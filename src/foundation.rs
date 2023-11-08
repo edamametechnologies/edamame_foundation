@@ -1,0 +1,9 @@
+pub static FOUNDATION_VERSION: &str = env!("EDAMAME_FOUNDATION_VERSION");
+pub static SERVER: &str = env!("EDAMAME_SERVER");
+pub static TARGET: &str = env!("EDAMAME_TARGET");
+pub static EDAMAME_CA_PEM: &str = env!("EDAMAME_CA_PEM");
+pub static EDAMAME_CLIENT_CA_PEM: &str = env!("EDAMAME_CLIENT_CA_PEM");
+pub static EDAMAME_CLIENT_PEM: &str = env!("EDAMAME_CLIENT_PEM");
+pub static EDAMAME_CLIENT_KEY: &str = env!("EDAMAME_CLIENT_KEY");
+pub static EDAMAME_SERVER_PEM: &str = env!("EDAMAME_SERVER_PEM");
+pub static EDAMAME_SERVER_KEY: &str = env!("EDAMAME_SERVER_KEY");
