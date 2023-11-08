@@ -27,7 +27,7 @@ fn main() {
     dotenv_build::output(dotenv_build::Config::default()).unwrap();
 
     // Tonic/proto
-    tonic_build::compile_protos("../proto/edamame.proto").unwrap();
+    tonic_build::compile_protos("./proto/edamame.proto").unwrap();
 
     // Emit the instructions
     let _ = EmitBuilder::builder().

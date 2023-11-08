@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package edamame;
+
+message HelperRequest {
+  string ordertype = 1;
+  string subordertype = 2;
+  string arg1 = 3;
+  string arg2 = 4;
+  string signature = 5;
+  string version = 6;
+}
+
+message HelperResponse {
+  string output = 1;
+}
+
+// Service definition
+service EDAMAMEHelper {
+  rpc Execute(HelperRequest) returns (HelperResponse);
+}
