@@ -10,7 +10,6 @@ use std::str;
 use std::sync::Mutex;
 use lazy_static::lazy_static;
 
-use crate::foundation::*;
 use crate::order_type::*;
 use crate::helper_proto::*;
 
@@ -23,14 +22,17 @@ lazy_static! {
     pub static ref FATAL_ERROR: Mutex<bool> = Mutex::new(false);
 }
 
-pub async fn helper_run_utility(subordertype: &str, arg1: &str, arg2: &str) -> Result<String, Box<dyn Error>> {
+// Version
+pub static CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+pub async fn helper_run_utility(subordertype: &str, arg1: &str, arg2: &str, ca_pem: &str, client_pem: &str, client_key: &str, target: &'static str) -> Result<String, Box<dyn Error>> {
     // No signature for utility orders
-    helper_run("utilityorder", subordertype , arg1, arg2, "").await
+    helper_run("utilityorder", subordertype , arg1, arg2, "", ca_pem, client_pem, client_key, target).await
 }
 
-pub async fn helper_run_metric(subordertype: MetricOrderType, threat: &str, username: &str, signature: &str) -> Result<String, Box<dyn Error>> {
+pub async fn helper_run_metric(subordertype: MetricOrderType, threat: &str, username: &str, signature: &str, ca_pem: &str, client_pem: &str, client_key: &str, target: &'static str) -> Result<String, Box<dyn Error>> {
     // Convert to string using the Display trait
-    match helper_run("metricorder", &subordertype.to_string(), threat, username, signature).await {
+    match helper_run("metricorder", &subordertype.to_string(), threat, username, signature, ca_pem, client_pem, client_key, target).await {
         Ok(result) => {
             // Set the fatal error flag
             trace!("Unsetting the FATAL_ERROR flag");
@@ -51,21 +53,21 @@ pub async fn helper_run_metric(subordertype: MetricOrderType, threat: &str, user
     }
 }
 
-async fn helper_run(ordertype: &str, subordertype: &str, arg1: &str, arg2: &str, signature: &str) -> Result<String, Box<dyn Error>> {
+async fn helper_run(ordertype: &str, subordertype: &str, arg1: &str, arg2: &str, signature: &str, ca_pem: &str, client_pem: &str, client_key: &str, target: &'static str) -> Result<String, Box<dyn Error>> {
 
     // Connect to server
     trace!("Connecting to helper server");
-    let server_root_ca_cert_base64 = EDAMAME_CA_PEM.to_string();
+    let server_root_ca_cert_base64 = ca_pem.to_string();
     let server_root_ca_cert_decoded = general_purpose::STANDARD.decode(&server_root_ca_cert_base64).expect("Failed to decode server root CA certificate");
     let server_root_ca_cert = str::from_utf8(&server_root_ca_cert_decoded).expect("Failed to convert server root CA certificate to string");
     let server_root_ca_cert = Certificate::from_pem(server_root_ca_cert);
 
     // Decode the Base64-encoded client certificate and key
-    let client_cert_base64 = EDAMAME_CLIENT_PEM.to_string();
+    let client_cert_base64 = client_pem.to_string();
     let client_cert_decoded = general_purpose::STANDARD.decode(&client_cert_base64).expect("Failed to decode client certificate");
     let client_cert = str::from_utf8(&client_cert_decoded).expect("Failed to convert client certificate to string");
 
-    let client_key_base64 = EDAMAME_CLIENT_KEY.to_string();
+    let client_key_base64 = client_key.to_string();
     let client_key_decoded = general_purpose::STANDARD.decode(&client_key_base64).expect("Failed to decode client key");
     let client_key = str::from_utf8(&client_key_decoded).expect("Failed to convert client key to string");
 
@@ -77,7 +79,7 @@ async fn helper_run(ordertype: &str, subordertype: &str, arg1: &str, arg2: &str,
         .ca_certificate(server_root_ca_cert)
         .identity(client_identity);
 
-    let channel = Channel::from_static(TARGET)
+    let channel = Channel::from_static(target)
         .tls_config(tls)?;
 
     // Timeout the connection after 1 second
@@ -95,7 +97,7 @@ async fn helper_run(ordertype: &str, subordertype: &str, arg1: &str, arg2: &str,
         arg1: arg1.to_owned(),
         arg2: arg2.to_owned(),
         signature: signature.to_owned(),
-        version: FOUNDATION_VERSION.to_string(),
+        version: CARGO_PKG_VERSION.to_string(),
     });
 
     let response = client.execute(request).await?;
