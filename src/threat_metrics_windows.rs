@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_WINDOWS: &str = r#"{
   "name": "threat model Windows",
   "extends": "none",
-  "date": "October 31th 2023",
-  "signature": "aa0317132c468e654a73b95a18808d2dd08729112014135e7492e558e827816e",
+  "date": "November 10th 2023",
+  "signature": "fe5817d78e4c3049d679fa65776f19aaac0936ebd4a67eaffbc0053836f5db8a",
   "metrics": [
     {
       "name": "edamame helper disabled",
@@ -39,7 +39,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "class": "installer",
         "elevation": "user",
-        "target": "https://edamame-helper.s3.eu-west-1.amazonaws.com",
+        "target": "https://github.com/edamametechnologies/edamame_helper/releases/download",
         "education": []
       },
       "rollback": {

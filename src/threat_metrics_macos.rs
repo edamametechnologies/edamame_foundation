@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_MACOS: &str = r#"{
   "name": "threat model macOS",
   "extends": "none",
-  "date": "October 19th 2023",
-  "signature": "52825c2266d862fb7cee6c7f707abb3f55c8c782a4b890d3e147c70d1ccd1acb",
+  "date": "November 10th 2023",
+  "signature": "bd2a18e8af9f56469e8913dfc17c836e76384756aff8fe4f8e760e85402a3798",
   "metrics": [
     {
       "name": "edamame helper disabled",
@@ -39,7 +39,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "class": "installer",
         "elevation": "user",
-        "target": "https://edamame-helper.s3.eu-west-1.amazonaws.com",
+        "target": "https://github.com/edamametechnologies/edamame_helper/releases/download",
         "education": []
       },
       "rollback": {
