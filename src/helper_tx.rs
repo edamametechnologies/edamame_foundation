@@ -27,7 +27,25 @@ pub static CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub async fn helper_run_utility(subordertype: &str, arg1: &str, arg2: &str, ca_pem: &str, client_pem: &str, client_key: &str, target: &'static str) -> Result<String, Box<dyn Error>> {
     // No signature for utility orders
-    helper_run("utilityorder", subordertype , arg1, arg2, "", ca_pem, client_pem, client_key, target).await
+    match helper_run("utilityorder", subordertype , arg1, arg2, "", ca_pem, client_pem, client_key, target).await {
+        Ok(result) => {
+            // Set the fatal error flag
+            trace!("Unsetting the FATAL_ERROR flag");
+            let mut fatal_error = FATAL_ERROR.lock().unwrap();
+            *fatal_error = false;
+            Ok(result)
+        },
+        Err(e) => {
+            if e.to_string().contains("Fatal") {
+                // Set the fatal error flag
+                trace!("Setting the FATAL_ERROR flag");
+                let mut fatal_error = FATAL_ERROR.lock().unwrap();
+                *fatal_error = true;
+            }
+            error!("{}", e);
+            Err(e)
+        }
+    }
 }
 
 pub async fn helper_run_metric(subordertype: MetricOrderType, threat: &str, username: &str, signature: &str, ca_pem: &str, client_pem: &str, client_key: &str, target: &'static str) -> Result<String, Box<dyn Error>> {
