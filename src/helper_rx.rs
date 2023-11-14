@@ -23,6 +23,8 @@ use edamame_proto::{HelperRequest, HelperResponse};
 
 lazy_static! {
     pub static ref THREATS: Arc<Mutex<ThreatMetrics>> = Arc::new(Mutex::new(ThreatMetrics::new("")));
+    // Branch name
+    pub static ref BRANCH: Arc<Mutex<String>> = Arc::new(Mutex::new("".to_string()));
 }
 
 // Version
@@ -98,7 +100,12 @@ impl ServerControl {
         ServerControl { stop: None }
     }
 
-    pub async fn start_server(&mut self, server_pem: &str, server_key: &str, client_ca_cert: &str, server: &str) -> Result<(), Box<dyn Error>> {
+    pub async fn start_server(&mut self, server_pem: &str, server_key: &str, client_ca_cert: &str, server: &str, branch: &str) -> Result<(), Box<dyn Error>> {
+
+        // Store branch name
+        let mut branch_lock = BRANCH.lock().await;
+        *branch_lock = branch.to_string();
+
         let (tx, rx) = oneshot::channel::<()>();
         self.stop = Some(tx);
 
@@ -212,7 +219,8 @@ pub async fn rpc_run(
                     current_signature, signature
                 );
                 // Perform update
-                match metrics.update("").await {
+                let branch = BRANCH.lock().await.clone();
+                match metrics.update("", &branch).await {
                     Ok(_) => {
                         info!("Updated model from backend successfully - new signature is: {}", metrics.signature);
                     }
