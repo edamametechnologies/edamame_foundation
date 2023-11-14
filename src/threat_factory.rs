@@ -125,7 +125,7 @@ impl ThreatMetrics {
     }
 
     // Update the threat model from the backend
-    pub async fn update(&mut self, platform: &str) -> Result<bool, Box<dyn Error>> {
+    pub async fn update(&mut self, platform: &str, branch: &str) -> Result<bool, Box<dyn Error>> {
         info!("Starting threat model update from backend");
 
         let mut success = false;
@@ -145,7 +145,7 @@ impl ThreatMetrics {
 
         let url = format!(
             "{}/{}/{}",
-            THREAT_MODEL_URL, env!("VERGEN_GIT_BRANCH"), model
+            THREAT_MODEL_URL, branch, model
         );
 
         info!("Fetching threat model from {}", url);
