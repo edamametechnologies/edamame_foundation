@@ -984,13 +984,13 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
       "description": [
         {
           "locale": "EN",
-          "title": "No antivirus installed",
-          "summary": "You don't have any antivirus installed. We recommend you to install one."
+          "title": "No antivirus enabled",
+          "summary": "You don't have any antivirus installed (MalwareBytes, Sentinel One...). We recommend you to enable one."
         },
         {
           "locale": "FR",
-          "title": "Pas d'antivirus installé",
-          "summary": "Vous n'avez pas d'antivirus installé. Nous vous recommandons d'en installer un."
+          "title": "Pas d'antivirus activé",
+          "summary": "Vous n'avez pas d'antivirus installé (MalwareBytes, Sentinel One...). Nous vous recommandons d'en activer un."
         }
       ],
       "implementation": {
@@ -999,7 +999,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
-        "target": "pgrep RTProtectionDaemon >/dev/null || echo noepp",
+        "target": "if ! { pgrep RTProtectionDaemon >/dev/null || sentinelctl version 2>/dev/null | grep -q 'Agent version'; }; then echo noepp; fi",
         "education": []
       },
       "remediation": {
