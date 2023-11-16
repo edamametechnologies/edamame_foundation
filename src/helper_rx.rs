@@ -103,8 +103,10 @@ impl ServerControl {
     pub async fn start_server(&mut self, server_pem: &str, server_key: &str, client_ca_cert: &str, server: &str, branch: &str) -> Result<(), Box<dyn Error>> {
 
         // Store branch name
-        let mut branch_lock = BRANCH.lock().await;
-        *branch_lock = branch.to_string();
+        {
+            let mut branch_lock = BRANCH.lock().await;
+            *branch_lock = branch.to_string();
+        }
 
         let (tx, rx) = oneshot::channel::<()>();
         self.stop = Some(tx);

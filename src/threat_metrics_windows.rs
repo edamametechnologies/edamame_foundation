@@ -129,13 +129,13 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
       "description": [
         {
           "locale": "EN",
-          "title": "Windows Defender Disabled",
-          "summary": "Windows Defender is a built-in antivirus and antimalware software that comes with Windows. Disabling it can leave your system vulnerable to various threats, such as viruses, Trojans, and spyware."
+          "title": "No antivirus enabled",
+          "summary": "You don't have any antivirus installed (Windows Defender, Sentinel One...). We recommend you to enable one."
         },
         {
           "locale": "FR",
-          "title": "Windows Defender désactivé",
-          "summary": "Windows Defender est un logiciel antivirus et antimalware intégré à Windows. Le désactiver peut laisser votre système vulnérable à diverses menaces, telles que des virus, des chevaux de Troie et des logiciels espions."
+          "title": "Pas d'antivirus activé",
+          "summary": "Vous n'avez pas d'antivirus installé (Windows Defender, Sentinel One...). Nous vous recommandons d'en activer un."
         }
       ],
       "implementation": {
@@ -144,7 +144,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "user",
-        "target": "if((Get-MpPreference | Select-Object -ExpandProperty DisableRealtimeMonitoring) -eq $true) { 'Real-time monitoring is disabled' } else { '' }",
+        "target": "if (-not (SentinelCtl.exe version 2>&1 | Select-String -Pattern \"Agent version\") -and ((Get-MpPreference | Select-Object -ExpandProperty DisableRealtimeMonitoring) -eq $true)) { Write-Output \"noepp\" }",
         "education": []
       },
       "remediation": {

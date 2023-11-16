@@ -53,6 +53,79 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       }
     },
     {
+      "name": "no EPP",
+      "metrictype": "bool",
+      "dimension": "applications",
+      "severity": 4,
+      "scope": "generic",
+      "tags": [
+        "ISO 27001/2,Malware Protection",
+        "PCI-DSS,Requirement-5",
+        "SOC 2,CC-Malware Protection"
+      ],
+      "description": [
+        {
+          "locale": "EN",
+          "title": "No antivirus enabled",
+          "summary": "You don't have any antivirus enabled (Sentinel One...). We recommend you to enable one."
+        },
+        {
+          "locale": "FR",
+          "title": "Pas d'antivirus activé",
+          "summary": "Vous n'avez pas d'antivirus activé (Sentinel One...). Nous vous recommandons d'en activer un."
+        }
+      ],
+      "implementation": {
+        "system": "Linux",
+        "minversion": 6,
+        "maxversion": 0,
+        "class": "cli",
+        "elevation": "admin",
+        "target": "sentinelctl version 2>/dev/null | grep -q 'Agent version' || echo noepp",
+        "education": []
+      },
+      "remediation": {
+        "system": "Linux",
+        "minversion": 6,
+        "maxversion": 0,
+        "class": "",
+        "elevation": "",
+        "target": "",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "link",
+            "target": "https://help.ubuntu.com/community/Antivirus"
+          },
+          {
+            "locale": "FR",
+            "class": "link",
+            "target": "https://doc.ubuntu-fr.org/antivirus"
+          }
+        ]
+      },
+      "rollback": {
+        "system": "Linux",
+        "minversion": 6,
+        "maxversion": 0,
+        "class": "",
+        "elevation": "",
+        "target": "",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "link",
+            "target": "https://help.ubuntu.com/community/Antivirus"
+          },
+          {
+            "locale": "FR",
+            "class": "link",
+            "target": "https://doc.ubuntu-fr.org/antivirus"
+          }
+        ]
+      }
+    },
+    {
       "name": "/etc/passwd permissions",
       "metrictype": "bool",
       "dimension": "system integrity",
