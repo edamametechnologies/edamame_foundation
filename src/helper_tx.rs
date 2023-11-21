@@ -100,9 +100,9 @@ async fn helper_run(ordertype: &str, subordertype: &str, arg1: &str, arg2: &str,
     let channel = Channel::from_static(target)
         .tls_config(tls)?;
 
-    // Timeout the connection after 1 second
+    // Timeout the connection after 2 second
     let connection = timeout(
-        Duration::from_secs(1),
+        Duration::from_secs(2),
         channel.connect(),
     ).await??;
 
