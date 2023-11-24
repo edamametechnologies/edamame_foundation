@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_WINDOWS: &str = r#"{
   "name": "threat model Windows",
   "extends": "none",
-  "date": "November 10th 2023",
-  "signature": "fe5817d78e4c3049d679fa65776f19aaac0936ebd4a67eaffbc0053836f5db8a",
+  "date": "November 14th 2023",
+  "signature": "d9ac4bf541903a8f5ea362070695137c30faf0d5491855fcb857dc6805f82b6b",
   "metrics": [
     {
       "name": "edamame helper disabled",
@@ -144,7 +144,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "user",
-        "target": "if (-not (SentinelCtl.exe version 2>&1 | Select-String -Pattern \"Agent version\") -and ((Get-MpPreference | Select-Object -ExpandProperty DisableRealtimeMonitoring) -eq $true)) { Write-Output \"noepp\" }",
+        "target": "if ((-not (Get-Command SentinelCtl.exe -ErrorAction SilentlyContinue)) -or (-not (SentinelCtl.exe version 2>&1 | Select-String -Pattern \"Agent version\")) -and ((Get-MpPreference | Select-Object -ExpandProperty DisableRealtimeMonitoring) -eq $true)) { Write-Output \"noepp\" }",
         "education": []
       },
       "remediation": {
@@ -323,12 +323,12 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
           {
             "locale": "EN",
             "class": "link",
-            "target": "https://haveibeenpwned.com/"
+            "target": "https://en.wikipedia.org/wiki/Have_I_Been_Pwned"
           },
           {
             "locale": "FR",
             "class": "link",
-            "target": "https://haveibeenpwned.com/"
+            "target": "https://www.futura-sciences.com/tech/actualites/internet-voici-savoir-si-vos-donnees-personnelles-internet-ont-ete-piratees-103095/"
           }
         ]
       }

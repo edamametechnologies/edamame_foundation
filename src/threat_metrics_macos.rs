@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_MACOS: &str = r#"{
   "name": "threat model macOS",
   "extends": "none",
-  "date": "November 10th 2023",
-  "signature": "bd2a18e8af9f56469e8913dfc17c836e76384756aff8fe4f8e760e85402a3798",
+  "date": "November 14th 2023",
+  "signature": "2d19c339c8451be977337133876ff55623962620cbb890705f2522867e23d4be",
   "metrics": [
     {
       "name": "edamame helper disabled",
@@ -999,7 +999,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
-        "target": "if ! { pgrep RTProtectionDaemon >/dev/null || sentinelctl version 2>/dev/null | grep -q 'Agent version'; }; then echo noepp; fi",
+        "target": "if ! { pgrep RTProtectionDaemon >/dev/null || sentinelctl version 2>/dev/null | grep -q \"Agent version\"; }; then echo noepp; fi",
         "education": []
       },
       "remediation": {
@@ -1342,12 +1342,12 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
           {
             "locale": "EN",
             "class": "link",
-            "target": "https://haveibeenpwned.com/"
+            "target": "https://en.wikipedia.org/wiki/Have_I_Been_Pwned"
           },
           {
             "locale": "FR",
             "class": "link",
-            "target": "https://haveibeenpwned.com/"
+            "target": "https://www.futura-sciences.com/tech/actualites/internet-voici-savoir-si-vos-donnees-personnelles-internet-ont-ete-piratees-103095/"
           }
         ]
       }

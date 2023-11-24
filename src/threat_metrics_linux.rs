@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_LINUX: &str = r#"{
   "name": "threat model Linux",
   "extends": "none",
-  "date": "November 10th 2023",
-  "signature": "bf40634dfd67698b65b8098ef2384e69363147530971a532b7fe893485912113",
+  "date": "November 14th 2023",
+  "signature": "d877f862f07a960e42575e2c68ba950211ea5c58e664f1bfb69f574a780c172e",
   "metrics": [
     {
       "name": "edamame helper disabled",
@@ -81,7 +81,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
-        "target": "sentinelctl version 2>/dev/null | grep -q 'Agent version' || echo noepp",
+        "target": "sentinelctl version 2>/dev/null | grep -q \"Agent version\" || echo noepp",
         "education": []
       },
       "remediation": {
@@ -121,6 +121,69 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
             "locale": "FR",
             "class": "link",
             "target": "https://doc.ubuntu-fr.org/antivirus"
+          }
+        ]
+      }
+    },
+    {
+      "name": "pwned",
+      "metrictype": "bool",
+      "dimension": "credentials",
+      "severity": 1,
+      "scope": "generic",
+      "tags": [
+        "ISO 27001/2,Information Security Incident Management",
+        "PCI-DSS,Requirement-12.10",
+        "SOC 2,CC-Incident Response",
+        "Personal Posture"
+      ],
+      "description": [
+        {
+          "locale": "EN",
+          "title": "Compromised email address",
+          "summary": "Your email address has recently appeared in a data breach, please review the breach and change your passwords accordingly."
+        },
+        {
+          "locale": "FR",
+          "title": "Adresse e-mail compromise",
+          "summary": "Votre adresse e-mail est apparue récemment dans une fuite de données, veuillez examiner la fuite et modifier vos mots de passe en conséquence."
+        }
+      ],
+      "implementation": {
+        "system": "Linux",
+        "minversion": 6,
+        "maxversion": 0,
+        "class": "internal",
+        "elevation": "user",
+        "target": "pwned -i 365",
+        "education": []
+      },
+      "remediation": {
+        "system": "Linux",
+        "minversion": 6,
+        "maxversion": 0,
+        "class": "internal",
+        "elevation": "",
+        "target": "digitalidentity_manager",
+        "education": []
+      },
+      "rollback": {
+        "system": "Linux",
+        "minversion": 6,
+        "maxversion": 0,
+        "class": "",
+        "elevation": "",
+        "target": "",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "link",
+            "target": "https://en.wikipedia.org/wiki/Have_I_Been_Pwned"
+          },
+          {
+            "locale": "FR",
+            "class": "link",
+            "target": "https://www.futura-sciences.com/tech/actualites/internet-voici-savoir-si-vos-donnees-personnelles-internet-ont-ete-piratees-103095/"
           }
         ]
       }
