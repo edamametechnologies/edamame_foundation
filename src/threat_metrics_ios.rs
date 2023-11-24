@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_IOS: &str = r#"{
   "name": "threat model iOS",
   "extends": "none",
-  "date": "October 15th 2023",
-  "signature": "0edabe402952ca151729bc19f5d5922db2213690482da4842c427def4f68eae4",
+  "date": "November 24th 2023",
+  "signature": "922479241a519b805dab78c00b2dbfa04bd9d2cba813143c81217f5ecbd4555b",
   "metrics": [
     {
       "name": "MDM profiles",
@@ -239,13 +239,13 @@ pub static THREAT_METRICS_IOS: &str = r#"{
       "description": [
         {
           "locale": "EN",
-          "title": "Compromised Apple ID",
-          "summary": "Your Apple ID email has recently appeared in a data breach referenced on haveibeenpwned.com, please review the breach and change your passwords accordingly."
+          "title": "Compromised email address",
+          "summary": "Your email address might have recently appeared in a data breach. Please set your email in the Identity tab, review the breaches if any and follow instructions."
         },
         {
           "locale": "FR",
-          "title": "Apple ID compromise",
-          "summary": "Votre e-mail Apple ID est apparue récemment dans une fuite de données référencée sur haveibeenpwned.com, veuillez examiner la fuite et modifier vos mots de passe en conséquence."
+          "title": "Adresse e-mail compromise",
+          "summary": "Votre adresse e-mail est peut-être apparue récemment dans une fuite de données. Renseignez votre email dans le tab Identité, examinez les fuites éventuelles et suivez les instructions."
         }
       ],
       "implementation": {

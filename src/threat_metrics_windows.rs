@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_WINDOWS: &str = r#"{
   "name": "threat model Windows",
   "extends": "none",
-  "date": "November 14th 2023",
-  "signature": "d9ac4bf541903a8f5ea362070695137c30faf0d5491855fcb857dc6805f82b6b",
+  "date": "November 24th 2023",
+  "signature": "0b8bd47fe9b71084f5100e4d921fe83b586a31760b60d762da539db3309a1f22",
   "metrics": [
     {
       "name": "edamame helper disabled",
@@ -286,12 +286,12 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         {
           "locale": "EN",
           "title": "Compromised email address",
-          "summary": "Your email address has recently appeared in a data breach, please review the breach and change your passwords accordingly."
+          "summary": "Your email address might have recently appeared in a data breach. Please set your email in the Identity tab, review the breaches if any and follow instructions."
         },
         {
           "locale": "FR",
           "title": "Adresse e-mail compromise",
-          "summary": "Votre adresse e-mail est apparue récemment dans une fuite de données, veuillez examiner la fuite et modifier vos mots de passe en conséquence."
+          "summary": "Votre adresse e-mail est peut-être apparue récemment dans une fuite de données. Renseignez votre email dans le tab Identité, examinez les fuites éventuelles et suivez les instructions."
         }
       ],
       "implementation": {
@@ -310,7 +310,18 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "class": "internal",
         "elevation": "",
         "target": "digitalidentity_manager",
-        "education": []
+        "education": [
+          {
+            "locale": "EN",
+            "class": "link",
+            "target": "https://en.wikipedia.org/wiki/Have_I_Been_Pwned"
+          },
+          {
+            "locale": "FR",
+            "class": "link",
+            "target": "https://www.futura-sciences.com/tech/actualites/internet-voici-savoir-si-vos-donnees-personnelles-internet-ont-ete-piratees-103095/"
+          }
+        ]
       },
       "rollback": {
         "system": "Windows",

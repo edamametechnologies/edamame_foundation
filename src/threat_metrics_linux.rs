@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_LINUX: &str = r#"{
   "name": "threat model Linux",
   "extends": "none",
-  "date": "November 14th 2023",
-  "signature": "d877f862f07a960e42575e2c68ba950211ea5c58e664f1bfb69f574a780c172e",
+  "date": "November 24th 2023",
+  "signature": "d5b23bd17ffce2e287ebacfd115a4c81d94fbeb0a1536e1e97551a06df63c355",
   "metrics": [
     {
       "name": "edamame helper disabled",
@@ -141,12 +141,12 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         {
           "locale": "EN",
           "title": "Compromised email address",
-          "summary": "Your email address has recently appeared in a data breach, please review the breach and change your passwords accordingly."
+          "summary": "Your email address might have recently appeared in a data breach. Please set your email in the Identity tab, review the breaches if any and follow instructions."
         },
         {
           "locale": "FR",
           "title": "Adresse e-mail compromise",
-          "summary": "Votre adresse e-mail est apparue récemment dans une fuite de données, veuillez examiner la fuite et modifier vos mots de passe en conséquence."
+          "summary": "Votre adresse e-mail est peut-être apparue récemment dans une fuite de données. Renseignez votre email dans le tab Identité, examinez les fuites éventuelles et suivez les instructions."
         }
       ],
       "implementation": {
@@ -165,7 +165,18 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "class": "internal",
         "elevation": "",
         "target": "digitalidentity_manager",
-        "education": []
+        "education": [
+          {
+            "locale": "EN",
+            "class": "link",
+            "target": "https://en.wikipedia.org/wiki/Have_I_Been_Pwned"
+          },
+          {
+            "locale": "FR",
+            "class": "link",
+            "target": "https://www.futura-sciences.com/tech/actualites/internet-voici-savoir-si-vos-donnees-personnelles-internet-ont-ete-piratees-103095/"
+          }
+        ]
       },
       "rollback": {
         "system": "Linux",

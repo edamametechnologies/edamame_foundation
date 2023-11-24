@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_ANDROID: &str = r#"{
   "name": "threat model Android",
   "extends": "none",
-  "date": "October 15th 2023",
-  "signature": "6026ed0b4940a920bb73ec64f17cf49a5ff579c7db4fc8869c50d8f4ff26611b",
+  "date": "November 24th 2023",
+  "signature": "314697f4bd33340dbc66563ea6fcf4238684fcd4d408c05c1b10365945b30405",
   "metrics": [
     {
       "name": "MDM profiles",
@@ -239,13 +239,13 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       "description": [
         {
           "locale": "EN",
-          "title": "Compromised Google ID",
-          "summary": "Your Google ID email has recently appeared in a data breach referenced on haveibeenpwned.com, please review the breach and change your passwords accordingly."
+          "title": "Compromised email address",
+          "summary": "Your email address might have recently appeared in a data breach. Please set your email in the Identity tab, review the breaches if any and follow instructions."
         },
         {
           "locale": "FR",
-          "title": "Google ID compromise",
-          "summary": "Votre e-mail Google ID est apparue récemment dans une fuite de données référencée sur haveibeenpwned.com, veuillez examiner la fuite et modifier vos mots de passe en conséquence."
+          "title": "Adresse e-mail compromise",
+          "summary": "Votre adresse e-mail est peut-être apparue récemment dans une fuite de données. Renseignez votre email dans le tab Identité, examinez les fuites éventuelles et suivez les instructions."
         }
       ],
       "implementation": {

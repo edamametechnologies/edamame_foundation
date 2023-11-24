@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_MACOS: &str = r#"{
   "name": "threat model macOS",
   "extends": "none",
-  "date": "November 14th 2023",
-  "signature": "2d19c339c8451be977337133876ff55623962620cbb890705f2522867e23d4be",
+  "date": "November 24th 2023",
+  "signature": "7121734850ed5d8bdf332a690059714434cebd622c6dafd85b2e66a3bbb69584",
   "metrics": [
     {
       "name": "edamame helper disabled",
@@ -1304,13 +1304,13 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
       "description": [
         {
           "locale": "EN",
-          "title": "Compromised Apple ID",
-          "summary": "Your Apple ID email has recently appeared in a data breach, please review the breach and change your passwords accordingly."
+          "title": "Compromised email address",
+          "summary": "Your email address might have recently appeared in a data breach. Please set your email in the Identity tab, review the breaches if any and follow instructions."
         },
         {
           "locale": "FR",
-          "title": "Apple ID compromise",
-          "summary": "Votre e-mail Apple ID est apparue récemment dans une fuite de données, veuillez examiner la fuite et modifier vos mots de passe en conséquence."
+          "title": "Adresse e-mail compromise",
+          "summary": "Votre adresse e-mail est peut-être apparue récemment dans une fuite de données. Renseignez votre email dans le tab Identité, examinez les fuites éventuelles et suivez les instructions."
         }
       ],
       "implementation": {
@@ -1329,7 +1329,18 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "class": "internal",
         "elevation": "",
         "target": "digitalidentity_manager",
-        "education": []
+        "education": [
+          {
+            "locale": "EN",
+            "class": "link",
+            "target": "https://en.wikipedia.org/wiki/Have_I_Been_Pwned"
+          },
+          {
+            "locale": "FR",
+            "class": "link",
+            "target": "https://www.futura-sciences.com/tech/actualites/internet-voici-savoir-si-vos-donnees-personnelles-internet-ont-ete-piratees-103095/"
+          }
+        ]
       },
       "rollback": {
         "system": "macOS",
