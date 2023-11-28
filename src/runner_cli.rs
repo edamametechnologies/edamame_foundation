@@ -1,23 +1,41 @@
 use log::{error, info, trace};
 use run_script::ScriptOptions;
 use std::error::Error;
+use std::thread::spawn;
 
 use powershell_script::PsScriptBuilder;
 
-// Non async execution
+
 // The personate parameter forces the execution into the context of username
 // We could use an empty username to indicate there is no need to personate but we keep it as is for now in case we find other use cases for the username
 pub async fn run_cli(cmd: &str, username: &str, personate: bool) -> Result<String, Box<dyn Error>> {
     // Verify platform support
     check_platform_support()?;
 
-    let (mut code, mut stdout, mut stderr) = (0, String::new(), String::new());
+    let cmd_clone = cmd.to_string();
+    let username_clone = username.to_string();
 
-    if cfg!(target_os = "windows") {
-        execute_windows_ps(cmd, &mut code, &mut stdout, &mut stderr)?;
-    } else {
-        execute_unix_command(cmd, username, personate, &mut code, &mut stdout, &mut stderr)?;
-    }
+    // Spawn a thread to execute the command as neither ps nor run_script are async
+    let handle = spawn(move || -> (i32, String, String) {
+        let (mut code, mut stdout, mut stderr) = (0, String::new(), String::new());
+
+        if cfg!(target_os = "windows") {
+            match execute_windows_ps(&cmd_clone, &mut code, &mut stdout, &mut stderr) {
+                Ok(_) => (),
+                Err(e) => error!("Error executing {:?} : {:?}", &cmd_clone, e),
+            }
+        } else {
+            match execute_unix_command(&cmd_clone, &username_clone, personate, &mut code, &mut stdout, &mut stderr) {
+                Ok(_) => (),
+                Err(e) => error!("Error executing {:?} : {:?}", &cmd_clone, e),
+            }
+        };
+
+        (code, stdout, stderr)
+    });
+
+    // Wait for the thread to finish
+    let (code, mut stdout, stderr) = handle.join().unwrap();
 
     // Remove newlines from stdout
     stdout = stdout.replace('\n', "");

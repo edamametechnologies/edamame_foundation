@@ -41,20 +41,3 @@ where
     trace!("Locking RUNTIME - end");
     res
 }
-
-// Spawn a thread on the runtime
-pub fn async_spawn<F>(async_fn: F)
-where
-    F: Future<Output = ()> + Send + 'static,
-{
-    trace!("async_spawn for {:?}", std::thread::current().id());
-    trace!("Locking RUNTIME - start");
-    let mut rt_guard = RUNTIME.lock().expect("Get runtime");
-    let rt = rt_guard.as_mut().expect("Runtime present");
-    let _guard = rt.enter();
-    trace!("spawn - start");
-    rt.spawn(async_fn);
-    trace!("spawn - end");
-    drop(rt_guard);
-    trace!("Locking RUNTIME - end");
-}
