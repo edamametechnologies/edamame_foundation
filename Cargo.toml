@@ -11,6 +11,10 @@ crate-type = ["staticlib", "lib"]
 
 [dependencies]
 
+# Sentry
+sentry = "0.32"
+sentry-log = "0.32.0"
+
 # Global statics w/ mutex
 lazy_static = "1.4.0"
 once_cell = "1.18.0"
