@@ -1,4 +1,4 @@
-use log::{error, trace};
+use log::{trace};
 use std::error::Error;
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Identity};
 use std::time::Duration;
@@ -42,7 +42,6 @@ pub async fn helper_run_utility(subordertype: &str, arg1: &str, arg2: &str, ca_p
                 let mut fatal_error = FATAL_ERROR.lock().unwrap();
                 *fatal_error = true;
             }
-            error!("{}", e);
             Err(e)
         }
     }
@@ -65,7 +64,6 @@ pub async fn helper_run_metric(subordertype: MetricOrderType, threat: &str, user
                 let mut fatal_error = FATAL_ERROR.lock().unwrap();
                 *fatal_error = true;
             }
-            error!("{}", e);
             Err(e)
         }
     }

@@ -9,11 +9,11 @@ use std::{
     },
 };
 use regex::Regex;
-use flexi_logger::{Duplicate, FileSpec, LogSpecification, Logger, writers::LogWriter};
+use flexi_logger::{FileSpec, LogSpecification, Logger, writers::LogWriter, Duplicate};
+use log::{info,error};
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use flexi_logger::LoggerHandle;
-
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -119,18 +119,21 @@ impl LogWriter for MemoryWriter {
                 let log_line = record.args().to_string();
                 let level = record.level().to_string();
                 let module = record.module_path().unwrap_or("unknown");
+
+                // Sanitize
+                let keywords = vec!["id", "uuid", "pin", "device", "password", "key", "Device ID", "device_id", "code"];
+                let log_line_sanitized = sanitize_keywords(&log_line, &keywords);
+
                 // Format
-                let log_line_formatted = format!("[{}] {} [{}] {}\n", now.format("%Y-%m-%d %H:%M:%S%.6f %:z"), level, module, log_line);
+                let log_line_formatted = format!("[{}] {} [{}] {}\n", now.format("%Y-%m-%d %H:%M:%S%.6f %:z"), level, module, log_line_sanitized);
                 // If we have more than MAX_LOG_LINES, remove the oldest one
                 if locked_data.logs.len() >= MAX_LOG_LINES {
                     locked_data.logs.pop_back();
                     locked_data.lines -= 1;
                 }
-                // Sanitize
-                let keywords = vec!["id", "uuid", "pin", "device", "password", "key", "Device ID", "device_id", "code"];
-                let log_line_sanitized = sanitize_keywords(&log_line_formatted, &keywords);
+
                 // Save to memory in a reverse order (latest at the beginning)
-                locked_data.logs.push_front(log_line_sanitized.clone());
+                locked_data.logs.push_front(log_line_formatted.clone());
                 // Update lines
                 if locked_data.lines < MAX_LOG_LINES {
                     locked_data.lines += 1;
@@ -139,8 +142,13 @@ impl LogWriter for MemoryWriter {
                 if locked_data.to_take < MAX_LOG_LINES {
                     locked_data.to_take += 1;
                 }
-                // Print it to stdout
-                print!("{}", log_line_sanitized);
+
+                // Send errors to Sentry
+                if level == "ERROR" {
+                    let log_line_formatted = format!("{} [{}] {}\n", level, module, log_line_sanitized);
+                    sentry::capture_message(&log_line_formatted, sentry::Level::Error);
+                }
+
                 Ok(res)
             }
             Err(e) => {
@@ -205,27 +213,25 @@ pub fn init_signals(flexi_logger: LoggerHandle, log_spec: &LogSpecification) {
     });
 }
 
-pub fn init_app_logger() {
+pub fn init_sentry(url: &str) {
 
-    // Init logger here, enforce log level to info as default
-    let default_log_spec = "info";
-    // Override with env variable if set
-    let env_log_spec = env::var("EDAMAME_LOG_LEVEL").unwrap_or(default_log_spec.to_string());
-    let log_spec = LogSpecification::env_or_parse(env_log_spec).unwrap();
+    // Init sentry
+    let sentry = sentry::init((url, sentry::ClientOptions {
+        release: sentry::release_name!(),
+        traces_sample_rate: 1.0,
+        ..Default::default()
+    }));
 
-    // When running as an app, we use our own logger to memory
-    let memory_writer = MemoryWriter::new();
-    let flexi_logger = Logger::with(log_spec.clone())
-        .format(flexi_logger::colored_opt_format)
-        .log_to_writer(Box::new(memory_writer))
-        .start()
-        .unwrap_or_else(|e| panic!("Logger initialization failed: {:?}", e));
-
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
-    init_signals(flexi_logger, &log_spec);
+    if sentry.is_enabled() {
+        info!("Sentry initialized");
+    } else {
+        error!("Sentry initialization failed");
+    }
+    // Forget the sentry object to prevent it from being dropped
+    std::mem::forget(sentry);
 }
 
-pub fn init_helper_logger() {
+pub fn init_logger(url: &str, is_helper: bool) {
 
     // Init logger here, enforce log level to info as default
     let default_log_spec = "info";
@@ -234,30 +240,36 @@ pub fn init_helper_logger() {
     let log_spec = LogSpecification::env_or_parse(env_log_spec).unwrap();
 
     // Flexi logger
+    // Our writer
+    let memory_writer = MemoryWriter::new();
     // The helper on Windows doesn't have access to the console, so we log to a file instead
-    let flexi_logger = if cfg!(target_os = "windows") {
+    let flexi_logger = if is_helper && cfg!(target_os = "windows") {
         let exe_path: PathBuf = env::current_exe().unwrap();
         let log_dir = exe_path.parent().unwrap().to_path_buf();
         Logger::with(log_spec.clone())
             .format(flexi_logger::colored_opt_format)
             // Write logs to a file in the binary's directory
-            .log_to_file(
+            // Always log to our writer (for Sentry)
+            .log_to_file_and_writer(
                 FileSpec::default()
                     .directory(log_dir)
                     .basename("edamame_helper")
                     .suffix("log"),
+                Box::new(memory_writer)
             )
             .start()
             .unwrap_or_else(|e| panic!("Logger initialization failed: {:?}", e))
     } else {
-        // Stderr logging
         Logger::with(log_spec.clone())
             .format(flexi_logger::colored_opt_format)
-            .duplicate_to_stderr(Duplicate::Warn)
+            .log_to_writer(Box::new(memory_writer))
+            .duplicate_to_stdout(Duplicate::All)
             .start()
             .unwrap_or_else(|e| panic!("Logger initialization failed: {:?}", e))
     };
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     init_signals(flexi_logger, &log_spec);
+
+    init_sentry(url);
 }
