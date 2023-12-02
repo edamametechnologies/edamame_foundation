@@ -1,4 +1,4 @@
-use log::{error, info, trace};
+use log::{error, info, trace, warn};
 use std::error::Error;
 use std::net::SocketAddr;
 use tonic::transport::{Certificate, Identity, Server, ServerTlsConfig};
@@ -73,12 +73,12 @@ pub async fn rpc_run_safe(
     version: &str,
 ) -> Result<Response<HelperResponse>, Status> {
     rpc_run(
-        &ordertype,
-        &subordertype,
-        &arg1,
-        &arg2,
-        &signature,
-        &version,
+        ordertype,
+        subordertype,
+        arg1,
+        arg2,
+        signature,
+        version,
     )
         .await
         .map(|output| {
@@ -187,7 +187,7 @@ pub async fn rpc_run(
     version: &str,
 ) -> Result<String, Box<dyn Error>> {
     // Force update if any of the key mandatory fields are empty - this would indicate a protocol error
-    if version == "" || ordertype == "" {
+    if version.is_empty() || ordertype.is_empty() {
         return order_error("order received with empty version of ordertype", true);
     }
 
@@ -227,7 +227,8 @@ pub async fn rpc_run(
                         info!("Updated model from backend successfully - new signature is: {}", metrics.signature);
                     }
                     Err(e) => {
-                        error!("Failed to update model from backend: {}", e);
+                        // Only warn this can happen if the device is offline
+                        warn!("Failed to update threat model from backend: {}", e);
                         return order_error(&format!("metricorder received with signature mismatch but failed to update model from backend: {}", e), true);
                     }
                 }
@@ -250,9 +251,9 @@ pub async fn rpc_run(
             }
 
             return if implementation.is_some() {
-                let implementation_clone = implementation.clone().unwrap();
+                let implementation_clone = implementation.unwrap();
                 trace!("Found implementation for threat: {}", threat);
-                if implementation_clone.target != "" && implementation_clone.class != "" {
+                if !implementation_clone.target.is_empty() && !implementation_clone.class.is_empty() {
                     let class = implementation_clone.class.as_str();
                     let target = implementation_clone.target.as_str();
                     // The personate parameter forces the execution into the context of username
@@ -290,7 +291,7 @@ pub async fn rpc_run(
         "utilityorder" => match subordertype {
             "getappleid_email" => {
                 let username = arg2;
-                return run_cli("defaults read MobileMeAccounts Accounts | grep AccountID | grep -o \"\\\".*\\\"\" | sed \"s/\\\"//g\" | tr -d \"\\n\"", &username, true).await;
+                run_cli("defaults read MobileMeAccounts Accounts | grep AccountID | grep -o \"\\\".*\\\"\" | sed \"s/\\\"//g\" | tr -d \"\\n\"", username, true).await
             }
             "mdns_resolve" => {
                 let json_addresses = arg1;
@@ -311,7 +312,8 @@ pub async fn rpc_run(
                         Ok(output)
                     }
                     Err(e) => {
-                        error!("Error performing arp_resolve: {}", e);
+                        // Only warn
+                        warn!("Error performing arp_resolve: {}", e);
                         order_error(&format!("error performing arp_resolve: {}", e), false)
                     }
                 }
@@ -321,11 +323,11 @@ pub async fn rpc_run(
                 Ok(CARGO_PKG_VERSION.to_string())
             }
             _ => {
-                return order_error(&format!("unknown or unimplemented utilityorder {}", subordertype), false);
+                order_error(&format!("unknown or unimplemented utilityorder {}", subordertype), false)
             }
         },
         _ => {
-            return order_error(&format!("unknown or unimplemented order {}", ordertype), false);
+            order_error(&format!("unknown or unimplemented order {}", ordertype), false)
         }
     }
 }

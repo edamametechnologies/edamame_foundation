@@ -1,4 +1,4 @@
-use log::{error, info};
+use log::{error, info, warn};
 use reqwest;
 use std::error::Error;
 
@@ -179,7 +179,8 @@ impl ThreatMetrics {
                 }
             }
             Err(err) => {
-                error!("Threat model transfer failed: {:?}", err);
+                // Only warn this can happen if the device is offline
+                warn!("Threat model transfer failed: {:?}", err);
             }
         }
 
