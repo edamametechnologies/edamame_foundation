@@ -13,7 +13,8 @@ pub async fn arp_resolve(addresses: &str) -> Result<String, Box<dyn Error>> {
             Ok(ip_addr) => {
                 match get_mac_address_from_ip(&address.0, &ip_addr).await {
                     Ok(mac_address) => arp_results.push((address.0, address.1, mac_address)),
-                    Err(e) => error!("Error resolving MAC for IP {} on interface {} : {}", address.1, address.0, e),
+                    // Only warn
+                    Err(e) => warn!("Error resolving MAC for IP {} on interface {} : {}", address.1, address.0, e),
                 }
             },
             Err(e) => error!("Error parsing IP address {}: {}", address.1, e),
@@ -32,6 +33,7 @@ pub async fn mdns_resolve(addresses: &str) -> Result<String, Box<dyn Error>> {
                     let services = mdns_info.services.iter().cloned().collect();
                     mdns_results.push((address, mdns_info.hostname, mdns_info.mac_address, services));
                 } else {
+                    // Only warn
                     warn!("No mDNS info found for IP {}", address);
                 }
             }

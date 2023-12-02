@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::{net::IpAddr, sync::{Arc}};
 use std::net::Ipv6Addr;
-use log::{error, info, trace};
+use log::{error, info, trace, warn};
 use tokio::task;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::Mutex;
@@ -43,6 +43,7 @@ pub fn mdns_stop() {
     SHOULD_STOP.store(true, Ordering::Relaxed);
 }
 
+// To be called in case of network change
 pub async fn mdns_flush() {
     info!("Flushing mDNS database");
     let mut locked_devices = DEVICES.lock().await;
@@ -173,7 +174,7 @@ async fn fetch_mdns_info() {
         let responses = match wez_mdns::resolve("_services._dns-sd._udp.local", QueryParameters::SERVICE_LOOKUP).await {
             Ok(responses) => responses,
             Err(e) => {
-                error!("Error resolving services: {:?}", e);
+                error!("Error querying mDNS services: {:?}", e);
                 tokio::time::sleep(pause_duration).await;
                 continue;
             }
@@ -183,7 +184,8 @@ async fn fetch_mdns_info() {
                 services
             },
             Err(e) => {
-                error!("Error receiving mDNS services query response: {:?}", e);
+                // this can happen, only warn
+                warn!("Error receiving mDNS services query response: {:?}", e);
                 tokio::time::sleep(pause_duration).await;
                 continue;
             }
@@ -204,10 +206,11 @@ async fn fetch_mdns_info() {
             // Now discover all the instances of this service
             // Our own fork that uses the interface
             // let responses = match wez_mdns::resolve(service_name, QueryParameters::SERVICE_LOOKUP, interface).await {
-            let responses = match wez_mdns::resolve(service_name, QueryParameters::SERVICE_LOOKUP).await {
+            let responses = match wez_mdns::resolve(service_name.clone(), QueryParameters::SERVICE_LOOKUP).await {
                 Ok(responses) => responses,
                 Err(e) => {
-                    error!("Error resolving service: {:?}", e);
+                    // this can happen, only warn
+                    error!("Error querying mDNS service {}: {:?}", service_name.clone(), e);
                     continue;
                 }
             };
@@ -215,7 +218,8 @@ async fn fetch_mdns_info() {
             let instances = match responses.recv().await {
                 Ok(instances) => instances,
                 Err(e) => {
-                    error!("Error receiving mDNS instance query response : {:?}", e);
+                    // this can happen, only warn
+                    warn!("Error receiving mDNS query response for service {} : {:?}", service_name, e);
                     continue;
                 }
             };
@@ -228,17 +232,18 @@ async fn fetch_mdns_info() {
                     // Now resolve the host to get all the A and AAAA records (IPv6 addresses) to extrapolate the MAC address
                     // Our own fork that uses the interface
                     // let responses = match wez_mdns::resolve(hostname, QueryParameters::HOST_LOOKUP, interface).await {
-                    let responses = match wez_mdns::resolve(hostname, QueryParameters::HOST_LOOKUP).await {
+                    let responses = match wez_mdns::resolve(hostname.clone(), QueryParameters::HOST_LOOKUP).await {
                         Ok(responses) => responses,
                         Err(e) => {
-                            error!("Error resolving service: {:?}", e);
+                            error!("Error resolving hostname {}: {:?}", hostname.clone(), e);
                             continue;
                         }
                     };
                     let hosts = match responses.recv().await {
                         Ok(hosts) => hosts,
                         Err(e) => {
-                            error!("Error receiving mDNS hosts query response : {:?}", e);
+                            // this can happen, only warn
+                            warn!("Error receiving mDNS query response for hostname {}: {:?}", hostname, e);
                             continue;
                         }
                     };
