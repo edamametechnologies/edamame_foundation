@@ -24,7 +24,7 @@ use signal_hook::consts::signal;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use signal_hook::iterator::Signals;
 
-const MAX_LOG_LINES: usize = 1000;
+const MAX_LOG_LINES: usize = 20000;
 
 pub struct MemoryWriterData {
     logs: VecDeque<String>,
