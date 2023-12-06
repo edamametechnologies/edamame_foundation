@@ -184,8 +184,7 @@ async fn fetch_mdns_info() {
                 services
             },
             Err(e) => {
-                // this can happen, only warn
-                warn!("Error receiving mDNS services query response: {:?}", e);
+                error!("Error receiving mDNS services query response: {:?}", e);
                 tokio::time::sleep(pause_duration).await;
                 continue;
             }
@@ -209,7 +208,6 @@ async fn fetch_mdns_info() {
             let responses = match wez_mdns::resolve(service_name.clone(), QueryParameters::SERVICE_LOOKUP).await {
                 Ok(responses) => responses,
                 Err(e) => {
-                    // this can happen, only warn
                     error!("Error querying mDNS service {}: {:?}", service_name.clone(), e);
                     continue;
                 }
@@ -218,8 +216,7 @@ async fn fetch_mdns_info() {
             let instances = match responses.recv().await {
                 Ok(instances) => instances,
                 Err(e) => {
-                    // this can happen, only warn
-                    warn!("Error receiving mDNS query response for service {} : {:?}", service_name, e);
+                    error!("Error receiving mDNS query response for service {} : {:?}", service_name, e);
                     continue;
                 }
             };
@@ -242,8 +239,7 @@ async fn fetch_mdns_info() {
                     let hosts = match responses.recv().await {
                         Ok(hosts) => hosts,
                         Err(e) => {
-                            // this can happen, only warn
-                            warn!("Error receiving mDNS query response for hostname {}: {:?}", hostname, e);
+                            error!("Error receiving mDNS query response for hostname {}: {:?}", hostname, e);
                             continue;
                         }
                     };
