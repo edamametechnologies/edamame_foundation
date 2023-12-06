@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::{net::IpAddr, sync::{Arc}};
 use std::net::Ipv6Addr;
-use log::{error, info, trace, warn};
+use log::{error, info, trace};
 use tokio::task;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::Mutex;
