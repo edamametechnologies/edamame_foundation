@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::{net::IpAddr, sync::{Arc}};
 use std::net::Ipv6Addr;
-use log::{error, info, trace};
+use log::{error, info, trace, warn};
 use tokio::task;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::Mutex;
@@ -203,8 +203,6 @@ async fn fetch_mdns_info() {
             trace!("Found service: {}", service_name);
             done_service.push(service_name.clone());
             // Now discover all the instances of this service
-            // Our own fork that uses the interface
-            // let responses = match wez_mdns::resolve(service_name, QueryParameters::SERVICE_LOOKUP, interface).await {
             let responses = match wez_mdns::resolve(service_name.clone(), QueryParameters::SERVICE_LOOKUP).await {
                 Ok(responses) => responses,
                 Err(e) => {
@@ -216,7 +214,8 @@ async fn fetch_mdns_info() {
             let instances = match responses.recv().await {
                 Ok(instances) => instances,
                 Err(e) => {
-                    error!("Error receiving mDNS query response for service {} : {:?}", service_name, e);
+                    // Only warn to prevent multiple sentry errors
+                    warn!("Error receiving mDNS query response for service {} : {:?}", service_name, e);
                     continue;
                 }
             };
@@ -239,7 +238,8 @@ async fn fetch_mdns_info() {
                     let hosts = match responses.recv().await {
                         Ok(hosts) => hosts,
                         Err(e) => {
-                            error!("Error receiving mDNS query response for hostname {}: {:?}", hostname, e);
+                            // Only warn to prevent multiple sentry errors
+                            warn!("Error receiving mDNS query response for hostname {}: {:?}", hostname, e);
                             continue;
                         }
                     };
