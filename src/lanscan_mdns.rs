@@ -31,7 +31,7 @@ pub struct mDNSInfo {
 
 pub async fn mdns_start() {
     if MDNS_HANDLE.lock().await.is_some() {
-        info!("mDNS task already running");
+        trace!("mDNS task already running");
         return;
     }
     info!("Starting mDNS task");

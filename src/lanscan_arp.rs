@@ -1,4 +1,4 @@
-use log::{trace};
+use log::{trace, warn};
 use std::net::IpAddr;
 
 // Not on Windows as it depends on Packet.lib / Packet.dll that we don't want to ship with the binary
@@ -12,13 +12,13 @@ use regex::Regex;
 #[cfg(target_os = "windows")]
 use log::error;
 
-use std::error::Error;
+use anyhow::{anyhow, Result};
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::time::Duration;
 
 // Gets the MAC address of a device given its IP address.
-pub async fn get_mac_address_from_ip(interface_name: &str, ip_addr: &IpAddr) -> Result<String, Box<dyn Error>> {
+pub async fn get_mac_address_from_ip(interface_name: &str, ip_addr: &IpAddr) -> Result<String> {
 
     trace!("Starting ARP query for {} on interface {}", ip_addr, interface_name);
 
@@ -38,7 +38,7 @@ pub async fn get_mac_address_from_ip(interface_name: &str, ip_addr: &IpAddr) -> 
             },
             Err(e) => {
                 error!("Powershell execution error with calling {:?} : {:?}", cmd, e.to_string());
-                return Err(From::from(e.to_string()));
+                return Err(anyhow!(e.to_string()));
             }
         };
 
@@ -57,7 +57,13 @@ pub async fn get_mac_address_from_ip(interface_name: &str, ip_addr: &IpAddr) -> 
             IpAddr::V4(ipv4_addr) => {
                 let iface = Interface::new_by_name(interface_name).unwrap();
                 let mut client =
-                    ArpClient::new_with_iface(&iface).map_err(|e| format!("Error creating ArpClient: {}", e))?;
+                    match ArpClient::new_with_iface(&iface) {
+                        Ok(client) => client,
+                        Err(e) => {
+                            warn!("Error creating ArpClient: {}", e);
+                            return Err(anyhow!(e.to_string()));
+                        }
+                    };
                 trace!("Created ARP client");
                 let mac_address = client
                     .ip_to_mac(*ipv4_addr, Some(Duration::from_millis(8000)))
@@ -65,10 +71,10 @@ pub async fn get_mac_address_from_ip(interface_name: &str, ip_addr: &IpAddr) -> 
                 trace!("Ending ARP scan");
                 Ok(mac_address.to_string())
             }
-            _ => Err(From::from("Only IPv4 addresses are supported")),
+            _ => Err(anyhow!("Only IPv4 addresses are supported")),
         }
     }
 
     #[cfg(any(target_os = "ios", target_os = "android"))]
-    Err(From::from("MAC address lookup not supported on mobile devices"))
+    Err(anyhow!("MAC address lookup not supported on mobile devices"))
 }
