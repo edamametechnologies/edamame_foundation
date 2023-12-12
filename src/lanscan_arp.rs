@@ -1,5 +1,9 @@
-use log::{trace, warn};
+use log::trace;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+use log::warn;
+
 use std::net::IpAddr;
+
 
 // Not on Windows as it depends on Packet.lib / Packet.dll that we don't want to ship with the binary
 #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -38,7 +42,7 @@ pub async fn get_mac_address_from_ip(interface_name: &str, ip_addr: &IpAddr) -> 
             },
             Err(e) => {
                 error!("Powershell execution error with calling {:?} : {:?}", cmd, e.to_string());
-                return Err(anyhow!(e.to_string()));
+                return Err(anyhow!("Error querying ARP table: {}", e.to_string()));
             }
         };
 
@@ -46,7 +50,12 @@ pub async fn get_mac_address_from_ip(interface_name: &str, ip_addr: &IpAddr) -> 
 
         // Regex to match the IP and MAC address
         let re = Regex::new(&format!(r"{}\s+((\w\w-\w\w-\w\w-\w\w-\w\w-\w\w)\s)", ip_addr))?;
-        let caps = re.captures(&stdout).ok_or("No MAC address found")?;
+        let caps = match re.captures(&stdout) {
+            Some(caps) => caps,
+            None => {
+                return Err(anyhow!("No valid MAC address found for {}", ip_addr));
+            }
+        };
 
         Ok(caps[2].trim().to_string())
     }
