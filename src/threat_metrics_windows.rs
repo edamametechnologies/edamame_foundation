@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_WINDOWS: &str = r#"{
   "name": "threat model Windows",
   "extends": "none",
-  "date": "November 24th 2023",
-  "signature": "0b8bd47fe9b71084f5100e4d921fe83b586a31760b60d762da539db3309a1f22",
+  "date": "December 13th 2023",
+  "signature": "e134c50cbb7b26a9f1ae33657d01010ad81a45cb32ea6b65a6017a77945e03ba",
   "metrics": [
     {
       "name": "edamame helper disabled",
@@ -340,6 +340,80 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
             "locale": "FR",
             "class": "link",
             "target": "https://www.futura-sciences.com/tech/actualites/internet-voici-savoir-si-vos-donnees-personnelles-internet-ont-ete-piratees-103095/"
+          }
+        ]
+      }
+    },
+    {
+      "name": "lanscan",
+      "metrictype": "bool",
+      "dimension": "network",
+      "severity": 1,
+      "scope": "generic",
+      "tags": [
+        "ISO 27001/2,Information Security Incident Management",
+        "PCI-DSS,Requirement-12.10",
+        "SOC 2,CC-Incident Response",
+        "Personal Posture"
+      ],
+      "description": [
+        {
+          "locale": "EN",
+          "title": "Unverified network environment",
+          "summary": "The network you are connected to is not a known one. If you are allowed to scan this network, go to the network tab and verify the presence of potentially dangerous devices."
+        },
+        {
+          "locale": "FR",
+          "title": "Environement réseau non vérifié",
+          "summary": "Le réseau auquel vous êtes connecté n'est pas connu. Si vous êtes autorisé à scanner ce réseau, allez dans l'onglet réseau et vérifiez la présence de périphériques potentiellement dangereux."
+        }
+      ],
+      "implementation": {
+        "system": "Windows",
+        "minversion": 10,
+        "maxversion": 0,
+        "class": "internal",
+        "elevation": "user",
+        "target": "lanscan",
+        "education": []
+      },
+      "remediation": {
+        "system": "Windows",
+        "minversion": 10,
+        "maxversion": 0,
+        "class": "internal",
+        "elevation": "",
+        "target": "network_manager",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "link",
+            "target": "https://en.wikipedia.org/wiki/Port_scanner"
+          },
+          {
+            "locale": "FR",
+            "class": "link",
+            "target": "https://fr.wikipedia.org/wiki/Balayage_de_ports"
+          }
+        ]
+      },
+      "rollback": {
+        "system": "Windows",
+        "minversion": 10,
+        "maxversion": 0,
+        "class": "",
+        "elevation": "",
+        "target": "",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "link",
+            "target": "https://en.wikipedia.org/wiki/Port_scanner"
+          },
+          {
+            "locale": "FR",
+            "class": "link",
+            "target": "https://fr.wikipedia.org/wiki/Balayage_de_ports"
           }
         ]
       }

@@ -25,6 +25,23 @@ update_threat_metrics() {
     echo -e $trailer >> "$target"
 }
 
+update_port_vulns () {
+    local target=./src/lanscan_port_vulns_db.rs
+    local header="// Built in default port vulns db\npub static PORT_VULNS: &str = r#\""
+    local trailer="\"#;"
+
+    echo "Updating port vulns db"
+
+    # Prevent bash parsing of escape chars
+    local body="$(wget -qO- https://raw.githubusercontent.com/edamametechnologies/threatmodels/main/port_vulns_db.json)"
+    # Interpret escape chars
+    echo -n -e "$header" > "$target"
+    # Preserve escape chars
+    echo -n "$body" >> "$target"
+    # Interpret escape chars
+    echo -e $trailer >> "$target"
+}
+
 # Define the array of target operating systems
 targets=("macOS" "Linux" "Windows" "iOS" "Android")
 
@@ -34,6 +51,7 @@ if [ $# -eq 0 ]; then
     for os in "${targets[@]}"; do
         update_threat_metrics $os
     done
+    update_port_vulns
 else
     # If an argument is provided, just use that
     update_threat_metrics $1
