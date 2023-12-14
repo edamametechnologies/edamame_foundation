@@ -4,15 +4,8 @@ use tokio::sync::Mutex;
 use log::{info, trace};
 use once_cell::sync::Lazy;
 
+use crate::lanscan_types::*;
 use crate::lanscan_port_vulns_db::*;
-
-#[derive(Debug, Serialize, Deserialize, Clone, Ord, PartialOrd, Eq, PartialEq)]
-pub struct PortInfo {
-    pub port: u16,
-    pub protocol: String,
-    pub service: String,
-    pub banner: String,
-}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct VulnerabilityInfo {
@@ -26,7 +19,7 @@ pub struct VulnerabilityPortInfo {
     pub name: String,
     pub description: String,
     pub vulnerabilities: Vec<VulnerabilityInfo>,
-    pub occurrence: u32,
+    pub count: u32,
     pub generated_date: String,
     pub protocol: String,
 }
@@ -105,18 +98,18 @@ pub async fn get_https_ports() -> Vec<u16> {
 pub async fn get_device_criticality(port_info_list: &Vec<PortInfo>) -> String {
     let vulns = VULNS.lock().await;
 
-    // Compute the sum of vulnerabilities occurence in the port info list
-    let occurrence_sum = port_info_list.iter().fold(0, |acc, port_info| {
+    // Compute the sum of vulnerabilities count in the port info list
+    let count_sum = port_info_list.iter().fold(0, |acc, port_info| {
         if let Some(known_port_info) = vulns.port_vulns.get(&port_info.port) {
-            acc + known_port_info.occurrence
+            acc + known_port_info.count
         } else {
             acc
         }
     });
 
-    if occurrence_sum >= 10 {
+    if count_sum >= 10 {
         "High".to_string()
-    } else if occurrence_sum >= 4 {
+    } else if count_sum >= 4 {
         "Medium".to_string()
     } else {
         "Low".to_string()

@@ -6,7 +6,7 @@ use tokio::sync::Mutex;
 use once_cell::sync::Lazy;
 
 use crate::lanscan_profile_db::*;
-use crate::lanscan_port_vulns::*;
+use crate::lanscan_types::*;
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct DeviceTypeRule {
