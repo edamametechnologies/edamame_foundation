@@ -23,5 +23,6 @@ pub mod threat_metrics_macos;
 pub mod threat_metrics_windows;
 pub mod order_type;
 pub mod foundation;
+pub mod lanscan_types;
 
 
