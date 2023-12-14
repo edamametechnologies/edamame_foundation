@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_ANDROID: &str = r#"{
   "name": "threat model Android",
   "extends": "none",
-  "date": "November 24th 2023",
-  "signature": "314697f4bd33340dbc66563ea6fcf4238684fcd4d408c05c1b10365945b30405",
+  "date": "December 13th 2023",
+  "signature": "336c981803d8a59383af2f64324456fe9a3583e6bf90f97d7c328441794ade15",
   "metrics": [
     {
       "name": "MDM profiles",
@@ -294,6 +294,80 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
             "locale": "FR",
             "class": "link",
             "target": "https://www.futura-sciences.com/tech/actualites/internet-voici-savoir-si-vos-donnees-personnelles-internet-ont-ete-piratees-103095/"
+          }
+        ]
+      }
+    },
+    {
+      "name": "lanscan",
+      "metrictype": "bool",
+      "dimension": "network",
+      "severity": 1,
+      "scope": "generic",
+      "tags": [
+        "ISO 27001/2,Information Security Incident Management",
+        "PCI-DSS,Requirement-12.10",
+        "SOC 2,CC-Incident Response",
+        "Personal Posture"
+      ],
+      "description": [
+        {
+          "locale": "EN",
+          "title": "Unverified network environment",
+          "summary": "The network you are connected to is not a known one. If you are allowed to scan this network, go to the network tab and verify the presence of potentially dangerous devices."
+        },
+        {
+          "locale": "FR",
+          "title": "Environement réseau non vérifié",
+          "summary": "Le réseau auquel vous êtes connecté n'est pas connu. Si vous êtes autorisé à scanner ce réseau, allez dans l'onglet réseau et vérifiez la présence de périphériques potentiellement dangereux."
+        }
+      ],
+      "implementation": {
+        "system": "Android",
+        "minversion": 13,
+        "maxversion": 0,
+        "class": "internal",
+        "elevation": "user",
+        "target": "lanscan",
+        "education": []
+      },
+      "remediation": {
+        "system": "Android",
+        "minversion": 13,
+        "maxversion": 0,
+        "class": "internal",
+        "elevation": "",
+        "target": "network_manager",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "link",
+            "target": "https://en.wikipedia.org/wiki/Port_scanner"
+          },
+          {
+            "locale": "FR",
+            "class": "link",
+            "target": "https://fr.wikipedia.org/wiki/Balayage_de_ports"
+          }
+        ]
+      },
+      "rollback": {
+        "system": "Android",
+        "minversion": 13,
+        "maxversion": 0,
+        "class": "",
+        "elevation": "",
+        "target": "",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "link",
+            "target": "https://en.wikipedia.org/wiki/Port_scanner"
+          },
+          {
+            "locale": "FR",
+            "class": "link",
+            "target": "https://fr.wikipedia.org/wiki/Balayage_de_ports"
           }
         ]
       }

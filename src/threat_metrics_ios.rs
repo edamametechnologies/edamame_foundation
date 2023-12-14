@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_IOS: &str = r#"{
   "name": "threat model iOS",
   "extends": "none",
-  "date": "November 24th 2023",
-  "signature": "922479241a519b805dab78c00b2dbfa04bd9d2cba813143c81217f5ecbd4555b",
+  "date": "December 13th 2023",
+  "signature": "4e7f0301d2397b31a8ae7989cf74d1ff0384f05802bf66edd74643b2c6d4df00",
   "metrics": [
     {
       "name": "MDM profiles",
@@ -294,6 +294,80 @@ pub static THREAT_METRICS_IOS: &str = r#"{
             "locale": "FR",
             "class": "link",
             "target": "https://www.futura-sciences.com/tech/actualites/internet-voici-savoir-si-vos-donnees-personnelles-internet-ont-ete-piratees-103095/"
+          }
+        ]
+      }
+    },
+    {
+      "name": "lanscan",
+      "metrictype": "bool",
+      "dimension": "network",
+      "severity": 1,
+      "scope": "generic",
+      "tags": [
+        "ISO 27001/2,Information Security Incident Management",
+        "PCI-DSS,Requirement-12.10",
+        "SOC 2,CC-Incident Response",
+        "Personal Posture"
+      ],
+      "description": [
+        {
+          "locale": "EN",
+          "title": "Unverified network environment",
+          "summary": "The network you are connected to is not a known one. If you are allowed to scan this network, go to the network tab and verify the presence of potentially dangerous devices."
+        },
+        {
+          "locale": "FR",
+          "title": "Environement réseau non vérifié",
+          "summary": "Le réseau auquel vous êtes connecté n'est pas connu. Si vous êtes autorisé à scanner ce réseau, allez dans l'onglet réseau et vérifiez la présence de périphériques potentiellement dangereux."
+        }
+      ],
+      "implementation": {
+        "system": "iOS",
+        "minversion": 15,
+        "maxversion": 0,
+        "class": "internal",
+        "elevation": "user",
+        "target": "lanscan",
+        "education": []
+      },
+      "remediation": {
+        "system": "iOS",
+        "minversion": 15,
+        "maxversion": 0,
+        "class": "internal",
+        "elevation": "",
+        "target": "network_manager",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "link",
+            "target": "https://en.wikipedia.org/wiki/Port_scanner"
+          },
+          {
+            "locale": "FR",
+            "class": "link",
+            "target": "https://fr.wikipedia.org/wiki/Balayage_de_ports"
+          }
+        ]
+      },
+      "rollback": {
+        "system": "iOS",
+        "minversion": 15,
+        "maxversion": 0,
+        "class": "",
+        "elevation": "",
+        "target": "",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "link",
+            "target": "https://en.wikipedia.org/wiki/Port_scanner"
+          },
+          {
+            "locale": "FR",
+            "class": "link",
+            "target": "https://fr.wikipedia.org/wiki/Balayage_de_ports"
           }
         ]
       }
