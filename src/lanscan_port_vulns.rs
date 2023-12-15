@@ -40,10 +40,9 @@ impl VulnerabilityInfoList {
         let mut https_ports = HashMap::new();
 
         for port_info in port_vulns_list {
-            if port_info.description.contains("HTTP (Hypertext Transfer Protocol)") {
+            if port_info.protocol == "HTTP" {
                 http_ports.insert(port_info.port, port_info.clone());
-            }
-            if port_info.description.contains("HTTPS (HTTP Secure)") {
+            } else if port_info.protocol == "HTTPS" {
                 https_ports.insert(port_info.port, port_info.clone());
             }
             port_vulns.insert(port_info.port, port_info);
