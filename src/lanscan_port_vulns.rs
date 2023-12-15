@@ -107,9 +107,10 @@ pub async fn get_device_criticality(port_info_list: &Vec<PortInfo>) -> String {
         }
     });
 
+    // More than 10 vulnerabilities is high, at least one port open is medium, otherwise low
     if count_sum >= 10 {
         "High".to_string()
-    } else if count_sum >= 4 {
+    } else if !port_info_list.is_empty() {
         "Medium".to_string()
     } else {
         "Low".to_string()
