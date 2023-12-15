@@ -48,6 +48,8 @@ impl VulnerabilityInfoList {
             port_vulns.insert(port_info.port, port_info);
         }
 
+        info!("Loaded {} ports, {} HTTP ports, {} HTTPS ports", port_vulns.len(), http_ports.len(), https_ports.len());
+
         VulnerabilityInfoList {
             port_vulns,
             http_ports,
