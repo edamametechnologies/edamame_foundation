@@ -1,14 +1,11 @@
 use log::trace;
-#[cfg(any(target_os = "macos", target_os = "linux"))]
-use log::warn;
-
 use std::net::IpAddr;
-
 
 // Not on Windows as it depends on Packet.lib / Packet.dll that we don't want to ship with the binary
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use libarp::{client::ArpClient, interfaces::Interface};
 
+// Rather just use PS...
 #[cfg(target_os = "windows")]
 use powershell_script::PsScriptBuilder;
 #[cfg(target_os = "windows")]
@@ -69,7 +66,8 @@ pub async fn get_mac_address_from_ip(interface_name: &str, ip_addr: &IpAddr) -> 
                     match ArpClient::new_with_iface(&iface) {
                         Ok(client) => client,
                         Err(e) => {
-                            warn!("Error creating ArpClient: {}", e);
+                            // This will fail if we are in userspace
+                            trace!("Error creating ArpClient: {}", e);
                             return Err(anyhow!(e.to_string()));
                         }
                     };
