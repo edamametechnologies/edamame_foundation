@@ -58,11 +58,11 @@ update_lanscan_port_vulns () {
 }
 
 update_lanscan_profiles () {
-    local target=./src/lanscan_profile_db.rs
+    local target=./src/lanscan_profiles_db.rs
     local header="// Built in default profile db\npub static DEVICE_PROFILES: &str = r#\""
     local trailer="\"#;"
 
-    echo "Updating lanscan profile db"
+    echo "Updating lanscan profiles db"
 
     # Delete the file if it exists
     if [ -f "$target" ]; then
@@ -74,7 +74,7 @@ update_lanscan_profiles () {
       branch=dev
     fi
     # Prevent bash parsing of escape chars
-    local body="$(wget --no-cache -qO- https://raw.githubusercontent.com/edamametechnologies/threatmodels/$branch/lanscan_profile_db.json)"
+    local body="$(wget --no-cache -qO- https://raw.githubusercontent.com/edamametechnologies/threatmodels/$branch/lanscan_profiles_db.json)"
     # Interpret escape chars
     echo -n -e "$header" > "$target"
     # Preserve escape chars

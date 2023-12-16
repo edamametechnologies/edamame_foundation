@@ -156,21 +156,17 @@ impl ThreatMetrics {
             Ok(res) => {
                 if res.status().is_success() {
                     info!("Threat model transfer complete");
-                    success = true;
-
                     let json: ThreatMetricsJSON = res.json().await?;
 
-                    let clone_json = json.clone();
-                    if success {
-                        // Then create complete versions of objects
-                        let metrics = Self::create_objects(&clone_json);
-                        self.name = json.name;
-                        self.extends = json.extends;
-                        self.date = json.date;
-                        self.signature = json.signature;
-                        self.metrics = metrics;
-                        self.timestamp = "".to_string();
-                    }
+                    // Then create complete versions of objects
+                    let metrics = Self::create_objects(&json);
+                    self.name = json.name;
+                    self.extends = json.extends;
+                    self.date = json.date;
+                    self.signature = json.signature;
+                    self.metrics = metrics;
+                    self.timestamp = "".to_string();
+                    success = true;
                 } else {
                     error!(
                         "Threat model transfer failed with status: {:?}",
