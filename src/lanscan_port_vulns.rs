@@ -24,7 +24,15 @@ pub struct VulnerabilityPortInfo {
     pub protocol: String,
 }
 
+pub struct VulnerabilityInfoListJSON {
+    pub date: String,
+    pub signature: String,
+    pub port_vulns: Vec<VulnerabilityPortInfo>,
+}
+
 pub struct VulnerabilityInfoList {
+    pub date: String,
+    pub signature: String,
     pub port_vulns: HashMap<u16, VulnerabilityPortInfo>,
     pub http_ports: HashMap<u16, VulnerabilityPortInfo>,
     pub https_ports: HashMap<u16, VulnerabilityPortInfo>,
@@ -34,7 +42,8 @@ impl VulnerabilityInfoList {
 
     pub fn new_from_str(json: &str) -> Self {
         info!("Loading port info list from JSON");
-        let port_vulns_list: Vec<VulnerabilityPortInfo> = serde_json::from_str(json).unwrap();
+        let vuln_info: VulnerabilityInfoListJSON = serde_json::from_str(json).unwrap();
+        let port_vulns_list = vuln_info.port_vulns.clone();
         let mut port_vulns = HashMap::new();
         let mut http_ports = HashMap::new();
         let mut https_ports = HashMap::new();
@@ -51,6 +60,8 @@ impl VulnerabilityInfoList {
         info!("Loaded {} ports, {} HTTP ports, {} HTTPS ports", port_vulns.len(), http_ports.len(), https_ports.len());
 
         VulnerabilityInfoList {
+            date: vuln_info.date.clone(),
+            signature: vuln_info.signature.clone(),
             port_vulns,
             http_ports,
             https_ports,

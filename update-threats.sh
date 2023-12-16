@@ -7,6 +7,11 @@ update_threat_metrics() {
 
     echo "Updating threat metrics for $os / $os_lower / $os_upper"
 
+    # Delete the file if it exists
+    if [ -f "$target" ]; then
+        rm "$target"
+    fi
+
     local branch=$(git rev-parse --abbrev-ref HEAD)
     # Only deal with main and dev branches, default to dev
     if [ $branch != "dev" ] && [ $branch != "main" ]; then
@@ -16,7 +21,7 @@ update_threat_metrics() {
     local header="// Built in default threat model\npub static THREAT_METRICS_$os_upper: &str = r#\""
     local trailer="\"#;"
     # Prevent bash parsing of escape chars
-    local body="$(wget -qO- https://raw.githubusercontent.com/edamametechnologies/threatmodels/$branch/threatmodel-$os.json)"
+    local body="$(wget --no-cache -qO- https://raw.githubusercontent.com/edamametechnologies/threatmodels/$branch/threatmodel-$os.json)"
     # Interpret escape chars
     echo -n -e "$header" > "$target"
     # Preserve escape chars
@@ -25,15 +30,51 @@ update_threat_metrics() {
     echo -e $trailer >> "$target"
 }
 
-update_port_vulns () {
+update_lanscan_port_vulns () {
     local target=./src/lanscan_port_vulns_db.rs
     local header="// Built in default port vulns db\npub static PORT_VULNS: &str = r#\""
     local trailer="\"#;"
 
-    echo "Updating port vulns db"
+    echo "Updating lanscan port vulns db"
 
+    # Delete the file if it exists
+    if [ -f "$target" ]; then
+        rm "$target"
+    fi
+
+    local branch=$(git rev-parse --abbrev-ref HEAD)
+    # Only deal with main and dev branches, default to dev
+    if [ $branch != "dev" ] && [ $branch != "main" ]; then
+      branch=dev
+    fi
     # Prevent bash parsing of escape chars
-    local body="$(wget -qO- https://raw.githubusercontent.com/edamametechnologies/threatmodels/main/port_vulns_db.json)"
+    local body="$(wget --no-cache -qO- https://raw.githubusercontent.com/edamametechnologies/threatmodels/$branch/lanscan_port_vulns_db.json)"
+    # Interpret escape chars
+    echo -n -e "$header" > "$target"
+    # Preserve escape chars
+    echo -n "$body" >> "$target"
+    # Interpret escape chars
+    echo -e $trailer >> "$target"
+}
+
+update_lanscan_profiles () {
+    local target=./src/lanscan_profile_db.rs
+    local header="// Built in default profile db\npub static DEVICE_PROFILES: &str = r#\""
+    local trailer="\"#;"
+
+    echo "Updating lanscan profile db"
+
+    # Delete the file if it exists
+    if [ -f "$target" ]; then
+        rm "$target"
+    fi
+    local branch=$(git rev-parse --abbrev-ref HEAD)
+    # Only deal with main and dev branches, default to dev
+    if [ $branch != "dev" ] && [ $branch != "main" ]; then
+      branch=dev
+    fi
+    # Prevent bash parsing of escape chars
+    local body="$(wget --no-cache -qO- https://raw.githubusercontent.com/edamametechnologies/threatmodels/$branch/lanscan_profile_db.json)"
     # Interpret escape chars
     echo -n -e "$header" > "$target"
     # Preserve escape chars
@@ -51,7 +92,8 @@ if [ $# -eq 0 ]; then
     for os in "${targets[@]}"; do
         update_threat_metrics $os
     done
-    update_port_vulns
+    update_lanscan_profiles
+    update_lanscan_port_vulns
 else
     # If an argument is provided, just use that
     update_threat_metrics $1
