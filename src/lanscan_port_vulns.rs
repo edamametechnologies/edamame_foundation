@@ -1,11 +1,15 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tokio::sync::Mutex;
-use log::{info, trace};
+use log::{info, trace, error, warn};
 use once_cell::sync::Lazy;
+use std::error::Error;
 
 use crate::lanscan_types::*;
 use crate::lanscan_port_vulns_db::*;
+
+const PORT_VULNS_REPO: &str = "https://raw.githubusercontent.com/edamametechnologies/threatmodels";
+const PORT_VULNS_NAME: &str = "lanscan_port_vulns_db.json";
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct VulnerabilityInfo {
@@ -20,14 +24,14 @@ pub struct VulnerabilityPortInfo {
     pub description: String,
     pub vulnerabilities: Vec<VulnerabilityInfo>,
     pub count: u32,
-    pub generated_date: String,
     pub protocol: String,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct VulnerabilityInfoListJSON {
     pub date: String,
     pub signature: String,
-    pub port_vulns: Vec<VulnerabilityPortInfo>,
+    pub vulnerabilities: Vec<VulnerabilityPortInfo>,
 }
 
 pub struct VulnerabilityInfoList {
@@ -40,10 +44,9 @@ pub struct VulnerabilityInfoList {
 
 impl VulnerabilityInfoList {
 
-    pub fn new_from_str(json: &str) -> Self {
+    pub fn new_from_json(vuln_info: &VulnerabilityInfoListJSON) -> Self {
         info!("Loading port info list from JSON");
-        let vuln_info: VulnerabilityInfoListJSON = serde_json::from_str(json).unwrap();
-        let port_vulns_list = vuln_info.port_vulns.clone();
+        let port_vulns_list = vuln_info.vulnerabilities.clone();
         let mut port_vulns = HashMap::new();
         let mut http_ports = HashMap::new();
         let mut https_ports = HashMap::new();
@@ -70,7 +73,8 @@ impl VulnerabilityInfoList {
 }
 
 pub static VULNS: Lazy<Mutex<VulnerabilityInfoList>> = Lazy::new(|| {
-    let vulns = VulnerabilityInfoList::new_from_str(PORT_VULNS);
+    let vuln_info: VulnerabilityInfoListJSON = serde_json::from_str(PORT_VULNS).unwrap();
+    let vulns = VulnerabilityInfoList::new_from_json(&vuln_info);
     Mutex::new(vulns)
 });
 
@@ -127,4 +131,44 @@ pub async fn get_device_criticality(port_info_list: &Vec<PortInfo>) -> String {
     } else {
         "Low".to_string()
     }
+}
+
+pub async fn update(branch: &str) -> Result<bool, Box<dyn Error>> {
+    info!("Starting port vulns update from backend");
+
+    let mut success = false;
+
+    let url = format!(
+        "{}/{}/{}",
+        PORT_VULNS_REPO, branch, PORT_VULNS_NAME
+    );
+
+    info!("Fetching port vulns from {}", url);
+
+    let response = reqwest::get(&url).await;
+
+    match response {
+        Ok(res) => {
+            if res.status().is_success() {
+                info!("Port vulns transfer complete");
+                success = true;
+
+                let json: VulnerabilityInfoListJSON = res.json().await?;
+                let mut locked_vulns = VULNS.lock().await;
+                *locked_vulns = VulnerabilityInfoList::new_from_json(&json);
+
+            } else {
+                error!(
+                        "Port vulns transfer failed with status: {:?}",
+                        res.status()
+                    );
+            }
+        }
+        Err(err) => {
+            // Only warn this can happen if the device is offline
+            warn!("Port vulns transfer failed: {:?}", err);
+        }
+    }
+
+    Ok(success)
 }
