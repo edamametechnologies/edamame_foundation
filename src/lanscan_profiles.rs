@@ -64,6 +64,8 @@ pub async fn device_type(port_info: &Vec<PortInfo>, mdns_services: &Vec<String>,
     let oui_vendor_lower = oui_vendor.to_lowercase();
     let open_ports_set: HashSet<u16> = port_info.iter().map(|info| info.port).collect();
 
+    // Match on unique set of ports > match on the presence of at least one service > match on the presence of a unique vendor
+
     for rule in device_types.device_types.iter() {
 
         // Match on ports, a type can be defined by a unique set of ports
@@ -75,11 +77,13 @@ pub async fn device_type(port_info: &Vec<PortInfo>, mdns_services: &Vec<String>,
             return rule.device_type.to_string();
         };
 
-        // Match on services, a type can be defined by the presence of at least one service
+        // Match on services, a type can be defined by the presence of at least one service in its service list
         if ! rule.mdns_services.is_empty() && rule
             .mdns_services
             .iter()
-            .any(|service| mdns_services.contains(service))
+            // The actual service name can have a prefix (for example ....-supportsRP-17._apple-mobdev2._tcp.local for _apple-mobdev2._tcp.local)
+            // So we must use contains instead of equality
+            .any(|service| mdns_services.iter().any(|mdns_service| mdns_service.contains(service)))
         {
             trace!("Match for services {:?} : {:?}", rule.mdns_services, rule);
             return rule.device_type.to_string();

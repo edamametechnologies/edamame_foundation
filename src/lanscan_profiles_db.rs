@@ -1,7 +1,7 @@
 // Built in default profile db
 pub static DEVICE_PROFILES: &str = r#"{
   "date": "December 16th 2023",
-  "signature": "0245a051563d732444c7fb7cf7b71e0ad32352193059a12af87731d99d984362",
+  "signature": "5644ec8111623f67dbfb5d7f20e03a5e3f08e4ae42438b1d76de863c9fb6a09a",
   "profiles": [
     {
       "device_type": "Printer",
@@ -106,7 +106,10 @@ pub static DEVICE_PROFILES: &str = r#"{
         1883,
         8883
       ],
-      "mdns_services": ["_hue._tcp.local", "_hap._tcp.local"],
+      "mdns_services": [
+        "_hue._tcp.local",
+        "_hap._tcp.local"
+      ],
       "vendors": [
         "wemo",
         "lifx",
