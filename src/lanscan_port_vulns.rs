@@ -11,7 +11,7 @@ use crate::lanscan_port_vulns_db::*;
 const PORT_VULNS_REPO: &str = "https://raw.githubusercontent.com/edamametechnologies/threatmodels";
 const PORT_VULNS_NAME: &str = "lanscan_port_vulns_db.json";
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Ord, Eq, PartialEq, PartialOrd)]
 pub struct VulnerabilityInfo {
     pub name: String,
     pub description: String,
@@ -109,6 +109,14 @@ pub async fn get_https_ports() -> Vec<u16> {
     let vulns = VULNS.lock().await;
     trace!("Locking VULNS - end");
     vulns.https_ports.keys().cloned().collect()
+}
+
+pub async fn get_vulns_of_port(port: u16) -> Vec<VulnerabilityInfo> {
+    trace!("Locking VULNS - start");
+    let vulns = VULNS.lock().await;
+    trace!("Locking VULNS - end");
+    vulns.port_vulns.get(&port)
+        .map_or(Vec::new(), |port_info| port_info.vulnerabilities.clone())
 }
 
 pub async fn get_device_criticality(port_info_list: &Vec<PortInfo>) -> String {
