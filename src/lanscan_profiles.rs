@@ -110,7 +110,7 @@ pub async fn device_type(port_info: &Vec<PortInfo>, mdns_services: &Vec<String>,
 }
 
 pub async fn update(branch: &str) -> Result<bool, Box<dyn Error>> {
-    info!("Starting port vulns update from backend");
+    info!("Starting profiles update from backend");
 
     let mut success = false;
 
@@ -119,14 +119,14 @@ pub async fn update(branch: &str) -> Result<bool, Box<dyn Error>> {
         PROFILES_REPO, branch, PROFILES_NAME
     );
 
-    info!("Fetching profile from {}", url);
+    info!("Fetching profiles from {}", url);
 
     let response = reqwest::get(&url).await;
 
     match response {
         Ok(res) => {
             if res.status().is_success() {
-                info!("Profile transfer complete");
+                info!("Profiles transfer complete");
                 success = true;
 
                 let json: DeviceTypeListJSON = res.json().await?;
@@ -135,14 +135,14 @@ pub async fn update(branch: &str) -> Result<bool, Box<dyn Error>> {
 
             } else {
                 error!(
-                        "Profile transfer failed with status: {:?}",
+                        "Profiles transfer failed with status: {:?}",
                         res.status()
                     );
             }
         }
         Err(err) => {
             // Only warn this can happen if the device is offline
-            warn!("Profile transfer failed: {:?}", err);
+            warn!("Profiles transfer failed: {:?}", err);
         }
     }
 
