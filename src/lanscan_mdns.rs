@@ -206,7 +206,7 @@ async fn fetch_mdns_info() {
                 services
             },
             Err(e) => {
-                error!("Error receiving mDNS services query response: {:?}", e);
+                warn!("Error receiving mDNS services query response: {:?}", e);
                 tokio::time::sleep(pause_duration).await;
                 continue;
             }
