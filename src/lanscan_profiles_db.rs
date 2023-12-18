@@ -1,7 +1,7 @@
 // Built in default profile db
 pub static DEVICE_PROFILES: &str = r#"{
   "date": "December 17th 2023",
-  "signature": "a0d8d4c8d4209f157d46cec9a0602f16e2ad66313975f29d1e13fa430ab4778a",
+  "signature": "27aa9cba78c3fdccab41b2e86b8553e360b46d36b1b578a1ece10615191ad05e",
   "profiles": [
     {
       "device_type": "Printer",
@@ -23,16 +23,6 @@ pub static DEVICE_PROFILES: &str = r#"{
         "sharp"
       ],
       "os_list": []
-    },
-    {
-      "device_type": "Router",
-      "open_ports": [
-        53
-      ],
-      "mdns_services": [],
-      "vendors": [],
-      "os_list": [
-      ]
     },
     {
       "device_type": "iPhone",
@@ -99,15 +89,26 @@ pub static DEVICE_PROFILES: &str = r#"{
       ]
     },
     {
+      "device_type": "Router",
+      "open_ports": [
+        53
+      ],
+      "mdns_services": [],
+      "vendors": [],
+      "os_list": [
+        "Linux",
+        "FreeBSD"
+      ]
+    },
+    {
       "device_type": "IoT",
       "open_ports": [
         1883,
         8883
       ],
       "mdns_services": [
-        "_mqtt._tcp.local",
-        "_hap._tcp.local",
-        "_hue._tcp.local"
+        "_hue._tcp.local",
+        "_hap._tcp.local"
       ],
       "vendors": [
         "wemo",
@@ -208,8 +209,7 @@ pub static DEVICE_PROFILES: &str = r#"{
     },
     {
       "device_type": "SmartTV",
-      "open_ports": [
-      ],
+      "open_ports": [],
       "mdns_services": [
         "_androidtvremote2._tcp.local"
       ],

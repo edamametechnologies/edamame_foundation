@@ -191,10 +191,13 @@ pub async fn rpc_run(
         return order_error("order received with empty version of ordertype", true);
     }
 
-    if version != CARGO_PKG_VERSION {
+    // Check the version - allow xx.yy.zz = xx.yy.ww
+    let major_version = version.split('.').take(2).collect::<Vec<&str>>().join(".");
+    let major_cargo_version = CARGO_PKG_VERSION.split('.').take(2).collect::<Vec<&str>>().join(".");
+    if major_version != major_cargo_version {
         return order_error(&format!(
-            "order received with foundation version mismatch - received {} != {}",
-            version, CARGO_PKG_VERSION), true);
+            "order received with foundation major version mismatch - received {} != {}",
+            major_version, major_cargo_version), true);
     }
 
     info!(

@@ -168,8 +168,11 @@ async fn process_host(host: Host, service_name: String) {
             // Check if the instance name is containing a MAC address using a regex
             match extract_mac_address(&instance) {
                 Some(mac_address) => {
-                    info!("Extracted MAC Address {} from instance {}", instance, mac_address);
+                    info!("Extracted MAC Address {} from instance {}", mac_address, instance);
                     if mdns_info.mac_address.is_empty() {
+                        mdns_info.mac_address = mac_address;
+                    } else if mdns_info.mac_address != mac_address {
+                        warn!("MAC Address {} from instance {} is different from the one already found {}, using the one from instance", mac_address, instance, mdns_info.mac_address);
                         mdns_info.mac_address = mac_address;
                     }
                 },
