@@ -97,4 +97,6 @@ if [ $# -eq 0 ]; then
 else
     # If an argument is provided, just use that
     update_threat_metrics $1
+    update_lanscan_profiles
+    update_lanscan_port_vulns
 fi
