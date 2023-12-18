@@ -1,6 +1,6 @@
 [package]
 name = "edamame_foundation"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2021"
 
 [lib]
@@ -73,6 +73,7 @@ libc = "0.2.147"
 # See https://github.com/abaumhauer/eui48/issues/29 - warning should be suppressed, but it's not...
 eui48 = { version = "1.1.0", features = ["disp_hexstring", "serde"] }
 oui = "0.8.1"
+ipnet = "2.9.0"
 
 # SSL related deps for iOS/Android (rustls doesn't work on iOS/Android due to missing certs but native-tls does)
 [target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
@@ -81,6 +82,10 @@ reqwest = { version = "0.11.18", default-features = false, features = ["native-t
 # SSL related deps for not iOS/Android
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 reqwest = { version = "0.11.18", features = ["json"] }
+
+# Not supported on iOS an Android (only implemented in Flutter for those platforms)
+[target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
+network-interface = "1.1.1"
 
 # Libpnet is a dependency that is not working on iOS/Android and depends on WinPcap on windows (that we don't want to ship with the binary)
 [target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]

@@ -11,6 +11,8 @@ pub mod lanscan_profiles;
 pub mod lanscan_profiles_db;
 pub mod lanscan_oui;
 pub mod lanscan_oui_db;
+pub mod lanscan_types;
+pub mod lanscan_interface;
 pub mod logger;
 pub mod runner_cli;
 pub mod runtime;
@@ -23,6 +25,6 @@ pub mod threat_metrics_macos;
 pub mod threat_metrics_windows;
 pub mod order_type;
 pub mod foundation;
-pub mod lanscan_types;
+
 
 
