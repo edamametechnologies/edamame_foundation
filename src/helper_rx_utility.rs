@@ -30,8 +30,15 @@ pub async fn mdns_resolve(addresses: &str) -> Result<String, Box<dyn Error>> {
         match address.parse() {
             Ok(ip) => {
                 if let Some(mdns_info) = mdns_get_by_ipv4(&ip).await {
-                    let services = mdns_info.services.iter().cloned().collect();
-                    mdns_results.push((address, mdns_info.hostname, mdns_info.mac_address, services));
+
+                    // mDNS info - we combine instances and services
+                    let mut mdns_services_instances = mdns_info.instances.to_vec();
+                    mdns_services_instances.extend(mdns_info.services.to_vec());
+                    // Deduplicate
+                    mdns_services_instances.sort();
+                    mdns_services_instances.dedup();
+
+                    mdns_results.push((address, mdns_info.hostname, mdns_info.mac_address, mdns_services_instances));
                 } else {
                     // Only warn
                     warn!("No mDNS info found for IP {}", address);

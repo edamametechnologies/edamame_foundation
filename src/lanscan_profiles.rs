@@ -103,7 +103,9 @@ pub async fn device_type(port_info: &Vec<PortInfo>, mdns_services: &Vec<String>,
     }
     // Generate an error if there is significant information in order to improve the profiles
     if (! port_info.is_empty() || ! mdns_services.is_empty()) && ! oui_vendor.is_empty() {
-        error!("Unknown device type for ports {:?}, mdns {:?}, vendor {}, OS name {}", port_info, mdns_services, oui_vendor, os_name);
+        // Extract port numbers from port_info
+        let ports: Vec<u16> = port_info.iter().map(|info| info.port).collect();
+        error!("Unknown device type for ports {:?}, mdns {:?}, vendor {}, OS name {}", ports, mdns_services, oui_vendor, os_name);
     }
 
     "Unknown".to_string()

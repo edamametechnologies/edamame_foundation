@@ -1,7 +1,7 @@
 // Built in default profile db
 pub static DEVICE_PROFILES: &str = r#"{
-  "date": "December 16th 2023",
-  "signature": "5644ec8111623f67dbfb5d7f20e03a5e3f08e4ae42438b1d76de863c9fb6a09a",
+  "date": "December 17th 2023",
+  "signature": "a0d8d4c8d4209f157d46cec9a0602f16e2ad66313975f29d1e13fa430ab4778a",
   "profiles": [
     {
       "device_type": "Printer",
@@ -23,6 +23,16 @@ pub static DEVICE_PROFILES: &str = r#"{
         "sharp"
       ],
       "os_list": []
+    },
+    {
+      "device_type": "Router",
+      "open_ports": [
+        53
+      ],
+      "mdns_services": [],
+      "vendors": [],
+      "os_list": [
+      ]
     },
     {
       "device_type": "iPhone",
@@ -89,26 +99,15 @@ pub static DEVICE_PROFILES: &str = r#"{
       ]
     },
     {
-      "device_type": "Router",
-      "open_ports": [
-        53
-      ],
-      "mdns_services": [],
-      "vendors": [],
-      "os_list": [
-        "Linux",
-        "FreeBSD"
-      ]
-    },
-    {
       "device_type": "IoT",
       "open_ports": [
         1883,
         8883
       ],
       "mdns_services": [
-        "_hue._tcp.local",
-        "_hap._tcp.local"
+        "_mqtt._tcp.local",
+        "_hap._tcp.local",
+        "_hue._tcp.local"
       ],
       "vendors": [
         "wemo",
@@ -126,12 +125,7 @@ pub static DEVICE_PROFILES: &str = r#"{
     {
       "device_type": "NAS",
       "open_ports": [],
-      "mdns_services": [
-        "_afpovertcp._tcp.local",
-        "_smb._tcp.local",
-        "_smb2._tcp.local",
-        "_nfs._tcp.local."
-      ],
+      "mdns_services": [],
       "vendors": [
         "synology",
         "qnap",
@@ -195,39 +189,10 @@ pub static DEVICE_PROFILES: &str = r#"{
       "os_list": []
     },
     {
-      "device_type": "SmartTV",
-      "open_ports": [],
-      "mdns_services": [
-        "_googlecast._tcp.local",
-        "_airplay._tcp.local",
-        "_raop._tcp.local"
-      ],
-      "vendors": [
-        "tcl",
-        "hisense",
-        "vizio",
-        "sharp",
-        "toshiba"
-      ],
-      "os_list": []
-    },
-    {
-      "device_type": "SmartTV",
-      "open_ports": [
-        7676,
-        8001,
-        8080
-      ],
-      "mdns_services": [],
-      "vendors": [],
-      "os_list": []
-    },
-    {
       "device_type": "SmartSpeaker",
       "open_ports": [],
       "mdns_services": [
-        "_sonos._tcp.local",
-        "_spotify-connect._tcp.local"
+        "_sonos._tcp.local"
       ],
       "vendors": [
         "amazon",
@@ -242,33 +207,47 @@ pub static DEVICE_PROFILES: &str = r#"{
       ]
     },
     {
+      "device_type": "SmartTV",
+      "open_ports": [
+      ],
+      "mdns_services": [
+        "_androidtvremote2._tcp.local"
+      ],
+      "vendors": [],
+      "os_list": []
+    },
+    {
+      "device_type": "SmartTV",
+      "open_ports": [
+        7676,
+        8001,
+        8080
+      ],
+      "mdns_services": [],
+      "vendors": [],
+      "os_list": []
+    },
+    {
+      "device_type": "SmartTV",
+      "open_ports": [],
+      "mdns_services": [
+        "_googlecast._tcp.local",
+        "_airplay._tcp.local"
+      ],
+      "vendors": [
+        "tcl",
+        "hisense",
+        "vizio",
+        "sharp",
+        "toshiba"
+      ],
+      "os_list": []
+    },
+    {
       "device_type": "Camera",
       "open_ports": [],
       "mdns_services": [
-        "_axis-video._tcp.local",
-        "_axis-camera._tcp.local",
-        "_axis-https._tcp.local",
-        "_axis-video-discover._tcp.local",
-        "_axis-acap._tcp.local",
-        "_axis-mediacontrol._tcp.local",
-        "_axis-rtsp._tcp.local",
-        "_axis-rtsp-http._tcp.local",
-        "_axis-rtsp-https._tcp.local",
-        "_axis-rtsp-rtp-udp._tcp.local",
-        "_axis-rtsp-rtp-tcp._tcp.local",
-        "_axis-search._tcp.local",
-        "_axis-update._tcp.local",
-        "_axis-remotecontrol._tcp.local",
-        "_axis-remotecontrol-discover._tcp.local",
-        "_axis-remotecontrol-https._tcp.local",
-        "_axis-remotecontrol-http._tcp.local",
-        "_axis-remotecontrol-rtp-udp._tcp.local",
-        "_axis-remotecontrol-rtp-tcp._tcp.local",
-        "_axis-remotecontrol-rtsp._tcp.local",
-        "_axis-remotecontrol-rtsp-http._tcp.local",
-        "_axis-remotecontrol-rtsp-https._tcp.local",
-        "_axis-remotecontrol-rtsp-rtp-udp._tcp.local",
-        "_axis-remotecontrol-rtsp-rtp-tcp._tcp.local"
+        "_axis-video._tcp.local"
       ],
       "vendors": [
         "hikvision",

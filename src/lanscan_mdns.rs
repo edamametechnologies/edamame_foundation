@@ -8,6 +8,7 @@ use tokio::sync::Mutex;
 use tokio::time::Duration;
 use lazy_static::lazy_static;
 use sorted_vec::SortedVec;
+use regex::Regex;
 
 // Our own fork with minor adjustements
 use wez_mdns::{QueryParameters, Host};
@@ -101,13 +102,18 @@ fn v6_to_mac(ipv6: &str) -> Option<String> {
         eui64_bytes[7],
     ];
 
-    Some(
-        eui48_bytes
-            .iter()
-            .map(|byte| format!("{:02x}", byte))
-            .collect::<Vec<String>>()
-            .join(":"),
-    )
+    let mac = eui48_bytes
+        .iter()
+        .map(|byte| format!("{:02x}", byte))
+        .collect::<Vec<String>>()
+        .join(":");
+    trace!("Converted link-local IPv6 address {} to MAC address {}", ipv6, mac);
+    Some(mac)
+}
+
+fn extract_mac_address(input: &str) -> Option<String> {
+    let re = Regex::new(r"([0-9a-fA-F]{2}[:-]){5}([0-9a-fA-F]{2})").unwrap();
+    re.find(input).map(|mat| mat.as_str().to_string())
 }
 
 async fn process_host(host: Host, service_name: String) {
@@ -141,7 +147,7 @@ async fn process_host(host: Host, service_name: String) {
                     // Convert the IPv6 address to a MAC address
                     if mdns_info.mac_address.is_empty() {
                         if let Some(mac) = v6_to_mac(&ip.to_string()) {
-                            trace!("Found MAC address {} for IPv6 address {}", mac, ip);
+                            info!("Found MAC address {} for IPv6 address {}", mac, ip);
                             mdns_info.mac_address = mac;
                         }
                     }
@@ -149,11 +155,27 @@ async fn process_host(host: Host, service_name: String) {
             }
             // Process the service and instance names
             if !mdns_info.services.contains(&service_name) {
+                info!("Found service {} for host {}", service_name, hostname);
                 mdns_info.services.push(service_name.clone());
             }
+
             // Filter out the instances limited to the host name
             if !mdns_info.instances.contains(&instance) && &instance != hostname {
+                info!("Found instance {} for host {}", instance, hostname);
                 mdns_info.instances.push(host.name.clone());
+            }
+
+            // Check if the instance name is containing a MAC address using a regex
+            match extract_mac_address(&instance) {
+                Some(mac_address) => {
+                    info!("Extracted MAC Address {} from instance {}", instance, mac_address);
+                    if mdns_info.mac_address.is_empty() {
+                        mdns_info.mac_address = mac_address;
+                    }
+                },
+                None => {
+                    trace!("No MAC Address found in the service");
+                }
             }
         }
     }
@@ -226,8 +248,6 @@ async fn fetch_mdns_info() {
                 if let Some(hostname) = host_clone.host_name {
                     process_host(host, service_name_clone.clone()).await;
                     // Now resolve the host to get all the A and AAAA records (IPv6 addresses) to extrapolate the MAC address
-                    // Our own fork that uses the interface
-                    // let responses = match wez_mdns::resolve(hostname, QueryParameters::HOST_LOOKUP, interface).await {
                     let responses = match wez_mdns::resolve(hostname.clone(), QueryParameters::HOST_LOOKUP).await {
                         Ok(responses) => responses,
                         Err(e) => {
