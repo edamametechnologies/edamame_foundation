@@ -1,5 +1,4 @@
 pub mod helper_proto;
-pub mod helper_state;
 pub mod helper_tx;
 pub mod helper_rx;
 pub mod helper_rx_utility;
