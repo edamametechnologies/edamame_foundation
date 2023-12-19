@@ -1,7 +1,7 @@
 // Built in default profile db
 pub static DEVICE_PROFILES: &str = r#"{
-  "date": "December 17th 2023",
-  "signature": "a0d8d4c8d4209f157d46cec9a0602f16e2ad66313975f29d1e13fa430ab4778a",
+  "date": "December 19th 2023",
+  "signature": "a53cc8078eac325adcde9717ed60fd051364009b296f865d9ec015d473860eea",
   "profiles": [
     {
       "device_type": "Printer",
@@ -31,8 +31,7 @@ pub static DEVICE_PROFILES: &str = r#"{
       ],
       "mdns_services": [],
       "vendors": [],
-      "os_list": [
-      ]
+      "os_list": []
     },
     {
       "device_type": "iPhone",
@@ -162,33 +161,6 @@ pub static DEVICE_PROFILES: &str = r#"{
       "os_list": []
     },
     {
-      "device_type": "NetworkDevice",
-      "open_ports": [],
-      "mdns_services": [],
-      "vendors": [
-        "alliedtelesis",
-        "alcatel-lucent",
-        "arista",
-        "aruba",
-        "belkin",
-        "buffalo",
-        "cisco",
-        "d-link",
-        "dell",
-        "extremenetworks",
-        "freebox",
-        "hpe",
-        "juniper",
-        "linksys",
-        "mikrotik",
-        "netgear",
-        "tplink",
-        "ubiquiti",
-        "zyxel"
-      ],
-      "os_list": []
-    },
-    {
       "device_type": "SmartSpeaker",
       "open_ports": [],
       "mdns_services": [
@@ -208,8 +180,7 @@ pub static DEVICE_PROFILES: &str = r#"{
     },
     {
       "device_type": "SmartTV",
-      "open_ports": [
-      ],
+      "open_ports": [],
       "mdns_services": [
         "_androidtvremote2._tcp.local"
       ],
@@ -257,6 +228,33 @@ pub static DEVICE_PROFILES: &str = r#"{
         "flir",
         "nest",
         "arlo"
+      ],
+      "os_list": []
+    },
+    {
+      "device_type": "NetworkDevice",
+      "open_ports": [],
+      "mdns_services": [],
+      "vendors": [
+        "alliedtelesis",
+        "alcatel-lucent",
+        "arista",
+        "aruba",
+        "belkin",
+        "buffalo",
+        "cisco",
+        "d-link",
+        "dell",
+        "extremenetworks",
+        "freebox",
+        "hpe",
+        "juniper",
+        "linksys",
+        "mikrotik",
+        "netgear",
+        "tplink",
+        "ubiquiti",
+        "zyxel"
       ],
       "os_list": []
     }
