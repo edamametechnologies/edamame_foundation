@@ -231,7 +231,8 @@ async fn fetch_mdns_info() {
             let responses = match wez_mdns::resolve(service_name.clone(), QueryParameters::SERVICE_LOOKUP).await {
                 Ok(responses) => responses,
                 Err(e) => {
-                    error!("Error querying mDNS service {}: {:?}", service_name.clone(), e);
+                    // Only warn to prevent multiple sentry errors
+                    warn!("Error querying mDNS service {}: {:?}", service_name.clone(), e);
                     continue;
                 }
             };
@@ -254,7 +255,8 @@ async fn fetch_mdns_info() {
                     let responses = match wez_mdns::resolve(hostname.clone(), QueryParameters::HOST_LOOKUP).await {
                         Ok(responses) => responses,
                         Err(e) => {
-                            error!("Error resolving hostname {}: {:?}", hostname.clone(), e);
+                            // Only warn to prevent multiple sentry errors
+                            warn!("Error resolving hostname {}: {:?}", hostname.clone(), e);
                             continue;
                         }
                     };
