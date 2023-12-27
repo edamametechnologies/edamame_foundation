@@ -1,7 +1,7 @@
 // Built in default profile db
 pub static DEVICE_PROFILES: &str = r#"{
-  "date": "December 19th 2023",
-  "signature": "a53cc8078eac325adcde9717ed60fd051364009b296f865d9ec015d473860eea",
+  "date": "December 26th 2023",
+  "signature": "8f38e695b7ff6232f4ceb0fc274228292bf5db1c9a861a549f3a549f96206d65",
   "profiles": [
     {
       "device_type": "Printer",
@@ -72,7 +72,7 @@ pub static DEVICE_PROFILES: &str = r#"{
     {
       "device_type": "Windows PC",
       "open_ports": [
-        139
+        7860
       ],
       "mdns_services": [],
       "vendors": [],
