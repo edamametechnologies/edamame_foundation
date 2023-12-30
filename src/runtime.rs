@@ -1,43 +1,43 @@
-use log::{trace};
-
-// Standard Mutex
-use std;
-// For Runtime
-use std::future::Future;
+use std::sync::{Arc, Mutex};
 use tokio::runtime::Runtime;
+use std::future::Future;
 
-// Normal Mutex for the Runtime (no async)
-static RUNTIME: std::sync::Mutex<Option<Runtime>> = std::sync::Mutex::new(None);
+// Use Arc to wrap the Runtime for safe sharing across threads
+static RUNTIME: Mutex<Option<Arc<Runtime>>> = Mutex::new(None);
 
 pub fn async_init() {
-    // Initialize a runtime
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_name("edamame")
-        .build();
+        .build()
+        .expect("Failed to build runtime");
 
-    // Here we can spawn background tasks to be run on the runtime.
-
-    // Store runtime in a global variable
-    *RUNTIME.lock().expect("Set runtime") = Some(rt.unwrap());
+    let rt = Arc::new(rt);
+    let mut rt_lock = RUNTIME.lock().expect("Failed to lock runtime");
+    *rt_lock = Some(rt);
 }
 
-// Block on a future and return the result
 pub fn async_exec<R, F>(async_fn: F) -> R
-where
-    R: 'static,
-    F: Future<Output = R> + 'static,
+    where
+        R: 'static,
+        F: Future<Output = R> + 'static,
 {
-    let res;
-    trace!("async_exec for {:?}", std::thread::current().id());
-    trace!("Locking RUNTIME - start");
-    let mut rt_guard = RUNTIME.lock().expect("Get runtime");
-    let rt = rt_guard.as_mut().expect("Runtime present");
-    let _guard = rt.enter();
-    trace!("block_on - start");
-    res = rt.block_on(async_fn);
-    trace!("block_on - end");
-    drop(rt_guard);
-    trace!("Locking RUNTIME - end");
-    res
+    let rt = {
+        let rt_lock = RUNTIME.lock().expect("Failed to lock runtime");
+        rt_lock.as_ref().expect("Runtime not initialized").clone()
+    };
+
+    rt.block_on(async_fn)
+}
+
+pub fn async_spawn<F>(async_fn: F) -> tokio::task::JoinHandle<()>
+    where
+        F: Future<Output = ()> + 'static + Send,
+{
+    let rt = {
+        let rt_lock = RUNTIME.lock().expect("Failed to lock runtime");
+        rt_lock.as_ref().expect("Runtime not initialized").clone()
+    };
+
+    rt.spawn(async_fn)
 }
