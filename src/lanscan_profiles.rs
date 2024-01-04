@@ -5,6 +5,8 @@ use log::{info, trace, error, warn};
 use tokio::sync::Mutex;
 use once_cell::sync::Lazy;
 use std::error::Error;
+use std::time::Duration;
+use reqwest::Client;
 
 use crate::lanscan_types::*;
 use crate::lanscan_profiles_db::*;
@@ -122,8 +124,13 @@ pub async fn update(branch: &str) -> Result<bool, Box<dyn Error>> {
     );
 
     info!("Fetching profiles from {}", url);
+    // Create a client with a timeout
+    let client = Client::builder()
+        .timeout(Duration::from_secs(20))
+        .build()?;
 
-    let response = reqwest::get(&url).await;
+    // Use the client to make a request
+    let response = client.get(&url).send().await;
 
     match response {
         Ok(res) => {

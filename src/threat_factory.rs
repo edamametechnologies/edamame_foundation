@@ -1,6 +1,8 @@
 use log::{error, info, warn};
 use reqwest;
 use std::error::Error;
+use std::time::Duration;
+use reqwest::Client;
 
 use crate::threat::*;
 use crate::threat_metrics_ios::*;
@@ -149,8 +151,13 @@ impl ThreatMetrics {
         );
 
         info!("Fetching threat model from {}", url);
+        // Create a client with a timeout
+        let client = Client::builder()
+            .timeout(Duration::from_secs(20))
+            .build()?;
 
-        let response = reqwest::get(&url).await;
+        // Use the client to make a request
+        let response = client.get(&url).send().await;
 
         match response {
             Ok(res) => {
