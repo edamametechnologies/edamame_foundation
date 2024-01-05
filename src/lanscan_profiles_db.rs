@@ -1,262 +1,447 @@
 // Built in default profile db
 pub static DEVICE_PROFILES: &str = r#"{
-  "date": "December 26th 2023",
-  "signature": "8f38e695b7ff6232f4ceb0fc274228292bf5db1c9a861a549f3a549f96206d65",
+  "date": "January 5th 2024",
+  "signature": "a53cc8078eac325adcde9717ed60fd051364009b296f865d9ec015d473860eea",
   "profiles": [
     {
       "device_type": "Printer",
-      "open_ports": [],
-      "mdns_services": [
-        "_ipp._tcp.local",
-        "_printer._tcp.local",
-        "_ippusb._tcp.local",
-        "_ipps._tcp.local"
-      ],
-      "vendors": [
-        "canon",
-        "epson",
-        "brother",
-        "lexmark",
-        "xerox",
-        "ricoh",
-        "kodak",
-        "sharp"
-      ],
-      "os_list": []
-    },
-    {
-      "device_type": "Router",
-      "open_ports": [
-        53
-      ],
-      "mdns_services": [],
-      "vendors": [],
-      "os_list": []
-    },
-    {
-      "device_type": "iPhone",
-      "open_ports": [
-        62078
-      ],
-      "mdns_services": [
-        "_apple-mobdev2._tcp.local"
-      ],
-      "vendors": [],
-      "os_list": [
-        "iOS"
-      ]
-    },
-    {
-      "device_type": "Smartphone",
-      "open_ports": [],
-      "mdns_services": [],
-      "vendors": [
-        "oneplus",
-        "motorola",
-        "nokia",
-        "htc"
-      ],
-      "os_list": []
-    },
-    {
-      "device_type": "Apple PC",
-      "open_ports": [],
-      "mdns_services": [],
-      "vendors": [
-        "apple"
-      ],
-      "os_list": [
-        "macOS"
-      ]
-    },
-    {
-      "device_type": "Windows PC",
-      "open_ports": [
-        7860
-      ],
-      "mdns_services": [],
-      "vendors": [],
-      "os_list": [
-        "Windows"
-      ]
-    },
-    {
-      "device_type": "PC",
-      "open_ports": [],
-      "mdns_services": [],
-      "vendors": [
-        "dell",
-        "lenovo",
-        "acer",
-        "asus",
-        "msi"
-      ],
-      "os_list": [
-        "Linux",
-        "FreeBSD",
-        "Windows"
-      ]
-    },
-    {
-      "device_type": "IoT",
-      "open_ports": [
-        1883,
-        8883
-      ],
-      "mdns_services": [
-        "_mqtt._tcp.local",
-        "_hap._tcp.local",
-        "_hue._tcp.local"
-      ],
-      "vendors": [
-        "wemo",
-        "lifx",
-        "tuya",
-        "dyson",
-        "physical graph corporation",
-        "philips lighting bv"
-      ],
-      "os_list": [
-        "Linux",
-        "FreeBSD"
-      ]
-    },
-    {
-      "device_type": "NAS",
-      "open_ports": [],
-      "mdns_services": [],
-      "vendors": [
-        "synology",
-        "qnap",
-        "asustor",
-        "drobo",
-        "wd",
-        "seagate"
-      ],
-      "os_list": [
-        "Linux",
-        "FreeBSD"
+      "conditions": [
+        {
+          "Node": {
+            "type": "OR",
+            "sub_conditions": [
+              {
+                "Leaf": {
+                  "mdns_services": [
+                    "ipp",
+                    "printer"
+                  ]
+                }
+              },
+              {
+                "Leaf": {
+                  "vendors": [
+                    "canon",
+                    "epson",
+                    "brother",
+                    "lexmark",
+                    "xerox",
+                    "ricoh",
+                    "kodak",
+                    "sharp"
+                  ]
+                }
+              }
+            ]
+          }
+        }
       ]
     },
     {
       "device_type": "RaspberryPi",
-      "open_ports": [],
-      "mdns_services": [],
-      "vendors": [
-        "raspberry pi"
-      ],
-      "os_list": [
-        "Linux"
+      "conditions": [
+        {
+          "Leaf": {
+            "vendors": [
+              "raspberry"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "device_type": "SmartSpeaker",
+      "conditions": [
+        {
+          "Node": {
+            "type": "OR",
+            "sub_conditions": [
+              {
+                "Leaf": {
+                  "vendors": [
+                    "sonos",
+                    "bose",
+                    "jbl",
+                    "harman"
+                  ]
+                }
+              },
+              {
+                "Leaf": {
+                  "mdns_services": [
+                    "sonos",
+                    "bose",
+                    "jbl",
+                    "harman"
+                  ]
+                }
+              },
+              {
+                "Leaf": {
+                  "hostnames": [
+                    "sonos",
+                    "bose",
+                    "jbl",
+                    "harman"
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "device_type": "Router",
+      "conditions": [
+        {
+          "Node": {
+            "type": "OR",
+            "sub_conditions": [
+              {
+                "Leaf": {
+                  "open_ports": [
+                    53
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "device_type": "iPhone",
+      "conditions": [
+        {
+          "Node": {
+            "type": "OR",
+            "sub_conditions": [
+              {
+                "Leaf": {
+                  "open_ports": [
+                    62078
+                  ]
+                }
+              },
+              {
+                "Node": {
+                  "type": "AND",
+                  "sub_conditions": [
+                    {
+                      "Leaf": {
+                        "open_ports": [
+                          49152
+                        ]
+                      }
+                    },
+                    {
+                      "Leaf": {
+                        "vendors": [
+                          "apple"
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "device_type": "Apple PC",
+      "conditions": [
+        {
+          "Node": {
+            "type": "OR",
+            "sub_conditions": [
+              {
+                "Leaf": {
+                  "vendors": [
+                    "apple"
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "device_type": "Smartphone",
+      "conditions": [
+        {
+          "Node": {
+            "type": "OR",
+            "sub_conditions": [
+              {
+                "Leaf": {
+                  "vendors": [
+                    "oneplus",
+                    "motorola",
+                    "nokia",
+                    "htc"
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "device_type": "PC",
+      "conditions": [
+        {
+          "Node": {
+            "type": "AND",
+            "sub_conditions": [
+              {
+                "Leaf": {
+                  "vendors": [
+                    "dell",
+                    "lenovo",
+                    "acer",
+                    "msi",
+                    "asus"
+                  ]
+                }
+              },
+              {
+                "Leaf": {
+                  "open_ports": [
+                    53
+                  ],
+                  "negate": true
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "device_type": "NAS",
+      "conditions": [
+        {
+          "Node": {
+            "type": "OR",
+            "sub_conditions": [
+              {
+                "Leaf": {
+                  "vendors": [
+                    "synology",
+                    "asustor",
+                    "drobo",
+                    "wd",
+                    "seagate"
+                  ]
+                }
+              }
+            ]
+          }
+        }
       ]
     },
     {
       "device_type": "GameConsole",
-      "open_ports": [],
-      "mdns_services": [],
-      "vendors": [
-        "sony",
-        "microsoft",
-        "nintendo"
-      ],
-      "os_list": []
+      "conditions": [
+        {
+          "Node": {
+            "type": "OR",
+            "sub_conditions": [
+              {
+                "Leaf": {
+                  "vendors": [
+                    "sony",
+                    "microsoft",
+                    "nintendo"
+                  ]
+                }
+              },
+              {
+                "Leaf": {
+                  "hostnames": [
+                    "ps4",
+                    "ps5",
+                    "xbox"
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
     },
     {
-      "device_type": "SmartSpeaker",
-      "open_ports": [],
-      "mdns_services": [
-        "_sonos._tcp.local"
-      ],
-      "vendors": [
-        "amazon",
-        "sonos",
-        "bose",
-        "jbl",
-        "harman kardon"
-      ],
-      "os_list": [
-        "Linux",
-        "FreeBSD"
+      "device_type": "IoT",
+      "conditions": [
+        {
+          "Node": {
+            "type": "OR",
+            "sub_conditions": [
+              {
+                "Leaf": {
+                  "open_ports": [
+                    1883
+                  ]
+                }
+              },
+              {
+                "Leaf": {
+                  "open_ports": [
+                    8883
+                  ]
+                }
+              },
+              {
+                "Leaf": {
+                  "mdns_services": [
+                    "mqtt",
+                    "hap",
+                    "hue",
+                    "yeelink"
+                  ]
+                }
+              },
+              {
+                "Leaf": {
+                  "vendors": [
+                    "wemo",
+                    "lifx",
+                    "tuya",
+                    "dyson",
+                    "physical graph",
+                    "philips lighting"
+                  ]
+                }
+              }
+            ]
+          }
+        }
       ]
     },
     {
       "device_type": "SmartTV",
-      "open_ports": [],
-      "mdns_services": [
-        "_androidtvremote2._tcp.local"
-      ],
-      "vendors": [],
-      "os_list": []
-    },
-    {
-      "device_type": "SmartTV",
-      "open_ports": [
-        7676,
-        8001,
-        8080
-      ],
-      "mdns_services": [],
-      "vendors": [],
-      "os_list": []
-    },
-    {
-      "device_type": "SmartTV",
-      "open_ports": [],
-      "mdns_services": [
-        "_googlecast._tcp.local",
-        "_airplay._tcp.local"
-      ],
-      "vendors": [
-        "tcl",
-        "hisense",
-        "vizio",
-        "sharp",
-        "toshiba"
-      ],
-      "os_list": []
+      "conditions": [
+        {
+          "Node": {
+            "type": "OR",
+            "sub_conditions": [
+              {
+                "Leaf": {
+                  "open_ports": [
+                    8001,
+                    8002,
+                    8080,
+                    9080
+                  ]
+                }
+              },
+              {
+                "Leaf": {
+                  "open_ports": [
+                    3000,
+                    3001,
+                    18181
+                  ]
+                }
+              },
+              {
+                "Leaf": {
+                  "vendors": [
+                    "tcl",
+                    "hisense",
+                    "vizio",
+                    "sharp",
+                    "toshiba"
+                  ]
+                }
+              },
+              {
+                "Leaf": {
+                  "mdns_services": [
+                    "androidtvremote",
+                    "googlecast",
+                    "airplay"
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
     },
     {
       "device_type": "Camera",
-      "open_ports": [],
-      "mdns_services": [
-        "_axis-video._tcp.local"
-      ],
-      "vendors": [
-        "hikvision",
-        "dahua",
-        "axis",
-        "vivotek",
-        "flir",
-        "nest",
-        "arlo"
-      ],
-      "os_list": []
+      "conditions": [
+        {
+          "Node": {
+            "type": "OR",
+            "sub_conditions": [
+              {
+                "Leaf": {
+                  "mdns_services": [
+                    "axis-video"
+                  ]
+                }
+              },
+              {
+                "Leaf": {
+                  "vendors": [
+                    "hikvision",
+                    "dahua",
+                    "axis",
+                    "vivotek",
+                    "flir",
+                    "nest",
+                    "arlo"
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
     },
     {
       "device_type": "NetworkDevice",
-      "open_ports": [],
-      "mdns_services": [],
-      "vendors": [
-        "alliedtelesis",
-        "alcatel-lucent",
-        "arista",
-        "aruba",
-        "belkin",
-        "buffalo",
-        "cisco",
-        "d-link",
-        "dell",
-        "extremenetworks",
-        "freebox",
-        "hpe",
-        "juniper",
-        "linksys",
-        "mikrotik",
-        "netgear",
-        "tplink",
-        "ubiquiti",
-        "zyxel"
-      ],
-      "os_list": []
+      "conditions": [
+        {
+          "Node": {
+            "type": "OR",
+            "sub_conditions": [
+              {
+                "Leaf": {
+                  "vendors": [
+                    "alliedtelesis",
+                    "alcatel-lucent",
+                    "arista",
+                    "aruba",
+                    "belkin",
+                    "buffalo",
+                    "cisco",
+                    "d-link",
+                    "dell",
+                    "extremenetworks",
+                    "freebox",
+                    "hpe",
+                    "juniper",
+                    "linksys",
+                    "mikrotik",
+                    "netgear",
+                    "tp-link",
+                    "ubiquiti",
+                    "zyxel"
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
     }
   ]
 }"#;

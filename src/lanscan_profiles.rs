@@ -1,13 +1,11 @@
 use std::collections::HashSet;
 use serde::{Deserialize, Serialize};
 use log::{info, trace, error, warn};
-// Tokio Mutex
 use tokio::sync::Mutex;
 use once_cell::sync::Lazy;
 use std::error::Error;
 use std::time::Duration;
 use reqwest::Client;
-
 use crate::lanscan_types::*;
 use crate::lanscan_profiles_db::*;
 
@@ -15,35 +13,47 @@ const PROFILES_REPO: &str = "https://raw.githubusercontent.com/edamametechnologi
 const PROFILES_NAME: &str = "lanscan_profiles_db.json";
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct DeviceTypeRule {
+struct Attributes {
+    open_ports: Option<Vec<u16>>,
+    mdns_services: Option<Vec<String>>,
+    vendors: Option<Vec<String>>,
+    hostnames: Option<Vec<String>>,
+    negate: Option<bool>, // New field to indicate negation
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+enum Condition {
+    Leaf(Attributes),
+    Node {
+        #[serde(rename = "type")]
+        condition_type: String,
+        sub_conditions: Vec<Condition>,
+    },
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+struct DeviceTypeRule {
     device_type: String,
-    open_ports: Vec<u16>,
-    mdns_services: Vec<String>,
-    vendors: Vec<String>,
-    os_list: Vec<String>,
+    conditions: Vec<Condition>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct DeviceTypeListJSON {
-    pub date: String,
-    pub signature: String,
-    pub profiles: Vec<DeviceTypeRule>,
+struct DeviceTypeListJSON {
+    date: String,
+    signature: String,
+    profiles: Vec<DeviceTypeRule>,
 }
 
-pub struct DeviceTypeList {
-    pub date: String,
-    pub signature: String,
-    pub device_types: Vec<DeviceTypeRule>,
+struct DeviceTypeList {
+    profiles: Vec<DeviceTypeRule>,
 }
 
 impl DeviceTypeList {
-    pub fn new_from_json(device_info: &DeviceTypeListJSON) -> Self {
+    fn new_from_json(device_info: &DeviceTypeListJSON) -> Self {
         info!("Loading device profiles from JSON");
 
         DeviceTypeList {
-            date: device_info.date.clone(),
-            signature: device_info.signature.clone(),
-            device_types: device_info.profiles.clone(),
+            profiles: device_info.profiles.clone(),
         }
     }
 }
@@ -54,63 +64,67 @@ static PROFILES: Lazy<Mutex<DeviceTypeList>> = Lazy::new(|| {
     Mutex::new(profiles)
 });
 
-// TODO: also use the discovered services to determine the device type (for example "Deskjet" in the case of a printer)
+pub async fn device_type(port_info: &Vec<PortInfo>, mdns_services: &Vec<String>, oui_vendor: &str, hostname: &str) -> String {
+    trace!("Computing device type for ports {:?}, mdns {:?}, vendor {}, hostname {}", port_info, mdns_services, oui_vendor, hostname);
 
-pub async fn device_type(port_info: &Vec<PortInfo>, mdns_services: &Vec<String>, oui_vendor: &str, os_name: &str) -> String {
-    trace!("Computing device type for ports {:?}, mdns {:?}, vendor {}, OS name {}", port_info, mdns_services, oui_vendor, os_name);
-
-    trace!("Locking PROFILES - start");
     let device_types = PROFILES.lock().await;
-    trace!("Locking PROFILES - end");
 
+    // To lower case as used in the profiles
     let oui_vendor_lower = oui_vendor.to_lowercase();
+    let hostname_lower = hostname.to_lowercase();
+    let mdns_services_lower: Vec<String> = mdns_services.iter().map(|service| service.to_lowercase()).collect();
+
     let open_ports_set: HashSet<u16> = port_info.iter().map(|info| info.port).collect();
 
-    // Match on unique set of ports > match on the presence of at least one service > match on the presence of a unique vendor
-
-    for rule in device_types.device_types.iter() {
-
-        // Match on ports, a type can be defined by a unique set of ports
-        if ! rule.open_ports.is_empty() && rule
-            .open_ports
-            .iter()
-            .all(|port| open_ports_set.contains(port)) {
-            trace!("Match for ports {:?} : {:?}", rule.open_ports, rule);
-            return rule.device_type.to_string();
-        };
-
-        // Match on services, a type can be defined by the presence of at least one service in its service list
-        if ! rule.mdns_services.is_empty() && rule
-            .mdns_services
-            .iter()
-            // The actual service name can have a prefix (for example ....-supportsRP-17._apple-mobdev2._tcp.local for _apple-mobdev2._tcp.local)
-            // So we must use contains instead of equality
-            .any(|service| mdns_services.iter().any(|mdns_service| mdns_service.contains(service)))
-        {
-            trace!("Match for services {:?} : {:?}", rule.mdns_services, rule);
-            return rule.device_type.to_string();
+    for profile in device_types.profiles.iter() {
+        for condition in &profile.conditions {
+            if match_condition(condition, &open_ports_set, &mdns_services_lower, &oui_vendor_lower, &hostname_lower) {
+                trace!("Match for device type {:?}", profile.device_type);
+                return profile.device_type.to_string();
+            }
         }
-
-        // Match on vendors, a type can be defined by the presence of at least one vendor
-        if ! rule.vendors.is_empty() && rule
-            .vendors
-            .iter()
-            .any(|brand| oui_vendor_lower.contains(brand))
-        {
-            trace!("Match for vendors {:?} : {:?}", rule.vendors, rule);
-            return rule.device_type.to_string();
-        }
-
-        // We don't use os name for now
     }
-    // Generate an error if there is significant information in order to improve the profiles
-    if (! port_info.is_empty() || ! mdns_services.is_empty()) && ! oui_vendor.is_empty() {
-        // Extract port numbers from port_info
+
+    if (!port_info.is_empty() || !mdns_services.is_empty()) && !oui_vendor.is_empty() {
         let ports: Vec<u16> = port_info.iter().map(|info| info.port).collect();
-        error!("Unknown device type for ports {:?}, mdns {:?}, vendor {}, OS name {}", ports, mdns_services, oui_vendor, os_name);
+        error!("Unknown device type for ports {:?}, mdns {:?}, vendor {}, hostname {} ", ports, mdns_services, oui_vendor, hostname);
     }
 
     "Unknown".to_string()
+}
+
+fn match_condition(condition: &Condition, open_ports_set: &HashSet<u16>, mdns_services: &Vec<String>, oui_vendor: &str, hostname: &str) -> bool {
+    match condition {
+        Condition::Leaf(attributes) => {
+            // All ports must match
+            let port_match = attributes.open_ports.as_ref()
+                .map_or(true, |open_ports_to_match| open_ports_to_match.iter().all(|open_port_to_match| open_ports_set.contains(open_port_to_match)));
+
+            // Any mdns must match
+            let mdns_match = attributes.mdns_services.as_ref()
+                .map_or(true, |services_to_match| services_to_match.iter().any(|service_to_match| mdns_services.iter().any(|mdns_service| !mdns_service.is_empty() && mdns_service.contains(service_to_match))));
+
+            // Any vendor must match (if vendor is empty, it will not match)
+            let vendor_match = attributes.vendors.as_ref().map_or(true, |vendors_to_match| vendors_to_match.iter().any(|vendor_to_match| !oui_vendor.is_empty() && oui_vendor.contains(vendor_to_match)));
+
+            // Any host must match (if hostname is empty, it will not match)
+            let hostname_match = attributes.hostnames.as_ref().map_or(true, |hostnames_to_match| hostnames_to_match.iter().any(|hostname_to_match| !hostname.is_empty() && hostname.contains(hostname_to_match)));
+            let result = port_match && mdns_match && vendor_match && hostname_match;
+
+            if attributes.negate.unwrap_or(false) { // Check if negation is true
+                !result
+            } else {
+                result
+            }
+        }
+        Condition::Node { condition_type, sub_conditions } => {
+            match condition_type.as_str() {
+                "AND" => sub_conditions.iter().all(|sub| match_condition(sub, open_ports_set, mdns_services, oui_vendor, hostname)),
+                "OR" => sub_conditions.iter().any(|sub| match_condition(sub, open_ports_set, mdns_services, oui_vendor, hostname)),
+                _ => false,
+            }
+        }
+    }
 }
 
 pub async fn update(branch: &str) -> Result<bool, Box<dyn Error>> {
@@ -141,7 +155,6 @@ pub async fn update(branch: &str) -> Result<bool, Box<dyn Error>> {
                 let json: DeviceTypeListJSON = res.json().await?;
                 let mut locked_vulns = PROFILES.lock().await;
                 *locked_vulns = DeviceTypeList::new_from_json(&json);
-
             } else {
                 error!(
                         "Profiles transfer failed with status: {:?}",
