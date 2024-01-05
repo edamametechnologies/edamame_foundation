@@ -138,7 +138,8 @@ pub static DEVICE_PROFILES: &str = r#"{
                     {
                       "Leaf": {
                         "vendors": [
-                          "apple"
+                          "apple",
+                          ""
                         ]
                       }
                     }

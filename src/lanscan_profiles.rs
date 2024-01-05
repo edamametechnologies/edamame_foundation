@@ -64,8 +64,8 @@ static PROFILES: Lazy<Mutex<DeviceTypeList>> = Lazy::new(|| {
     Mutex::new(profiles)
 });
 
-pub async fn device_type(port_info: &Vec<PortInfo>, mdns_services: &Vec<String>, oui_vendor: &str, hostname: &str) -> String {
-    trace!("Computing device type for ports {:?}, mdns {:?}, vendor {}, hostname {}", port_info, mdns_services, oui_vendor, hostname);
+pub async fn device_type(open_ports: &Vec<PortInfo>, mdns_services: &Vec<String>, oui_vendor: &str, hostname: &str) -> String {
+    trace!("Computing device type for ports {:?}, mdns {:?}, vendor {}, hostname {}", open_ports, mdns_services, oui_vendor, hostname);
 
     let device_types = PROFILES.lock().await;
 
@@ -74,7 +74,7 @@ pub async fn device_type(port_info: &Vec<PortInfo>, mdns_services: &Vec<String>,
     let hostname_lower = hostname.to_lowercase();
     let mdns_services_lower: Vec<String> = mdns_services.iter().map(|service| service.to_lowercase()).collect();
 
-    let open_ports_set: HashSet<u16> = port_info.iter().map(|info| info.port).collect();
+    let open_ports_set: HashSet<u16> = open_ports.iter().map(|info| info.port).collect();
 
     for profile in device_types.profiles.iter() {
         for condition in &profile.conditions {
@@ -85,8 +85,8 @@ pub async fn device_type(port_info: &Vec<PortInfo>, mdns_services: &Vec<String>,
         }
     }
 
-    if (!port_info.is_empty() || !mdns_services.is_empty()) && !oui_vendor.is_empty() {
-        let ports: Vec<u16> = port_info.iter().map(|info| info.port).collect();
+    if (!open_ports.is_empty() || !mdns_services.is_empty()) && !oui_vendor.is_empty() {
+        let ports: Vec<u16> = open_ports.iter().map(|info| info.port).collect();
         error!("Unknown device type for ports {:?}, mdns {:?}, vendor {}, hostname {} ", ports, mdns_services, oui_vendor, hostname);
     }
 
@@ -102,13 +102,13 @@ fn match_condition(condition: &Condition, open_ports_set: &HashSet<u16>, mdns_se
 
             // Any mdns must match
             let mdns_match = attributes.mdns_services.as_ref()
-                .map_or(true, |services_to_match| services_to_match.iter().any(|service_to_match| mdns_services.iter().any(|mdns_service| !mdns_service.is_empty() && mdns_service.contains(service_to_match))));
+                .map_or(true, |services_to_match| services_to_match.iter().any(|service_to_match| mdns_services.iter().any(|mdns_service| mdns_service.contains(service_to_match))));
 
             // Any vendor must match (if vendor is empty, it will not match)
-            let vendor_match = attributes.vendors.as_ref().map_or(true, |vendors_to_match| vendors_to_match.iter().any(|vendor_to_match| !oui_vendor.is_empty() && oui_vendor.contains(vendor_to_match)));
+            let vendor_match = attributes.vendors.as_ref().map_or(true, |vendors_to_match| vendors_to_match.iter().any(|vendor_to_match| oui_vendor.contains(vendor_to_match)));
 
             // Any host must match (if hostname is empty, it will not match)
-            let hostname_match = attributes.hostnames.as_ref().map_or(true, |hostnames_to_match| hostnames_to_match.iter().any(|hostname_to_match| !hostname.is_empty() && hostname.contains(hostname_to_match)));
+            let hostname_match = attributes.hostnames.as_ref().map_or(true, |hostnames_to_match| hostnames_to_match.iter().any(|hostname_to_match| hostname.contains(hostname_to_match)));
             let result = port_match && mdns_match && vendor_match && hostname_match;
 
             if attributes.negate.unwrap_or(false) { // Check if negation is true
