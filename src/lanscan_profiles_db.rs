@@ -1,7 +1,7 @@
 // Built in default profile db
 pub static DEVICE_PROFILES: &str = r#"{
-  "date": "January 5th 2024",
-  "signature": "a53cc8078eac325adcde9717ed60fd051364009b296f865d9ec015d473860eea",
+  "date": "January 05th 2024",
+  "signature": "b6ef51f03030c10f30e52bdae83c47c40c8ed0def43d175d70231d0297a7b2f1",
   "profiles": [
     {
       "device_type": "Printer",
@@ -41,9 +41,23 @@ pub static DEVICE_PROFILES: &str = r#"{
       "device_type": "RaspberryPi",
       "conditions": [
         {
-          "Leaf": {
-            "vendors": [
-              "raspberry"
+          "Node": {
+            "type": "OR",
+            "sub_conditions": [
+              {
+                "Leaf": {
+                  "vendors": [
+                    "raspberry"
+                  ]
+                }
+              },
+              {
+                "Leaf": {
+                  "banners": [
+                    "raspbian"
+                  ]
+                }
+              }
             ]
           }
         }
