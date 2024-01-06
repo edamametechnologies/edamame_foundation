@@ -73,9 +73,9 @@ pub async fn device_type(open_ports: &Vec<PortInfo>, mdns_services: &Vec<String>
     // To lower case as used in the profiles
     let oui_vendor_lower = oui_vendor.to_lowercase();
     let hostname_lower = hostname.to_lowercase();
-    let banners_lower: Vec<String> = open_ports.iter().map(|info| info.banner.to_lowercase()).collect();
     let mdns_services_lower: Vec<String> = mdns_services.iter().map(|service| service.to_lowercase()).collect();
     let open_ports_set: HashSet<u16> = open_ports.iter().map(|info| info.port).collect();
+    let banners_lower: Vec<String> = open_ports.iter().map(|info| info.banner.to_lowercase()).collect();
 
     for profile in device_types.profiles.iter() {
         for condition in &profile.conditions {
@@ -88,7 +88,7 @@ pub async fn device_type(open_ports: &Vec<PortInfo>, mdns_services: &Vec<String>
 
     if (!open_ports.is_empty() || !mdns_services.is_empty()) && !oui_vendor.is_empty() {
         let ports: Vec<u16> = open_ports.iter().map(|info| info.port).collect();
-        error!("Unknown device type for ports {:?}, mdns {:?}, vendor {}, hostname {} ", ports, mdns_services, oui_vendor, hostname);
+        error!("Unknown device type for ports {:?}, mdns {:?}, vendor {}, hostname {}, banners {:?}", ports, mdns_services, oui_vendor, hostname, banners_lower);
     }
 
     "Unknown".to_string()
