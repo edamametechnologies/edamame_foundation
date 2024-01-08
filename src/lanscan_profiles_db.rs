@@ -1,7 +1,7 @@
 // Built in default profile db
 pub static DEVICE_PROFILES: &str = r#"{
-  "date": "January 05th 2024",
-  "signature": "b6ef51f03030c10f30e52bdae83c47c40c8ed0def43d175d70231d0297a7b2f1",
+  "date": "January 06th 2024",
+  "signature": "feb6bb5a38a917e22adbc76cccc7d6cced5576bb0e7a921352370b0e163696e7",
   "profiles": [
     {
       "device_type": "Printer",
@@ -83,7 +83,7 @@ pub static DEVICE_PROFILES: &str = r#"{
               {
                 "Leaf": {
                   "mdns_services": [
-                    "sonos",
+                    "_sonos",
                     "bose",
                     "jbl",
                     "harman"
@@ -316,7 +316,7 @@ pub static DEVICE_PROFILES: &str = r#"{
                   "mdns_services": [
                     "mqtt",
                     "hap",
-                    "hue",
+                    "_hue",
                     "yeelink"
                   ]
                 }
