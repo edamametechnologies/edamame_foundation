@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::{net::IpAddr, sync::{Arc}};
 use std::net::Ipv6Addr;
-use log::{error, info, trace, warn};
+use log::{info, trace, warn};
 use tokio::task;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::Mutex;
@@ -199,7 +199,7 @@ async fn fetch_mdns_info() {
         let responses = match wez_mdns::resolve("_services._dns-sd._udp.local", QueryParameters::SERVICE_LOOKUP).await {
             Ok(responses) => responses,
             Err(e) => {
-                error!("Error querying mDNS services: {:?}", e);
+                warn!("Error querying mDNS services: {:?}", e);
                 tokio::time::sleep(pause_duration).await;
                 continue;
             }

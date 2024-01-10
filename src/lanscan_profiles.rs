@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use serde::{Deserialize, Serialize};
-use log::{info, trace, error, warn};
+use log::{info, trace, warn};
 use tokio::sync::Mutex;
 use once_cell::sync::Lazy;
 use std::error::Error;
@@ -88,7 +88,7 @@ pub async fn device_type(open_ports: &Vec<PortInfo>, mdns_services: &Vec<String>
 
     if (!open_ports.is_empty() || !mdns_services.is_empty()) && !oui_vendor.is_empty() {
         let ports: Vec<u16> = open_ports.iter().map(|info| info.port).collect();
-        error!("Unknown device type for ports {:?}, mdns {:?}, vendor {}, hostname {}, banners {:?}", ports, mdns_services, oui_vendor, hostname, banners_lower);
+        warn!("Unknown device type for ports {:?}, mdns {:?}, vendor {}, hostname {}, banners {:?}", ports, mdns_services, oui_vendor, hostname, banners_lower);
     }
 
     "Unknown".to_string()
