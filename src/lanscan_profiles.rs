@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use serde::{Deserialize, Serialize};
-use log::{info, trace, warn};
+use log::{info, trace, warn, error};
 use tokio::sync::Mutex;
 use once_cell::sync::Lazy;
 use std::error::Error;
