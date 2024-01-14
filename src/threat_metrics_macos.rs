@@ -1032,13 +1032,13 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "education": [
           {
             "locale": "EN",
-            "class": "link",
-            "target": "https://support.malwarebytes.com/hc/en-us/articles/360039023473-Uninstall-and-reinstall-Malwarebytes-using-the-Malwarebytes-Support-Tool"
+            "class": "youtube",
+            "target": "https://www.youtube.com/watch?v=1vIf7ujOYdY"
           },
           {
             "locale": "FR",
-            "class": "link",
-            "target": "https://support.malwarebytes.com/hc/en-us/articles/360039023473-Uninstall-and-reinstall-Malwarebytes-using-the-Malwarebytes-Support-Tool"
+            "class": "youtube",
+            "target": "https://www.youtube.com/watch?v=1vIf7ujOYdY"
           }
         ]
       }

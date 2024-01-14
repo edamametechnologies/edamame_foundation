@@ -1,7 +1,7 @@
 // Built in default profile db
 pub static DEVICE_PROFILES: &str = r#"{
-  "date": "January 06th 2024",
-  "signature": "feb6bb5a38a917e22adbc76cccc7d6cced5576bb0e7a921352370b0e163696e7",
+  "date": "January 10th 2024",
+  "signature": "ce8ef6409e2f0453c478671aca7aacf78584e9f93bd0622da7b6cb18ad7b3740",
   "profiles": [
     {
       "device_type": "Printer",
@@ -77,6 +77,15 @@ pub static DEVICE_PROFILES: &str = r#"{
                     "bose",
                     "jbl",
                     "harman"
+                  ]
+                }
+              },
+              {
+                "Leaf": {
+                  "open_ports": [
+                    1400,
+                    1410,
+                    1443
                   ]
                 }
               },
@@ -317,7 +326,7 @@ pub static DEVICE_PROFILES: &str = r#"{
                     "mqtt",
                     "hap",
                     "_hue",
-                    "yeelink"
+                    "miio"
                   ]
                 }
               },
@@ -350,8 +359,7 @@ pub static DEVICE_PROFILES: &str = r#"{
                   "open_ports": [
                     8001,
                     8002,
-                    8080,
-                    9080
+                    8080
                   ]
                 }
               },
@@ -361,6 +369,16 @@ pub static DEVICE_PROFILES: &str = r#"{
                     3000,
                     3001,
                     18181
+                  ]
+                }
+              },
+              {
+                "Leaf": {
+                  "open_ports": [
+                    8008,
+                    8009,
+                    8443,
+                    9000
                   ]
                 }
               },
