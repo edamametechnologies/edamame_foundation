@@ -79,6 +79,9 @@ pub async fn device_type(open_ports: &Vec<PortInfo>, mdns_services: &Vec<String>
 
     for profile in device_types.profiles.iter() {
         for condition in &profile.conditions {
+            // Only check if
+
+
             if match_condition(condition, &open_ports_set, &mdns_services_lower, &oui_vendor_lower, &hostname_lower, &banners_lower) {
                 trace!("Match for device type {:?}", profile.device_type);
                 return profile.device_type.to_string();
@@ -93,29 +96,70 @@ pub async fn device_type(open_ports: &Vec<PortInfo>, mdns_services: &Vec<String>
 
     "Unknown".to_string()
 }
-
-fn match_condition(condition: &Condition, open_ports_set: &HashSet<u16>, mdns_services: &Vec<String>, oui_vendor: &str, hostname: &str, banners:  &Vec<String>) -> bool {
+fn match_condition(condition: &Condition, open_ports_set: &HashSet<u16>, mdns_services: &Vec<String>, oui_vendor: &str, hostname: &str, banners: &Vec<String>) -> bool {
     match condition {
         Condition::Leaf(attributes) => {
-            // All ports must match
-            let port_match = attributes.open_ports.as_ref()
-                .map_or(true, |open_ports_to_match| open_ports_to_match.iter().all(|open_port_to_match| open_ports_set.contains(open_port_to_match)));
+            let port_match = match &attributes.open_ports {
+                Some(open_ports) => {
+                    let match_result = open_ports.iter().all(|port| open_ports_set.contains(port));
+                    if match_result {
+                        trace!("Port match: {:?} against {:?}", open_ports, open_ports_set);
+                    }
+                    match_result
+                }
+                None => true,
+            };
 
-            // Any mdns must match
-            let mdns_match = attributes.mdns_services.as_ref()
-                .map_or(true, |services_to_match| services_to_match.iter().any(|service_to_match| mdns_services.iter().any(|mdns_service| mdns_service.contains(service_to_match))));
+            let mdns_match = match &attributes.mdns_services {
+                Some(services) if !services.is_empty() => {
+                    let match_result = services.iter().filter(|service| !service.is_empty()).any(|service| mdns_services.iter().any(|mdns_service| mdns_service.contains(service)));
+                    if match_result {
+                        trace!("MDNS match: {:?} against {:?}", services, mdns_services);
+                    }
+                    match_result
+                }
+                _ => true,
+            };
 
-            // Any vendor must match
-            let vendor_match = attributes.vendors.as_ref().map_or(true, |vendors_to_match| vendors_to_match.iter().any(|vendor_to_match| oui_vendor.contains(vendor_to_match)));
+            let vendor_match = match &attributes.vendors {
+                Some(vendors) if !vendors.is_empty() => {
+                    let match_result = vendors.iter().filter(|vendor| !vendor.is_empty()).any(|vendor| oui_vendor.contains(vendor));
+                    if match_result {
+                        trace!("Vendor match: {:?} against {:?}", vendors, oui_vendor);
+                    }
+                    match_result
+                }
+                _ => true,
+            };
 
-            // Any host must match
-            let hostname_match = attributes.hostnames.as_ref().map_or(true, |hostnames_to_match| hostnames_to_match.iter().any(|hostname_to_match| hostname.contains(hostname_to_match)));
+            let hostname_match = match &attributes.hostnames {
+                Some(hostnames) if !hostnames.is_empty() => {
+                    let match_result = hostnames.iter().filter(|host| !host.is_empty()).any(|host| hostname.contains(host));
+                    if match_result {
+                        trace!("Hostname match: {:?} against {:?}", hostnames, hostname);
+                    }
+                    match_result
+                }
+                _ => true,
+            };
 
-            // Any banner must match
-            let banner_match = attributes.banners.as_ref().map_or(true, |banners_to_match| banners_to_match.iter().any(|banner_to_match| banners.contains(banner_to_match)));
+            let banner_match = match &attributes.banners {
+                Some(banners_attr) if !banners_attr.is_empty() => {
+                    let match_result = banners_attr.iter().filter(|banner| !banner.is_empty()).any(|banner_attr| banners.iter().any(|banner| banner.contains(banner_attr)));
+                    if match_result {
+                        trace!("Banner match: {:?} against {:?}", banners_attr, banners);
+                    }
+                    match_result
+                },
+                _ => true,
+            };
+
             let result = port_match && mdns_match && vendor_match && hostname_match && banner_match;
+            if !result {
+                trace!("No match for {:?}", attributes);
+            }
 
-            if attributes.negate.unwrap_or(false) { // Check if negation is true
+            if attributes.negate.unwrap_or(false) {
                 !result
             } else {
                 result
@@ -174,6 +218,8 @@ pub async fn update(branch: &str) -> Result<bool, Box<dyn Error>> {
 
     Ok(success)
 }
+
+
 
 
 
