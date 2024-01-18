@@ -149,6 +149,7 @@ async fn process_host(host: Host, service_name: String) {
                         if let Some(mac) = v6_to_mac(&ip.to_string()) {
                             info!("Found MAC address {} for IPv6 address {}", mac, ip);
                             mdns_info.mac_address = mac;
+                            // Don't push in instances to keep them clean of PII
                         }
                     }
                 }
@@ -174,6 +175,7 @@ async fn process_host(host: Host, service_name: String) {
                     } else if mdns_info.mac_address != mac_address {
                         warn!("MAC Address {} from instance {} is different from the one already found {}, using the one from instance", mac_address, instance, mdns_info.mac_address);
                         mdns_info.mac_address = mac_address;
+                        // Don't push in instances to keep them clean of PII
                     }
                 },
                 None => {
