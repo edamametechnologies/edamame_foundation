@@ -1,7 +1,7 @@
 // Built in default profile db
 pub static DEVICE_PROFILES: &str = r#"{
-  "date": "January 10th 2024",
-  "signature": "ce8ef6409e2f0453c478671aca7aacf78584e9f93bd0622da7b6cb18ad7b3740",
+  "date": "January 20th 2024",
+  "signature": "8d2eae39a182116fcb64454dee2210d0cfdeb562cddf9c34924aa9464208313b",
   "profiles": [
     {
       "device_type": "Printer",
@@ -29,6 +29,13 @@ pub static DEVICE_PROFILES: &str = r#"{
                     "ricoh",
                     "kodak",
                     "sharp"
+                  ]
+                }
+              },
+              {
+                "Leaf": {
+                  "banners": [
+                    "hp http server"
                   ]
                 }
               }
@@ -84,8 +91,7 @@ pub static DEVICE_PROFILES: &str = r#"{
                 "Leaf": {
                   "open_ports": [
                     1400,
-                    1410,
-                    1443
+                    1410
                   ]
                 }
               },
