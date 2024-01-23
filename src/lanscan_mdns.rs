@@ -2,9 +2,9 @@ use std::collections::HashMap;
 use std::{net::IpAddr, sync::{Arc}};
 use std::net::Ipv6Addr;
 use log::{info, trace, warn};
-use tokio::task;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::Mutex;
+use tokio::task;
 use tokio::time::Duration;
 use lazy_static::lazy_static;
 use sorted_vec::SortedVec;
@@ -14,9 +14,9 @@ use regex::Regex;
 use wez_mdns::{QueryParameters, Host};
 
 lazy_static! {
-    static ref SHOULD_STOP: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
-    static ref DEVICES: Arc<Mutex<HashMap<String, mDNSInfo>>> = Arc::new(Mutex::new(HashMap::new()));
+    static ref MDNS_STOP: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
     static ref MDNS_HANDLE: Arc<Mutex<Option<task::JoinHandle<()>>>> = Arc::new(Mutex::new(None));
+    static ref DEVICES: Arc<Mutex<HashMap<String, mDNSInfo>>> = Arc::new(Mutex::new(HashMap::new()));
 }
 
 #[derive(Debug, Clone)]
@@ -36,12 +36,12 @@ pub async fn mdns_start() {
         return;
     }
     info!("Starting mDNS task");
-    *MDNS_HANDLE.lock().await = Some(task::spawn(fetch_mdns_info()));
+    *MDNS_HANDLE.lock().await = Some(task::spawn(fetch_mdns_info_task()));
 }
 
 pub fn mdns_stop() {
     info!("Terminating mDNS task");
-    SHOULD_STOP.store(true, Ordering::Relaxed);
+    MDNS_STOP.store(true, Ordering::Relaxed);
 }
 
 // To be called in case of network change
@@ -186,12 +186,12 @@ async fn process_host(host: Host, service_name: String) {
     }
 }
 
-async fn fetch_mdns_info() {
+async fn fetch_mdns_info_task() {
 
     let pause_duration = Duration::from_secs(5);
 
     loop {
-        if SHOULD_STOP.load(Ordering::Relaxed) {
+        if MDNS_STOP.load(Ordering::Relaxed) {
             info!("Received mDNS termination signal");
             trace!("mDNS database: {:?}", DEVICES.lock().await);
             break;
@@ -202,7 +202,6 @@ async fn fetch_mdns_info() {
             Ok(responses) => responses,
             Err(e) => {
                 warn!("Error querying mDNS services: {:?}", e);
-                tokio::time::sleep(pause_duration).await;
                 continue;
             }
         };
@@ -212,7 +211,6 @@ async fn fetch_mdns_info() {
             },
             Err(e) => {
                 warn!("Error receiving mDNS services query response: {:?}", e);
-                tokio::time::sleep(pause_duration).await;
                 continue;
             }
         };

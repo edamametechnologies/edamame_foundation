@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_MACOS: &str = r#"{
   "name": "threat model macOS",
   "extends": "none",
-  "date": "December 12th 2023",
-  "signature": "b44266f387c48766f0fc50f46bd07e179068931e4aeb36a6a7232f581e027cfa",
+  "date": "January 19th 2024",
+  "signature": "a672c9ba81f8f94cdb7f879eb1bf671ff6872cbcf14445c47b60a9906cb67998",
   "metrics": [
     {
       "name": "edamame helper disabled",
@@ -985,12 +985,12 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         {
           "locale": "EN",
           "title": "No antivirus enabled",
-          "summary": "You don't have any antivirus installed (MalwareBytes, Sentinel One...). We recommend you to enable one."
+          "summary": "You don't have any antivirus installed (MalwareBytes, Sentinel One, BitDefender...). We recommend you to enable one."
         },
         {
           "locale": "FR",
           "title": "Pas d'antivirus activé",
-          "summary": "Vous n'avez pas d'antivirus installé (MalwareBytes, Sentinel One...). Nous vous recommandons d'en activer un."
+          "summary": "Vous n'avez pas d'antivirus installé (MalwareBytes, Sentinel One, BitDefender...). Nous vous recommandons d'en activer un."
         }
       ],
       "implementation": {
@@ -999,7 +999,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
-        "target": "if ! { pgrep RTProtectionDaemon >/dev/null || sentinelctl version 2>/dev/null | grep -q \"Agent version\"; }; then echo noepp; fi",
+        "target": "if ! { pgrep BDLDaemon >/dev/null || pgrep RTProtectionDaemon >/dev/null || sentinelctl version 2>/dev/null | grep -q \"Agent version\"; }; then echo noepp; fi",
         "education": []
       },
       "remediation": {
@@ -1304,12 +1304,12 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
       "description": [
         {
           "locale": "EN",
-          "title": "Compromised email address",
+          "title": "Potentially compromised email address",
           "summary": "Your email address might have recently appeared in a data breach. Please set your email in the Identity tab, review the breaches if any and follow instructions."
         },
         {
           "locale": "FR",
-          "title": "Adresse e-mail compromise",
+          "title": "Adresse e-mail potentiellement compromise",
           "summary": "Votre adresse e-mail est peut-être apparue récemment dans une fuite de données. Renseignez votre email dans le tab Identité, examinez les fuites éventuelles et suivez les instructions."
         }
       ],

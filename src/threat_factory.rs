@@ -14,7 +14,51 @@ use crate::threat_metrics_linux::*;
 static THREAT_MODEL_URL: &str =
     "https://raw.githubusercontent.com/edamametechnologies/threatmodels";
 
+impl ThreatMetric {
+    pub fn new() -> ThreatMetric {
+        ThreatMetric {
+            metric: ThreatMetricJSON::new(),
+            timestamp: "".to_string(),
+            // No threat by default
+            status: ThreatStatus::Unknown,
+            // internal_metrics: None,
+        }
+    }
+}
+
+impl ThreatMetricJSON {
+    pub fn new() -> ThreatMetricJSON {
+        ThreatMetricJSON {
+            name: "".to_string(),
+            metrictype: "".to_string(),
+            dimension: "".to_string(),
+            severity: 0,
+            scope: "".to_string(),
+            tags: Vec::new(),
+            description: Vec::new(),
+            implementation: ThreatMetricImplementationJSON::new(),
+            remediation: ThreatMetricImplementationJSON::new(),
+            rollback: ThreatMetricImplementationJSON::new(),
+        }
+    }
+}
+
+impl ThreatMetricImplementationJSON {
+    pub fn new() -> ThreatMetricImplementationJSON {
+        ThreatMetricImplementationJSON {
+            class: "".to_string(),
+            elevation: "".to_string(),
+            target: "".to_string(),
+            education: Vec::new(),
+            maxversion: 0,
+            minversion: 0,
+            system: "".to_string(),
+        }
+    }
+}
+
 impl ThreatMetrics {
+
     // Initialize with the appropriate built-in version of the threat model
     fn get_builtin_version(platform: &str) -> Result<&'static str, String> {
 
@@ -105,13 +149,12 @@ impl ThreatMetrics {
             extends: json.extends,
             date: json.date,
             signature: json.signature,
-            metrics: Self::create_objects(&clone_json),
+            metrics: Self::create_metrics(&clone_json),
             timestamp: "".to_string(),
         }
     }
 
-    // We disabled the associated internal object for now
-    fn create_objects(json: &ThreatMetricsJSON) -> Vec<ThreatMetric> {
+    fn create_metrics(json: &ThreatMetricsJSON) -> Vec<ThreatMetric> {
         let mut metrics = Vec::new();
         let clone_json = json.clone();
         for j in clone_json.metrics {
@@ -166,7 +209,7 @@ impl ThreatMetrics {
                     let json: ThreatMetricsJSON = res.json().await?;
 
                     // Then create complete versions of objects
-                    let metrics = Self::create_objects(&json);
+                    let metrics = Self::create_metrics(&json);
                     self.name = json.name;
                     self.extends = json.extends;
                     self.date = json.date;
