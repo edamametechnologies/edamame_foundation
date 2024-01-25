@@ -200,10 +200,23 @@ pub async fn rpc_run(
             major_version, major_cargo_version), true);
     }
 
-    info!(
-        "Executing order {} / {} with arg1 {} and arg2 {}",
+    // Display the order and the arguments, ignore empty arguments
+    if arg1.is_empty() && arg2.is_empty() {
+        info!(
+            "Executing order {} / {}",
+            ordertype, subordertype
+        );
+    } else if arg2.is_empty() {
+        info!(
+            "Executing order {} / {} with arg#1 {}",
+            ordertype, subordertype, arg1
+        );
+    } else {
+        info!(
+        "Executing order {} / {} with arg#1 {} and arg#2 {}",
         ordertype, subordertype, arg1, arg2
-    );
+        );
+    }
 
     match ordertype {
         "metricorder" => {
