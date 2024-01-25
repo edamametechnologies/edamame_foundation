@@ -32,7 +32,7 @@ uuid = { version = "1.6.1", features = [
 # Logging
 log = "0.4.20"
 signal-hook = "0.3"
-flexi_logger = "0.27.3"
+flexi_logger = "0.27.4"
 
 # gRPC server/client
 tonic = { version = "0.10.2", features = ["tls"] }

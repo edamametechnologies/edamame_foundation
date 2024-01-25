@@ -1,4 +1,4 @@
-use log::{error, info, trace};
+use log::{error, trace};
 use run_script::ScriptOptions;
 use std::error::Error;
 use std::thread::spawn;
@@ -41,7 +41,7 @@ pub async fn run_cli(cmd: &str, username: &str, personate: bool) -> Result<Strin
     stdout = stdout.replace('\n', "");
     stdout = stdout.replace('\r', "");
 
-    info!("Execution results for {:?} - code : {:?} - stdout : {:?} - stderr : {:?}", cmd, code, stdout, stderr);
+    trace!("Execution results for {:?} - code : {:?} - stdout : {:?} - stderr : {:?}", cmd, code, stdout, stderr);
 
     if execution_failed(code, &stderr) {
         Err(From::from(stderr.clone()))
