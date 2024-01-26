@@ -53,8 +53,10 @@ pub async fn get_mac_address_from_ip(interface_name: &str, ip_addr: &IpAddr) -> 
                 return Err(anyhow!("No valid MAC address found for {}", ip_addr));
             }
         };
-
-        Ok(caps[2].trim().to_string())
+        let mac = caps[2].trim().to_string();
+        // Convert to lowercase and replace - by :
+        let formatted_mac = mac.to_lowercase().replace("-", ":");
+        Ok(formatted_mac)
     }
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]
