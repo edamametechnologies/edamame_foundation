@@ -1,9 +1,11 @@
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 use log::{info, trace};
+
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 use ipnet::ipv4_mask_to_prefix;
 
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 use network_interface::{NetworkInterface, NetworkInterfaceConfig, Addr};
-
 
 // Search for the interfaces - the ones that are up, not loopback or link layer and has an IPv4 address and sorted with the lowest index first (the default)
 // Returns (ip, prefix, name)
