@@ -3,6 +3,7 @@ pub mod helper_tx;
 pub mod helper_rx;
 pub mod helper_rx_utility;
 pub mod lanscan_arp;
+pub mod lanscan_device_info;
 pub mod lanscan_mdns;
 pub mod lanscan_port_vulns;
 pub mod lanscan_port_vulns_db;
