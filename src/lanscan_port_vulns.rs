@@ -7,7 +7,7 @@ use std::error::Error;
 use std::time::Duration;
 use reqwest::Client;
 
-use crate::lanscan_types::*;
+use crate::lanscan_port_info::*;
 use crate::lanscan_port_vulns_db::*;
 
 const PORT_VULNS_REPO: &str = "https://raw.githubusercontent.com/edamametechnologies/threatmodels";
