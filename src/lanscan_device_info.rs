@@ -2,9 +2,10 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use regex::Regex;
 
-use crate::lanscan_types::*;
+use crate::lanscan_port_info::*;
+use crate::lanscan_device_info_backend::*;
 
-// We should really use HashSets instead of Vec but we don't in order to make it more usable with FFI
+// We should really use HashSets instead of Vec, but we don't in order to make it more usable with FFI
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DeviceInfo {
     // PII
@@ -35,6 +36,8 @@ pub struct DeviceInfo {
     pub device_type: String,
 }
 
+
+
 impl DeviceInfo {
     pub fn new() -> DeviceInfo {
         DeviceInfo {
@@ -63,36 +66,31 @@ impl DeviceInfo {
     }
     
     // Used before any query to AI assistance
-    pub fn sanitized_device_info(device: &DeviceInfo) -> DeviceInfo {
-        let mut device_clone = device.clone();
+    pub fn sanitized_device_info(device: &DeviceInfo) -> DeviceInfoBackend {
 
-        // Remove any PII from the device info
-        // Addresses and names
-        device_clone.ip_address = "".to_string();
-        device_clone.ip_addresses = Vec::new();
-        device_clone.mac_address = "".to_string();
-        device_clone.mac_addresses = Vec::new();
-        device_clone.hostname = "".to_string();
-        device_clone.custom_name = "".to_string();
-        device_clone.os_name = "".to_string();
+        let mut device_backend = DeviceInfoBackend {
+            mdns_services: device.mdns_services.clone(),
+            device_vendor: device.device_vendor.clone(),
+            open_ports: device.open_ports.clone(),
+        };
 
         // mDNS instances can be prefixed by the device's serial, mac, ip address.
         // We keep only the part from _xxx._yyy.local onwards
         let re = Regex::new(r".*?(_.*?\.local)").unwrap();
 
         let mut mdns_services_sanitized = Vec::new();
-        for mdns_service in device_clone.mdns_services.iter() {
+        for mdns_service in device_backend.mdns_services.iter() {
             // Replace the matched pattern with the first captured group, which is _xxx._yyy.local
             let sanitized = re.replace(mdns_service, "$1").to_string();
             mdns_services_sanitized.push(sanitized);
         }
-        device_clone.mdns_services = mdns_services_sanitized;
+        device_backend.mdns_services = mdns_services_sanitized;
 
         // Deduplicate
-        device_clone.mdns_services.sort();
-        device_clone.mdns_services.dedup();
+        device_backend.mdns_services.sort();
+        device_backend.mdns_services.dedup();
 
-        device_clone
+        device_backend
     }
 
     pub fn merge(device: &mut DeviceInfo, new_device: &DeviceInfo) {
