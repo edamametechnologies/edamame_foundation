@@ -7,7 +7,9 @@ edition = "2021"
 async_fn_in_trait = "allow"
 
 [features]
-disable-grpc = []
+default = ["helper"]
+helper = ["tonic", "prost", "tonic-build", "run_script", "powershell_script"] # Include helper related dependencies by default
+disable-helper = [] # When this feature is enabled, `helper` dependencies are excluded
 
 [lib]
 # Dynamic lib version is not used on apple platforms as it's painful, but we must use it on windows and linux
@@ -41,14 +43,15 @@ log = "0.4.20"
 signal-hook = "0.3"
 flexi_logger = "0.27.4"
 
-# gRPC server/client
-tonic = { version = "0.10.2", features = ["tls"] }
-prost = "0.12.3"
+# gRPC server/client, marked as optional
+tonic = { version = "0.10.2", features = ["tls"], optional = true }
+prost = { version = "0.12.3", optional = true }
+
 base64 = "0.21.5"
 
 # CLI support
-run_script = "0.10.1"
-powershell_script = "1.1.0"
+run_script = { version = "0.10.1", optional = true }
+powershell_script = { version = "1.1.0", optional = true }
 
 # Async
 async-trait = "0.1.77"
@@ -60,7 +63,7 @@ tokio = { version = "1.35.1", features = ["full"] }
 chrono = { version = "0.4.31", features = ["serde"] }
 
 # Network utils
-ipnet = "2.9.0"
+ipnet = { version = "2.9.0" }
 # wez-mdns = "0.1.1"
 # Our own mdns implementation forked from wez-mdns
 wez-mdns = { git = "https://github.com/edamametechnologies/mdns" }
@@ -105,5 +108,7 @@ system-configuration-sys = { git = "https://github.com/edamametechnologies/syste
 
 [build-dependencies]
 
+# Conditional compilation for build dependencies
 # protobuf->Rust compiler
-tonic-build = "0.10.2"
+tonic-build = { version = "0.10.2", optional = true }
+
