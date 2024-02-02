@@ -33,18 +33,18 @@ pub trait Backend {
         score: &DetailedScoreBackend,
     ) -> Result<()>;
 
-    async fn fetch_lanscan_remediation(
+    async fn get_remediation_lanscan(
         &self,
         language: &str,
         device_info: &DeviceInfoBackend,
     ) -> Result<String>;
 
-    async fn fetch_breach_remediation(
+    async fn get_remediation_pwned(
         &self,
         language: &str,
         name: &str,
         user_skills: &str,
-        breach_description: &str,
+        description: &str,
         is_service: bool
     ) -> Result<String>;
 }
