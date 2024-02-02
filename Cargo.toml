@@ -6,6 +6,9 @@ edition = "2021"
 [lints.rust]
 async_fn_in_trait = "allow"
 
+[features]
+disable-grpc = []
+
 [lib]
 # Dynamic lib version is not used on apple platforms as it's painful, but we must use it on windows and linux
 # We must keep lib if we want to build targets with cargo
