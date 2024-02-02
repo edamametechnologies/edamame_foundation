@@ -9,11 +9,9 @@ pub mod helper_tx;
 pub mod helper_rx;
 #[cfg(not(feature = "disable-helper"))]
 pub mod helper_rx_utility;
-#[cfg(not(feature = "disable-helper"))]
 pub mod lanscan_arp;
 pub mod lanscan_device_info;
 pub mod lanscan_device_info_backend;
-#[cfg(not(feature = "disable-helper"))]
 pub mod lanscan_mdns;
 pub mod lanscan_port_vulns;
 pub mod lanscan_port_vulns_db;
@@ -22,9 +20,7 @@ pub mod lanscan_profiles_db;
 pub mod lanscan_oui;
 pub mod lanscan_oui_db;
 pub mod lanscan_port_info;
-#[cfg(not(feature = "disable-helper"))]
 pub mod lanscan_interface;
-#[cfg(not(feature = "disable-helper"))]
 pub mod logger;
 pub mod order;
 pub mod order_backend;
@@ -32,7 +28,6 @@ pub mod order_type;
 pub mod pwned_breach;
 #[cfg(not(feature = "disable-helper"))]
 pub mod runner_cli;
-#[cfg(not(feature = "disable-helper"))]
 pub mod runtime;
 pub mod score;
 pub mod score_backend;
