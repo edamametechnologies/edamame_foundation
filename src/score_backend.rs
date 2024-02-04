@@ -5,7 +5,7 @@ use crate::threat::ThreatMetrics;
 use serde_with::serde_as;
 
 #[serde_as]
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ScoreBackend {
     // % of compliance
     pub network: i32,
