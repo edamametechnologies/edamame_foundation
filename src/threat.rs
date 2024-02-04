@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 // Only Strings in order to easily read the JSON array
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ThreatMetricEducationJSON {
     pub locale: String,
     pub class: String,
@@ -9,7 +9,7 @@ pub struct ThreatMetricEducationJSON {
 }
 
 // Only Strings in order to easily read the JSON array
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ThreatMetricImplementationJSON {
     pub system: String,
     pub minversion: i32,
@@ -21,7 +21,7 @@ pub struct ThreatMetricImplementationJSON {
 }
 
 // Only Strings in order to easily read the JSON array
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ThreatMetricDescriptionJSON {
     pub locale: String,
     pub title: String,
@@ -29,7 +29,7 @@ pub struct ThreatMetricDescriptionJSON {
 }
 
 // Only Strings in order to easily read the JSON array
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ThreatMetricJSON {
     pub name: String,
     pub metrictype: String,
@@ -43,7 +43,7 @@ pub struct ThreatMetricJSON {
     pub rollback: ThreatMetricImplementationJSON,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ThreatMetricsJSON {
     pub name: String,
     pub extends: String,
@@ -52,14 +52,14 @@ pub struct ThreatMetricsJSON {
     pub metrics: Vec<ThreatMetricJSON>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ThreatStatus {
     Active,
     Inactive,
     Unknown
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ThreatMetric {
     pub metric: ThreatMetricJSON,
     // Can be empty
@@ -67,7 +67,7 @@ pub struct ThreatMetric {
     pub status: ThreatStatus,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ThreatMetrics {
     pub metrics: Vec<ThreatMetric>,
     // Copied field from the JSON threat model
