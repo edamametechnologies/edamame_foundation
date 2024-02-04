@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use crate::order_type::MetricOrderType;
 
 // Compact version of MetricOrderResult to transmit to the backend
-#[derive(Serialize, Deserialize, Debug, Clone, PartialOrd, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialOrd, PartialEq, Eq)]
 pub struct MetricOrderResultBackend {
     pub metricname: String,
     pub ordertype: MetricOrderType,
