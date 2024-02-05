@@ -1,7 +1,7 @@
 use std::fmt;
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, PartialOrd)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, PartialOrd)]
 pub enum MetricOrderType {
     Capture,
     Remediate,

@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::order_type::*;
 use crate::threat::ThreatMetric;
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, PartialOrd)]
 pub struct MetricOrderResult {
     pub ordertype: MetricOrderType,
     pub timestamp: String,

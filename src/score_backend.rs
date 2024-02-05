@@ -1,11 +1,8 @@
-use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use crate::history::OrderHistory;
 use crate::threat::ThreatMetrics;
-use serde_with::serde_as;
 
-#[serde_as]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, PartialOrd)]
 pub struct ScoreBackend {
     // % of compliance
     pub network: i32,
@@ -16,13 +13,12 @@ pub struct ScoreBackend {
     pub overall: i32,
     // Stars are computed according to a variety of criteria - on 5 stars (0.0 to 5.0)
     pub stars: f64,
-    #[serde_as(as = "Vec<(_, _)>")]
-    pub compliance: HashMap<String, f64>,
+    pub compliance: Vec<(String, f64)>,
     pub metrics: ThreatMetrics,
     pub history: OrderHistory,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, PartialOrd)]
 pub struct NumericalScoreBackend {
     pub device_id: String,
     pub os_name: String,
@@ -34,7 +30,7 @@ pub struct NumericalScoreBackend {
     pub connected_user: String,
     pub connected_domain: String,
 }
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, PartialOrd)]
 pub struct DetailedScoreBackend {
     pub device_id: String,
     pub os_name: String,

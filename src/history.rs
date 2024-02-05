@@ -1,7 +1,7 @@
 use serde::{Serialize, Deserialize};
 use crate::order_backend::*;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, PartialOrd)]
 pub struct OrderHistory {
     pub history: Vec<MetricOrderResultBackend>,
 }
