@@ -47,7 +47,7 @@ pub struct DetailedScoreBackend {
     pub latitude: String,
     pub longitude: String,
     pub helper_state: String,
-    pub score: ScoreBackend,
+    pub score: f64,
     // RFC3339
     pub timestamp: String,
     pub connected_user: String,
