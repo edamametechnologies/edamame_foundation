@@ -4,16 +4,14 @@ use crate::threat::ThreatMetrics;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, PartialOrd)]
 pub struct ScoreBackend {
-    // % of compliance
     pub network: i32,
     pub system_integrity: i32,
     pub system_services: i32,
     pub applications: i32,
     pub credentials: i32,
     pub overall: i32,
-    // Stars are computed according to a variety of criteria - on 5 stars (0.0 to 5.0)
     pub stars: f64,
-    // We don't use a hasmap here to keep it simple with the backend
+    // We don't use a hashmap here to keep it simple with the backend
     pub compliance: Vec<(String, f64)>,
     pub metrics: ThreatMetrics,
     pub history: OrderHistory,
