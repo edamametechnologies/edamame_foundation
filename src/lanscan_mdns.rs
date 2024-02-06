@@ -13,6 +13,8 @@ use regex::Regex;
 // Our own fork with minor adjustements
 use wez_mdns::{QueryParameters, Host};
 
+use crate::runtime::async_spawn;
+
 lazy_static! {
     static ref MDNS_STOP: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
     static ref MDNS_HANDLE: Arc<Mutex<Option<task::JoinHandle<()>>>> = Arc::new(Mutex::new(None));
@@ -31,12 +33,15 @@ pub struct mDNSInfo {
 }
 
 pub async fn mdns_start() {
+
+    MDNS_STOP.store(false, Ordering::Relaxed);
+
     if MDNS_HANDLE.lock().await.is_some() {
         trace!("mDNS task already running");
         return;
     }
     info!("Starting mDNS task");
-    *MDNS_HANDLE.lock().await = Some(task::spawn(fetch_mdns_info_task()));
+    *MDNS_HANDLE.lock().await = Some(async_spawn(fetch_mdns_info_task()));
 }
 
 pub fn mdns_stop() {
