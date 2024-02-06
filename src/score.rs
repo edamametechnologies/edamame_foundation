@@ -10,14 +10,12 @@ use crate::history::*;
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Score {
-    // % of compliance
     pub network: i32,
     pub system_integrity: i32,
     pub system_services: i32,
     pub applications: i32,
     pub credentials: i32,
     pub overall: i32,
-    // Stars are computed according to a variety of criteria - on 5 stars (0.0 to 5.0)
     pub stars: f64,
     #[serde_as(as = "Vec<(_, _)>")]
     pub compliance: HashMap<String, f64>,
