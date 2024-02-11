@@ -48,7 +48,7 @@ update_lanscan_port_vulns () {
       branch=dev
     fi
     # Prevent bash parsing of escape chars
-    local body="$(wget --no-cache -qO- https://raw.githubusercontent.com/edamametechnologies/threatmodels/$branch/lanscan_port_vulns_db.json)"
+    local body="$(wget --no-cache -qO- https://raw.githubusercontent.com/edamametechnologies/threatmodels/$branch/lanscan-port-vulns-db.json)"
     # Interpret escape chars
     echo -n -e "$header" > "$target"
     # Preserve escape chars
@@ -74,7 +74,7 @@ update_lanscan_profiles () {
       branch=dev
     fi
     # Prevent bash parsing of escape chars
-    local body="$(wget --no-cache -qO- https://raw.githubusercontent.com/edamametechnologies/threatmodels/$branch/lanscan_profiles_db.json)"
+    local body="$(wget --no-cache -qO- https://raw.githubusercontent.com/edamametechnologies/threatmodels/$branch/lanscan-profiles-db.json)"
     # Interpret escape chars
     echo -n -e "$header" > "$target"
     # Preserve escape chars
