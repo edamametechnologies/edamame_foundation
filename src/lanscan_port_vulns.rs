@@ -12,7 +12,7 @@ use crate::lanscan_port_vulns_db::*;
 use crate::update::*;
 
 const PORT_VULNS_REPO: &str = "https://raw.githubusercontent.com/edamametechnologies/threatmodels";
-const PORT_VULNS_NAME: &str = "lanscan_port_vulns_db.json";
+const PORT_VULNS_NAME: &str = "lanscan-port-vulns-db.json";
 
 #[derive(Serialize, Deserialize, Debug, Clone, Ord, Eq, PartialEq, PartialOrd)]
 pub struct VulnerabilityInfo {

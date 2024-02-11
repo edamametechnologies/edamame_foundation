@@ -11,7 +11,7 @@ use crate::lanscan_profiles_db::*;
 use crate::update::*;
 
 const PROFILES_REPO: &str = "https://raw.githubusercontent.com/edamametechnologies/threatmodels";
-const PROFILES_NAME: &str = "lanscan_profiles_db.json";
+const PROFILES_NAME: &str = "lanscan-profiles-db.json";
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 struct Attributes {
