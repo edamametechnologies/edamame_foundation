@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use crate::history::OrderHistory;
+use crate::history_backend::OrderHistoryBackend;
 use crate::threat::ThreatMetrics;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, PartialOrd)]
@@ -14,7 +14,7 @@ pub struct ScoreBackend {
     // We don't use a hashmap here to keep it simple with the backend
     pub compliance: Vec<(String, f64)>,
     pub metrics: ThreatMetrics,
-    pub history: OrderHistory,
+    pub history: OrderHistoryBackend,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, PartialOrd)]

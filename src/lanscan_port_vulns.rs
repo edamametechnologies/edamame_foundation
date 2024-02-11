@@ -9,6 +9,7 @@ use reqwest::Client;
 
 use crate::lanscan_port_info::*;
 use crate::lanscan_port_vulns_db::*;
+use crate::UpdateStatus;
 
 const PORT_VULNS_REPO: &str = "https://raw.githubusercontent.com/edamametechnologies/threatmodels";
 const PORT_VULNS_NAME: &str = "lanscan_port_vulns_db.json";
@@ -143,10 +144,10 @@ pub async fn get_device_criticality(port_info_list: &Vec<PortInfo>) -> String {
     }
 }
 
-pub async fn update(branch: &str) -> Result<bool, Box<dyn Error>> {
+pub async fn update(branch: &str) -> Result<UpdateStatus, Box<dyn Error>> {
     info!("Starting port vulns update from backend");
 
-    let mut success = false;
+    let mut status = UpdateStatus::NotUpdated;
 
     let url = format!(
         "{}/{}/{}",
@@ -167,12 +168,19 @@ pub async fn update(branch: &str) -> Result<bool, Box<dyn Error>> {
         Ok(res) => {
             if res.status().is_success() {
                 info!("Port vulns transfer complete");
-                success = true;
 
-                let json: VulnerabilityInfoListJSON = res.json().await?;
+                let json: VulnerabilityInfoListJSON = match res.json().await {
+                    Ok(json) => json,
+                    Err(err) => {
+                        error!("Profiles transfer failed: {:?}", err);
+                        return Ok(UpdateStatus::FormatError);
+                    }
+                };
                 let mut locked_vulns = VULNS.lock().await;
                 *locked_vulns = VulnerabilityInfoList::new_from_json(&json);
 
+                // Success
+                status = UpdateStatus::Updated;
             } else {
                 error!(
                         "Port vulns transfer failed with status: {:?}",
@@ -186,5 +194,5 @@ pub async fn update(branch: &str) -> Result<bool, Box<dyn Error>> {
         }
     }
 
-    Ok(success)
+    Ok(status)
 }

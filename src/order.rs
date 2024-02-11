@@ -5,7 +5,7 @@ use crate::threat::ThreatMetric;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, PartialOrd)]
 pub struct MetricOrderResult {
-    pub ordertype: MetricOrderType,
+    pub order_type: MetricOrderType,
     pub timestamp: String,
     // Execution status
     pub success: bool,

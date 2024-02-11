@@ -1,6 +1,7 @@
 pub mod backend;
 pub mod foundation;
 pub mod history;
+pub mod history_backend;
 #[cfg(not(feature = "disable-helper"))]
 pub mod helper_proto;
 #[cfg(not(feature = "disable-helper"))]
@@ -39,4 +40,9 @@ pub mod threat_metrics_linux;
 pub mod threat_metrics_macos;
 pub mod threat_metrics_windows;
 
-
+// For config files pulled from the backend
+pub enum UpdateStatus {
+    Updated,
+    NotUpdated,
+    FormatError,
+}
