@@ -23,6 +23,7 @@ pub mod lanscan_oui_db;
 pub mod lanscan_port_info;
 pub mod lanscan_interface;
 pub mod logger;
+pub mod update;
 pub mod order;
 pub mod order_backend;
 pub mod order_type;
@@ -39,10 +40,3 @@ pub mod threat_metrics_ios;
 pub mod threat_metrics_linux;
 pub mod threat_metrics_macos;
 pub mod threat_metrics_windows;
-
-// For config files pulled from the backend
-pub enum UpdateStatus {
-    Updated,
-    NotUpdated,
-    FormatError,
-}

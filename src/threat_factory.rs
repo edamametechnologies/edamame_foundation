@@ -4,7 +4,7 @@ use std::error::Error;
 use std::time::Duration;
 use reqwest::Client;
 
-use crate::UpdateStatus;
+use crate::update::*;
 use crate::threat::*;
 use crate::threat_metrics_ios::*;
 use crate::threat_metrics_macos::*;

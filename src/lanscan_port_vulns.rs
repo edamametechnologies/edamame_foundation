@@ -9,7 +9,7 @@ use reqwest::Client;
 
 use crate::lanscan_port_info::*;
 use crate::lanscan_port_vulns_db::*;
-use crate::UpdateStatus;
+use crate::update::*;
 
 const PORT_VULNS_REPO: &str = "https://raw.githubusercontent.com/edamametechnologies/threatmodels";
 const PORT_VULNS_NAME: &str = "lanscan_port_vulns_db.json";
