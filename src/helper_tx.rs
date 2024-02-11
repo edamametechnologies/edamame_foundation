@@ -80,7 +80,6 @@ async fn helper_run(ordertype: &str, subordertype: &str, arg1: &str, arg2: &str,
 
     // Decode the Base64-encoded client certificate and key
     let client_cert_base64 = client_pem.to_string();
-    info!("client_cert_base64: {:?}", client_cert_base64);
     let client_cert_decoded = general_purpose::STANDARD.decode(&client_cert_base64).expect("Failed to decode client certificate");
     let client_cert = str::from_utf8(&client_cert_decoded).expect("Failed to convert client certificate to string");
 
