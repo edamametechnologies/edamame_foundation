@@ -4,6 +4,7 @@ use std::error::Error;
 use std::time::Duration;
 use reqwest::Client;
 
+use crate::UpdateStatus;
 use crate::threat::*;
 use crate::threat_metrics_ios::*;
 use crate::threat_metrics_macos::*;
@@ -170,10 +171,10 @@ impl ThreatMetrics {
     }
 
     // Update the threat model from the backend
-    pub async fn update(&mut self, platform: &str, branch: &str) -> Result<bool, Box<dyn Error>> {
+    pub async fn update(&mut self, platform: &str, branch: &str) -> Result<UpdateStatus, Box<dyn Error>> {
         info!("Starting threat model update from backend");
 
-        let mut success = false;
+        let mut status = UpdateStatus::NotUpdated;
 
         let model = match Self::get_model_name(platform) {
             Ok(_model) => {
@@ -206,7 +207,14 @@ impl ThreatMetrics {
             Ok(res) => {
                 if res.status().is_success() {
                     info!("Threat model transfer complete");
-                    let json: ThreatMetricsJSON = res.json().await?;
+
+                    let json: ThreatMetricsJSON = match res.json().await {
+                        Ok(json) => json,
+                        Err(err) => {
+                            error!("Error while parsing threat model JSON: {:?}", err);
+                            return Ok(UpdateStatus::FormatError);
+                        }
+                    };
 
                     // Then create complete versions of objects
                     let metrics = Self::create_metrics(&json);
@@ -216,7 +224,9 @@ impl ThreatMetrics {
                     self.signature = json.signature;
                     self.metrics = metrics;
                     self.timestamp = "".to_string();
-                    success = true;
+
+                    // Success
+                    status = UpdateStatus::Updated;
                 } else {
                     error!(
                         "Threat model transfer failed with status: {:?}",
@@ -230,6 +240,6 @@ impl ThreatMetrics {
             }
         }
 
-        Ok(success)
+        Ok(status)
     }
 }

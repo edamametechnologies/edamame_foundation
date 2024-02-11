@@ -8,6 +8,7 @@ use std::time::Duration;
 use reqwest::Client;
 use crate::lanscan_port_info::*;
 use crate::lanscan_profiles_db::*;
+use crate::UpdateStatus;
 
 const PROFILES_REPO: &str = "https://raw.githubusercontent.com/edamametechnologies/threatmodels";
 const PROFILES_NAME: &str = "lanscan_profiles_db.json";
@@ -175,10 +176,10 @@ fn match_condition(condition: &Condition, open_ports_set: &HashSet<u16>, mdns_se
     }
 }
 
-pub async fn update(branch: &str) -> Result<bool, Box<dyn Error>> {
+pub async fn update(branch: &str) -> Result<UpdateStatus, Box<dyn Error>> {
     info!("Starting profiles update from backend");
 
-    let mut success = false;
+    let mut status = UpdateStatus::NotUpdated;
 
     let url = format!(
         "{}/{}/{}",
@@ -198,11 +199,19 @@ pub async fn update(branch: &str) -> Result<bool, Box<dyn Error>> {
         Ok(res) => {
             if res.status().is_success() {
                 info!("Profiles transfer complete");
-                success = true;
 
-                let json: DeviceTypeListJSON = res.json().await?;
+                let json: DeviceTypeListJSON = match res.json().await {
+                    Ok(json) => json,
+                    Err(err) => {
+                        error!("Profiles transfer failed: {:?}", err);
+                        return Ok(UpdateStatus::FormatError);
+                    }
+                };
                 let mut locked_vulns = PROFILES.lock().await;
                 *locked_vulns = DeviceTypeList::new_from_json(&json);
+
+                // Success
+                status = UpdateStatus::Updated;
             } else {
                 error!(
                         "Profiles transfer failed with status: {:?}",
@@ -216,7 +225,7 @@ pub async fn update(branch: &str) -> Result<bool, Box<dyn Error>> {
         }
     }
 
-    Ok(success)
+    Ok(status)
 }
 
 
