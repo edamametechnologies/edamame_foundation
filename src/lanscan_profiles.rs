@@ -8,7 +8,7 @@ use std::time::Duration;
 use reqwest::Client;
 use crate::lanscan_port_info::*;
 use crate::lanscan_profiles_db::*;
-use crate::UpdateStatus;
+use crate::update::*;
 
 const PROFILES_REPO: &str = "https://raw.githubusercontent.com/edamametechnologies/threatmodels";
 const PROFILES_NAME: &str = "lanscan_profiles_db.json";
