@@ -1,4 +1,4 @@
-use log::{info, trace};
+use log::trace;
 use std::error::Error;
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Identity};
 use std::time::Duration;
