@@ -1,7 +1,7 @@
 // Built in default profile db
 pub static DEVICE_PROFILES: &str = r#"{
-  "date": "January 20th 2024",
-  "signature": "8d2eae39a182116fcb64454dee2210d0cfdeb562cddf9c34924aa9464208313b",
+  "date": "February 11th 2024",
+  "signature": "c9b4a7d5d65e437d766ed2dca9a24c1512f09411d343be4698cd3d9848a68381",
   "profiles": [
     {
       "device_type": "Printer",
