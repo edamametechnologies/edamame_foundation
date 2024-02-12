@@ -1,7 +1,7 @@
 // Built in default port vulns db
 pub static PORT_VULNS: &str = r#"{
-  "date": "December 16th 2023",
-  "signature": "90e7a33d43f83636adafbab76861dfae66e7fc2bb88c5f8ae38e5f514e4b7c77",
+  "date": "February 11th 2024",
+  "signature": "5e7146281465c2f4974d38e88aa7fa3550a4a5f6210acc8c8df4968e7e50f625",
   "vulnerabilities": [
     {
       "port": 0,
