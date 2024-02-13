@@ -22,6 +22,7 @@ pub mod lanscan_oui;
 pub mod lanscan_oui_db;
 pub mod lanscan_port_info;
 pub mod lanscan_interface;
+pub mod lanscan_dislike_device_info_backend;
 pub mod logger;
 pub mod update;
 pub mod order;
