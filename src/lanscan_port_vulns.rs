@@ -173,7 +173,11 @@ pub async fn update(branch: &str) -> Result<UpdateStatus, Box<dyn Error>> {
                     Ok(json) => json,
                     Err(err) => {
                         error!("Profiles transfer failed: {:?}", err);
-                        return Ok(UpdateStatus::FormatError);
+                        return if err.is_decode() {
+                            Ok(UpdateStatus::FormatError)
+                        } else {
+                            Err(err.into())
+                        }
                     }
                 };
                 let mut locked_vulns = VULNS.lock().await;
