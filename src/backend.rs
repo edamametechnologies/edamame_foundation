@@ -1,10 +1,10 @@
 use anyhow::Result;
 
-use crate::score_backend::*;
 use crate::lanscan_device_info_backend::*;
+use crate::lanscan_dislike_device_info_backend::DislikeDeviceInfoBackend;
+use crate::score_backend::*;
 
 pub trait Backend {
-    
     // Request PIN
     async fn request_pin(
         &self,
@@ -45,6 +45,11 @@ pub trait Backend {
         name: &str,
         user_skills: &str,
         description: &str,
-        is_service: bool
+        is_service: bool,
     ) -> Result<String>;
+
+    async fn send_dislike_device_type_info(
+        &self,
+        dislike_device_info_backend: DislikeDeviceInfoBackend,
+    ) -> Result<()>;
 }
