@@ -156,9 +156,9 @@ pub async fn update(branch: &str) -> Result<UpdateStatus, Box<dyn Error>> {
 
     info!("Fetching port vulns from {}", url);
 
-    // Create a client with a timeout
+    // Create a client with a long timeout as the file can be large
     let client = Client::builder()
-        .timeout(Duration::from_secs(20))
+        .timeout(Duration::from_secs(120))
         .build()?;
 
     // Use the client to make a request
@@ -168,6 +168,7 @@ pub async fn update(branch: &str) -> Result<UpdateStatus, Box<dyn Error>> {
         Ok(res) => {
             if res.status().is_success() {
                 info!("Port vulns transfer complete");
+
 
                 let json: VulnerabilityInfoListJSON = match res.json().await {
                     Ok(json) => json,
