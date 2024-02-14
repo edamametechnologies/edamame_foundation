@@ -3,6 +3,7 @@ use reqwest;
 use std::error::Error;
 use std::time::Duration;
 use reqwest::Client;
+use crate::lanscan_port_vulns::VulnerabilityInfoListJSON;
 
 use crate::update::*;
 use crate::threat::*;
@@ -211,8 +212,12 @@ impl ThreatMetrics {
                     let json: ThreatMetricsJSON = match res.json().await {
                         Ok(json) => json,
                         Err(err) => {
-                            error!("Error while parsing threat model JSON: {:?}", err);
-                            return Ok(UpdateStatus::FormatError);
+                            error!("Profiles transfer failed: {:?}", err);
+                            return if err.is_decode() {
+                                Ok(UpdateStatus::FormatError)
+                            } else {
+                                Err(err.into())
+                            }
                         }
                     };
 
