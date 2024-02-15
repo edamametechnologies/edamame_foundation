@@ -52,7 +52,7 @@ pub struct ThreatMetricsJSON {
     pub metrics: Vec<ThreatMetricJSON>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, PartialOrd)]
+#[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq, PartialOrd)]
 pub enum ThreatStatus {
     Active,
     Inactive,
