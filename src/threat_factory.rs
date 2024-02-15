@@ -3,7 +3,6 @@ use reqwest;
 use std::error::Error;
 use std::time::Duration;
 use reqwest::Client;
-use crate::lanscan_port_vulns::VulnerabilityInfoListJSON;
 
 use crate::update::*;
 use crate::threat::*;
