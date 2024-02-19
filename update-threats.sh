@@ -57,6 +57,33 @@ update_lanscan_port_vulns () {
     echo -e $trailer >> "$target"
 }
 
+update_lanscan_vendor_vulns () {
+    local target=./src/lanscan_vendor_vulns_db.rs
+    local header="// Built in default vendor vulns db\npub static VENDOR_VULNS: &str = r#\""
+    local trailer="\"#;"
+
+    echo "Updating lanscan vendor vulns db"
+
+    # Delete the file if it exists
+    if [ -f "$target" ]; then
+        rm "$target"
+    fi
+
+    local branch=$(git rev-parse --abbrev-ref HEAD)
+    # Only deal with main and dev branches, default to dev
+    if [ $branch != "dev" ] && [ $branch != "main" ]; then
+      branch=dev
+    fi
+    # Prevent bash parsing of escape chars
+    local body="$(wget --no-cache -qO- https://raw.githubusercontent.com/edamametechnologies/threatmodels/$branch/lanscan-vendor-vulns-db.json)"
+    # Interpret escape chars
+    echo -n -e "$header" > "$target"
+    # Preserve escape chars
+    echo -n "$body" >> "$target"
+    # Interpret escape chars
+    echo -e $trailer >> "$target"
+}
+
 update_lanscan_profiles () {
     local target=./src/lanscan_profiles_db.rs
     local header="// Built in default profile db\npub static DEVICE_PROFILES: &str = r#\""
@@ -94,9 +121,11 @@ if [ $# -eq 0 ]; then
     done
     update_lanscan_profiles
     update_lanscan_port_vulns
+    update_lanscan_vendor_vulns
 else
     # If an argument is provided, just use that
     update_threat_metrics $1
     update_lanscan_profiles
     update_lanscan_port_vulns
+    update_lanscan_vendor_vulns
 fi
