@@ -100,9 +100,9 @@ pub async fn update(branch: &str) -> Result<UpdateStatus, Box<dyn Error>> {
 
     info!("Fetching vendor vulns from {}", url);
 
-    // Create a client with a long timeout as the file can be large
+    // Create a client with a long timeout as the file can be VERY large
     let client = Client::builder()
-        .timeout(Duration::from_secs(120))
+        .timeout(Duration::from_secs(360))
         .build()?;
 
     // Use the client to make a request
