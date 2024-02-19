@@ -9,18 +9,13 @@ use reqwest::Client;
 
 use crate::lanscan_port_info::*;
 use crate::lanscan_port_vulns_db::*;
+use crate::lanscan_vulnerability_info::*;
 use crate::update::*;
 
 const PORT_VULNS_REPO: &str = "https://raw.githubusercontent.com/edamametechnologies/threatmodels";
 const PORT_VULNS_NAME: &str = "lanscan-port-vulns-db.json";
 
-#[derive(Serialize, Deserialize, Debug, Clone, Ord, Eq, PartialEq, PartialOrd)]
-pub struct VulnerabilityInfo {
-    pub name: String,
-    pub description: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Ord, Eq, PartialEq, PartialOrd)]
 pub struct VulnerabilityPortInfo {
     pub port: u16,
     pub name: String,
@@ -31,13 +26,13 @@ pub struct VulnerabilityPortInfo {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct VulnerabilityInfoListJSON {
+pub struct VulnerabilityPortInfoListJSON {
     pub date: String,
     pub signature: String,
     pub vulnerabilities: Vec<VulnerabilityPortInfo>,
 }
 
-pub struct VulnerabilityInfoList {
+pub struct VulnerabilityPortInfoList {
     pub date: String,
     pub signature: String,
     pub port_vulns: HashMap<u16, VulnerabilityPortInfo>,
@@ -45,9 +40,9 @@ pub struct VulnerabilityInfoList {
     pub https_ports: HashMap<u16, VulnerabilityPortInfo>,
 }
 
-impl VulnerabilityInfoList {
+impl VulnerabilityPortInfoList {
 
-    pub fn new_from_json(vuln_info: &VulnerabilityInfoListJSON) -> Self {
+    pub fn new_from_json(vuln_info: &VulnerabilityPortInfoListJSON) -> Self {
         info!("Loading port info list from JSON");
         let port_vulns_list = vuln_info.vulnerabilities.clone();
         let mut port_vulns = HashMap::new();
@@ -65,7 +60,7 @@ impl VulnerabilityInfoList {
 
         info!("Loaded {} ports, {} HTTP ports, {} HTTPS ports", port_vulns.len(), http_ports.len(), https_ports.len());
 
-        VulnerabilityInfoList {
+        VulnerabilityPortInfoList {
             date: vuln_info.date.clone(),
             signature: vuln_info.signature.clone(),
             port_vulns,
@@ -75,9 +70,9 @@ impl VulnerabilityInfoList {
     }
 }
 
-pub static VULNS: Lazy<Mutex<VulnerabilityInfoList>> = Lazy::new(|| {
-    let vuln_info: VulnerabilityInfoListJSON = serde_json::from_str(PORT_VULNS).unwrap();
-    let vulns = VulnerabilityInfoList::new_from_json(&vuln_info);
+pub static VULNS: Lazy<Mutex<VulnerabilityPortInfoList>> = Lazy::new(|| {
+    let vuln_info: VulnerabilityPortInfoListJSON = serde_json::from_str(PORT_VULNS).unwrap();
+    let vulns = VulnerabilityPortInfoList::new_from_json(&vuln_info);
     Mutex::new(vulns)
 });
 
@@ -170,7 +165,7 @@ pub async fn update(branch: &str) -> Result<UpdateStatus, Box<dyn Error>> {
                 info!("Port vulns transfer complete");
 
 
-                let json: VulnerabilityInfoListJSON = match res.json().await {
+                let json: VulnerabilityPortInfoListJSON = match res.json().await {
                     Ok(json) => json,
                     Err(err) => {
                         error!("Profiles transfer failed: {:?}", err);
@@ -182,7 +177,7 @@ pub async fn update(branch: &str) -> Result<UpdateStatus, Box<dyn Error>> {
                     }
                 };
                 let mut locked_vulns = VULNS.lock().await;
-                *locked_vulns = VulnerabilityInfoList::new_from_json(&json);
+                *locked_vulns = VulnerabilityPortInfoList::new_from_json(&json);
 
                 // Success
                 status = UpdateStatus::Updated;

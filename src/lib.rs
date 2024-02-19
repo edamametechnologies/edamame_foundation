@@ -14,8 +14,11 @@ pub mod lanscan_arp;
 pub mod lanscan_device_info;
 pub mod lanscan_device_info_backend;
 pub mod lanscan_mdns;
+pub mod lanscan_vulnerability_info;
 pub mod lanscan_port_vulns;
 pub mod lanscan_port_vulns_db;
+pub mod lanscan_vendor_vulns;
+pub mod lanscan_vendor_vulns_db;
 pub mod lanscan_profiles;
 pub mod lanscan_profiles_db;
 pub mod lanscan_oui;
@@ -41,3 +44,4 @@ pub mod threat_metrics_ios;
 pub mod threat_metrics_linux;
 pub mod threat_metrics_macos;
 pub mod threat_metrics_windows;
+
