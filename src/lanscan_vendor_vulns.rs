@@ -16,7 +16,7 @@ const VENDOR_VULNS_NAME: &str = "lanscan-vendor-vulns-db.json";
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct VulnerabilityVendorInfo {
-    pub name: String,
+    pub vendor: String,
     pub vulnerabilities: Vec<VulnerabilityInfo>,
     pub count: u32,
 }
@@ -42,7 +42,7 @@ impl VulnerabilityInfoList {
         let mut vendor_vulns = HashMap::new();
 
         for vendor_info in vendor_vulns_list {
-            vendor_vulns.insert(vendor_info.name.clone(), vendor_info);
+            vendor_vulns.insert(vendor_info.vendor.clone(), vendor_info);
         }
 
         info!("Loaded {} vendors", vendor_vulns.len());
@@ -77,7 +77,7 @@ pub async fn get_description_from_vendor(vendor: &str) -> String {
     let vulns = VULNS.lock().await;
     trace!("Locking VULNS - end");
     vulns.vendor_vulns.get(vendor)
-        .map_or("".to_string(), |vendor_info| vendor_info.name.clone())
+        .map_or("".to_string(), |vendor_info| vendor_info.vendor.clone())
 }
 
 pub async fn get_vulns_of_vendor(vendor: &str) -> Vec<VulnerabilityInfo> {
