@@ -32,8 +32,9 @@ update_threat_metrics() {
 
 update_lanscan_port_vulns () {
     local target=./src/lanscan_port_vulns_db.rs
-    local header="// Built in default port vulns db\npub static PORT_VULNS: &str = r#\""
-    local trailer="\"#;"
+    # We need to use 4 # in order to deal with the mess of escape chars found in the CVE descriptions
+    local header="// Built in default port vulns db\npub static PORT_VULNS: &str = r####\""
+    local trailer="\"####;"
 
     echo "Updating lanscan port vulns db"
 
@@ -59,8 +60,9 @@ update_lanscan_port_vulns () {
 
 update_lanscan_vendor_vulns () {
     local target=./src/lanscan_vendor_vulns_db.rs
-    local header="// Built in default vendor vulns db\npub static VENDOR_VULNS: &str = r#\""
-    local trailer="\"#;"
+    # We need to use 4 # in order to deal with the mess of escape chars found in the CVE descriptions
+    local header="// Built in default vendor vulns db\npub static VENDOR_VULNS: &str = r####\""
+    local trailer="\"####;"
 
     echo "Updating lanscan vendor vulns db"
 
