@@ -84,8 +84,22 @@ pub async fn get_vulns_of_vendor(vendor: &str) -> Vec<VulnerabilityInfo> {
     trace!("Locking VULNS - start");
     let vulns = VULNS.lock().await;
     trace!("Locking VULNS - end");
-    vulns.vendor_vulns.get(vendor)
-        .map_or(Vec::new(), |vendor_info| vendor_info.vulnerabilities.clone())
+
+    // Try the full vendor name first, then try to remove the trailing words one by one until we find a match
+    let mut vendor_name = vendor.to_string();
+    while !vendor_name.is_empty() {
+        if let Some(vendor_info) = vulns.vendor_vulns.get(&vendor_name) {
+            return vendor_info.vulnerabilities.clone();
+        }
+        // Attempt to remove the last word
+        if let Some(pos) = vendor_name.rfind(' ') {
+            vendor_name.truncate(pos);
+        } else {
+            // No space found, clear the string to exit the loop
+            vendor_name.clear();
+        }
+    }
+    vec![]
 }
 
 pub async fn update(branch: &str) -> Result<UpdateStatus, Box<dyn Error>> {
