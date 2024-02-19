@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_WINDOWS: &str = r#"{
   "name": "threat model Windows",
   "extends": "none",
-  "date": "December 13th 2023",
-  "signature": "e134c50cbb7b26a9f1ae33657d01010ad81a45cb32ea6b65a6017a77945e03ba",
+  "date": "February 06th 2024",
+  "signature": "9fbb45c8e9678a5efe8992979c7a1695e2e528d6bec6487a1b17dd69df73c23e",
   "metrics": [
     {
       "name": "edamame helper disabled",
@@ -167,6 +167,80 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
       }
     },
     {
+      "name": "encrypted disk disabled",
+      "metrictype": "bool",
+      "dimension": "system services",
+      "severity": 4,
+      "scope": "generic",
+      "tags": [
+        "CIS Benchmark Level 1,windows_security/bitlocker_enforce",
+        "ISO 27001/2,Information Security Incident Management",
+        "PCI-DSS,Requirement-3.4",
+        "SOC 2,CC-Data Protection"
+      ],
+      "description": [
+        {
+          "locale": "EN",
+          "title": "Disk encryption disabled",
+          "summary": "Your main storage is not encrypted. While there is a little performance impact by enabling it, we really urge you to set it up. Without that anyone physically accessing your computer can access your data."
+        },
+        {
+          "locale": "FR",
+          "title": "Encryption du disque désactivée",
+          "summary": "Votre stockage principal n'est pas crypté. Bien qu'il y ait un petit impact sur les performances en l'activant, nous vous invitons vraiment à le configurer. Sans cela, toute personne accédant physiquement à votre ordinateur peut accéder à vos données."
+        }
+      ],
+      "implementation": {
+        "system": "Windows",
+        "minversion": 10,
+        "maxversion": 0,
+        "class": "cli",
+        "elevation": "admin",
+        "target": "manage-bde -status | findstr 'Protection Off'",
+        "education": []
+      },
+      "remediation": {
+        "system": "Windows",
+        "minversion": 10,
+        "maxversion": 0,
+        "class": "",
+        "elevation": "",
+        "target": "",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "youtube",
+            "target": "https://www.youtube.com/watch?v=PtMyu9xrJ_E"
+          },
+          {
+            "locale": "FR",
+            "class": "youtube",
+            "target": "https://www.youtube.com/watch?v=RqWzTzUVYaM"
+          }
+        ]
+      },
+      "rollback": {
+        "system": "Windows",
+        "minversion": 10,
+        "maxversion": 0,
+        "class": "",
+        "elevation": "",
+        "target": "",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "link",
+            "target": "https://www.youtube.com/watch?v=lY0Iz0NpAoU"
+          },
+          {
+            "locale": "FR",
+            "class": "link",
+            "target": "https://www.youtube.com/watch?v=Cj4UUMxm6D8"
+          }
+        ]
+      }
+    },
+    {
       "name": "UAC disabled",
       "metrictype": "bool",
       "dimension": "system integrity",
@@ -285,12 +359,12 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
       "description": [
         {
           "locale": "EN",
-          "title": "Compromised email address",
+          "title": "Potentially compromised email address",
           "summary": "Your email address might have recently appeared in a data breach. Please set your email in the Identity tab, review the breaches if any and follow instructions."
         },
         {
           "locale": "FR",
-          "title": "Adresse e-mail compromise",
+          "title": "Adresse e-mail potentiellement compromise",
           "summary": "Votre adresse e-mail est peut-être apparue récemment dans une fuite de données. Renseignez votre email dans le tab Identité, examinez les fuites éventuelles et suivez les instructions."
         }
       ],
@@ -750,8 +824,8 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         },
         {
           "locale": "FR",
-          "title": "Service Registre distant activé",
-          "summary": "Le Service Registre distant permet l'accès distant au Registre de Windows. Cela peut être un risque de sécurité si cela n'est pas correctement sécurisé."
+          "title": "Service Registre Distant activé",
+          "summary": "Le Service Registre Distant permet l'accès distant au Registre de Windows. Cela peut être un risque de sécurité si cela n'est pas correctement sécurisé."
         }
       ],
       "implementation": {
