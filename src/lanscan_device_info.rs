@@ -4,6 +4,7 @@ use regex::Regex;
 
 use crate::lanscan_port_info::*;
 use crate::lanscan_device_info_backend::*;
+use crate::lanscan_vulnerability_info::*;
 
 // We should really use HashSets instead of Vec, but we don't in order to make it more usable with FFI
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -20,6 +21,8 @@ pub struct DeviceInfo {
     pub os_name: String,
     pub os_version: String,
     pub device_vendor: String,
+    // Vendor related vulnerabilities
+    pub vulnerabilities: Vec<VulnerabilityInfo>,
     // Sorted Vec would be better but had trouble with the bridge once...
     pub open_ports: Vec<PortInfo>,
     // Device state
@@ -51,6 +54,7 @@ impl DeviceInfo {
             os_name: "".to_string(),
             os_version: "".to_string(),
             device_vendor: "".to_string(),
+            vulnerabilities: Vec::new(),
             open_ports: Vec::new(),
             dismissed_ports: Vec::new(),
             last_detected: Utc::now(),
@@ -71,6 +75,7 @@ impl DeviceInfo {
         let mut device_backend = DeviceInfoBackend {
             mdns_services: device.mdns_services.clone(),
             device_vendor: device.device_vendor.clone(),
+            vulnerabilities: device.vulnerabilities.clone(),
             open_ports: device.open_ports.clone(),
         };
 
