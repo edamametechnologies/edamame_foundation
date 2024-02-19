@@ -1,0 +1,147 @@
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use tokio::sync::Mutex;
+use log::{info, trace, error, warn};
+use once_cell::sync::Lazy;
+use std::error::Error;
+use std::time::Duration;
+use reqwest::Client;
+
+use crate::lanscan_vendor_vulns_db::*;
+use crate::lanscan_vulnerability_info::*;
+use crate::update::*;
+
+const VENDOR_VULNS_REPO: &str = "https://raw.githubusercontent.com/edamametechnologies/threatmodels";
+const VENDOR_VULNS_NAME: &str = "lanscan-vendor-vulns-db.json";
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct VulnerabilityVendorInfo {
+    pub name: String,
+    pub vulnerabilities: Vec<VulnerabilityInfo>,
+    pub count: u32,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct VulnerabilityVendorInfoListJSON {
+    pub date: String,
+    pub signature: String,
+    pub vulnerabilities: Vec<VulnerabilityVendorInfo>,
+}
+
+pub struct VulnerabilityInfoList {
+    pub date: String,
+    pub signature: String,
+    pub vendor_vulns: HashMap<String, VulnerabilityVendorInfo>,
+}
+
+impl VulnerabilityInfoList {
+
+    pub fn new_from_json(vuln_info: &VulnerabilityVendorInfoListJSON) -> Self {
+        info!("Loading vendor info list from JSON");
+        let vendor_vulns_list = vuln_info.vulnerabilities.clone();
+        let mut vendor_vulns = HashMap::new();
+
+        for vendor_info in vendor_vulns_list {
+            vendor_vulns.insert(vendor_info.name.clone(), vendor_info);
+        }
+
+        info!("Loaded {} vendors", vendor_vulns.len());
+
+        VulnerabilityInfoList {
+            date: vuln_info.date.clone(),
+            signature: vuln_info.signature.clone(),
+            vendor_vulns,
+        }
+    }
+}
+
+pub static VULNS: Lazy<Mutex<VulnerabilityInfoList>> = Lazy::new(|| {
+    let vuln_info: VulnerabilityVendorInfoListJSON = serde_json::from_str(VENDOR_VULNS).unwrap();
+    let vulns = VulnerabilityInfoList::new_from_json(&vuln_info);
+    Mutex::new(vulns)
+});
+
+pub async fn get_vendors() -> Vec<String> {
+    trace!("Locking VULNS - start");
+    let vulns = VULNS.lock().await;
+    trace!("Locking VULNS - end");
+    vulns.vendor_vulns.keys().cloned().collect()
+}
+
+pub async fn get_deep_vendors() -> Vec<u16> {
+    (0..65535).collect()
+}
+
+pub async fn get_description_from_vendor(vendor: &str) -> String {
+    trace!("Locking VULNS - start");
+    let vulns = VULNS.lock().await;
+    trace!("Locking VULNS - end");
+    vulns.vendor_vulns.get(vendor)
+        .map_or("".to_string(), |vendor_info| vendor_info.name.clone())
+}
+
+pub async fn get_vulns_of_vendor(vendor: &str) -> Vec<VulnerabilityInfo> {
+    trace!("Locking VULNS - start");
+    let vulns = VULNS.lock().await;
+    trace!("Locking VULNS - end");
+    vulns.vendor_vulns.get(vendor)
+        .map_or(Vec::new(), |vendor_info| vendor_info.vulnerabilities.clone())
+}
+
+pub async fn update(branch: &str) -> Result<UpdateStatus, Box<dyn Error>> {
+    info!("Starting vendor vulns update from backend");
+
+    let mut status = UpdateStatus::NotUpdated;
+
+    let url = format!(
+        "{}/{}/{}",
+        VENDOR_VULNS_REPO, branch, VENDOR_VULNS_NAME
+    );
+
+    info!("Fetching vendor vulns from {}", url);
+
+    // Create a client with a long timeout as the file can be large
+    let client = Client::builder()
+        .timeout(Duration::from_secs(120))
+        .build()?;
+
+    // Use the client to make a request
+    let response = client.get(&url).send().await;
+
+    match response {
+        Ok(res) => {
+            if res.status().is_success() {
+                info!("Vendor vulns transfer complete");
+
+
+                let json: VulnerabilityVendorInfoListJSON = match res.json().await {
+                    Ok(json) => json,
+                    Err(err) => {
+                        error!("Profiles transfer failed: {:?}", err);
+                        return if err.is_decode() {
+                            Ok(UpdateStatus::FormatError)
+                        } else {
+                            Err(err.into())
+                        }
+                    }
+                };
+                let mut locked_vulns = VULNS.lock().await;
+                *locked_vulns = VulnerabilityInfoList::new_from_json(&json);
+
+                // Success
+                status = UpdateStatus::Updated;
+            } else {
+                error!(
+                        "Vendor vulns transfer failed with status: {:?}",
+                        res.status()
+                    );
+            }
+        }
+        Err(err) => {
+            // Only warn this can happen if the device is offline
+            warn!("Vendor vulns transfer failed: {:?}", err);
+        }
+    }
+
+    Ok(status)
+}

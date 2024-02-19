@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_ANDROID: &str = r#"{
   "name": "threat model Android",
   "extends": "none",
-  "date": "December 13th 2023",
-  "signature": "336c981803d8a59383af2f64324456fe9a3583e6bf90f97d7c328441794ade15",
+  "date": "January 18th 2024",
+  "signature": "8a6c6c78d968e8047e3b86984951800ea0025a715c9032f6badd6193e11acf1f",
   "metrics": [
     {
       "name": "MDM profiles",
@@ -46,7 +46,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
           {
             "locale": "EN",
             "class": "link",
-            "target": "https://en.wikipedia.org/wiki/Mobile_device_managements"
+            "target": "https://en.wikipedia.org/wiki/Mobile_device_management"
           },
           {
             "locale": "FR",
@@ -66,7 +66,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
           {
             "locale": "EN",
             "class": "link",
-            "target": "https://en.wikipedia.org/wiki/Mobile_device_managements"
+            "target": "https://en.wikipedia.org/wiki/Mobile_device_management"
           },
           {
             "locale": "FR",
@@ -239,12 +239,12 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       "description": [
         {
           "locale": "EN",
-          "title": "Compromised email address",
+          "title": "Potentially compromised email address",
           "summary": "Your email address might have recently appeared in a data breach. Please set your email in the Identity tab, review the breaches if any and follow instructions."
         },
         {
           "locale": "FR",
-          "title": "Adresse e-mail compromise",
+          "title": "Adresse e-mail potentiellement compromise",
           "summary": "Votre adresse e-mail est peut-être apparue récemment dans une fuite de données. Renseignez votre email dans le tab Identité, examinez les fuites éventuelles et suivez les instructions."
         }
       ],

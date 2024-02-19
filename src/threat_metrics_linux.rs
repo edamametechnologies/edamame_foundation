@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_LINUX: &str = r#"{
   "name": "threat model Linux",
   "extends": "none",
-  "date": "December 13th 2023",
-  "signature": "940ca101ecce327bb30e70f77289b072fd73608e9c0bf0c7e75ae4961e828dbc",
+  "date": "January 18th 2024",
+  "signature": "86789acc8042abe52a2968c61a07274fc5819c0d8b87ecb9ccea03e5ec920349",
   "metrics": [
     {
       "name": "edamame helper disabled",
@@ -140,12 +140,12 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       "description": [
         {
           "locale": "EN",
-          "title": "Compromised email address",
+          "title": "Potentially compromised email address",
           "summary": "Your email address might have recently appeared in a data breach. Please set your email in the Identity tab, review the breaches if any and follow instructions."
         },
         {
           "locale": "FR",
-          "title": "Adresse e-mail compromise",
+          "title": "Adresse e-mail potentiellement compromise",
           "summary": "Votre adresse e-mail est peut-être apparue récemment dans une fuite de données. Renseignez votre email dans le tab Identité, examinez les fuites éventuelles et suivez les instructions."
         }
       ],
