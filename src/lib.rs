@@ -39,6 +39,7 @@ pub mod score;
 pub mod score_backend;
 pub mod threat;
 pub mod threat_factory;
+pub mod health;
 pub mod threat_metrics_android;
 pub mod threat_metrics_ios;
 pub mod threat_metrics_linux;
