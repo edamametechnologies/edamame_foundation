@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_MACOS: &str = r#"{
   "name": "threat model macOS",
   "extends": "none",
-  "date": "January 19th 2024",
-  "signature": "a672c9ba81f8f94cdb7f879eb1bf671ff6872cbcf14445c47b60a9906cb67998",
+  "date": "March 03th 2024",
+  "signature": "a8f82e30153a34debe02d9a3f5b9db5f0f715a6c83090123af4d1c9b7b1da16d",
   "metrics": [
     {
       "name": "edamame helper disabled",
@@ -49,7 +49,18 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "class": "cli",
         "elevation": "system",
         "target": "/Library/Application\\ Support/Edamame/Edamame-Helper/uninstall.sh",
-        "education": []
+        "education": [
+          {
+            "locale": "EN",
+            "class": "html",
+            "target": "<p>If you need to uninstall the EDAMAME Helper software for any reason, you can use the provided shell script command. Note that uninstalling may affect the Security Score analysis of your system.</p>"
+          },
+          {
+            "locale": "FR",
+            "class": "html",
+            "target": "<p>Si vous devez désinstaller le logiciel d'assistance EDAMAME pour une raison quelconque, vous pouvez utiliser la commande de script shell fournie. Notez que la désinstallation peut affecter l'analyse du score de sécurité de votre système.</p>"
+          }
+        ]
       }
     },
     {
@@ -92,7 +103,18 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "class": "cli",
         "elevation": "system",
         "target": "/usr/libexec/ApplicationFirewall/socketfilterfw --setstealthmode on",
-        "education": []
+        "education": [
+          {
+            "locale": "EN",
+            "class": "html",
+            "target": "<p>Enabling stealth mode through the CLI command <code>/usr/libexec/ApplicationFirewall/socketfilterfw --setstealthmode on</code> will make your system invisible to ping requests, enhancing your network security by reducing the attack surface visible to potential attackers.</p>"
+          },
+          {
+            "locale": "FR",
+            "class": "html",
+            "target": "<p>L'activation du mode furtif via la commande CLI <code>/usr/libexec/ApplicationFirewall/socketfilterfw --setstealthmode on</code> rendra votre système invisible aux requêtes ping, améliorant ainsi la sécurité de votre réseau en réduisant la surface d'attaque visible par les attaquants potentiels.</p>"
+          }
+        ]
       },
       "rollback": {
         "system": "macOS",
@@ -101,7 +123,18 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "class": "cli",
         "elevation": "system",
         "target": "/usr/libexec/ApplicationFirewall/socketfilterfw --setstealthmode off",
-        "education": []
+        "education": [
+          {
+            "locale": "EN",
+            "class": "html",
+            "target": "<p>Disabling stealth mode by executing <code>/usr/libexec/ApplicationFirewall/socketfilterfw --setstealthmode off</code> via CLI will make your system respond to ping requests again. Be cautious as this increases your network visibility and may expose your system to potential threats.</p>"
+          },
+          {
+            "locale": "FR",
+            "class": "html",
+            "target": "<p>La désactivation du mode furtif en exécutant <code>/usr/libexec/ApplicationFirewall/socketfilterfw --setstealthmode off</code> via CLI permettra à nouveau à votre système de répondre aux requêtes ping. Soyez prudent, car cela augmente la visibilité de votre réseau et peut exposer votre système à des menaces potentielles.</p>"
+          }
+        ]
       }
     },
     {
@@ -141,7 +174,18 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "class": "cli",
         "elevation": "system",
         "target": "profiles remove -all -forced",
-        "education": []
+        "education": [
+          {
+            "locale": "EN",
+            "class": "html",
+            "target": "<p>To remove MDM profiles from your macOS device, you can use the CLI command <code>profiles remove -all -forced</code>. This action will ensure that your device is no longer managed remotely, which is crucial for maintaining personal security and privacy.</p>"
+          },
+          {
+            "locale": "FR",
+            "class": "html",
+            "target": "<p>Pour supprimer les profils MDM de votre appareil macOS, vous pouvez utiliser la commande CLI <code>profiles remove -all -forced</code>. Cette action garantira que votre appareil n'est plus géré à distance, ce qui est crucial pour maintenir la sécurité et la confidentialité personnelles.</p>"
+          }
+        ]
       },
       "rollback": {
         "system": "macOS",
@@ -264,7 +308,18 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "class": "cli",
         "elevation": "system",
         "target": "systemsetup -setwakeonnetworkaccess off",
-        "education": []
+        "education": [
+          {
+            "locale": "EN",
+            "class": "html",
+            "target": "<p>Disabling Wake On LAN (WOL) prevents your computer from being remotely activated, which can be a security risk. Use the command <code>systemsetup -setwakeonnetworkaccess off</code> to turn off WOL and enhance your device's security.</p>"
+          },
+          {
+            "locale": "FR",
+            "class": "html",
+            "target": "<p>Désactiver le Wake On LAN (WOL) empêche votre ordinateur d'être activé à distance, ce qui peut représenter un risque de sécurité. Utilisez la commande <code>systemsetup -setwakeonnetworkaccess off</code> pour désactiver le WOL et améliorer la sécurité de votre appareil.</p>"
+          }
+        ]
       },
       "rollback": {
         "system": "macOS",
@@ -368,7 +423,18 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "class": "cli",
         "elevation": "system",
         "target": "defaults write /Library/Preferences/com.apple.alf globalstate -int 2",
-        "education": []
+        "education": [
+          {
+            "locale": "EN",
+            "class": "html",
+            "target": "<p>Enabling the local firewall on macOS can be done via CLI with <code>defaults write /Library/Preferences/com.apple.alf globalstate -int 2</code>. This enhances security by monitoring and controlling incoming connections.</p>"
+          },
+          {
+            "locale": "FR",
+            "class": "html",
+            "target": "<p>L'activation du pare-feu local sur macOS peut être effectuée via CLI avec <code>defaults write /Library/Preferences/com.apple.alf globalstate -int 2</code>. Cela améliore la sécurité en surveillant et contrôlant les connexions entrantes.</p>"
+          }
+        ]
       },
       "rollback": {
         "system": "macOS",
@@ -377,7 +443,18 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "class": "cli",
         "elevation": "system",
         "target": "defaults write /Library/Preferences/com.apple.alf globalstate -int 0 && launchctl unload /System/Library/LaunchDaemons/com.apple.alf.agent.plist && launchctl load /System/Library/LaunchDaemons/com.apple.alf.agent.plist&& killall socketfilterfw || true",
-        "education": []
+        "education": [
+          {
+            "locale": "EN",
+            "class": "html",
+            "target": "<p>If necessary, the firewall can be disabled for troubleshooting or specific network tasks with <code>defaults write /Library/Preferences/com.apple.alf globalstate -int 0</code>, but it's recommended to keep it enabled for security.</p>"
+          },
+          {
+            "locale": "FR",
+            "class": "html",
+            "target": "<p>Si nécessaire, le pare-feu peut être désactivé pour le dépannage ou des tâches réseau spécifiques avec <code>defaults write /Library/Preferences/com.apple.alf globalstate -int 0</code>, mais il est recommandé de le garder activé pour la sécurité.</p>"
+          }
+        ]
       }
     },
     {
@@ -411,7 +488,18 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "class": "cli",
         "elevation": "user",
         "target": "defaults read /Library/Preferences/com.apple.loginwindow | grep autoLoginUser",
-        "education": []
+        "education": [
+          {
+            "locale": "EN",
+            "class": "html",
+            "target": "<p>Disabling automatic login enhances your security by requiring authentication at startup. Execute the CLI command <code>defaults delete /Library/Preferences/com.apple.loginwindow autoLoginUser</code> to turn it off. This ensures that unauthorized users cannot access your system without entering the correct credentials.</p>"
+          },
+          {
+            "locale": "FR",
+            "class": "html",
+            "target": "<p>Désactiver la connexion automatique améliore votre sécurité en exigeant une authentification au démarrage. Exécutez la commande CLI <code>defaults delete /Library/Preferences/com.apple.loginwindow autoLoginUser</code> pour la désactiver. Cela garantit que les utilisateurs non autorisés ne peuvent pas accéder à votre système sans saisir les identifiants corrects.</p>"
+          }
+        ]
       },
       "remediation": {
         "system": "macOS",
@@ -420,7 +508,18 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "class": "cli",
         "elevation": "system",
         "target": "defaults delete /Library/Preferences/com.apple.loginwindow autoLoginUser",
-        "education": []
+        "education": [
+          {
+            "locale": "EN",
+            "class": "html",
+            "target": "<p>Disabling automatic login enhances your security by requiring authentication at startup. Execute the CLI command <code>defaults delete /Library/Preferences/com.apple.loginwindow autoLoginUser</code> to turn it off. This ensures that unauthorized users cannot access your system without entering the correct credentials.</p>"
+          },
+          {
+            "locale": "FR",
+            "class": "html",
+            "target": "<p>Désactiver la connexion automatique améliore votre sécurité en exigeant une authentification au démarrage. Exécutez la commande CLI <code>defaults delete /Library/Preferences/com.apple.loginwindow autoLoginUser</code> pour la désactiver. Cela garantit que les utilisateurs non autorisés ne peuvent pas accéder à votre système sans saisir les identifiants corrects.</p>"
+          }
+        ]
       },
       "rollback": {
         "system": "macOS",
@@ -478,7 +577,18 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "class": "cli",
         "elevation": "fulldisk",
         "target": "echo yes | systemsetup -setremotelogin off",
-        "education": []
+        "education": [
+          {
+            "locale": "EN",
+            "class": "html",
+            "target": "<p>Disabling remote login via the CLI command <code>echo yes | systemsetup -setremotelogin off</code> secures your macOS system by preventing unauthorized remote access. This command requires full disk access permissions to execute and ensures that your system is only accessible by authorized users locally.</p>"
+          },
+          {
+            "locale": "FR",
+            "class": "html",
+            "target": "<p>Désactiver l'accès à distance via la commande CLI <code>echo yes | systemsetup -setremotelogin off</code> sécurise votre système macOS en empêchant l'accès à distance non autorisé. Cette commande nécessite des permissions d'accès complet au disque pour s'exécuter et garantit que votre système est uniquement accessible localement par les utilisateurs autorisés.</p>"
+          }
+        ]
       },
       "rollback": {
         "system": "macOS",
@@ -487,7 +597,18 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "class": "cli",
         "elevation": "fulldisk",
         "target": "systemsetup -setremotelogin on",
-        "education": []
+        "education": [
+          {
+            "locale": "EN",
+            "class": "html",
+            "target": "<p>Enabling remote login on macOS can be done via the CLI command <code>systemsetup -setremotelogin on</code>. This command allows remote users to access the system via SSH, which can be useful for remote administration but increases the risk of unauthorized access. Use this feature cautiously and ensure your firewall and user access permissions are properly configured.</p>"
+          },
+          {
+            "locale": "FR",
+            "class": "html",
+            "target": "<p>L'activation de l'accès à distance sur macOS peut être effectuée via la commande CLI <code>systemsetup -setremotelogin on</code>. Cette commande permet aux utilisateurs distants d'accéder au système via SSH, ce qui peut être utile pour l'administration à distance mais augmente le risque d'accès non autorisé. Utilisez cette fonction avec prudence et assurez-vous que votre pare-feu et les permissions d'accès utilisateur sont correctement configurés.</p>"
+          }
+        ]
       }
     },
     {
@@ -530,7 +651,18 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "class": "cli",
         "elevation": "fulldisk",
         "target": "/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -deactivate -stop",
-        "education": []
+        "education": [
+          {
+            "locale": "EN",
+            "class": "html",
+            "target": "<p>Disabling remote desktop access can significantly enhance the security of your macOS system. Use the CLI command <code>/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -deactivate -stop</code> to turn off remote management services. This prevents unauthorized remote desktop access, ensuring only approved users can control the system remotely.</p>"
+          },
+          {
+            "locale": "FR",
+            "class": "html",
+            "target": "<p>Désactiver l'accès au bureau à distance peut considérablement renforcer la sécurité de votre système macOS. Utilisez la commande CLI <code>/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -deactivate -stop</code> pour désactiver les services de gestion à distance. Cela empêche l'accès à distance non autorisé au bureau, garantissant que seuls les utilisateurs approuvés peuvent contrôler le système à distance.</p>"
+          }
+        ]
       },
       "rollback": {
         "system": "macOS",
@@ -539,7 +671,18 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "class": "cli",
         "elevation": "fulldisk",
         "target": "sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate",
-        "education": []
+        "education": [
+          {
+            "locale": "EN",
+            "class": "html",
+            "target": "<p>Re-enabling remote desktop services on macOS can be done through the CLI command <code>sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate</code>. While this enables remote management capabilities, it's crucial to ensure that only trusted users have access and that your network is secure to mitigate potential security risks.</p>"
+          },
+          {
+            "locale": "FR",
+            "class": "html",
+            "target": "<p>Réactiver les services de bureau à distance sur macOS peut se faire via la commande CLI <code>sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate</code>. Bien que cela active les capacités de gestion à distance, il est crucial de s'assurer que seuls les utilisateurs de confiance ont accès et que votre réseau est sécurisé pour atténuer les risques de sécurité potentiels.</p>"
+          }
+        ]
       }
     },
     {
@@ -582,7 +725,18 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "class": "cli",
         "elevation": "system",
         "target": "launchctl unload -w /System/Library/LaunchDaemons/com.apple.smbd.plist",
-        "education": []
+        "education": [
+          {
+            "locale": "EN",
+            "class": "html",
+            "target": "<p>Disabling file sharing on your macOS system can significantly enhance your data security. Use the CLI command <code>launchctl unload -w /System/Library/LaunchDaemons/com.apple.smbd.plist</code> to turn off SMB file sharing. This action ensures that your files are not inadvertently shared across the network, reducing the risk of unauthorized access.</p>"
+          },
+          {
+            "locale": "FR",
+            "class": "html",
+            "target": "<p>Désactiver le partage de fichiers sur votre système macOS peut considérablement renforcer la sécurité de vos données. Utilisez la commande CLI <code>launchctl unload -w /System/Library/LaunchDaemons/com.apple.smbd.plist</code> pour désactiver le partage de fichiers SMB. Cette action garantit que vos fichiers ne sont pas partagés par inadvertance sur le réseau, réduisant ainsi le risque d'accès non autorisé.</p>"
+          }
+        ]
       },
       "rollback": {
         "system": "macOS",
@@ -591,7 +745,18 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "class": "cli",
         "elevation": "system",
         "target": "launchctl load -w /System/Library/LaunchDaemons/com.apple.smbd.plist && defaults write /Library/Preferences/SystemConfiguration/com.apple.smb.server.plist EnabledServices -array disk",
-        "education": []
+        "education": [
+          {
+            "locale": "EN",
+            "class": "html",
+            "target": "<p>Re-enabling file sharing on macOS allows for easy file access and sharing within a network. To enable SMB file sharing, use the CLI command <code>launchctl load -w /System/Library/LaunchDaemons/com.apple.smbd.plist && defaults write /Library/Preferences/SystemConfiguration/com.apple.smb.server.plist EnabledServices -array disk</code>. Ensure proper security measures are in place to protect shared data.</p>"
+          },
+          {
+            "locale": "FR",
+            "class": "html",
+            "target": "<p>Réactiver le partage de fichiers sur macOS permet un accès et un partage de fichiers faciles au sein d'un réseau. Pour activer le partage de fichiers SMB, utilisez la commande CLI <code>launchctl load -w /System/Library/LaunchDaemons/com.apple.smbd.plist && defaults write /Library/Preferences/SystemConfiguration/com.apple.smb.server.plist EnabledServices -array disk</code>. Assurez-vous que des mesures de sécurité appropriées sont en place pour protéger les données partagées.</p>"
+          }
+        ]
       }
     },
     {
@@ -634,7 +799,18 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "class": "cli",
         "elevation": "fulldisk",
         "target": "systemsetup -setremoteappleevents off",
-        "education": []
+        "education": [
+          {
+            "locale": "EN",
+            "class": "html",
+            "target": "<p>Disabling file sharing on your macOS system can significantly enhance your data security. Use the CLI command <code>launchctl unload -w /System/Library/LaunchDaemons/com.apple.smbd.plist</code> to turn off SMB file sharing. This action ensures that your files are not inadvertently shared across the network, reducing the risk of unauthorized access.</p>"
+          },
+          {
+            "locale": "FR",
+            "class": "html",
+            "target": "<p>Désactiver le partage de fichiers sur votre système macOS peut considérablement renforcer la sécurité de vos données. Utilisez la commande CLI <code>launchctl unload -w /System/Library/LaunchDaemons/com.apple.smbd.plist</code> pour désactiver le partage de fichiers SMB. Cette action garantit que vos fichiers ne sont pas partagés par inadvertance sur le réseau, réduisant ainsi le risque d'accès non autorisé.</p>"
+          }
+        ]
       },
       "rollback": {
         "system": "macOS",
@@ -643,7 +819,18 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "class": "cli",
         "elevation": "fulldisk",
         "target": "systemsetup -setremoteappleevents on",
-        "education": []
+        "education": [
+          {
+            "locale": "EN",
+            "class": "html",
+            "target": "<p>Re-enabling file sharing on macOS allows for easy file access and sharing within a network. To enable SMB file sharing, use the CLI command <code>launchctl load -w /System/Library/LaunchDaemons/com.apple.smbd.plist && defaults write /Library/Preferences/SystemConfiguration/com.apple.smb.server.plist EnabledServices -array disk</code>. Ensure proper security measures are in place to protect shared data.</p>"
+          },
+          {
+            "locale": "FR",
+            "class": "html",
+            "target": "<p>Réactiver le partage de fichiers sur macOS permet un accès et un partage de fichiers faciles au sein d'un réseau. Pour activer le partage de fichiers SMB, utilisez la commande CLI <code>launchctl load -w /System/Library/LaunchDaemons/com.apple.smbd.plist && defaults write /Library/Preferences/SystemConfiguration/com.apple.smb.server.plist EnabledServices -array disk</code>. Assurez-vous que des mesures de sécurité appropriées sont en place pour protéger les données partagées.</p>"
+          }
+        ]
       }
     },
     {
@@ -831,7 +1018,18 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "class": "cli",
         "elevation": "system",
         "target": "spctl --global-enable",
-        "education": []
+        "education": [
+          {
+            "locale": "EN",
+            "class": "html",
+            "target": "<p>Enabling Gatekeeper to block unsigned applications enhances your security by ensuring only trusted software can run on your macOS system. Use the CLI command <code>spctl --global-enable</code> to enforce application signatures. This action prevents potentially harmful applications from running, safeguarding your system against malware.</p>"
+          },
+          {
+            "locale": "FR",
+            "class": "html",
+            "target": "<p>Activer Gatekeeper pour bloquer les applications non signées améliore votre sécurité en garantissant que seuls les logiciels de confiance peuvent s'exécuter sur votre système macOS. Utilisez la commande CLI <code>spctl --global-enable</code> pour imposer les signatures d'application. Cette action empêche l'exécution d'applications potentiellement dangereuses, protégeant ainsi votre système contre les logiciels malveillants.</p>"
+          }
+        ]
       },
       "rollback": {
         "system": "macOS",
@@ -840,7 +1038,18 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "class": "cli",
         "elevation": "system",
         "target": "spctl --global-disable",
-        "education": []
+        "education": [
+          {
+            "locale": "EN",
+            "class": "html",
+            "target": "<p>Disabling Gatekeeper allows unsigned applications to run on your macOS system, which can be necessary for certain software not available through the App Store. If you need to do this, use the CLI command <code>spctl --global-disable</code>. Be cautious and ensure you trust any unsigned applications you choose to run, as this increases the risk of installing potentially harmful software.</p>"
+          },
+          {
+            "locale": "FR",
+            "class": "html",
+            "target": "<p>Désactiver Gatekeeper permet à des applications non signées de s'exécuter sur votre système macOS, ce qui peut être nécessaire pour certains logiciels non disponibles via l'App Store. Si vous devez le faire, utilisez la commande CLI <code>spctl --global-disable</code>. Soyez prudent et assurez-vous de faire confiance à toutes les applications non signées que vous choisissez d'exécuter, car cela augmente le risque d'installer des logiciels potentiellement dangereux.</p>"
+          }
+        ]
       }
     },
     {
@@ -884,7 +1093,18 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "class": "cli",
         "elevation": "system",
         "target": "defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticCheckEnabled -bool true; defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticDownload -bool true; defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticallyInstallMacOSUpdates -bool true; defaults write /Library/Preferences/com.apple.SoftwareUpdate CriticalUpdateInstall -bool true; defaults write /Library/Preferences/com.apple.SoftwareUpdate ConfigDataInstall -bool true; softwareupdate --schedule on",
-        "education": []
+        "education": [
+          {
+            "locale": "EN",
+            "class": "html",
+            "target": "<p>Automating system updates is crucial for maintaining the security and efficiency of your macOS system. Enable automatic updates with the CLI command <code>defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticCheckEnabled -bool true; defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticDownload -bool true; defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticallyInstallMacOSUpdates -bool true; defaults write /Library/Preferences/com.apple.SoftwareUpdate CriticalUpdateInstall -bool true; defaults write /Library/Preferences/com.apple.SoftwareUpdate ConfigDataInstall -bool true; softwareupdate --schedule on</code>. This ensures your system always has the latest security patches and improvements.</p>"
+          },
+          {
+            "locale": "FR",
+            "class": "html",
+            "target": "<p>Automatiser les mises à jour système est crucial pour maintenir la sécurité et l'efficacité de votre système macOS. Activez les mises à jour automatiques avec la commande CLI <code>defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticCheckEnabled -bool true; defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticDownload -bool true; defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticallyInstallMacOSUpdates -bool true; defaults write /Library/Preferences/com.apple.SoftwareUpdate CriticalUpdateInstall -bool true; defaults write /Library/Preferences/com.apple.SoftwareUpdate ConfigDataInstall -bool true; softwareupdate --schedule on</code>. Cela garantit que votre système dispose toujours des derniers correctifs de sécurité et améliorations.</p>"
+          }
+        ]
       },
       "rollback": {
         "system": "macOS",
@@ -893,7 +1113,18 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "class": "cli",
         "elevation": "system",
         "target": "defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticCheckEnabled -bool false; defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticDownload -bool false; defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticallyInstallMacOSUpdates -bool false; defaults write /Library/Preferences/com.apple.SoftwareUpdate CriticalUpdateInstall -bool false; defaults write /Library/Preferences/com.apple.SoftwareUpdate ConfigDataInstall -bool false; softwareupdate --schedule off",
-        "education": []
+        "education": [
+          {
+            "locale": "EN",
+            "class": "html",
+            "target": "<p>If you need to disable automatic system updates, perhaps for testing or other specific scenarios, use the CLI command <code>defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticCheckEnabled -bool false; defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticDownload -bool false; defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticallyInstallMacOSUpdates -bool false; defaults write /Library/Preferences/com.apple.SoftwareUpdate CriticalUpdateInstall -bool false; defaults write /Library/Preferences/com.apple.SoftwareUpdate ConfigDataInstall -bool false; softwareupdate --schedule off</code>. Remember, this action might leave your system vulnerable to security threats.</p>"
+          },
+          {
+            "locale": "FR",
+            "class": "html",
+            "target": "<p>Si vous devez désactiver les mises à jour automatiques du système, peut-être pour des tests ou d'autres scénarios spécifiques, utilisez la commande CLI <code>defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticCheckEnabled -bool false; defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticDownload -bool false; defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticallyInstallMacOSUpdates -bool false; defaults write /Library/Preferences/com.apple.SoftwareUpdate CriticalUpdateInstall -bool false; defaults write /Library/Preferences/com.apple.SoftwareUpdate ConfigDataInstall -bool false; softwareupdate --schedule off</code>. N'oubliez pas, cette action pourrait laisser votre système vulnérable aux menaces de sécurité.</p>"
+          }
+        ]
       }
     },
     {
@@ -1152,7 +1383,18 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "class": "cli",
         "elevation": "system",
         "target": "sysadminctl -guestAccount off",
-        "education": []
+        "education": [
+          {
+            "locale": "EN",
+            "class": "html",
+            "target": "<p>Disabling the guest account on your macOS system is an important step in securing your computer against unauthorized access. To disable the guest account, open Terminal and execute the following command: <code>sudo sysadminctl -guestAccount off</code>. This command requires administrator privileges, so you may need to enter your administrator password to proceed.</p>"
+          },
+          {
+            "locale": "FR",
+            "class": "html",
+            "target": "<p>Désactiver le compte invité sur votre système macOS est une étape importante pour sécuriser votre ordinateur contre les accès non autorisés. Pour désactiver le compte invité, ouvrez le Terminal et exécutez la commande suivante : <code>sudo sysadminctl -guestAccount off</code>. Cette commande nécessite des privilèges d'administrateur, donc vous devrez peut-être entrer votre mot de passe administrateur pour continuer.</p>"
+          }
+        ]
       },
       "rollback": {
         "system": "macOS",
@@ -1161,7 +1403,18 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "class": "cli",
         "elevation": "system",
         "target": "sysadminctl -guestAccount on",
-        "education": []
+        "education": [
+          {
+            "locale": "EN",
+            "class": "html",
+            "target": "<p>If you need to enable the guest account on your macOS for any specific reason, such as providing temporary access to your computer, you can do so safely by opening Terminal and executing the command: <code>sudo sysadminctl -guestAccount on</code>. Remember to disable the guest account again once it's no longer needed to maintain the security of your system.</p>"
+          },
+          {
+            "locale": "FR",
+            "class": "html",
+            "target": "<p>Si vous devez activer le compte invité sur votre macOS pour une raison spécifique, comme fournir un accès temporaire à votre ordinateur, vous pouvez le faire en toute sécurité en ouvrant le Terminal et en exécutant la commande : <code>sudo sysadminctl -guestAccount on</code>. N'oubliez pas de désactiver à nouveau le compte invité une fois qu'il n'est plus nécessaire pour maintenir la sécurité de votre système.</p>"
+          }
+        ]
       }
     },
     {
@@ -1277,7 +1530,18 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "class": "cli",
         "elevation": "system",
         "target": "security authorizationdb read system.preferences > /tmp/system.preferences.plist; /usr/libexec/PlistBuddy -c \"Set :shared false\" /tmp/system.preferences.plist; security authorizationdb write system.preferences < /tmp/system.preferences.plist",
-        "education": []
+        "education": [
+          {
+            "locale": "EN",
+            "class": "html",
+            "target": "<p>Restricting system-wide changes is essential for maintaining the integrity and security of your macOS device. The process involves modifying the system's authorization database to ensure that only authorized users can make significant changes. Detailed guidance on how to securely configure system preferences can be found on <a href='https://support.apple.com'>Apple's support website</a>. For a deeper understanding, consulting resources such as <a href='https://developer.apple.com/documentation/security'>Apple's security documentation</a> may provide additional insights into securing macOS systems.</p>"
+          },
+          {
+            "locale": "FR",
+            "class": "html",
+            "target": "<p>Restreindre les modifications à l'échelle du système est essentiel pour maintenir l'intégrité et la sécurité de votre appareil macOS. Le processus implique la modification de la base de données d'autorisation du système pour garantir que seuls les utilisateurs autorisés peuvent effectuer des changements significatifs. Des conseils détaillés sur la façon de configurer de manière sécurisée les préférences système peuvent être trouvés sur <a href='https://support.apple.com/fr-fr'>le site de support d'Apple</a>. Pour une compréhension plus approfondie, la consultation de ressources telles que <a href='https://developer.apple.com/documentation/security'>la documentation de sécurité d'Apple</a> peut fournir des informations supplémentaires sur la sécurisation des systèmes macOS.</p>"
+          }
+        ]
       },
       "rollback": {
         "system": "macOS",
@@ -1286,7 +1550,18 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "class": "cli",
         "elevation": "system",
         "target": "security authorizationdb read system.preferences > /tmp/system.preferences.plist; /usr/libexec/PlistBuddy -c \"Set :shared true\" /tmp/system.preferences.plist; security authorizationdb write system.preferences < /tmp/system.preferences.plist",
-        "education": []
+        "education": [
+          {
+            "locale": "EN",
+            "class": "html",
+            "target": "<p>Rolling back the restrictions on system-wide changes can reintroduce the flexibility of allowing any user to modify system settings, which might be necessary for specific administrative tasks or troubleshooting. However, it's important to carefully consider the security implications of such a change. Guidance on managing system preferences for different user roles can be found on <a href='https://support.apple.com'>Apple's support website</a>. Additionally, <a href='https://developer.apple.com/documentation/security'>Apple's security documentation</a> offers insights on balancing security and usability in macOS systems.</p>"
+          },
+          {
+            "locale": "FR",
+            "class": "html",
+            "target": "<p>Annuler les restrictions sur les modifications à l'échelle du système peut réintroduire la flexibilité permettant à tout utilisateur de modifier les paramètres du système, ce qui peut être nécessaire pour des tâches administratives spécifiques ou le dépannage. Cependant, il est important de considérer attentivement les implications en matière de sécurité d'un tel changement. Des conseils sur la gestion des préférences système pour différents rôles d'utilisateur peuvent être trouvés sur <a href='https://support.apple.com/fr-fr'>le site de support d'Apple</a>. De plus, <a href='https://developer.apple.com/documentation/security'>la documentation de sécurité d'Apple</a> offre des perspectives sur l'équilibre entre la sécurité et l'usabilité dans les systèmes macOS.</p>"
+          }
+        ]
       }
     },
     {
