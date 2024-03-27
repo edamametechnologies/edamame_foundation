@@ -1,17 +1,18 @@
+use log::{error, info, trace, warn};
+use once_cell::sync::Lazy;
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use tokio::sync::Mutex;
-use log::{info, trace, error, warn};
-use once_cell::sync::Lazy;
 use std::error::Error;
 use std::time::Duration;
-use reqwest::Client;
+use tokio::sync::Mutex;
 
 use crate::lanscan_vendor_vulns_db::*;
 use crate::lanscan_vulnerability_info::*;
 use crate::update::*;
 
-const VENDOR_VULNS_REPO: &str = "https://raw.githubusercontent.com/edamametechnologies/threatmodels";
+const VENDOR_VULNS_REPO: &str =
+    "https://raw.githubusercontent.com/edamametechnologies/threatmodels";
 const VENDOR_VULNS_NAME: &str = "lanscan-vendor-vulns-db.json";
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -35,7 +36,6 @@ pub struct VulnerabilityInfoList {
 }
 
 impl VulnerabilityInfoList {
-
     pub fn new_from_json(vuln_info: &VulnerabilityVendorInfoListJSON) -> Self {
         info!("Loading vendor info list from JSON");
         let vendor_vulns_list = vuln_info.vulnerabilities.clone();
@@ -76,7 +76,9 @@ pub async fn get_description_from_vendor(vendor: &str) -> String {
     trace!("Locking VULNS - start");
     let vulns = VULNS.lock().await;
     trace!("Locking VULNS - end");
-    vulns.vendor_vulns.get(vendor)
+    vulns
+        .vendor_vulns
+        .get(vendor)
         .map_or("".to_string(), |vendor_info| vendor_info.vendor.clone())
 }
 
@@ -107,10 +109,7 @@ pub async fn update(branch: &str) -> Result<UpdateStatus, Box<dyn Error>> {
 
     let mut status = UpdateStatus::NotUpdated;
 
-    let url = format!(
-        "{}/{}/{}",
-        VENDOR_VULNS_REPO, branch, VENDOR_VULNS_NAME
-    );
+    let url = format!("{}/{}/{}", VENDOR_VULNS_REPO, branch, VENDOR_VULNS_NAME);
 
     info!("Fetching vendor vulns from {}", url);
 
@@ -127,7 +126,6 @@ pub async fn update(branch: &str) -> Result<UpdateStatus, Box<dyn Error>> {
             if res.status().is_success() {
                 info!("Vendor vulns transfer complete");
 
-
                 let json: VulnerabilityVendorInfoListJSON = match res.json().await {
                     Ok(json) => json,
                     Err(err) => {
@@ -136,7 +134,7 @@ pub async fn update(branch: &str) -> Result<UpdateStatus, Box<dyn Error>> {
                             Ok(UpdateStatus::FormatError)
                         } else {
                             Err(err.into())
-                        }
+                        };
                     }
                 };
                 let mut locked_vulns = VULNS.lock().await;
@@ -146,9 +144,9 @@ pub async fn update(branch: &str) -> Result<UpdateStatus, Box<dyn Error>> {
                 status = UpdateStatus::Updated;
             } else {
                 error!(
-                        "Vendor vulns transfer failed with status: {:?}",
-                        res.status()
-                    );
+                    "Vendor vulns transfer failed with status: {:?}",
+                    res.status()
+                );
             }
         }
         Err(err) => {

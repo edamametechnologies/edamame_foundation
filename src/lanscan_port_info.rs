@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use crate::lanscan_vulnerability_info::*;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone, Ord, Eq, PartialEq, PartialOrd)]
 pub struct PortInfo {

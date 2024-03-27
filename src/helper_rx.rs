@@ -1,11 +1,11 @@
+use base64::{engine::general_purpose, Engine as _};
 use log::{error, info, trace, warn};
 use std::error::Error;
 use std::net::SocketAddr;
-use tonic::transport::{Certificate, Identity, Server, ServerTlsConfig};
-use tonic::{Request, Response, Status, Code};
-use tokio::sync::oneshot;
-use base64::{Engine as _, engine::general_purpose};
 use std::str;
+use tokio::sync::oneshot;
+use tonic::transport::{Certificate, Identity, Server, ServerTlsConfig};
+use tonic::{Code, Request, Response, Status};
 
 use lazy_static::lazy_static;
 // Tokio Mutex
@@ -60,7 +60,8 @@ impl EdamameHelper for Helper {
             &arg2,
             &signature,
             &version,
-        ).await
+        )
+        .await
     }
 }
 
@@ -72,14 +73,7 @@ pub async fn rpc_run_safe(
     signature: &str,
     version: &str,
 ) -> Result<Response<HelperResponse>, Status> {
-    rpc_run(
-        ordertype,
-        subordertype,
-        arg1,
-        arg2,
-        signature,
-        version,
-    )
+    rpc_run(ordertype, subordertype, arg1, arg2, signature, version)
         .await
         .map(|output| {
             let response = HelperResponse { output };
@@ -100,8 +94,14 @@ impl ServerControl {
         ServerControl { stop: None }
     }
 
-    pub async fn start_server(&mut self, server_pem: &str, server_key: &str, client_ca_cert: &str, server: &str, branch: &str) -> Result<(), Box<dyn Error>> {
-
+    pub async fn start_server(
+        &mut self,
+        server_pem: &str,
+        server_key: &str,
+        client_ca_cert: &str,
+        server: &str,
+        branch: &str,
+    ) -> Result<(), Box<dyn Error>> {
         // Store branch name
         {
             let mut branch_lock = BRANCH.lock().await;
@@ -115,10 +115,14 @@ impl ServerControl {
         let key_base64 = server_key.to_string();
 
         // Decode Base64 to original PEM format
-        let cert_decoded = general_purpose::STANDARD.decode(&cert_base64).expect("Failed to decode Base64");
+        let cert_decoded = general_purpose::STANDARD
+            .decode(&cert_base64)
+            .expect("Failed to decode Base64");
         let cert = str::from_utf8(&cert_decoded).expect("Failed to convert to string");
 
-        let key_decoded = general_purpose::STANDARD.decode(&key_base64).expect("Failed to decode Base64");
+        let key_decoded = general_purpose::STANDARD
+            .decode(&key_base64)
+            .expect("Failed to decode Base64");
         let key = str::from_utf8(&key_decoded).expect("Failed to convert to string");
 
         let server_identity = Identity::from_pem(cert, key);
@@ -126,8 +130,11 @@ impl ServerControl {
         let client_ca_cert_base64 = client_ca_cert.to_string();
 
         // Decode Base64 to original PEM format
-        let client_ca_cert_decoded = general_purpose::STANDARD.decode(&client_ca_cert_base64).expect("Failed to decode Base64");
-        let client_ca_cert = str::from_utf8(&client_ca_cert_decoded).expect("Failed to convert to string");
+        let client_ca_cert_decoded = general_purpose::STANDARD
+            .decode(&client_ca_cert_base64)
+            .expect("Failed to decode Base64");
+        let client_ca_cert =
+            str::from_utf8(&client_ca_cert_decoded).expect("Failed to convert to string");
         let client_ca_cert = Certificate::from_pem(client_ca_cert);
 
         let edamame_server = Helper::default();
@@ -193,19 +200,24 @@ pub async fn rpc_run(
 
     // Check the version - allow xx.yy.zz = xx.yy.ww
     let major_version = version.split('.').take(2).collect::<Vec<&str>>().join(".");
-    let major_cargo_version = CARGO_PKG_VERSION.split('.').take(2).collect::<Vec<&str>>().join(".");
+    let major_cargo_version = CARGO_PKG_VERSION
+        .split('.')
+        .take(2)
+        .collect::<Vec<&str>>()
+        .join(".");
     if major_version != major_cargo_version {
-        return order_error(&format!(
-            "order received with foundation major version mismatch - received {} != {}",
-            major_version, major_cargo_version), true);
+        return order_error(
+            &format!(
+                "order received with foundation major version mismatch - received {} != {}",
+                major_version, major_cargo_version
+            ),
+            true,
+        );
     }
 
     // Display the order and the arguments, ignore empty arguments
     if arg1.is_empty() && arg2.is_empty() {
-        info!(
-            "Executing order {} / {}",
-            ordertype, subordertype
-        );
+        info!("Executing order {} / {}", ordertype, subordertype);
     } else if arg2.is_empty() {
         info!(
             "Executing order {} / {} with arg#1 {}",
@@ -213,14 +225,13 @@ pub async fn rpc_run(
         );
     } else {
         info!(
-        "Executing order {} / {} with arg#1 {} and arg#2 {}",
-        ordertype, subordertype, arg1, arg2
+            "Executing order {} / {} with arg#1 {} and arg#2 {}",
+            ordertype, subordertype, arg1, arg2
         );
     }
 
     match ordertype {
         "metricorder" => {
-
             let threat = arg1;
             let username = arg2;
 
@@ -240,7 +251,10 @@ pub async fn rpc_run(
                 let branch = BRANCH.lock().await.clone();
                 match metrics.update("", &branch).await {
                     Ok(_) => {
-                        info!("Updated model from backend successfully - new signature is: {}", metrics.signature);
+                        info!(
+                            "Updated model from backend successfully - new signature is: {}",
+                            metrics.signature
+                        );
                     }
                     Err(e) => {
                         // Only warn this can happen if the device is offline
@@ -259,7 +273,13 @@ pub async fn rpc_run(
                         "remediate" => implementation = Some(&m.metric.remediation),
                         "rollback" => implementation = Some(&m.metric.rollback),
                         _ => {
-                            return order_error(&format!("unknown subordertype {} for metricorder {}", subordertype, threat), false);
+                            return order_error(
+                                &format!(
+                                    "unknown subordertype {} for metricorder {}",
+                                    subordertype, threat
+                                ),
+                                false,
+                            );
                         }
                     }
                     break;
@@ -269,7 +289,8 @@ pub async fn rpc_run(
             return if implementation.is_some() {
                 let implementation_clone = implementation.unwrap();
                 trace!("Found implementation for threat: {}", threat);
-                if !implementation_clone.target.is_empty() && !implementation_clone.class.is_empty() {
+                if !implementation_clone.target.is_empty() && !implementation_clone.class.is_empty()
+                {
                     let class = implementation_clone.class.as_str();
                     let target = implementation_clone.target.as_str();
                     // The personate parameter forces the execution into the context of username
@@ -282,26 +303,40 @@ pub async fn rpc_run(
                             order_error(&format!("personate required but no username provided for metricorder {}", threat), false)
                         } else {
                             match class {
-                                "cli" => {
-                                    run_cli(target, username, personate).await
-                                },
+                                "cli" => run_cli(target, username, personate).await,
                                 "internal" => {
                                     // We don't have any internal implementation within the helper for now
                                     order_error(&format!("internal implementation type not implemented for metricorder {}", threat), false)
                                 }
-                                _ => {
-                                    order_error(&format!("unknown or unimplemented implementation type {} for {}", class, threat), false)
-                                }
+                                _ => order_error(
+                                    &format!(
+                                        "unknown or unimplemented implementation type {} for {}",
+                                        class, threat
+                                    ),
+                                    false,
+                                ),
                             }
-                        }
+                        };
                     } else {
-                        order_error(&format!("no implementation type found for metricorder {}", threat), false)
+                        order_error(
+                            &format!("no implementation type found for metricorder {}", threat),
+                            false,
+                        )
                     }
                 } else {
-                    order_error(&format!("missing target or class in implementation or metricorder {}", threat), false)
+                    order_error(
+                        &format!(
+                            "missing target or class in implementation or metricorder {}",
+                            threat
+                        ),
+                        false,
+                    )
                 }
             } else {
-                order_error(&format!("no implementation found for metricorder {}", threat), false)
+                order_error(
+                    &format!("no implementation found for metricorder {}", threat),
+                    false,
+                )
             };
         }
         "utilityorder" => match subordertype {
@@ -312,9 +347,7 @@ pub async fn rpc_run(
             "mdns_resolve" => {
                 let json_addresses = arg1;
                 match mdns_resolve(json_addresses).await {
-                    Ok(output) => {
-                        Ok(output)
-                    }
+                    Ok(output) => Ok(output),
                     Err(e) => {
                         error!("Error performing mdns_resolve: {}", e);
                         order_error(&format!("error performing mdns_resolve: {}", e), false)
@@ -324,9 +357,7 @@ pub async fn rpc_run(
             "arp_resolve" => {
                 let json_addresses = arg1;
                 match arp_resolve(json_addresses).await {
-                    Ok(output) => {
-                        Ok(output)
-                    }
+                    Ok(output) => Ok(output),
                     Err(e) => {
                         // Only warn
                         warn!("Error performing arp_resolve: {}", e);
@@ -338,13 +369,15 @@ pub async fn rpc_run(
                 // Return the current helper version
                 Ok(CARGO_PKG_VERSION.to_string())
             }
-            _ => {
-                order_error(&format!("unknown or unimplemented utilityorder {}", subordertype), false)
-            }
+            _ => order_error(
+                &format!("unknown or unimplemented utilityorder {}", subordertype),
+                false,
+            ),
         },
-        _ => {
-            order_error(&format!("unknown or unimplemented order {}", ordertype), false)
-        }
+        _ => order_error(
+            &format!("unknown or unimplemented order {}", ordertype),
+            false,
+        ),
     }
 }
 

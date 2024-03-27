@@ -1,6 +1,6 @@
-use serde::{Deserialize, Serialize};
 use crate::lanscan_port_info::PortInfo;
 use crate::lanscan_vulnerability_info::VulnerabilityInfo;
+use serde::{Deserialize, Serialize};
 
 // Simplified version for use with the backend
 #[derive(Debug, Serialize, Deserialize, Clone)]

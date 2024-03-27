@@ -17,7 +17,7 @@ pub struct ThreatMetricImplementationJSON {
     pub class: String,
     pub elevation: String,
     pub target: String,
-    pub education: Vec<ThreatMetricEducationJSON>
+    pub education: Vec<ThreatMetricEducationJSON>,
 }
 
 // Only Strings in order to easily read the JSON array
@@ -25,7 +25,7 @@ pub struct ThreatMetricImplementationJSON {
 pub struct ThreatMetricDescriptionJSON {
     pub locale: String,
     pub title: String,
-    pub summary: String
+    pub summary: String,
 }
 
 // Only Strings in order to easily read the JSON array
@@ -56,7 +56,7 @@ pub struct ThreatMetricsJSON {
 pub enum ThreatStatus {
     Active,
     Inactive,
-    Unknown
+    Unknown,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, PartialOrd)]

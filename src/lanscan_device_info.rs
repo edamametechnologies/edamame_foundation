@@ -1,9 +1,9 @@
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 
-use crate::lanscan_port_info::*;
 use crate::lanscan_device_info_backend::*;
+use crate::lanscan_port_info::*;
 use crate::lanscan_vulnerability_info::*;
 
 // We should really use HashSets instead of Vec, but we don't in order to make it more usable with FFI
@@ -39,8 +39,6 @@ pub struct DeviceInfo {
     pub device_type: String,
 }
 
-
-
 impl DeviceInfo {
     pub fn new() -> DeviceInfo {
         DeviceInfo {
@@ -68,10 +66,9 @@ impl DeviceInfo {
             device_type: "Unknown".to_string(),
         }
     }
-    
+
     // Used before any query to AI assistance
     pub fn sanitized_device_info(device: &DeviceInfo) -> DeviceInfoBackend {
-
         let mut device_backend = DeviceInfoBackend {
             mdns_services: device.mdns_services.clone(),
             device_vendor: device.device_vendor.clone(),
@@ -99,7 +96,6 @@ impl DeviceInfo {
     }
 
     pub fn merge(device: &mut DeviceInfo, new_device: &DeviceInfo) {
-
         // Priority to the first device
         if device.ip_address.is_empty() {
             device.ip_address = new_device.ip_address.clone();
@@ -118,7 +114,9 @@ impl DeviceInfo {
 
         // Merge the MAC addresses
         if !new_device.mac_addresses.is_empty() {
-            device.mac_addresses.extend(new_device.mac_addresses.clone());
+            device
+                .mac_addresses
+                .extend(new_device.mac_addresses.clone());
             // Deduplicate
             device.mac_addresses.sort();
             device.mac_addresses.dedup();
@@ -166,7 +164,9 @@ impl DeviceInfo {
 
         // Merge mDNS services
         if !new_device.mdns_services.is_empty() {
-            device.mdns_services.extend(new_device.mdns_services.clone());
+            device
+                .mdns_services
+                .extend(new_device.mdns_services.clone());
 
             // Deduplicate
             device.mdns_services.sort();
