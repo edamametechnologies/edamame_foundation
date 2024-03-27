@@ -256,11 +256,18 @@ pub fn init_sentry(url: &str) {
 
 pub fn init_logger(url: &str, is_helper: bool) {
     #[cfg(target_os = "android")]
-    let _ = android_logger::init_once(
-        android_logger::Config::default()
-            .with_tag("Rust")
-            .with_max_level(log::LevelFilter::Info),
-    );
+    {
+        let _ = android_logger::init_once(
+            android_logger::Config::default()
+                .with_tag("Rust")
+                .with_max_level(log::LevelFilter::Info),
+        );
+        let old_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |arg| {
+            error!("{:?}", arg);
+            old_hook(arg);
+        }));
+    }
     #[cfg(not(any(target_os = "android")))]
     {
         // Init logger here, enforce log level to info as default
