@@ -110,6 +110,10 @@ arp-toolkit = "0.3.2"
 system-configuration = { git = "https://github.com/edamametechnologies/system-configuration-rs" }
 system-configuration-sys = { git = "https://github.com/edamametechnologies/system-configuration-rs" }
 
+# Android
+[target.'cfg(target_os = "android")'.dependencies]
+android_logger = "0.13.3"
+
 [build-dependencies]
 
 # Conditional compilation for build dependencies
