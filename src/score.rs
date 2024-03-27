@@ -1,10 +1,10 @@
-use serde::{Serialize, Deserialize};
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use std::collections::HashMap;
 
-use crate::threat::*;
 use crate::history::*;
+use crate::threat::*;
 
 // Score
 #[serde_as]
@@ -28,7 +28,9 @@ pub struct Score {
 impl Score {
     pub fn new(platform: &str) -> Score {
         // Will read it later
-        let history = OrderHistory { history: Vec::new() };
+        let history = OrderHistory {
+            history: Vec::new(),
+        };
         Score {
             network: 0,
             system_integrity: 0,

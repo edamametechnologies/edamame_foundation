@@ -1,11 +1,11 @@
+use log::{error, info, trace, warn};
+use once_cell::sync::Lazy;
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use tokio::sync::Mutex;
-use log::{info, trace, error, warn};
-use once_cell::sync::Lazy;
 use std::error::Error;
 use std::time::Duration;
-use reqwest::Client;
+use tokio::sync::Mutex;
 
 use crate::lanscan_port_info::*;
 use crate::lanscan_port_vulns_db::*;
@@ -41,7 +41,6 @@ pub struct VulnerabilityPortInfoList {
 }
 
 impl VulnerabilityPortInfoList {
-
     pub fn new_from_json(vuln_info: &VulnerabilityPortInfoListJSON) -> Self {
         info!("Loading port info list from JSON");
         let port_vulns_list = vuln_info.vulnerabilities.clone();
@@ -58,7 +57,12 @@ impl VulnerabilityPortInfoList {
             port_vulns.insert(port_info.port, port_info);
         }
 
-        info!("Loaded {} ports, {} HTTP ports, {} HTTPS ports", port_vulns.len(), http_ports.len(), https_ports.len());
+        info!(
+            "Loaded {} ports, {} HTTP ports, {} HTTPS ports",
+            port_vulns.len(),
+            http_ports.len(),
+            https_ports.len()
+        );
 
         VulnerabilityPortInfoList {
             date: vuln_info.date.clone(),
@@ -91,7 +95,9 @@ pub async fn get_description_from_port(port: u16) -> String {
     trace!("Locking VULNS - start");
     let vulns = VULNS.lock().await;
     trace!("Locking VULNS - end");
-    vulns.port_vulns.get(&port)
+    vulns
+        .port_vulns
+        .get(&port)
         .map_or("".to_string(), |port_info| port_info.description.clone())
 }
 
@@ -113,7 +119,9 @@ pub async fn get_vulns_of_port(port: u16) -> Vec<VulnerabilityInfo> {
     trace!("Locking VULNS - start");
     let vulns = VULNS.lock().await;
     trace!("Locking VULNS - end");
-    vulns.port_vulns.get(&port)
+    vulns
+        .port_vulns
+        .get(&port)
         .map_or(Vec::new(), |port_info| port_info.vulnerabilities.clone())
 }
 
@@ -144,10 +152,7 @@ pub async fn update(branch: &str) -> Result<UpdateStatus, Box<dyn Error>> {
 
     let mut status = UpdateStatus::NotUpdated;
 
-    let url = format!(
-        "{}/{}/{}",
-        PORT_VULNS_REPO, branch, PORT_VULNS_NAME
-    );
+    let url = format!("{}/{}/{}", PORT_VULNS_REPO, branch, PORT_VULNS_NAME);
 
     info!("Fetching port vulns from {}", url);
 
@@ -164,7 +169,6 @@ pub async fn update(branch: &str) -> Result<UpdateStatus, Box<dyn Error>> {
             if res.status().is_success() {
                 info!("Port vulns transfer complete");
 
-
                 let json: VulnerabilityPortInfoListJSON = match res.json().await {
                     Ok(json) => json,
                     Err(err) => {
@@ -173,7 +177,7 @@ pub async fn update(branch: &str) -> Result<UpdateStatus, Box<dyn Error>> {
                             Ok(UpdateStatus::FormatError)
                         } else {
                             Err(err.into())
-                        }
+                        };
                     }
                 };
                 let mut locked_vulns = VULNS.lock().await;
@@ -182,10 +186,7 @@ pub async fn update(branch: &str) -> Result<UpdateStatus, Box<dyn Error>> {
                 // Success
                 status = UpdateStatus::Updated;
             } else {
-                error!(
-                        "Port vulns transfer failed with status: {:?}",
-                        res.status()
-                    );
+                error!("Port vulns transfer failed with status: {:?}", res.status());
             }
         }
         Err(err) => {

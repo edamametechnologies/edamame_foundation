@@ -1,16 +1,14 @@
+use flexi_logger::{writers::LogWriter, Duplicate, FileSpec, LogSpecification, Logger};
 use lazy_static::lazy_static;
-use std::io::Cursor;
+use log::{error, info};
+use regex::Regex;
 use std::collections::VecDeque;
+use std::io::Cursor;
 use std::{
     env,
     path::PathBuf,
-    sync::{
-        Arc, Mutex
-    },
+    sync::{Arc, Mutex},
 };
-use regex::Regex;
-use flexi_logger::{FileSpec, LogSpecification, Logger, writers::LogWriter, Duplicate};
-use log::{info,error};
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use flexi_logger::LoggerHandle;
@@ -29,7 +27,7 @@ const MAX_LOG_LINES: usize = 20000;
 pub struct MemoryWriterData {
     logs: VecDeque<String>,
     lines: usize,
-    to_take: usize
+    to_take: usize,
 }
 
 impl MemoryWriterData {
@@ -37,13 +35,14 @@ impl MemoryWriterData {
         Self {
             logs: VecDeque::new(),
             lines: 0,
-            to_take: 0
+            to_take: 0,
         }
     }
 }
 
 lazy_static! {
-    pub static ref MEMORY_WRITER_DATA: Arc<Mutex<MemoryWriterData>> = Arc::new(Mutex::new(MemoryWriterData::new()));
+    pub static ref MEMORY_WRITER_DATA: Arc<Mutex<MemoryWriterData>> =
+        Arc::new(Mutex::new(MemoryWriterData::new()));
 }
 
 fn sanitize_keywords(input: &str, keywords: &[&str]) -> String {
@@ -54,17 +53,18 @@ fn sanitize_keywords(input: &str, keywords: &[&str]) -> String {
             r#"(?P<key>"?(\b{})"?\s*[:=]?\s*)("(?P<val1>[^"]+)"|(?P<val2>\b[^\s",}}]+))"#,
             regex::escape(keyword)
         ))
-            .unwrap();
+        .unwrap();
 
-        output = re.replace_all(&output, |caps: &regex::Captures| {
-            let key = &caps["key"];
-            let val1 = caps.name("val1").map_or("", |m| m.as_str());
-            let val2 = caps.name("val2").map_or("", |m| m.as_str());
-            let val = if !val1.is_empty() { val1 } else { val2 };
-            let quotes = if !val1.is_empty() { "\"" } else { "" };
+        output = re
+            .replace_all(&output, |caps: &regex::Captures| {
+                let key = &caps["key"];
+                let val1 = caps.name("val1").map_or("", |m| m.as_str());
+                let val2 = caps.name("val2").map_or("", |m| m.as_str());
+                let val = if !val1.is_empty() { val1 } else { val2 };
+                let quotes = if !val1.is_empty() { "\"" } else { "" };
 
-            format!("{}{}{}{}", key, quotes, "*".repeat(val.len()), quotes)
-        })
+                format!("{}{}{}{}", key, quotes, "*".repeat(val.len()), quotes)
+            })
             .to_string();
     }
 
@@ -93,13 +93,11 @@ fn main() {
 }
 */
 
-struct MemoryWriter {
-}
+struct MemoryWriter {}
 
 impl MemoryWriter {
     pub fn new() -> Self {
-        Self {
-        }
+        Self {}
     }
 }
 
@@ -121,11 +119,27 @@ impl LogWriter for MemoryWriter {
                 let module = record.module_path().unwrap_or("unknown");
 
                 // Sanitize
-                let keywords = vec!["id", "uuid", "pin", "device", "password", "key", "Device ID", "device_id", "code"];
+                let keywords = vec![
+                    "id",
+                    "uuid",
+                    "pin",
+                    "device",
+                    "password",
+                    "key",
+                    "Device ID",
+                    "device_id",
+                    "code",
+                ];
                 let log_line_sanitized = sanitize_keywords(&log_line, &keywords);
 
                 // Format
-                let log_line_formatted = format!("[{}] {} [{}] {}\n", now.format("%Y-%m-%d %H:%M:%S%.6f %:z"), level, module, log_line_sanitized);
+                let log_line_formatted = format!(
+                    "[{}] {} [{}] {}\n",
+                    now.format("%Y-%m-%d %H:%M:%S%.6f %:z"),
+                    level,
+                    module,
+                    log_line_sanitized
+                );
                 // If we have more than MAX_LOG_LINES, remove the oldest one
                 if locked_data.logs.len() >= MAX_LOG_LINES {
                     locked_data.logs.pop_back();
@@ -145,7 +159,8 @@ impl LogWriter for MemoryWriter {
 
                 // Send errors to Sentry
                 if level == "ERROR" {
-                    let log_line_formatted = format!("{} [{}] {}\n", level, module, log_line_sanitized);
+                    let log_line_formatted =
+                        format!("{} [{}] {}\n", level, module, log_line_sanitized);
                     sentry::capture_message(&log_line_formatted, sentry::Level::Error);
                 }
 
@@ -169,7 +184,11 @@ pub fn get_new_logs() -> String {
     let mut locked_data = MEMORY_WRITER_DATA.lock().unwrap();
     let mut new_logs: String = "".to_string();
     // Don't pop elements from the circular buffer, just collect locked_data.to_take of those
-    new_logs = locked_data.logs.iter().take(locked_data.to_take).fold(new_logs, |acc, x| format!("{}\n{}", acc, x));
+    new_logs = locked_data
+        .logs
+        .iter()
+        .take(locked_data.to_take)
+        .fold(new_logs, |acc, x| format!("{}\n{}", acc, x));
     locked_data.to_take = 0;
     new_logs
 }
@@ -179,7 +198,10 @@ pub fn get_all_logs() -> String {
     let mut locked_data = MEMORY_WRITER_DATA.lock().unwrap();
     let mut all_logs: String = "".to_string();
     // Don't pop elements from the circular buffer, just collect them
-    all_logs = locked_data.logs.iter().fold(all_logs, |acc, x| format!("{}\n{}", acc, x));
+    all_logs = locked_data
+        .logs
+        .iter()
+        .fold(all_logs, |acc, x| format!("{}\n{}", acc, x));
     locked_data.to_take = 0;
     all_logs
 }
@@ -206,21 +228,22 @@ pub fn init_signals(flexi_logger: LoggerHandle, log_spec: &LogSpecification) {
                 log::LevelFilter::Info
             };
             current_log_level_signal.store(new_log_level as usize, Ordering::Relaxed);
-            let new_spec =
-                LogSpecification::env_or_parse(&new_log_level.to_string()).unwrap();
+            let new_spec = LogSpecification::env_or_parse(&new_log_level.to_string()).unwrap();
             flexi_logger.set_new_spec(new_spec);
         }
     });
 }
 
 pub fn init_sentry(url: &str) {
-
     // Init sentry
-    let sentry = sentry::init((url, sentry::ClientOptions {
-        release: sentry::release_name!(),
-        traces_sample_rate: 1.0,
-        ..Default::default()
-    }));
+    let sentry = sentry::init((
+        url,
+        sentry::ClientOptions {
+            release: sentry::release_name!(),
+            traces_sample_rate: 1.0,
+            ..Default::default()
+        },
+    ));
 
     if sentry.is_enabled() {
         info!("Sentry initialized");
@@ -232,7 +255,6 @@ pub fn init_sentry(url: &str) {
 }
 
 pub fn init_logger(url: &str, is_helper: bool) {
-
     // Init logger here, enforce log level to info as default
     let default_log_spec = "info";
     // Override with env variable if set
@@ -255,7 +277,7 @@ pub fn init_logger(url: &str, is_helper: bool) {
                     .directory(log_dir)
                     .basename("edamame_helper")
                     .suffix("log"),
-                Box::new(memory_writer)
+                Box::new(memory_writer),
             )
             .start()
             .unwrap_or_else(|e| panic!("Logger initialization failed: {:?}", e))

@@ -1,24 +1,25 @@
-use std::collections::HashMap;
-use std::{net::IpAddr, sync::{Arc}};
-use std::net::Ipv6Addr;
+use lazy_static::lazy_static;
 use log::{info, trace, warn};
+use regex::Regex;
+use sorted_vec::SortedVec;
+use std::collections::HashMap;
+use std::net::Ipv6Addr;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::{net::IpAddr, sync::Arc};
 use tokio::sync::Mutex;
 use tokio::task;
 use tokio::time::Duration;
-use lazy_static::lazy_static;
-use sorted_vec::SortedVec;
-use regex::Regex;
 
 // Our own fork with minor adjustements
-use wez_mdns::{QueryParameters, Host};
+use wez_mdns::{Host, QueryParameters};
 
 use crate::runtime::async_spawn;
 
 lazy_static! {
     static ref MDNS_STOP: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
     static ref MDNS_HANDLE: Arc<Mutex<Option<task::JoinHandle<()>>>> = Arc::new(Mutex::new(None));
-    static ref DEVICES: Arc<Mutex<HashMap<String, mDNSInfo>>> = Arc::new(Mutex::new(HashMap::new()));
+    static ref DEVICES: Arc<Mutex<HashMap<String, mDNSInfo>>> =
+        Arc::new(Mutex::new(HashMap::new()));
 }
 
 #[derive(Debug, Clone)]
@@ -29,11 +30,10 @@ pub struct mDNSInfo {
     pub mac_address: String,
     pub services: SortedVec<String>,
     pub hostname: String,
-    pub instances: SortedVec<String>
+    pub instances: SortedVec<String>,
 }
 
 pub async fn mdns_start() {
-
     MDNS_STOP.store(false, Ordering::Relaxed);
 
     if MDNS_HANDLE.lock().await.is_some() {
@@ -58,19 +58,18 @@ pub async fn mdns_flush() {
 
 pub async fn mdns_get_by_ipv4(ipv4: &IpAddr) -> Option<mDNSInfo> {
     let locked_devices = DEVICES.lock().await;
-    locked_devices.iter()
-        .find_map(|(_hostname, mdns_info)| {
-            if let Some(ip_addr) = &mdns_info.ip_addr {
-                if ip_addr == ipv4 {
-                    info!("Found mDNS entry for {}: {:?}", ipv4, mdns_info);
-                    Some(mdns_info.clone())
-                } else {
-                    None
-                }
+    locked_devices.iter().find_map(|(_hostname, mdns_info)| {
+        if let Some(ip_addr) = &mdns_info.ip_addr {
+            if ip_addr == ipv4 {
+                info!("Found mDNS entry for {}: {:?}", ipv4, mdns_info);
+                Some(mdns_info.clone())
             } else {
                 None
             }
-        })
+        } else {
+            None
+        }
+    })
 }
 
 fn v6_to_mac(ipv6: &str) -> Option<String> {
@@ -112,7 +111,11 @@ fn v6_to_mac(ipv6: &str) -> Option<String> {
         .map(|byte| format!("{:02x}", byte))
         .collect::<Vec<String>>()
         .join(":");
-    trace!("Converted link-local IPv6 address {} to MAC address {}", ipv6, mac);
+    trace!(
+        "Converted link-local IPv6 address {} to MAC address {}",
+        ipv6,
+        mac
+    );
     Some(mac)
 }
 
@@ -122,13 +125,17 @@ fn extract_mac_address(input: &str) -> Option<String> {
 }
 
 async fn process_host(host: Host, service_name: String) {
-
     if host.host_name.is_some() {
         let hostname = host.host_name.as_ref().unwrap();
         let instance = host.name.clone();
         if !host.ip_address.is_empty() {
             let ip_addresses = host.ip_address.clone();
-            trace!("Found instance {} with host {} and ips {:?}", instance, hostname, ip_addresses);
+            trace!(
+                "Found instance {} with host {} and ips {:?}",
+                instance,
+                hostname,
+                ip_addresses
+            );
             // Fill in the info for this host
             let mut locked_devices = DEVICES.lock().await;
             let mdns_info = locked_devices.entry(hostname.clone()).or_insert(mDNSInfo {
@@ -137,7 +144,7 @@ async fn process_host(host: Host, service_name: String) {
                 mac_address: "".to_string(),
                 services: SortedVec::new(),
                 hostname: hostname.clone(),
-                instances: SortedVec::new()
+                instances: SortedVec::new(),
             });
             // Process the ip addresses
             for ip in ip_addresses {
@@ -174,7 +181,10 @@ async fn process_host(host: Host, service_name: String) {
             // Check if the instance name is containing a MAC address using a regex
             match extract_mac_address(&instance) {
                 Some(mac_address) => {
-                    info!("Extracted MAC Address {} from instance {}", mac_address, instance);
+                    info!(
+                        "Extracted MAC Address {} from instance {}",
+                        mac_address, instance
+                    );
                     if mdns_info.mac_address.is_empty() {
                         mdns_info.mac_address = mac_address;
                     } else if mdns_info.mac_address != mac_address {
@@ -182,7 +192,7 @@ async fn process_host(host: Host, service_name: String) {
                         mdns_info.mac_address = mac_address;
                         // Don't push in instances to keep them clean of PII
                     }
-                },
+                }
                 None => {
                     trace!("No MAC Address found in the service");
                 }
@@ -192,7 +202,6 @@ async fn process_host(host: Host, service_name: String) {
 }
 
 async fn fetch_mdns_info_task() {
-
     let pause_duration = Duration::from_secs(5);
 
     loop {
@@ -203,7 +212,12 @@ async fn fetch_mdns_info_task() {
         }
         trace!("Starting mDNS discovery loop");
         // First discover all the services
-        let responses = match wez_mdns::resolve("_services._dns-sd._udp.local", QueryParameters::SERVICE_LOOKUP).await {
+        let responses = match wez_mdns::resolve(
+            "_services._dns-sd._udp.local",
+            QueryParameters::SERVICE_LOOKUP,
+        )
+        .await
+        {
             Ok(responses) => responses,
             Err(e) => {
                 warn!("Error querying mDNS services: {:?}", e);
@@ -211,9 +225,7 @@ async fn fetch_mdns_info_task() {
             }
         };
         let services = match responses.recv().await {
-            Ok(services) => {
-                services
-            },
+            Ok(services) => services,
             Err(e) => {
                 warn!("Error receiving mDNS services query response: {:?}", e);
                 continue;
@@ -233,11 +245,20 @@ async fn fetch_mdns_info_task() {
             trace!("Found service: {}", service_name);
             done_service.push(service_name.clone());
             // Now discover all the instances of this service
-            let responses = match wez_mdns::resolve(service_name.clone(), QueryParameters::SERVICE_LOOKUP).await {
+            let responses = match wez_mdns::resolve(
+                service_name.clone(),
+                QueryParameters::SERVICE_LOOKUP,
+            )
+            .await
+            {
                 Ok(responses) => responses,
                 Err(e) => {
                     // Only warn to prevent multiple sentry errors
-                    warn!("Error querying mDNS service {}: {:?}", service_name.clone(), e);
+                    warn!(
+                        "Error querying mDNS service {}: {:?}",
+                        service_name.clone(),
+                        e
+                    );
                     continue;
                 }
             };
@@ -246,7 +267,10 @@ async fn fetch_mdns_info_task() {
                 Ok(instances) => instances,
                 Err(e) => {
                     // Only warn to prevent multiple sentry errors
-                    warn!("Error receiving mDNS query response for service {} : {:?}", service_name, e);
+                    warn!(
+                        "Error receiving mDNS query response for service {} : {:?}",
+                        service_name, e
+                    );
                     continue;
                 }
             };
@@ -257,19 +281,25 @@ async fn fetch_mdns_info_task() {
                 if let Some(hostname) = host_clone.host_name {
                     process_host(host, service_name_clone.clone()).await;
                     // Now resolve the host to get all the A and AAAA records (IPv6 addresses) to extrapolate the MAC address
-                    let responses = match wez_mdns::resolve(hostname.clone(), QueryParameters::HOST_LOOKUP).await {
-                        Ok(responses) => responses,
-                        Err(e) => {
-                            // Only warn to prevent multiple sentry errors
-                            warn!("Error resolving hostname {}: {:?}", hostname.clone(), e);
-                            continue;
-                        }
-                    };
+                    let responses =
+                        match wez_mdns::resolve(hostname.clone(), QueryParameters::HOST_LOOKUP)
+                            .await
+                        {
+                            Ok(responses) => responses,
+                            Err(e) => {
+                                // Only warn to prevent multiple sentry errors
+                                warn!("Error resolving hostname {}: {:?}", hostname.clone(), e);
+                                continue;
+                            }
+                        };
                     let hosts = match responses.recv().await {
                         Ok(hosts) => hosts,
                         Err(e) => {
                             // Only warn to prevent multiple sentry errors
-                            warn!("Error receiving mDNS query response for hostname {}: {:?}", hostname, e);
+                            warn!(
+                                "Error receiving mDNS query response for hostname {}: {:?}",
+                                hostname, e
+                            );
                             continue;
                         }
                     };
