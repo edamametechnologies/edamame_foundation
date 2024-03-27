@@ -1,16 +1,16 @@
 use log::{error, info, warn};
 use reqwest;
+use reqwest::Client;
 use std::error::Error;
 use std::time::Duration;
-use reqwest::Client;
 
-use crate::update::*;
 use crate::threat::*;
+use crate::threat_metrics_android::*;
 use crate::threat_metrics_ios::*;
+use crate::threat_metrics_linux::*;
 use crate::threat_metrics_macos::*;
 use crate::threat_metrics_windows::*;
-use crate::threat_metrics_android::*;
-use crate::threat_metrics_linux::*;
+use crate::update::*;
 
 static THREAT_MODEL_URL: &str =
     "https://raw.githubusercontent.com/edamametechnologies/threatmodels";
@@ -59,10 +59,8 @@ impl ThreatMetricImplementationJSON {
 }
 
 impl ThreatMetrics {
-
     // Initialize with the appropriate built-in version of the threat model
     fn get_builtin_version(platform: &str) -> Result<&'static str, String> {
-
         if !platform.is_empty() {
             if platform == "macos" {
                 Ok(THREAT_METRICS_MACOS)
@@ -94,7 +92,6 @@ impl ThreatMetrics {
 
     // Get the appropriate threat model JSON file based on the platform
     fn get_model_name(platform: &str) -> Result<&'static str, Box<dyn Error>> {
-
         if !platform.is_empty() {
             if platform == "macos" {
                 Ok("threatmodel-macOS.json")
@@ -125,9 +122,8 @@ impl ThreatMetrics {
     }
 
     pub fn new(platform: &str) -> ThreatMetrics {
-
         // Initialize with the builtin version
-        let builtin= match Self::get_builtin_version(platform) {
+        let builtin = match Self::get_builtin_version(platform) {
             Ok(_builtin) => {
                 // Use the built-in version
                 _builtin
@@ -171,7 +167,11 @@ impl ThreatMetrics {
     }
 
     // Update the threat model from the backend
-    pub async fn update(&mut self, platform: &str, branch: &str) -> Result<UpdateStatus, Box<dyn Error>> {
+    pub async fn update(
+        &mut self,
+        platform: &str,
+        branch: &str,
+    ) -> Result<UpdateStatus, Box<dyn Error>> {
         info!("Starting threat model update from backend");
 
         let mut status = UpdateStatus::NotUpdated;
@@ -189,16 +189,11 @@ impl ThreatMetrics {
             }
         };
 
-        let url = format!(
-            "{}/{}/{}",
-            THREAT_MODEL_URL, branch, model
-        );
+        let url = format!("{}/{}/{}", THREAT_MODEL_URL, branch, model);
 
         info!("Fetching threat model from {}", url);
         // Create a client with a timeout
-        let client = Client::builder()
-            .timeout(Duration::from_secs(20))
-            .build()?;
+        let client = Client::builder().timeout(Duration::from_secs(20)).build()?;
 
         // Use the client to make a request
         let response = client.get(&url).send().await;
@@ -216,7 +211,7 @@ impl ThreatMetrics {
                                 Ok(UpdateStatus::FormatError)
                             } else {
                                 Err(err.into())
-                            }
+                            };
                         }
                     };
 

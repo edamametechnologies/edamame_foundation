@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use crate::lanscan_port_info::PortInfo;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DislikeDeviceInfoBackend {

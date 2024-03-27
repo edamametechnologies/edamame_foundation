@@ -15,4 +15,3 @@ pub struct MetricOrderResult {
     // Associated metric
     pub metric: ThreatMetric,
 }
-

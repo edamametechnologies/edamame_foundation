@@ -1,8 +1,8 @@
-use oui::OuiDatabase;
 use log::{error, trace, warn};
+use oui::OuiDatabase;
 // Tokio Mutex
-use tokio::sync::Mutex;
 use once_cell::sync::Lazy;
+use tokio::sync::Mutex;
 
 use crate::lanscan_oui_db::*;
 
@@ -10,9 +10,9 @@ use crate::lanscan_oui_db::*;
 // const OUI_DB_URL: &str = "https://www.wireshark.org/download/automated/data/manuf";
 
 static OUI: Lazy<Mutex<OuiDatabase>> = Lazy::new(|| {
-        let oui = OuiDatabase::new_from_str(OUI_DB).unwrap();
-        Mutex::new(oui)
-    });
+    let oui = OuiDatabase::new_from_str(OUI_DB).unwrap();
+    Mutex::new(oui)
+});
 
 pub async fn get_mac_address_vendor(mac_address: &str) -> String {
     trace!("Locking OUI - start");
@@ -35,7 +35,10 @@ pub async fn get_mac_address_vendor(mac_address: &str) -> String {
             "".to_string()
         }
         Err(err) => {
-            error!("Failed to query the vendor database for MAC address: {} - {}", mac_address, err);
+            error!(
+                "Failed to query the vendor database for MAC address: {} - {}",
+                mac_address, err
+            );
             "".to_string()
         }
     }

@@ -1,14 +1,14 @@
-use std::collections::HashSet;
-use serde::{Deserialize, Serialize};
-use log::{info, trace, warn, error};
-use tokio::sync::Mutex;
-use once_cell::sync::Lazy;
-use std::error::Error;
-use std::time::Duration;
-use reqwest::Client;
 use crate::lanscan_port_info::*;
 use crate::lanscan_profiles_db::*;
 use crate::update::*;
+use log::{error, info, trace, warn};
+use once_cell::sync::Lazy;
+use reqwest::Client;
+use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+use std::error::Error;
+use std::time::Duration;
+use tokio::sync::Mutex;
 
 const PROFILES_REPO: &str = "https://raw.githubusercontent.com/edamametechnologies/threatmodels";
 const PROFILES_NAME: &str = "lanscan-profiles-db.json";
@@ -66,24 +66,47 @@ static PROFILES: Lazy<Mutex<DeviceTypeList>> = Lazy::new(|| {
     Mutex::new(profiles)
 });
 
-pub async fn device_type(open_ports: &Vec<PortInfo>, mdns_services: &Vec<String>, oui_vendor: &str, hostname: &str) -> String {
-    trace!("Computing device type for ports {:?}, mdns {:?}, vendor {}, hostname {}", open_ports, mdns_services, oui_vendor, hostname);
+pub async fn device_type(
+    open_ports: &Vec<PortInfo>,
+    mdns_services: &Vec<String>,
+    oui_vendor: &str,
+    hostname: &str,
+) -> String {
+    trace!(
+        "Computing device type for ports {:?}, mdns {:?}, vendor {}, hostname {}",
+        open_ports,
+        mdns_services,
+        oui_vendor,
+        hostname
+    );
 
     let device_types = PROFILES.lock().await;
 
     // To lower case as used in the profiles
     let oui_vendor_lower = oui_vendor.to_lowercase();
     let hostname_lower = hostname.to_lowercase();
-    let mdns_services_lower: Vec<String> = mdns_services.iter().map(|service| service.to_lowercase()).collect();
+    let mdns_services_lower: Vec<String> = mdns_services
+        .iter()
+        .map(|service| service.to_lowercase())
+        .collect();
     let open_ports_set: HashSet<u16> = open_ports.iter().map(|info| info.port).collect();
-    let banners_lower: Vec<String> = open_ports.iter().map(|info| info.banner.to_lowercase()).collect();
+    let banners_lower: Vec<String> = open_ports
+        .iter()
+        .map(|info| info.banner.to_lowercase())
+        .collect();
 
     for profile in device_types.profiles.iter() {
         for condition in &profile.conditions {
             // Only check if
 
-
-            if match_condition(condition, &open_ports_set, &mdns_services_lower, &oui_vendor_lower, &hostname_lower, &banners_lower) {
+            if match_condition(
+                condition,
+                &open_ports_set,
+                &mdns_services_lower,
+                &oui_vendor_lower,
+                &hostname_lower,
+                &banners_lower,
+            ) {
                 trace!("Match for device type {:?}", profile.device_type);
                 return profile.device_type.to_string();
             }
@@ -92,12 +115,22 @@ pub async fn device_type(open_ports: &Vec<PortInfo>, mdns_services: &Vec<String>
 
     if (!open_ports.is_empty() || !mdns_services.is_empty()) && !oui_vendor.is_empty() {
         let ports: Vec<u16> = open_ports.iter().map(|info| info.port).collect();
-        warn!("Unknown device type for ports {:?}, mdns {:?}, vendor {}, hostname {}, banners {:?}", ports, mdns_services, oui_vendor, hostname, banners_lower);
+        warn!(
+            "Unknown device type for ports {:?}, mdns {:?}, vendor {}, hostname {}, banners {:?}",
+            ports, mdns_services, oui_vendor, hostname, banners_lower
+        );
     }
 
     "Unknown".to_string()
 }
-fn match_condition(condition: &Condition, open_ports_set: &HashSet<u16>, mdns_services: &Vec<String>, oui_vendor: &str, hostname: &str, banners: &Vec<String>) -> bool {
+fn match_condition(
+    condition: &Condition,
+    open_ports_set: &HashSet<u16>,
+    mdns_services: &Vec<String>,
+    oui_vendor: &str,
+    hostname: &str,
+    banners: &Vec<String>,
+) -> bool {
     match condition {
         Condition::Leaf(attributes) => {
             let port_match = match &attributes.open_ports {
@@ -113,7 +146,15 @@ fn match_condition(condition: &Condition, open_ports_set: &HashSet<u16>, mdns_se
 
             let mdns_match = match &attributes.mdns_services {
                 Some(services) if !services.is_empty() => {
-                    let match_result = services.iter().filter(|service| !service.is_empty()).any(|service| mdns_services.iter().any(|mdns_service| mdns_service.contains(service)));
+                    let match_result =
+                        services
+                            .iter()
+                            .filter(|service| !service.is_empty())
+                            .any(|service| {
+                                mdns_services
+                                    .iter()
+                                    .any(|mdns_service| mdns_service.contains(service))
+                            });
                     if match_result {
                         trace!("MDNS match: {:?} against {:?}", services, mdns_services);
                     }
@@ -124,7 +165,10 @@ fn match_condition(condition: &Condition, open_ports_set: &HashSet<u16>, mdns_se
 
             let vendor_match = match &attributes.vendors {
                 Some(vendors) if !vendors.is_empty() => {
-                    let match_result = vendors.iter().filter(|vendor| !vendor.is_empty()).any(|vendor| oui_vendor.contains(vendor));
+                    let match_result = vendors
+                        .iter()
+                        .filter(|vendor| !vendor.is_empty())
+                        .any(|vendor| oui_vendor.contains(vendor));
                     if match_result {
                         trace!("Vendor match: {:?} against {:?}", vendors, oui_vendor);
                     }
@@ -135,7 +179,10 @@ fn match_condition(condition: &Condition, open_ports_set: &HashSet<u16>, mdns_se
 
             let hostname_match = match &attributes.hostnames {
                 Some(hostnames) if !hostnames.is_empty() => {
-                    let match_result = hostnames.iter().filter(|host| !host.is_empty()).any(|host| hostname.contains(host));
+                    let match_result = hostnames
+                        .iter()
+                        .filter(|host| !host.is_empty())
+                        .any(|host| hostname.contains(host));
                     if match_result {
                         trace!("Hostname match: {:?} against {:?}", hostnames, hostname);
                     }
@@ -146,12 +193,14 @@ fn match_condition(condition: &Condition, open_ports_set: &HashSet<u16>, mdns_se
 
             let banner_match = match &attributes.banners {
                 Some(banners_attr) if !banners_attr.is_empty() => {
-                    let match_result = banners_attr.iter().filter(|banner| !banner.is_empty()).any(|banner_attr| banners.iter().any(|banner| banner.contains(banner_attr)));
+                    let match_result = banners_attr.iter().filter(|banner| !banner.is_empty()).any(
+                        |banner_attr| banners.iter().any(|banner| banner.contains(banner_attr)),
+                    );
                     if match_result {
                         trace!("Banner match: {:?} against {:?}", banners_attr, banners);
                     }
                     match_result
-                },
+                }
                 _ => true,
             };
 
@@ -166,13 +215,32 @@ fn match_condition(condition: &Condition, open_ports_set: &HashSet<u16>, mdns_se
                 result
             }
         }
-        Condition::Node { condition_type, sub_conditions } => {
-            match condition_type.as_str() {
-                "AND" => sub_conditions.iter().all(|sub| match_condition(sub, open_ports_set, mdns_services, oui_vendor, hostname, banners)),
-                "OR" => sub_conditions.iter().any(|sub| match_condition(sub, open_ports_set, mdns_services, oui_vendor, hostname, banners)),
-                _ => false,
-            }
-        }
+        Condition::Node {
+            condition_type,
+            sub_conditions,
+        } => match condition_type.as_str() {
+            "AND" => sub_conditions.iter().all(|sub| {
+                match_condition(
+                    sub,
+                    open_ports_set,
+                    mdns_services,
+                    oui_vendor,
+                    hostname,
+                    banners,
+                )
+            }),
+            "OR" => sub_conditions.iter().any(|sub| {
+                match_condition(
+                    sub,
+                    open_ports_set,
+                    mdns_services,
+                    oui_vendor,
+                    hostname,
+                    banners,
+                )
+            }),
+            _ => false,
+        },
     }
 }
 
@@ -181,16 +249,11 @@ pub async fn update(branch: &str) -> Result<UpdateStatus, Box<dyn Error>> {
 
     let mut status = UpdateStatus::NotUpdated;
 
-    let url = format!(
-        "{}/{}/{}",
-        PROFILES_REPO, branch, PROFILES_NAME
-    );
+    let url = format!("{}/{}/{}", PROFILES_REPO, branch, PROFILES_NAME);
 
     info!("Fetching profiles from {}", url);
     // Create a client with a timeout
-    let client = Client::builder()
-        .timeout(Duration::from_secs(20))
-        .build()?;
+    let client = Client::builder().timeout(Duration::from_secs(20)).build()?;
 
     // Use the client to make a request
     let response = client.get(&url).send().await;
@@ -208,7 +271,7 @@ pub async fn update(branch: &str) -> Result<UpdateStatus, Box<dyn Error>> {
                             Ok(UpdateStatus::FormatError)
                         } else {
                             Err(err.into())
-                        }
+                        };
                     }
                 };
                 let mut locked_vulns = PROFILES.lock().await;
@@ -217,10 +280,7 @@ pub async fn update(branch: &str) -> Result<UpdateStatus, Box<dyn Error>> {
                 // Success
                 status = UpdateStatus::Updated;
             } else {
-                error!(
-                        "Profiles transfer failed with status: {:?}",
-                        res.status()
-                    );
+                error!("Profiles transfer failed with status: {:?}", res.status());
             }
         }
         Err(err) => {
@@ -231,9 +291,3 @@ pub async fn update(branch: &str) -> Result<UpdateStatus, Box<dyn Error>> {
 
     Ok(status)
 }
-
-
-
-
-
-
