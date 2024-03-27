@@ -1,21 +1,21 @@
+use base64::{engine::general_purpose, Engine as _};
 use log::trace;
 use std::error::Error;
-use tonic::transport::{Certificate, Channel, ClientTlsConfig, Identity};
+use std::str;
 use std::time::Duration;
 use tokio::time::timeout;
-use base64::{Engine as _, engine::general_purpose};
-use std::str;
+use tonic::transport::{Certificate, Channel, ClientTlsConfig, Identity};
 
 // Standard Mutex
-use std::sync::Mutex;
 use lazy_static::lazy_static;
+use std::sync::Mutex;
 
-use crate::order_type::*;
 use crate::helper_proto::*;
+use crate::order_type::*;
 
 // Proto generated server traits
 use edamame_proto::edamame_helper_client::EdamameHelperClient;
-use edamame_proto::{HelperRequest};
+use edamame_proto::HelperRequest;
 
 // Implement a flag to detect if the helper is in fatal state
 lazy_static! {
@@ -25,16 +25,36 @@ lazy_static! {
 // Version
 pub static CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-pub async fn helper_run_utility(subordertype: &str, arg1: &str, arg2: &str, ca_pem: &str, client_pem: &str, client_key: &str, target: &'static str) -> Result<String, Box<dyn Error>> {
+pub async fn helper_run_utility(
+    subordertype: &str,
+    arg1: &str,
+    arg2: &str,
+    ca_pem: &str,
+    client_pem: &str,
+    client_key: &str,
+    target: &'static str,
+) -> Result<String, Box<dyn Error>> {
     // No signature for utility orders
-    match helper_run("utilityorder", subordertype , arg1, arg2, "", ca_pem, client_pem, client_key, target).await {
+    match helper_run(
+        "utilityorder",
+        subordertype,
+        arg1,
+        arg2,
+        "",
+        ca_pem,
+        client_pem,
+        client_key,
+        target,
+    )
+    .await
+    {
         Ok(result) => {
             // Set the fatal error flag
             trace!("Unsetting the FATAL_ERROR flag");
             let mut fatal_error = FATAL_ERROR.lock().unwrap();
             *fatal_error = false;
             Ok(result)
-        },
+        }
         Err(e) => {
             if e.to_string().contains("Fatal") {
                 // Set the fatal error flag
@@ -47,16 +67,37 @@ pub async fn helper_run_utility(subordertype: &str, arg1: &str, arg2: &str, ca_p
     }
 }
 
-pub async fn helper_run_metric(subordertype: MetricOrderType, threat: &str, username: &str, signature: &str, ca_pem: &str, client_pem: &str, client_key: &str, target: &'static str) -> Result<String, Box<dyn Error>> {
+pub async fn helper_run_metric(
+    subordertype: MetricOrderType,
+    threat: &str,
+    username: &str,
+    signature: &str,
+    ca_pem: &str,
+    client_pem: &str,
+    client_key: &str,
+    target: &'static str,
+) -> Result<String, Box<dyn Error>> {
     // Convert to string using the Display trait
-    match helper_run("metricorder", &subordertype.to_string(), threat, username, signature, ca_pem, client_pem, client_key, target).await {
+    match helper_run(
+        "metricorder",
+        &subordertype.to_string(),
+        threat,
+        username,
+        signature,
+        ca_pem,
+        client_pem,
+        client_key,
+        target,
+    )
+    .await
+    {
         Ok(result) => {
             // Set the fatal error flag
             trace!("Unsetting the FATAL_ERROR flag");
             let mut fatal_error = FATAL_ERROR.lock().unwrap();
             *fatal_error = false;
             Ok(result)
-        },
+        }
         Err(e) => {
             if e.to_string().contains("Fatal") {
                 // Set the fatal error flag
@@ -69,23 +110,41 @@ pub async fn helper_run_metric(subordertype: MetricOrderType, threat: &str, user
     }
 }
 
-async fn helper_run(ordertype: &str, subordertype: &str, arg1: &str, arg2: &str, signature: &str, ca_pem: &str, client_pem: &str, client_key: &str, target: &'static str) -> Result<String, Box<dyn Error>> {
-
+async fn helper_run(
+    ordertype: &str,
+    subordertype: &str,
+    arg1: &str,
+    arg2: &str,
+    signature: &str,
+    ca_pem: &str,
+    client_pem: &str,
+    client_key: &str,
+    target: &'static str,
+) -> Result<String, Box<dyn Error>> {
     // Connect to server
     trace!("Connecting to helper server");
     let server_root_ca_cert_base64 = ca_pem.to_string();
-    let server_root_ca_cert_decoded = general_purpose::STANDARD.decode(&server_root_ca_cert_base64).expect("Failed to decode server root CA certificate");
-    let server_root_ca_cert = str::from_utf8(&server_root_ca_cert_decoded).expect("Failed to convert server root CA certificate to string");
+    let server_root_ca_cert_decoded = general_purpose::STANDARD
+        .decode(&server_root_ca_cert_base64)
+        .expect("Failed to decode server root CA certificate");
+    let server_root_ca_cert = str::from_utf8(&server_root_ca_cert_decoded)
+        .expect("Failed to convert server root CA certificate to string");
     let server_root_ca_cert = Certificate::from_pem(server_root_ca_cert);
 
     // Decode the Base64-encoded client certificate and key
     let client_cert_base64 = client_pem.to_string();
-    let client_cert_decoded = general_purpose::STANDARD.decode(&client_cert_base64).expect("Failed to decode client certificate");
-    let client_cert = str::from_utf8(&client_cert_decoded).expect("Failed to convert client certificate to string");
+    let client_cert_decoded = general_purpose::STANDARD
+        .decode(&client_cert_base64)
+        .expect("Failed to decode client certificate");
+    let client_cert = str::from_utf8(&client_cert_decoded)
+        .expect("Failed to convert client certificate to string");
 
     let client_key_base64 = client_key.to_string();
-    let client_key_decoded = general_purpose::STANDARD.decode(&client_key_base64).expect("Failed to decode client key");
-    let client_key = str::from_utf8(&client_key_decoded).expect("Failed to convert client key to string");
+    let client_key_decoded = general_purpose::STANDARD
+        .decode(&client_key_base64)
+        .expect("Failed to decode client key");
+    let client_key =
+        str::from_utf8(&client_key_decoded).expect("Failed to convert client key to string");
 
     let client_identity = Identity::from_pem(client_cert, client_key);
 
@@ -95,14 +154,10 @@ async fn helper_run(ordertype: &str, subordertype: &str, arg1: &str, arg2: &str,
         .ca_certificate(server_root_ca_cert)
         .identity(client_identity);
 
-    let channel = Channel::from_static(target)
-        .tls_config(tls)?;
+    let channel = Channel::from_static(target).tls_config(tls)?;
 
     // Timeout the connection after 60 seconds, this needs to be high enough as we are querying the helper in //
-    let connection = timeout(
-        Duration::from_secs(60),
-        channel.connect(),
-    ).await??;
+    let connection = timeout(Duration::from_secs(60), channel.connect()).await??;
 
     let mut client = EdamameHelperClient::new(connection);
 

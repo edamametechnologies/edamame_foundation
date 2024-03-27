@@ -1,6 +1,6 @@
-use serde::{Deserialize, Serialize};
 use crate::history_backend::OrderHistoryBackend;
 use crate::threat::ThreatMetrics;
+use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, PartialOrd)]
 pub struct ScoreBackend {

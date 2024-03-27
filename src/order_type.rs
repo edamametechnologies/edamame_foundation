@@ -1,11 +1,11 @@
-use std::fmt;
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, PartialOrd)]
 pub enum MetricOrderType {
     Capture,
     Remediate,
-    Rollback
+    Rollback,
 }
 
 impl fmt::Display for MetricOrderType {

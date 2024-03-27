@@ -5,7 +5,6 @@ use std::thread::spawn;
 
 use powershell_script::PsScriptBuilder;
 
-
 // The personate parameter forces the execution into the context of username
 // We could use an empty username to indicate there is no need to personate but we keep it as is for now in case we find other use cases for the username
 pub async fn run_cli(cmd: &str, username: &str, personate: bool) -> Result<String, Box<dyn Error>> {
@@ -25,7 +24,14 @@ pub async fn run_cli(cmd: &str, username: &str, personate: bool) -> Result<Strin
                 Err(e) => error!("Error executing {:?} : {:?}", &cmd_clone, e),
             }
         } else {
-            match execute_unix_command(&cmd_clone, &username_clone, personate, &mut code, &mut stdout, &mut stderr) {
+            match execute_unix_command(
+                &cmd_clone,
+                &username_clone,
+                personate,
+                &mut code,
+                &mut stdout,
+                &mut stderr,
+            ) {
                 Ok(_) => (),
                 Err(e) => error!("Error executing {:?} : {:?}", &cmd_clone, e),
             }
@@ -41,7 +47,13 @@ pub async fn run_cli(cmd: &str, username: &str, personate: bool) -> Result<Strin
     stdout = stdout.replace('\n', "");
     stdout = stdout.replace('\r', "");
 
-    trace!("Execution results for {:?} - code : {:?} - stdout : {:?} - stderr : {:?}", cmd, code, stdout, stderr);
+    trace!(
+        "Execution results for {:?} - code : {:?} - stdout : {:?} - stderr : {:?}",
+        cmd,
+        code,
+        stdout,
+        stderr
+    );
 
     if execution_failed(code, &stderr) {
         Err(From::from(stderr.clone()))
@@ -57,14 +69,23 @@ fn execution_failed(code: i32, stderr: &str) -> bool {
 
 fn check_platform_support() -> Result<(), Box<dyn Error>> {
     if cfg!(target_os = "ios") || cfg!(target_os = "Android") {
-        let os_name = if cfg!(target_os = "ios") { "iOS" } else { "Android" };
+        let os_name = if cfg!(target_os = "ios") {
+            "iOS"
+        } else {
+            "Android"
+        };
         error!("{} is not supported", os_name);
         return Err(From::from(format!("{} is not supported", os_name)));
     }
     Ok(())
 }
 
-fn execute_windows_ps(cmd: &str, code: &mut i32, stdout: &mut String, stderr: &mut String) -> Result<(), Box<dyn Error>> {
+fn execute_windows_ps(
+    cmd: &str,
+    code: &mut i32,
+    stdout: &mut String,
+    stderr: &mut String,
+) -> Result<(), Box<dyn Error>> {
     let ps = PsScriptBuilder::new()
         .no_profile(true)
         .non_interactive(true)
@@ -79,7 +100,11 @@ fn execute_windows_ps(cmd: &str, code: &mut i32, stdout: &mut String, stderr: &m
             Ok(())
         }
         Err(e) => {
-            error!("Powershell execution error with calling {:?} : {:?}", cmd, e.to_string());
+            error!(
+                "Powershell execution error with calling {:?} : {:?}",
+                cmd,
+                e.to_string()
+            );
             Err(From::from(e.to_string()))
         }
     }
@@ -108,5 +133,3 @@ fn execute_unix_command(
     *stderr = output.2;
     Ok(())
 }
-
-
