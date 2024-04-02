@@ -75,5 +75,4 @@ pub struct ThreatMetrics {
     pub extends: String,
     pub date: String,
     pub signature: String,
-    pub timestamp: String,
 }
