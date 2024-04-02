@@ -147,7 +147,6 @@ impl ThreatMetrics {
             date: json.date,
             signature: json.signature,
             metrics: Self::create_metrics(&clone_json),
-            timestamp: "".to_string(),
         }
     }
 
@@ -222,7 +221,6 @@ impl ThreatMetrics {
                     self.date = json.date;
                     self.signature = json.signature;
                     self.metrics = metrics;
-                    self.timestamp = "".to_string();
 
                     // Success
                     status = UpdateStatus::Updated;
