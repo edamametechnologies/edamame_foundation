@@ -15,22 +15,13 @@ pub trait Backend {
         language: &str,
     ) -> Result<()>;
 
-    // Report anonymous score
     async fn report_score(
         &self,
         device_id: &str,
         language: &str,
         pin: &str,
-        disconnect: bool,
-        score: &NumericalScoreBackend,
-    ) -> Result<()>;
-
-    async fn report_detailed_score(
-        &self,
-        device_id: &str,
-        language: &str,
-        pin: &str,
         score: &DetailedScoreBackend,
+        disconnect: bool,
     ) -> Result<()>;
 
     async fn get_remediation_lanscan(
