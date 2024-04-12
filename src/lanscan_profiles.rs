@@ -267,7 +267,7 @@ pub async fn update(branch: &str) -> Result<UpdateStatus, Box<dyn Error>> {
                     Ok(json) => json,
                     Err(err) => {
                         error!("Profiles transfer failed: {:?}", err);
-                        return if err.is_decode() {
+                        return if err.is_decode() && !err.is_timeout() {
                             Ok(UpdateStatus::FormatError)
                         } else {
                             Err(err.into())

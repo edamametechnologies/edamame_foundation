@@ -3,7 +3,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
   "name": "threat model macOS",
   "extends": "none",
   "date": "March 03th 2024",
-  "signature": "a8f82e30153a34debe02d9a3f5b9db5f0f715a6c83090123af4d1c9b7b1da16d",
+  "signature": "a8f82e30153a34debe02d9a3f5b9db5f0f715a6c83090423af4d1c9b7b1da16d",
   "metrics": [
     {
       "name": "edamame helper disabled",
@@ -143,9 +143,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
       "dimension": "system integrity",
       "severity": 5,
       "scope": "generic",
-      "tags": [
-        "Personal Posture"
-      ],
+      "tags": ["Personal Posture"],
       "description": [
         {
           "locale": "EN",
@@ -214,9 +212,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
       "dimension": "system integrity",
       "severity": 5,
       "scope": "macOS",
-      "tags": [
-        "Personal Posture"
-      ],
+      "tags": ["Personal Posture"],
       "description": [
         {
           "locale": "EN",
@@ -839,9 +835,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
       "dimension": "system integrity",
       "severity": 4,
       "scope": "generic",
-      "tags": [
-        "Personal Posture"
-      ],
+      "tags": ["Personal Posture"],
       "description": [
         {
           "locale": "EN",
@@ -1781,6 +1775,79 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
             "locale": "FR",
             "class": "youtube",
             "target": "https://www.youtube.com/watch?v=FG2DXkPA93g&t=124s"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Chrome not uptodate",
+      "metrictype": "bool",
+      "dimension": "applications",
+      "severity": 3,
+      "scope": "generic",
+      "tags": [
+        "ISO 27001/2,Application Security",
+        "PCI-DSS,Requirement-6",
+        "SOC 2,CC-System Operations"
+      ],
+      "description": [
+        {
+          "locale": "EN",
+          "title": "Chrome browser not up to date",
+          "summary": "Your Google Chrome browser is not up to date. Running the latest version ensures you have the latest security features and performance improvements."
+        },
+        {
+          "locale": "FR",
+          "title": "Navigateur Chrome non à jour",
+          "summary": "Votre navigateur Google Chrome n'est pas à jour. Exécuter la dernière version garantit que vous disposez des dernières fonctionnalités de sécurité et des améliorations de performance."
+        }
+      ],
+      "implementation": {
+        "system": "macOS",
+        "minversion": 12,
+        "maxversion": 0,
+        "class": "cli",
+        "elevation": "user",
+        "target": "if defaults read /Applications/Google\\ Chrome.app/Contents/Info.plist CFBundleShortVersionString &>/dev/null; then latest_version=$(curl -s \"https://chromiumdash.appspot.com/fetch_releases?channel=Stable&platform=Mac&num=1\" | awk -F'[\"]' '{for(i=1;i<=NF;i++) if ($i==\"version\") {print $(i+2); exit}}'); local_version=$(defaults read /Applications/Google\\ Chrome.app/Contents/Info.plist CFBundleShortVersionString); if [ \"$latest_version\" = \"$local_version\" ]; then echo \"\"; else echo \"Chrome is not up to date (Installed: $local_version, Latest: $latest_version)\"; fi; else echo \"\"; fi",
+        "education": []
+      },
+      "remediation": {
+        "system": "macOS",
+        "minversion": 12,
+        "maxversion": 0,
+        "class": "",
+        "elevation": "",
+        "target": "",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "link",
+            "target": "https://support.google.com/chrome/answer/95414"
+          },
+          {
+            "locale": "FR",
+            "class": "link",
+            "target": "https://support.google.com/chrome/answer/95414?hl=fr"
+          }
+        ]
+      },
+      "rollback": {
+        "system": "macOS",
+        "minversion": 12,
+        "maxversion": 0,
+        "class": "",
+        "elevation": "",
+        "target": "",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "link",
+            "target": "https://support.google.com/chrome/a/answer/6350036"
+          },
+          {
+            "locale": "FR",
+            "class": "link",
+            "target": "https://support.google.com/chrome/a/answer/6350036?hl=fr"
           }
         ]
       }
