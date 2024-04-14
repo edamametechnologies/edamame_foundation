@@ -13,10 +13,6 @@ update_threat_metrics() {
     fi
 
     local branch=$(git rev-parse --abbrev-ref HEAD)
-    # Only deal with main and dev branches, default to dev
-    if [ $branch != "dev" ] && [ $branch != "main" ]; then
-      branch=dev
-    fi
     local target=./src/threat_metrics_$os_lower.rs
     local header="// Built in default threat model\npub static THREAT_METRICS_$os_upper: &str = r#\""
     local trailer="\"#;"
