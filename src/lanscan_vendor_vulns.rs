@@ -130,9 +130,7 @@ pub async fn update(branch: &str) -> Result<UpdateStatus, Box<dyn Error>> {
                     Ok(json) => json,
                     Err(err) => {
                         error!("JSON decoding failed: {:?}", err);
-                        return if err.is_timeout() {
-                            Err(err.into())
-                        } else if err.is_decode() {
+                        return if !err.is_timeout() && err.is_decode() {
                             Ok(UpdateStatus::FormatError)
                         } else {
                             Err(err.into())
