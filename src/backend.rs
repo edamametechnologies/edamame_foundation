@@ -2,6 +2,7 @@ use anyhow::Result;
 
 use crate::lanscan_device_info_backend::*;
 use crate::lanscan_dislike_device_info_backend::DislikeDeviceInfoBackend;
+use crate::pwned_breach_backend::BreachDetailBackend;
 use crate::score_backend::*;
 
 pub trait Backend {
@@ -29,6 +30,11 @@ pub trait Backend {
         language: &str,
         device_info: &DeviceInfoBackend,
     ) -> Result<String>;
+
+    async fn get_pwned_breaches(
+        &self,
+        email: &str,
+    ) -> Result<Vec<BreachDetailBackend>>;
 
     async fn get_remediation_pwned(
         &self,
