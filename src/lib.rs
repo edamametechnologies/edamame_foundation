@@ -32,6 +32,7 @@ pub mod order;
 pub mod order_backend;
 pub mod order_type;
 pub mod pwned_breach;
+pub mod pwned_breach_backend;
 #[cfg(not(feature = "disable-helper"))]
 pub mod runner_cli;
 pub mod runtime;
