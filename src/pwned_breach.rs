@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
+use crate::pwned_breach_backend::PwnedCriticalityBackend;
 
 #[derive(Debug, Ord, PartialOrd, Eq, PartialEq, Clone, Serialize, Deserialize)]
 pub enum PwnedCriticality {
@@ -17,6 +18,17 @@ impl Display for PwnedCriticality {
             PwnedCriticality::Low => write!(f, "Low"),
             PwnedCriticality::Medium => write!(f, "Medium"),
             PwnedCriticality::High => write!(f, "High"),
+        }
+    }
+}
+
+impl From<PwnedCriticalityBackend> for PwnedCriticality {
+    fn from(c: PwnedCriticalityBackend) -> Self {
+        match c {
+            PwnedCriticalityBackend::Unknown => PwnedCriticality::Unknown,
+            PwnedCriticalityBackend::Low => PwnedCriticality::Low,
+            PwnedCriticalityBackend::Medium => PwnedCriticality::Medium,
+            PwnedCriticalityBackend::High => PwnedCriticality::High,
         }
     }
 }
