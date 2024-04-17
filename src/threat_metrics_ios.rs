@@ -411,12 +411,12 @@ pub static THREAT_METRICS_IOS: &str = r#"{
           {
             "locale": "EN",
             "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=ebUrdg2vFNk"
+            "target": "https://www.youtube.com/watch?v=ucf4ATXwfuw"
           },
           {
             "locale": "FR",
             "class": "youtube",
-            "target": "https://www.youtube.com/shorts/ALRMvPnUTt0"
+            "target": "https://www.youtube.com/watch?v=n19GUSpycu8"
           }
         ]
       },
@@ -431,12 +431,12 @@ pub static THREAT_METRICS_IOS: &str = r#"{
           {
             "locale": "EN",
             "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=FG2DXkPA93g&t=124s"
+            "target": "https://www.youtube.com/watch?v=FG2DXkPA93g"
           },
           {
             "locale": "FR",
             "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=FG2DXkPA93g&t=124s"
+            "target": "https://www.youtube.com/watch?v=FG2DXkPA93g"
           }
         ]
       }
@@ -485,7 +485,7 @@ pub static THREAT_METRICS_IOS: &str = r#"{
           {
             "locale": "EN",
             "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=1FcE86kwODQ"
+            "target": "https://www.youtube.com/watch?v=o4zUfDPwHnM"
           },
           {
             "locale": "FR",
@@ -505,7 +505,7 @@ pub static THREAT_METRICS_IOS: &str = r#"{
           {
             "locale": "EN",
             "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=1FcE86kwODQ"
+            "target": "https://www.youtube.com/watch?v=o4zUfDPwHnM"
           },
           {
             "locale": "FR",
