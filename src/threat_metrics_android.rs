@@ -83,7 +83,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       "severity": 3,
       "scope": "generic",
       "tags": [
-        "CIS Benchmark Level 1,iOS_Screen_Lock",
+        "CIS Benchmark Level 1",
         "ISO 27001/2,Access Control",
         "PCI-DSS,Requirement-8.1.7",
         "SOC 2,CC-Access Control"
@@ -120,12 +120,12 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
           {
             "locale": "EN",
             "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=2t0NrqIwI2s"
+            "target": "https://www.youtube.com/watch?v=E5OPbL4YJUk"
           },
           {
             "locale": "FR",
             "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=55lKpx3SCK0"
+            "target": "https://www.youtube.com/watch?v=k2RVUT7Yai0"
           }
         ]
       },
@@ -140,12 +140,12 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
           {
             "locale": "EN",
             "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=2t0NrqIwI2s"
+            "target": "https://www.youtube.com/watch?v=E5OPbL4YJUk"
           },
           {
             "locale": "FR",
             "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=55lKpx3SCK0"
+            "target": "https://www.youtube.com/watch?v=k2RVUT7Yai0"
           }
         ]
       }
@@ -194,12 +194,12 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
           {
             "locale": "EN",
             "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=_VNsH_OWmRw"
+            "target": "https://www.youtube.com/watch?v=UXyeb3n8Gc8"
           },
           {
             "locale": "FR",
             "class": "link",
-            "target": "https://www.youtube.com/watch?v=jdIrJ2ex0gE"
+            "target": "https://www.youtube.com/watch?v=-lRlQdBxmmM"
           }
         ]
       },
@@ -214,12 +214,12 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
           {
             "locale": "EN",
             "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=_VNsH_OWmRw"
+            "target": "https://www.youtube.com/watch?v=UXyeb3n8Gc8"
           },
           {
             "locale": "FR",
             "class": "link",
-            "target": "https://www.youtube.com/watch?v=jdIrJ2ex0gE"
+            "target": "https://www.youtube.com/watch?v=-lRlQdBxmmM"
           }
         ]
       }
@@ -411,12 +411,12 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
           {
             "locale": "EN",
             "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=ebUrdg2vFNk"
+            "target": "https://www.youtube.com/watch?v=v9H4pcZ1QFc"
           },
           {
             "locale": "FR",
             "class": "youtube",
-            "target": "https://www.youtube.com/shorts/ALRMvPnUTt0"
+            "target": "https://www.youtube.com/watch?v=fVLLgBFgNMg"
           }
         ]
       },
@@ -431,12 +431,12 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
           {
             "locale": "EN",
             "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=FG2DXkPA93g&t=124s"
+            "target": "https://www.youtube.com/watch?v=v9H4pcZ1QFc"
           },
           {
             "locale": "FR",
             "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=FG2DXkPA93g&t=124s"
+            "target": "https://www.youtube.com/watch?v=fVLLgBFgNMg"
           }
         ]
       }
@@ -485,12 +485,12 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
           {
             "locale": "EN",
             "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=1FcE86kwODQ"
+            "target": "https://www.youtube.com/watch?v=wLWbhRZ7VXI"
           },
           {
             "locale": "FR",
             "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=02UHT0OBGlo"
+            "target": "https://www.youtube.com/watch?v=or1OJxptpqQ"
           }
         ]
       },
@@ -505,12 +505,12 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
           {
             "locale": "EN",
             "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=1FcE86kwODQ"
+            "target": "https://www.youtube.com/watch?v=wLWbhRZ7VXI"
           },
           {
             "locale": "FR",
             "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=02UHT0OBGlo"
+            "target": "https://www.youtube.com/watch?v=or1OJxptpqQ"
           }
         ]
       }
