@@ -1808,7 +1808,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "user",
-        "target": "defaults read /Applications/Google\\\\ Chrome.app/Contents/Info.plist CFBundleShortVersionString &>/dev/null && { latest_version=$(curl -s \"https://chromiumdash.appspot.com/fetch_releases?channel=Stable&platform=Mac&num=1\" | awk -F'[\\\"]' '{for(i=1;i<=NF;i++) if ($i==\"version\") {print $(i+2); exit}}'); local_version=$(defaults read /Applications/Google\\\\ Chrome.app/Contents/Info.plist CFBundleShortVersionString); [[ \"$(echo -e \"$local_version\\n$latest_version\" | sort -V | head -n1)\" != \"$latest_version\" ]] && echo \"\" || echo \"Chrome is not up to date (Installed: $local_version, Latest: $latest_version)\"; } || echo \"\"",
+        "target": "if defaults read /Applications/Google\\ Chrome.app/Contents/Info.plist CFBundleShortVersionString &>/dev/null; then latest_version=$(curl -s \"https://formulae.brew.sh/api/cask/google-chrome.json\" | awk -F'[\"]' '{for(i=1;i<=NF;i++) if ($i==\"version\") {print $(i+2); exit}}'); local_version=$(defaults read /Applications/Google\\ Chrome.app/Contents/Info.plist CFBundleShortVersionString); if [ \"$latest_version\" = \"$local_version\" ]; then echo \"\"; else echo \"Chrome is not up to date (Installed: $local_version, Latest: $latest_version)\"; fi; else echo \"\"; fi",
         "education": []
       },
       "remediation": {
