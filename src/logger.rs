@@ -292,6 +292,8 @@ fn init_flexi_logger(is_helper: bool) {
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     init_signals(flexi_logger, &log_spec);
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    let _ = flexi_logger;
 }
 
 #[cfg(target_os = "android")]
