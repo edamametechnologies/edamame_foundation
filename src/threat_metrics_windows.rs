@@ -758,7 +758,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "user",
-        "target": "if((Get-ItemProperty -Path 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate\\AU' -Name NoAutoUpdate -ErrorAction SilentlyContinue).NoAutoUpdate -ne 0) { 'NoAutoUpdate is set' } else { '' }",
+        "target": "$registryPath = 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate\\AU'; $noAutoUpdate = (Get-ItemProperty -Path $registryPath -Name NoAutoUpdate -ErrorAction SilentlyContinue).NoAutoUpdate; $useWUServer = (Get-ItemProperty -Path $registryPath -Name UseWUServer -ErrorAction SilentlyContinue).UseWUServer; Write-Output ($(if ($noAutoUpdate -eq 0 -or $useWUServer -eq 1) { '' } else { $messages = @(); if ($noAutoUpdate -ne 0) {$messages += 'NoAutoUpdate is set.'}; if ($useWUServer -ne 1) {$messages += 'Updates are not managed through GPO.'}; $messages -join ' ' }))",
         "education": []
       },
       "remediation": {
@@ -1349,7 +1349,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "user",
-        "target": "$path = 'HKLM:\\SOFTWARE\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Google Chrome'; if (Test-Path $path) { $local_version = (Get-ItemProperty -Path $path).DisplayVersion; $web_content = Invoke-WebRequest -UseBasicParsing 'https://chromiumdash.appspot.com/fetch_releases?channel=Stable&platform=Windows&num=1'; $latest_version = ($web_content.Content | ConvertFrom-Json)[0].version; if ([version]$latest_version -le [version]$local_version) { Write-Output '' } else { Write-Output \"Chrome is not up to date (Installed: $local_version, Latest: $latest_version)\"; } } else { Write-Output '' }\n",
+        "target": "$path = 'HKLM:\\SOFTWARE\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Google Chrome'; if (Test-Path $path) { $local_version = (Get-ItemProperty -Path $path).DisplayVersion; $web_content = Invoke-WebRequest -UseBasicParsing 'https://chromiumdash.appspot.com/fetch_releases?channel=Stable&platform=Windows&num=1'; $latest_version = ($web_content.Content | ConvertFrom-Json)[0].version; if ([version]$latest_version -le [version]$local_version) { Write-Output '' } else { Write-Output \"Chrome is not up to date (Installed: $local_version, Latest: $latest_version)\"; } } else { Write-Output '' }",
         "education": []
       },
       "remediation": {

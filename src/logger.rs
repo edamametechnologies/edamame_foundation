@@ -254,60 +254,65 @@ pub fn init_sentry(url: &str) {
     std::mem::forget(sentry);
 }
 
+fn init_flexi_logger(is_helper: bool) {
+    // Init logger here, enforce log level to info as default
+    let default_log_spec = "info";
+    // Override with env variable if set
+    let env_log_spec = env::var("EDAMAME_LOG_LEVEL").unwrap_or(default_log_spec.to_string());
+    let log_spec = LogSpecification::env_or_parse(env_log_spec).unwrap();
+
+    // Flexi logger
+    // Our writer
+    let memory_writer = MemoryWriter::new();
+    // The helper on Windows doesn't have access to the console, so we log to a file instead
+    let flexi_logger = if is_helper && cfg!(target_os = "windows") {
+        let exe_path: PathBuf = env::current_exe().unwrap();
+        let log_dir = exe_path.parent().unwrap().to_path_buf();
+        Logger::with(log_spec.clone())
+            .format(flexi_logger::colored_opt_format)
+            // Write logs to a file in the binary's directory
+            // Always log to our writer (for Sentry)
+            .log_to_file_and_writer(
+                FileSpec::default()
+                    .directory(log_dir)
+                    .basename("edamame_helper")
+                    .suffix("log"),
+                Box::new(memory_writer),
+            )
+            .start()
+            .unwrap_or_else(|e| panic!("Logger initialization failed: {:?}", e))
+    } else {
+        Logger::with(log_spec.clone())
+            .format(flexi_logger::colored_opt_format)
+            .log_to_writer(Box::new(memory_writer))
+            .duplicate_to_stdout(Duplicate::All)
+            .start()
+            .unwrap_or_else(|e| panic!("Logger initialization failed: {:?}", e))
+    };
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    init_signals(flexi_logger, &log_spec);
+}
+
+#[cfg(target_os = "android")]
+pub fn init_android_logger() {
+    let _ = android_logger::init_once(
+        android_logger::Config::default()
+            .with_tag("Rust")
+            .with_max_level(log::LevelFilter::Info),
+    );
+    let old_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |arg| {
+        error!("{:?}", arg);
+        old_hook(arg);
+    }));
+}
+
 pub fn init_logger(url: &str, is_helper: bool) {
-    #[cfg(target_os = "android")]
-    {
-        let _ = android_logger::init_once(
-            android_logger::Config::default()
-                .with_tag("Rust")
-                .with_max_level(log::LevelFilter::Info),
-        );
-        let old_hook = std::panic::take_hook();
-        std::panic::set_hook(Box::new(move |arg| {
-            error!("{:?}", arg);
-            old_hook(arg);
-        }));
-    }
-    #[cfg(not(any(target_os = "android")))]
-    {
-        // Init logger here, enforce log level to info as default
-        let default_log_spec = "info";
-        // Override with env variable if set
-        let env_log_spec = env::var("EDAMAME_LOG_LEVEL").unwrap_or(default_log_spec.to_string());
-        let log_spec = LogSpecification::env_or_parse(env_log_spec).unwrap();
-
-        // Flexi logger
-        // Our writer
-        let memory_writer = MemoryWriter::new();
-        // The helper on Windows doesn't have access to the console, so we log to a file instead
-        let flexi_logger = if is_helper && cfg!(target_os = "windows") {
-            let exe_path: PathBuf = env::current_exe().unwrap();
-            let log_dir = exe_path.parent().unwrap().to_path_buf();
-            Logger::with(log_spec.clone())
-                .format(flexi_logger::colored_opt_format)
-                // Write logs to a file in the binary's directory
-                // Always log to our writer (for Sentry)
-                .log_to_file_and_writer(
-                    FileSpec::default()
-                        .directory(log_dir)
-                        .basename("edamame_helper")
-                        .suffix("log"),
-                    Box::new(memory_writer),
-                )
-                .start()
-                .unwrap_or_else(|e| panic!("Logger initialization failed: {:?}", e))
-        } else {
-            Logger::with(log_spec.clone())
-                .format(flexi_logger::colored_opt_format)
-                .log_to_writer(Box::new(memory_writer))
-                .duplicate_to_stdout(Duplicate::All)
-                .start()
-                .unwrap_or_else(|e| panic!("Logger initialization failed: {:?}", e))
-        };
-
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
-        init_signals(flexi_logger, &log_spec);
-    }
-
+    
+    // This is mutually exclusive with flexi_logger
+    //#[cfg(not(any(target_os = "android")))]
+    //init_android_logger();
+    init_flexi_logger(is_helper);
     init_sentry(url);
 }
