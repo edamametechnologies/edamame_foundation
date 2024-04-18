@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_ANDROID: &str = r#"{
   "name": "threat model Android",
   "extends": "none",
-  "date": "January 18th 2024",
-  "signature": "8a6c6c78d968e8047e3b86984951800ea0025a715c9032f6badd6193e11acf1f",
+  "date": "April 17th 2024",
+  "signature": "edcd1640587552e638f11cd9f60d4608324029f420ad8b2b65063b6cf4eaa0d3",
   "metrics": [
     {
       "name": "MDM profiles",
