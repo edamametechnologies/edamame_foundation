@@ -130,12 +130,8 @@ pub async fn update(branch: &str) -> Result<UpdateStatus, Box<dyn Error>> {
                     Ok(json) => json,
                     Err(err) => {
                         error!("Profiles transfer failed: {:?}", err);
-                        // Catch a JSON format mismatch
-                        return if err.is_decode() && !err.is_timeout() {
-                            Ok(UpdateStatus::FormatError)
-                        } else {
-                            Err(err.into())
-                        };
+                        // As the payload can be very large, we can get a timeout error that translates to a decode error so we don't want to return a FormatError in that case
+                        return Err(err.into());
                     }
                 };
                 let mut locked_vulns = VULNS.lock().await;
