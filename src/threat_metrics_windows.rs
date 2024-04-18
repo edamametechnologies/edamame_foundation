@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_WINDOWS: &str = r#"{
   "name": "threat model Windows",
   "extends": "none",
-  "date": "April 10th 2024",
-  "signature": "ac0cbf0c62e868aa776c35cfc7646cfe1448ae44bed474ae218f6427b1eb43a2",
+  "date": "April 18th 2024",
+  "signature": "aa2ea7ea0e72ad085c7c665fbb5d13b21463e236822f045383285c7659616709",
   "metrics": [
     {
       "name": "edamame helper disabled",
@@ -832,7 +832,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "user",
-        "target": "$guestName = (Get-WmiObject Win32_UserAccount | Where-Object {$_.SID -like '*-501'} | Select-Object -ExpandProperty Name); if(net user $guestName | findstr /c:'active' | findstr /c:'Yes') { 'Guest account active' } else { '' }",
+        "target": "$guestAccount = Get-LocalUser | Where-Object {$_.SID -like '*-501'}; if ($guestAccount.Enabled) {'Guest account is active'} else {''}",
         "education": []
       },
       "remediation": {
@@ -841,7 +841,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "system",
-        "target": "$guestName = (Get-WmiObject Win32_UserAccount | Where-Object {$_.SID -like '*-501'} | Select-Object -ExpandProperty Name); Disable-LocalUser -Name $guestName",
+        "target": "$guestAccount = Get-LocalUser | Where-Object {$_.SID -like '*-501'}; if ($guestAccount.Enabled) {Disable-LocalUser -Name $guestAccount.Name}",
         "education": [
           {
             "locale": "EN",
@@ -861,7 +861,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "system",
-        "target": "$guestName = (Get-WmiObject Win32_UserAccount | Where-Object {$_.SID -like '*-501'} | Select-Object -ExpandProperty Name); Enable-LocalUser -Name $guestName",
+        "target": "$guestAccount = Get-LocalUser | Where-Object {$_.SID -like '*-501'}; if (-not $guestAccount.Enabled) {Enable-LocalUser -Name $guestAccount.Name}",
         "education": [
           {
             "locale": "EN",
@@ -906,7 +906,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "user",
-        "target": "$adminName = (Get-WmiObject Win32_UserAccount | Where-Object {$_.SID -like '*-500'} | Select-Object -ExpandProperty Name); if(((net user $adminName) | findstr /C:'Account active') -match 'Yes') { Write-Output 'Built-in Administrator account enabled' } else { Write-Output '' }",
+        "target": "$adminAccount = Get-LocalUser | Where-Object {$_.SID -like '*-500'}; if ($adminAccount.Enabled) {'Built-in Administrator account enabled'} else {''}",
         "education": []
       },
       "remediation": {
@@ -915,7 +915,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "system",
-        "target": "$adminName = (Get-WmiObject Win32_UserAccount | Where-Object {$_.SID -like '*-500'} | Select-Object -ExpandProperty Name); net user $adminName /active:no",
+        "target": "$adminAccount = Get-LocalUser | Where-Object {$_.SID -like '*-500'}; if ($adminAccount.Enabled) {Disable-LocalUser -Name $adminAccount.Name}",
         "education": [
           {
             "locale": "EN",
@@ -935,7 +935,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "system",
-        "target": "$adminName = (Get-WmiObject Win32_UserAccount | Where-Object {$_.SID -like '*-500'} | Select-Object -ExpandProperty Name); net user $adminName /active:yes",
+        "target": "$adminAccount = Get-LocalUser | Where-Object {$_.SID -like '*-500'}; if (-not $adminAccount.Enabled) {Enable-LocalUser -Name $adminAccount.Name}",
         "education": [
           {
             "locale": "EN",
@@ -1285,7 +1285,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "system",
-        "target": "Set-ExecutionPolicy -ExecutionPolicy Default -Scope CurrentUser",
+        "target": "Set-ExecutionPolicy -ExecutionPolicy Default -Scope CurrentUser -Force",
         "education": [
           {
             "locale": "EN",
@@ -1305,7 +1305,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "system",
-        "target": "Set-ExecutionPolicy -ExecutionPolicy Unrestricted -Scope CurrentUser",
+        "target": "Set-ExecutionPolicy -ExecutionPolicy Unrestricted -Scope CurrentUser -Force",
         "education": [
           {
             "locale": "EN",
@@ -1400,9 +1400,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
       "severity": 5,
       "scope": "generic",
       "tags": [
-        "CIS Benchmark Level 1",
-        "windows_security/smb1_protocol_disabled",
-        "need_restart"
+        "CIS Benchmark Level 1,windows_security/smb1_protocol_disabled"
       ],
       "description": [
         {
