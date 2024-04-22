@@ -163,38 +163,41 @@ pub async fn update(branch: &str) -> Result<UpdateStatus, Box<dyn Error>> {
 
     // Use the client to make a request
     let response = client.get(&url).send().await;
-
     match response {
         Ok(res) => {
             if res.status().is_success() {
-                info!("Port vulns transfer complete");
-
-                let json: VulnerabilityPortInfoListJSON = match res.json().await {
-                    Ok(json) => json,
+                info!("Model transfer complete");
+                // Perform the transfer and decode in 2 steps in order to catch format errors
+                let json: VulnerabilityPortInfoListJSON = match res.text().await {
+                    Ok(json) => {
+                        match serde_json::from_str(&json) {
+                            Ok(json) => json,
+                            Err(err) => {
+                                error!("Model decoding failed : {:?}", err);
+                                // Catch a JSON format mismatch
+                                return Ok(UpdateStatus::FormatError);
+                            }
+                        }
+                    }
                     Err(err) => {
-                        error!("Profiles transfer failed: {:?}", err);
-                        // Catch a JSON format mismatch
-                        return if err.is_decode() && !err.is_timeout() {                            
-                            Ok(UpdateStatus::FormatError)
-                        } else {
-                            Err(err.into())
-                        };
+                        // Only warn this can happen if the device is offline
+                        warn!("Model transfer failed: {:?}", err);
+                        return Err(err.into());
                     }
                 };
                 let mut locked_vulns = VULNS.lock().await;
                 *locked_vulns = VulnerabilityPortInfoList::new_from_json(&json);
-
                 // Success
                 status = UpdateStatus::Updated;
             } else {
-                error!("Port vulns transfer failed with status: {:?}", res.status());
+                // Only warn this can happen if the device is offline
+                warn!("Model transfer failed with status: {:?}", res.status());
             }
         }
         Err(err) => {
             // Only warn this can happen if the device is offline
-            warn!("Port vulns transfer failed: {:?}", err);
+            warn!("Model transfer failed: {:?}", err);
         }
     }
-
     Ok(status)
 }

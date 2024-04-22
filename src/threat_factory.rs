@@ -200,17 +200,23 @@ impl ThreatMetrics {
         match response {
             Ok(res) => {
                 if res.status().is_success() {
-                    info!("Threat model transfer complete");
-
-                    let json: ThreatMetricsJSON = match res.json().await {
-                        Ok(json) => json,
+                    info!("Model transfer complete");
+                    // Perform the transfer and decode in 2 steps in order to catch format errors
+                    let json: ThreatMetricsJSON = match res.text().await {
+                        Ok(json) => {
+                            match serde_json::from_str(&json) {
+                                Ok(json) => json,
+                                Err(err) => {
+                                    error!("Model decoding failed : {:?}", err);
+                                    // Catch a JSON format mismatch
+                                    return Ok(UpdateStatus::FormatError);
+                                }
+                            }
+                        }
                         Err(err) => {
-                            error!("Profiles transfer failed: {:?}", err);
-                            return if err.is_decode() && !err.is_timeout() {
-                                Ok(UpdateStatus::FormatError)
-                            } else {
-                                Err(err.into())
-                            };
+                            // Only warn this can happen if the device is offline
+                            warn!("Model transfer failed: {:?}", err);
+                            return Err(err.into());
                         }
                     };
 
@@ -225,15 +231,13 @@ impl ThreatMetrics {
                     // Success
                     status = UpdateStatus::Updated;
                 } else {
-                    error!(
-                        "Threat model transfer failed with status: {:?}",
-                        res.status()
-                    );
+                    // Only warn this can happen if the device is offline
+                    warn!("Model transfer failed with status: {:?}", res.status());
                 }
             }
             Err(err) => {
                 // Only warn this can happen if the device is offline
-                warn!("Threat model transfer failed: {:?}", err);
+                warn!("Model transfer failed: {:?}", err);
             }
         }
 
