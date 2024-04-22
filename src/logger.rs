@@ -9,8 +9,10 @@ use std::{
     path::PathBuf,
     sync::{Arc, Mutex},
     io::{Error, ErrorKind, Cursor},
-    thread::spawn,
 };
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+use std::thread::spawn;
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use flexi_logger::LoggerHandle;

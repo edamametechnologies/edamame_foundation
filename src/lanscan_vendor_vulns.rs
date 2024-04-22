@@ -111,46 +111,50 @@ pub async fn update(branch: &str) -> Result<UpdateStatus, Box<dyn Error>> {
 
     let url = format!("{}/{}/{}", VENDOR_VULNS_REPO, branch, VENDOR_VULNS_NAME);
 
-    info!("Fetching vendor vulns from {}", url);
+    info!("Fetching port vulns from {}", url);
 
-    // Create a client with a long timeout as the file can be VERY large
+    // Create a client with a long timeout as the file can be large
     let client = Client::builder()
-        .timeout(Duration::from_secs(360))
+        .timeout(Duration::from_secs(120))
         .build()?;
 
     // Use the client to make a request
     let response = client.get(&url).send().await;
-
     match response {
         Ok(res) => {
             if res.status().is_success() {
-                info!("Vendor vulns transfer complete");
-
-                let json: VulnerabilityVendorInfoListJSON = match res.json().await {
-                    Ok(json) => json,
+                info!("Model transfer complete");
+                // Perform the transfer and decode in 2 steps in order to catch format errors
+                let json: VulnerabilityVendorInfoListJSON = match res.text().await {
+                    Ok(json) => {
+                        match serde_json::from_str(&json) {
+                            Ok(json) => json,
+                            Err(err) => {
+                                error!("Model decoding failed : {:?}", err);
+                                // Catch a JSON format mismatch
+                                return Ok(UpdateStatus::FormatError);
+                            }
+                        }
+                    }
                     Err(err) => {
-                        error!("Profiles transfer failed: {:?}", err);
-                        // As the payload can be very large, we can get a timeout error that translates to a decode error so we don't want to return a FormatError in that case
+                        // Only warn this can happen if the device is offline
+                        warn!("Model transfer failed: {:?}", err);
                         return Err(err.into());
                     }
                 };
                 let mut locked_vulns = VULNS.lock().await;
                 *locked_vulns = VulnerabilityInfoList::new_from_json(&json);
-
                 // Success
                 status = UpdateStatus::Updated;
             } else {
-                error!(
-                    "Vendor vulns transfer failed with status: {:?}",
-                    res.status()
-                );
+                // Only warn this can happen if the device is offline
+                warn!("Model transfer failed with status: {:?}", res.status());
             }
         }
         Err(err) => {
             // Only warn this can happen if the device is offline
-            warn!("Vendor vulns transfer failed: {:?}", err);
+            warn!("Model transfer failed: {:?}", err);
         }
     }
-
     Ok(status)
 }
