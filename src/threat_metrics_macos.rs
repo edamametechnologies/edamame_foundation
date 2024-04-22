@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_MACOS: &str = r#"{
   "name": "threat model macOS",
   "extends": "none",
-  "date": "March 03th 2024",
-  "signature": "a8f82e30153a34debe02d9a3f5b9db5f0f715a6c83090423af4d1c9b7b1da16d",
+  "date": "April 15th 2024",
+  "signature": "b06ad1b730c231a1625d1d1553d3f658a60201fdfed43fbba3f25ea519af0625",
   "metrics": [
     {
       "name": "edamame helper disabled",
@@ -143,7 +143,9 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
       "dimension": "system integrity",
       "severity": 5,
       "scope": "generic",
-      "tags": ["Personal Posture"],
+      "tags": [
+        "Personal Posture"
+      ],
       "description": [
         {
           "locale": "EN",
@@ -212,7 +214,9 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
       "dimension": "system integrity",
       "severity": 5,
       "scope": "macOS",
-      "tags": ["Personal Posture"],
+      "tags": [
+        "Personal Posture"
+      ],
       "description": [
         {
           "locale": "EN",
@@ -835,7 +839,9 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
       "dimension": "system integrity",
       "severity": 4,
       "scope": "generic",
-      "tags": ["Personal Posture"],
+      "tags": [
+        "Personal Posture"
+      ],
       "description": [
         {
           "locale": "EN",
