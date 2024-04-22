@@ -1,13 +1,15 @@
 use flexi_logger::{writers::LogWriter, Duplicate, FileSpec, LogSpecification, Logger};
 use lazy_static::lazy_static;
-use log::{error, info};
 use regex::Regex;
-use std::collections::VecDeque;
-use std::io::Cursor;
 use std::{
-    env,
+    collections::VecDeque,
+    env::{var, current_exe},
+    mem::forget,
+    fs::create_dir_all,
     path::PathBuf,
     sync::{Arc, Mutex},
+    io::{Error, ErrorKind, Cursor},
+    thread::spawn,
 };
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -53,7 +55,7 @@ fn sanitize_keywords(input: &str, keywords: &[&str]) -> String {
             r#"(?P<key>"?(\b{})"?\s*[:=]?\s*)("(?P<val1>[^"]+)"|(?P<val2>\b[^\s",}}]+))"#,
             regex::escape(keyword)
         ))
-        .unwrap();
+            .unwrap();
 
         output = re
             .replace_all(&output, |caps: &regex::Captures| {
@@ -169,7 +171,7 @@ impl LogWriter for MemoryWriter {
             Err(e) => {
                 // Use print to avoid recursion
                 println!("Error writing log line to memory logger: {}", e);
-                Err(std::io::Error::new(std::io::ErrorKind::Other, e))
+                Err(Error::new(ErrorKind::Other, e))
             }
         }
     }
@@ -218,7 +220,7 @@ pub fn init_signals(flexi_logger: LoggerHandle, log_spec: &LogSpecification) {
     let mut signals = Signals::new([signal::SIGUSR1]).unwrap();
 
     // Spawn a thread to handle signals and toggle log level (info / trace)
-    std::thread::spawn(move || {
+    spawn(move || {
         for _ in signals.forever() {
             let current_log_level = current_log_level_signal.load(Ordering::Relaxed);
 
@@ -246,39 +248,88 @@ pub fn init_sentry(url: &str) {
     ));
 
     if sentry.is_enabled() {
-        info!("Sentry initialized");
+        println!("Sentry initialized");
     } else {
-        error!("Sentry initialization failed");
+        eprintln!("Sentry initialization failed");
     }
     // Forget the sentry object to prevent it from being dropped
-    std::mem::forget(sentry);
+    forget(sentry);
 }
 
 fn init_flexi_logger(is_helper: bool) {
     // Init logger here, enforce log level to info as default
     let default_log_spec = "info";
     // Override with env variable if set
-    let env_log_spec = env::var("EDAMAME_LOG_LEVEL").unwrap_or(default_log_spec.to_string());
+    let env_log_spec = var("EDAMAME_LOG_LEVEL").unwrap_or(default_log_spec.to_string());
     let log_spec = LogSpecification::env_or_parse(env_log_spec).unwrap();
 
     // Flexi logger
     // Our writer
     let memory_writer = MemoryWriter::new();
     // The helper on Windows doesn't have access to the console, so we log to a file instead
-    let flexi_logger = if is_helper && cfg!(target_os = "windows") {
-        let exe_path: PathBuf = env::current_exe().unwrap();
-        let log_dir = exe_path.parent().unwrap().to_path_buf();
+    let flexi_logger = if cfg!(target_os = "windows") {
+        let log_dir = if is_helper {
+            // Log to the same directory as the binary
+            let exe_path: PathBuf = match current_exe() {
+                Ok(path) => path,
+                Err(e) => {
+                    // Use Sentry for error reporting
+                    let error = format!("Failed to get current_exe: {}", e);
+                    eprintln!("{}", error);
+                    sentry::capture_message(&error, sentry::Level::Error);
+                    return;
+                }
+            };
+            match exe_path.parent() {
+                Some(parent) => parent.to_path_buf(),
+                None => {
+                    // Use Sentry for error reporting
+                    let error = "Failed to get parent of current_exe".to_string();
+                    eprintln!("{}", error);
+                    sentry::capture_message(&error, sentry::Level::Error);
+                    return;
+                }
+            }
+        } else {
+            // Log in APPDATA/com.edamametech/EDAMAME\ Security/ (redirected to proper location in UWP apps)
+            let appdata = match var("APPDATA") {
+                Ok(appdata) => appdata,
+                Err(e) => {
+                    let error = format!("Failed to get APPDATA: {}", e);
+                    eprintln!("{}", error);
+                    sentry::capture_message(&error, sentry::Level::Error);
+                    return;
+                }
+            };
+            let appdata_path = format!("{}/com.edamametech/EDAMAME Security", appdata);
+            // Create the directory if it doesn't exist
+            match create_dir_all(&appdata_path) {
+                Ok(_) => (),
+                Err(e) => {
+                    let error = format!("Failed to create directory {} : {}", appdata_path, e);
+                    eprintln!("{}", error);
+                    sentry::capture_message(&error, sentry::Level::Error);
+                    return;
+                }
+            };
+            PathBuf::from(appdata_path)
+        };
+        let basename = if is_helper {
+            "edamame_helper"
+        } else {
+            "edamame"
+        };
         Logger::with(log_spec.clone())
             .format(flexi_logger::colored_opt_format)
             // Write logs to a file in the binary's directory
-            // Always log to our writer (for Sentry)
             .log_to_file_and_writer(
                 FileSpec::default()
                     .directory(log_dir)
-                    .basename("edamame_helper")
+                    .basename(basename)
                     .suffix("log"),
                 Box::new(memory_writer),
             )
+            .duplicate_to_stdout(Duplicate::All)
             .start()
             .unwrap_or_else(|e| panic!("Logger initialization failed: {:?}", e))
     } else {
@@ -293,7 +344,7 @@ fn init_flexi_logger(is_helper: bool) {
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     init_signals(flexi_logger, &log_spec);
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    let _ = flexi_logger;
+        let _ = flexi_logger;
 }
 
 #[cfg(target_os = "android")]
@@ -311,10 +362,11 @@ pub fn init_android_logger() {
 }
 
 pub fn init_logger(url: &str, is_helper: bool) {
-    
+
+    // Init Sentry first
+    init_sentry(url);
     // This is mutually exclusive with flexi_logger
     //#[cfg(not(any(target_os = "android")))]
     //init_android_logger();
     init_flexi_logger(is_helper);
-    init_sentry(url);
 }
