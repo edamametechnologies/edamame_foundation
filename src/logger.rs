@@ -2,12 +2,14 @@ use flexi_logger::{writers::LogWriter, Duplicate, FileSpec, LogSpecification, Lo
 use lazy_static::lazy_static;
 use log::{error, info};
 use regex::Regex;
-use std::collections::VecDeque;
-use std::io::Cursor;
 use std::{
-    env,
+    collections::VecDeque,
+    env::{var, current_exe},
+    mem,
     path::PathBuf,
     sync::{Arc, Mutex},
+    io::{Error, ErrorKind, Cursor},
+    thread::spawn
 };
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -169,7 +171,7 @@ impl LogWriter for MemoryWriter {
             Err(e) => {
                 // Use print to avoid recursion
                 println!("Error writing log line to memory logger: {}", e);
-                Err(std::io::Error::new(std::io::ErrorKind::Other, e))
+                Err(Error::new(ErrorKind::Other, e))
             }
         }
     }
@@ -218,7 +220,7 @@ pub fn init_signals(flexi_logger: LoggerHandle, log_spec: &LogSpecification) {
     let mut signals = Signals::new([signal::SIGUSR1]).unwrap();
 
     // Spawn a thread to handle signals and toggle log level (info / trace)
-    std::thread::spawn(move || {
+    spawn(move || {
         for _ in signals.forever() {
             let current_log_level = current_log_level_signal.load(Ordering::Relaxed);
 
@@ -251,34 +253,46 @@ pub fn init_sentry(url: &str) {
         error!("Sentry initialization failed");
     }
     // Forget the sentry object to prevent it from being dropped
-    std::mem::forget(sentry);
+    mem::forget(sentry);
 }
 
 fn init_flexi_logger(is_helper: bool) {
     // Init logger here, enforce log level to info as default
     let default_log_spec = "info";
     // Override with env variable if set
-    let env_log_spec = env::var("EDAMAME_LOG_LEVEL").unwrap_or(default_log_spec.to_string());
+    let env_log_spec = var("EDAMAME_LOG_LEVEL").unwrap_or(default_log_spec.to_string());
     let log_spec = LogSpecification::env_or_parse(env_log_spec).unwrap();
 
     // Flexi logger
     // Our writer
     let memory_writer = MemoryWriter::new();
     // The helper on Windows doesn't have access to the console, so we log to a file instead
-    let flexi_logger = if is_helper && cfg!(target_os = "windows") {
-        let exe_path: PathBuf = env::current_exe().unwrap();
-        let log_dir = exe_path.parent().unwrap().to_path_buf();
+    let flexi_logger = if cfg!(target_os = "windows") {
+        // TODO: error handling
+        let log_dir = if is_helper {
+            // Log to the same directory as the binary
+            let exe_path: PathBuf = current_exe().unwrap();
+            exe_path.parent().unwrap().parent().unwrap().to_path_buf()
+        } else {
+            let appdata_path = PathBuf::from(var("APPDATA").unwrap());
+            appdata_path.parent().unwrap().to_path_buf()
+        };
+        let basename = if is_helper {
+            "edamame_helper"
+        } else {
+            "edamame"
+        };
         Logger::with(log_spec.clone())
             .format(flexi_logger::colored_opt_format)
             // Write logs to a file in the binary's directory
-            // Always log to our writer (for Sentry)
             .log_to_file_and_writer(
                 FileSpec::default()
                     .directory(log_dir)
-                    .basename("edamame_helper")
+                    .basename(basename)
                     .suffix("log"),
                 Box::new(memory_writer),
             )
+            .duplicate_to_stdout(Duplicate::All)
             .start()
             .unwrap_or_else(|e| panic!("Logger initialization failed: {:?}", e))
     } else {
