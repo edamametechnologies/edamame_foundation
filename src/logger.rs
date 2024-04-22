@@ -356,7 +356,10 @@ pub fn init_android_logger() {
     );
     let old_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |arg| {
-        error!("{:?}", arg);
+        // Use Sentry for error reporting
+        let error = format!("Panic: {:?}", arg);
+        eprintln!("{}", error);
+        sentry::capture_message(&error, sentry::Level::Error);
         old_hook(arg);
     }));
 }
