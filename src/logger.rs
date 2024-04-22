@@ -312,7 +312,7 @@ fn init_flexi_logger(is_helper: bool) {
                     return;
                 }
             };
-            PathBuf::from(appdata)
+            PathBuf::from(appdata_path)
         };
         let basename = if is_helper {
             "edamame_helper"
