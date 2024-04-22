@@ -251,43 +251,50 @@ pub async fn update(branch: &str) -> Result<UpdateStatus, Box<dyn Error>> {
 
     let url = format!("{}/{}/{}", PROFILES_REPO, branch, PROFILES_NAME);
 
-    info!("Fetching profiles from {}", url);
-    // Create a client with a timeout
-    let client = Client::builder().timeout(Duration::from_secs(20)).build()?;
+    info!("Fetching port vulns from {}", url);
+
+    // Create a client with a long timeout as the file can be large
+    let client = Client::builder()
+        .timeout(Duration::from_secs(120))
+        .build()?;
 
     // Use the client to make a request
     let response = client.get(&url).send().await;
-
     match response {
         Ok(res) => {
             if res.status().is_success() {
-                info!("Profiles transfer complete");
-
-                let json: DeviceTypeListJSON = match res.json().await {
-                    Ok(json) => json,
+                info!("Model transfer complete");
+                // Perform the transfer and decode in 2 steps in order to catch format errors
+                let json: DeviceTypeListJSON = match res.text().await {
+                    Ok(json) => {
+                        match serde_json::from_str(&json) {
+                            Ok(json) => json,
+                            Err(err) => {
+                                error!("Model decoding failed : {:?}", err);
+                                // Catch a JSON format mismatch
+                                return Ok(UpdateStatus::FormatError);
+                            }
+                        }
+                    }
                     Err(err) => {
-                        error!("Profiles transfer failed: {:?}", err);
-                        return if err.is_decode() && !err.is_timeout() {
-                            Ok(UpdateStatus::FormatError)
-                        } else {
-                            Err(err.into())
-                        };
+                        // Only warn this can happen if the device is offline
+                        warn!("Model transfer failed: {:?}", err);
+                        return Err(err.into());
                     }
                 };
                 let mut locked_vulns = PROFILES.lock().await;
                 *locked_vulns = DeviceTypeList::new_from_json(&json);
-
                 // Success
                 status = UpdateStatus::Updated;
             } else {
-                error!("Profiles transfer failed with status: {:?}", res.status());
+                // Only warn this can happen if the device is offline
+                warn!("Model transfer failed with status: {:?}", res.status());
             }
         }
         Err(err) => {
             // Only warn this can happen if the device is offline
-            warn!("Profiles transfer failed: {:?}", err);
+            warn!("Model transfer failed: {:?}", err);
         }
     }
-
     Ok(status)
 }
