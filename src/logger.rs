@@ -301,7 +301,7 @@ fn init_flexi_logger(is_helper: bool) {
                     return;
                 }
             };
-            let appdata_path = format!("{}\\com.edamametech/EDAMAME\\ Security", appdata);
+            let appdata_path = format!("{}/com.edamametech/EDAMAME Security", appdata);
             // Create the directory if it doesn't exist
             match create_dir_all(&appdata_path) {
                 Ok(_) => (),
