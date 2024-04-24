@@ -238,12 +238,13 @@ pub fn init_signals(flexi_logger: LoggerHandle, log_spec: &LogSpecification) {
     });
 }
 
-pub fn init_sentry(url: &str) {
+pub fn init_sentry(url: &str, release: &str) {
     // Init sentry
+    let release = release.to_string();
     let sentry = sentry::init((
         url,
         sentry::ClientOptions {
-            release: sentry::release_name!(),
+            release: if release.is_empty() { sentry::release_name!() } else { Some(release.into()) },
             traces_sample_rate: 1.0,
             ..Default::default()
         },
@@ -366,10 +367,10 @@ pub fn init_android_logger() {
     }));
 }
 
-pub fn init_logger(url: &str, is_helper: bool) {
+pub fn init_logger(url: &str, release: &str, is_helper: bool) {
 
     // Init Sentry first
-    init_sentry(url);
+    init_sentry(url, release);
     // This is mutually exclusive with flexi_logger
     //#[cfg(not(any(target_os = "android")))]
     //init_android_logger();
