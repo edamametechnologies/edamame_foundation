@@ -68,6 +68,7 @@ chrono = { version = "0.4.31", features = ["serde"] }
 
 # Network utils
 ipnet = { version = "2.9.0" }
+# mdns discovery that works on all platforms and tolerates foreign language characters
 # wez-mdns = "0.1.1"
 # Our own mdns implementation forked from wez-mdns
 wez-mdns = { git = "https://github.com/edamametechnologies/mdns" }
