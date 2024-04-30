@@ -31,10 +31,7 @@ pub trait Backend {
         device_info: &DeviceInfoBackend,
     ) -> Result<String>;
 
-    async fn get_pwned_breaches(
-        &self,
-        email: &str,
-    ) -> Result<Vec<BreachDetailBackend>>;
+    async fn get_pwned_breaches(&self, email: &str) -> Result<Vec<BreachDetailBackend>>;
 
     async fn get_remediation_pwned(
         &self,
