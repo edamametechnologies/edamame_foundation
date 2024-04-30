@@ -1,7 +1,7 @@
+use crate::pwned_breach_backend::PwnedCriticalityBackend;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
-use crate::pwned_breach_backend::PwnedCriticalityBackend;
 
 #[derive(Debug, Ord, PartialOrd, Eq, PartialEq, Clone, Serialize, Deserialize)]
 pub enum PwnedCriticality {
