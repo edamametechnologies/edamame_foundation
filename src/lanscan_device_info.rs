@@ -68,7 +68,7 @@ impl DeviceInfo {
     }
 
     // Used before any query to AI assistance
-    pub fn sanitized_device_info(device: &DeviceInfo) -> DeviceInfoBackend {
+    pub fn sanitized_backend_device_info(device: &DeviceInfo) -> DeviceInfoBackend {
         let mut device_backend = DeviceInfoBackend {
             mdns_services: device.mdns_services.clone(),
             device_vendor: device.device_vendor.clone(),
@@ -88,11 +88,25 @@ impl DeviceInfo {
         }
         device_backend.mdns_services = mdns_services_sanitized;
 
-        // Deduplicate
+        // Sort the entries to make sure they are always in the same order
         device_backend.mdns_services.sort();
+        // The sanitization can create duplicates
         device_backend.mdns_services.dedup();
+        device_backend.open_ports.sort_by(|a, b| a.port.cmp(&b.port));
+        device_backend.vulnerabilities.sort_by(|a, b| a.name.cmp(&b.name));
 
         device_backend
+    }
+    
+    pub fn sanitized_backend_device_key(&self) -> String {
+        let sanitized_device = DeviceInfo::sanitized_backend_device_info(self);
+        format!(
+            "{}{}{}{}",
+            sanitized_device.device_vendor,
+            sanitized_device.mdns_services.join(""),
+            sanitized_device.vulnerabilities.len(),
+            sanitized_device.open_ports.len()
+        )
     }
 
     pub fn merge(device: &mut DeviceInfo, new_device: &DeviceInfo) {
