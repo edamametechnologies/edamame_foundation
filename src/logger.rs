@@ -3,13 +3,21 @@ use lazy_static::lazy_static;
 use regex::Regex;
 use std::{
     collections::VecDeque,
-    env::{var, current_exe},
-    mem::forget,
+    env::{current_exe, var},
     fs::create_dir_all,
+    io::{Cursor, Error, ErrorKind},
+    mem::forget,
     path::PathBuf,
     sync::{Arc, Mutex},
-    io::{Error, ErrorKind, Cursor},
 };
+
+#[cfg(target_os = "android")]
+use android_logger;
+
+#[cfg(target_os = "ios")]
+use oslog::OsLogger;
+
+use log::LevelFilter;
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::thread::spawn;
@@ -57,7 +65,7 @@ fn sanitize_keywords(input: &str, keywords: &[&str]) -> String {
             r#"(?P<key>"?(\b{})"?\s*[:=]?\s*)("(?P<val1>[^"]+)"|(?P<val2>\b[^\s",}}]+))"#,
             regex::escape(keyword)
         ))
-            .unwrap();
+        .unwrap();
 
         output = re
             .replace_all(&output, |caps: &regex::Captures| {
@@ -226,10 +234,10 @@ pub fn init_signals(flexi_logger: LoggerHandle, log_spec: &LogSpecification) {
         for _ in signals.forever() {
             let current_log_level = current_log_level_signal.load(Ordering::Relaxed);
 
-            let new_log_level = if current_log_level == log::LevelFilter::Info as usize {
-                log::LevelFilter::Trace
+            let new_log_level = if current_log_level == LevelFilter::Info as usize {
+                LevelFilter::Trace
             } else {
-                log::LevelFilter::Info
+                LevelFilter::Info
             };
             current_log_level_signal.store(new_log_level as usize, Ordering::Relaxed);
             let new_spec = LogSpecification::env_or_parse(&new_log_level.to_string()).unwrap();
@@ -244,7 +252,11 @@ pub fn init_sentry(url: &str, release: &str) {
     let sentry = sentry::init((
         url,
         sentry::ClientOptions {
-            release: if release.is_empty() { sentry::release_name!() } else { Some(release.into()) },
+            release: if release.is_empty() {
+                sentry::release_name!()
+            } else {
+                Some(release.into())
+            },
             traces_sample_rate: 1.0,
             ..Default::default()
         },
@@ -259,6 +271,7 @@ pub fn init_sentry(url: &str, release: &str) {
     forget(sentry);
 }
 
+#[cfg(not(all(debug_assertions, any(target_os = "android", target_os = "ios"))))]
 fn init_flexi_logger(is_helper: bool) {
     // Init logger here, enforce log level to info as default
     let default_log_spec = "info";
@@ -347,7 +360,7 @@ fn init_flexi_logger(is_helper: bool) {
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     init_signals(flexi_logger, &log_spec);
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-        let _ = flexi_logger;
+    let _ = flexi_logger;
 }
 
 #[cfg(target_os = "android")]
@@ -355,11 +368,28 @@ pub fn init_android_logger() {
     let _ = android_logger::init_once(
         android_logger::Config::default()
             .with_tag("Rust")
-            .with_max_level(log::LevelFilter::Info),
+            .with_max_level(LevelFilter::Info),
     );
+
+    // Use Sentry for panic reporting only
     let old_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |arg| {
-        // Use Sentry for error reporting
+        let error = format!("Panic: {:?}", arg);
+        eprintln!("{}", error);
+        sentry::capture_message(&error, sentry::Level::Error);
+        old_hook(arg);
+    }));
+}
+
+#[cfg(target_os = "ios")]
+pub fn init_ios_logger() {
+    let _ = OsLogger::new("com.edamametech.edamame")
+        .level_filter(LevelFilter::Info)
+        .init();
+
+    // Use Sentry for panic reporting only
+    let old_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |arg| {
         let error = format!("Panic: {:?}", arg);
         eprintln!("{}", error);
         sentry::capture_message(&error, sentry::Level::Error);
@@ -368,11 +398,14 @@ pub fn init_android_logger() {
 }
 
 pub fn init_logger(url: &str, release: &str, is_helper: bool) {
-
     // Init Sentry first
     init_sentry(url, release);
-    // This is mutually exclusive with flexi_logger
-    //#[cfg(not(any(target_os = "android")))]
-    //init_android_logger();
+
+    // This is mutually exclusive with flexi_logger, use native loggers in debug mode only
+    #[cfg(all(debug_assertion, target_os = "android"))]
+    init_android_logger();
+    #[cfg(all(debug_assertion, target_os = "ios"))]
+    init_ios_logger();
+    #[cfg(not(all(debug_assertions, any(target_os = "android", target_os = "ios"))))]
     init_flexi_logger(is_helper);
 }
