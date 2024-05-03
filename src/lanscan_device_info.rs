@@ -6,6 +6,8 @@ use crate::lanscan_device_info_backend::*;
 use crate::lanscan_port_info::*;
 use crate::lanscan_vulnerability_info::*;
 
+pub static DEVICE_ACTIVITY_TIMEOUT: i64 = 900;
+
 // We should really use HashSets instead of Vec, but we don't in order to make it more usable with FFI
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DeviceInfo {
@@ -107,6 +109,42 @@ impl DeviceInfo {
             sanitized_device.vulnerabilities.len(),
             sanitized_device.open_ports.len()
         )
+    }
+
+    // Combine the devices based on the hostname or IP address
+    pub fn merge_vec(devices: &mut Vec<DeviceInfo>, new_devices: &Vec<DeviceInfo>) {
+        for new_device in new_devices {
+            let mut found = false;
+
+            // If the new device information is not recent, skip it
+            if new_device.last_detected < Utc::now() - chrono::Duration::seconds(DEVICE_ACTIVITY_TIMEOUT) {
+                continue;
+            }
+            
+            for device in devices.iter_mut() {
+
+                // If the hostname matches => device has been seen before and possibly has a different IP address
+                // or if the IP address matches => device has been seen before and possibly has a different hostname
+                // Note that devices can have multiple IP addresses and one unique hostname
+                if (!new_device.hostname.is_empty()
+                    && !device.hostname.is_empty()
+                    && device.hostname == new_device.hostname)
+                    || (!new_device.ip_addresses.is_empty()
+                    && !device.ip_addresses.is_empty()
+                    && (new_device.ip_address == device.ip_address))
+                {
+                    // Merge the devices
+                    DeviceInfo::merge(device, new_device);
+                    found = true;
+                    break;
+                }
+            }
+
+            // If no match was found, add the new device
+            if !found {
+                devices.push(new_device.clone());
+            }
+        }
     }
 
     pub fn merge(device: &mut DeviceInfo, new_device: &DeviceInfo) {
