@@ -276,7 +276,10 @@ fn init_flexi_logger(is_helper: bool) {
     // Init logger here, enforce log level to info as default
     let default_log_spec = "info";
     // Override with env variable if set
-    let env_log_spec = var("EDAMAME_LOG_LEVEL").unwrap_or(default_log_spec.to_string());
+    let mut env_log_spec = var("EDAMAME_LOG_LEVEL").unwrap_or(default_log_spec.to_string());
+    // Add exceptions to log level
+    // Suppress warnings in lib p2p
+    env_log_spec.push_str(",libp2p=info");
     let log_spec = LogSpecification::env_or_parse(env_log_spec).unwrap();
 
     // Flexi logger
