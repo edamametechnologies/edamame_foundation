@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use log::trace;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
@@ -118,6 +119,7 @@ impl DeviceInfo {
 
             // If the new device information is not recent, skip it
             if new_device.last_detected < Utc::now() - chrono::Duration::seconds(DEVICE_ACTIVITY_TIMEOUT) {
+                trace!("Skipping device {} as it is not recent", new_device.ip_address);
                 continue;
             }
             
@@ -129,8 +131,8 @@ impl DeviceInfo {
                 if (!new_device.hostname.is_empty()
                     && !device.hostname.is_empty()
                     && device.hostname == new_device.hostname)
-                    || (!new_device.ip_addresses.is_empty()
-                    && !device.ip_addresses.is_empty()
+                    || (!new_device.ip_address.is_empty()
+                    && !device.ip_address.is_empty()
                     && (new_device.ip_address == device.ip_address))
                 {
                     // Merge the devices
