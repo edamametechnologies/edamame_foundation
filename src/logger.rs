@@ -169,8 +169,10 @@ impl LogWriter for MemoryWriter {
                     locked_data.to_take += 1;
                 }
 
-                // Send errors to Sentry
-                if level == "ERROR" {
+                // Send errors to Sentry, exclude libp2p* that is generating too much network related errors
+                // Also exclude network errors
+                if (level == "ERROR") && (!module.starts_with("libp2p")
+                    || (!log_line_sanitized.contains("Socket is not connected"))) {
                     let log_line_formatted =
                         format!("{} [{}] {}\n", level, module, log_line_sanitized);
                     sentry::capture_message(&log_line_formatted, sentry::Level::Error);
@@ -273,6 +275,9 @@ pub fn init_sentry(url: &str, release: &str) {
 
 #[cfg(not(all(debug_assertions, any(target_os = "android", target_os = "ios"))))]
 fn init_flexi_logger(is_helper: bool) {
+
+    println!("Initializing Flexi logger");
+
     // Init logger here, enforce log level to info as default
     let default_log_spec = "info";
     // Override with env variable if set
@@ -368,6 +373,9 @@ fn init_flexi_logger(is_helper: bool) {
 
 #[cfg(target_os = "android")]
 pub fn init_android_logger() {
+
+    println!("Initializing Android logger");
+
     let _ = android_logger::init_once(
         android_logger::Config::default()
             .with_tag("Rust")
@@ -386,9 +394,14 @@ pub fn init_android_logger() {
 
 #[cfg(target_os = "ios")]
 pub fn init_ios_logger() {
+
+    println!("Initializing iOS logger");
+
     let _ = OsLogger::new("com.edamametech.edamame")
-        .level_filter(LevelFilter::Info)
-        .init();
+        .level_filter(LevelFilter::Debug)
+        .category_level_filter("Settings", LevelFilter::Trace)
+        .init()
+        .unwrap();
 
     // Use Sentry for panic reporting only
     let old_hook = std::panic::take_hook();
