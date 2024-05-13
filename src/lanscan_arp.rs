@@ -74,7 +74,14 @@ pub async fn get_mac_address_from_ip(interface_name: &str, ip_addr: &IpAddr) -> 
     {
         match ip_addr {
             IpAddr::V4(ipv4_addr) => {
-                let iface = Interface::new_by_name(interface_name).unwrap();
+                let iface = match Interface::new_by_name(interface_name) {
+                    Some(iface) => iface,
+                    None => {
+                        // This will fail if the interface is invalid
+                        trace!("Error creating Interface");
+                        return Err(anyhow!("Error creating Interface"));
+                    }
+                };
                 let mut client = match ArpClient::new_with_iface(&iface) {
                     Ok(client) => client,
                     Err(e) => {
