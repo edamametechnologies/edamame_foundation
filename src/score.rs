@@ -2,9 +2,12 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use std::collections::HashMap;
+use std::error::Error;
 
 use crate::history::*;
+use crate::order::MetricOrderResult;
 use crate::threat::*;
+use crate::update::UpdateStatus;
 
 // Score
 #[serde_as]
@@ -23,6 +26,23 @@ pub struct Score {
     pub history: OrderHistory,
     pub last_compute: Option<DateTime<Utc>>,
     pub compute_in_progress: bool,
+}
+
+pub trait ScoreTrait {
+    async fn compute(&mut self, compute_requested: bool) -> bool;
+    async fn update_state(&self, completed_metric: &MetricOrderResult);
+    async fn get_progress_percent(&self) -> f32;
+    async fn get_last_completed_metric(&self) -> ThreatMetric;
+    fn get_metrics_summary(&self) -> String;
+    async fn get_history(&mut self) -> Result<OrderHistory, Box<dyn Error>>;
+    async fn remediate(&mut self, name: String) -> Result<MetricOrderResult, Box<dyn Error>>;
+    async fn rollback(&mut self, name: String) -> Result<MetricOrderResult, Box<dyn Error>>;
+    async fn update_threats(
+        &mut self,
+        platform: &str,
+        branch: &str,
+    ) -> Result<UpdateStatus, Box<dyn Error>>;
+    async fn threat_active(&mut self, name: String) -> Result<bool, Box<dyn Error>>;
 }
 
 impl Score {
