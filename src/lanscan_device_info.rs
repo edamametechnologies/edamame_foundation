@@ -95,12 +95,16 @@ impl DeviceInfo {
         device_backend.mdns_services.sort();
         // The sanitization can create duplicates
         device_backend.mdns_services.dedup();
-        device_backend.open_ports.sort_by(|a, b| a.port.cmp(&b.port));
-        device_backend.vulnerabilities.sort_by(|a, b| a.name.cmp(&b.name));
+        device_backend
+            .open_ports
+            .sort_by(|a, b| a.port.cmp(&b.port));
+        device_backend
+            .vulnerabilities
+            .sort_by(|a, b| a.name.cmp(&b.name));
 
         device_backend
     }
-    
+
     pub fn sanitized_backend_device_key(&self) -> String {
         let sanitized_device = DeviceInfo::sanitized_backend_device_info(self);
         format!(
@@ -118,13 +122,17 @@ impl DeviceInfo {
             let mut found = false;
 
             // If the new device information is not recent, skip it
-            if new_device.last_detected < Utc::now() - chrono::Duration::seconds(DEVICE_ACTIVITY_TIMEOUT) {
-                trace!("Skipping device {} as it is not recent", new_device.ip_address);
+            if new_device.last_detected
+                < Utc::now() - chrono::Duration::seconds(DEVICE_ACTIVITY_TIMEOUT)
+            {
+                trace!(
+                    "Skipping device {} as it is not recent",
+                    new_device.ip_address
+                );
                 continue;
             }
-            
-            for device in devices.iter_mut() {
 
+            for device in devices.iter_mut() {
                 // If the hostname matches => device has been seen before and possibly has a different IP address
                 // or if the IP address matches => device has been seen before and possibly has a different hostname
                 // Note that devices can have multiple IP addresses and one unique hostname
@@ -132,8 +140,8 @@ impl DeviceInfo {
                     && !device.hostname.is_empty()
                     && device.hostname == new_device.hostname)
                     || (!new_device.ip_address.is_empty()
-                    && !device.ip_address.is_empty()
-                    && (new_device.ip_address == device.ip_address))
+                        && !device.ip_address.is_empty()
+                        && (new_device.ip_address == device.ip_address))
                 {
                     // Merge the devices
                     DeviceInfo::merge(device, new_device);

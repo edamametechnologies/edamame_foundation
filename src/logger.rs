@@ -171,8 +171,10 @@ impl LogWriter for MemoryWriter {
 
                 // Send errors to Sentry, exclude libp2p* that is generating too much network related errors
                 // Also exclude network errors
-                if (level == "ERROR") && (!module.starts_with("libp2p")
-                    || (!log_line_sanitized.contains("Socket is not connected"))) {
+                if (level == "ERROR")
+                    && (!module.starts_with("libp2p")
+                        || (!log_line_sanitized.contains("Socket is not connected")))
+                {
                     let log_line_formatted =
                         format!("{} [{}] {}\n", level, module, log_line_sanitized);
                     sentry::capture_message(&log_line_formatted, sentry::Level::Error);
@@ -275,7 +277,6 @@ pub fn init_sentry(url: &str, release: &str) {
 
 #[cfg(not(all(debug_assertions, any(target_os = "android", target_os = "ios"))))]
 fn init_flexi_logger(is_helper: bool) {
-
     println!("Initializing Flexi logger");
 
     // Init logger here, enforce log level to info as default
@@ -373,7 +374,6 @@ fn init_flexi_logger(is_helper: bool) {
 
 #[cfg(target_os = "android")]
 pub fn init_android_logger() {
-
     println!("Initializing Android logger");
 
     let _ = android_logger::init_once(
@@ -394,7 +394,6 @@ pub fn init_android_logger() {
 
 #[cfg(target_os = "ios")]
 pub fn init_ios_logger() {
-
     println!("Initializing iOS logger");
 
     let _ = OsLogger::new("com.edamametech.edamame")
