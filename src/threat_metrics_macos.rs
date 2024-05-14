@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_MACOS: &str = r#"{
   "name": "threat model macOS",
   "extends": "none",
-  "date": "April 15th 2024",
-  "signature": "b06ad1b730c231a1625d1d1553d3f658a60201fdfed43fbba3f25ea519af0625",
+  "date": "April 29th 2024",
+  "signature": "c5b6c67afec6e7067be5d06d5a19b2b33d3fa4260215bac8ba93c8b912325d4d",
   "metrics": [
     {
       "name": "edamame helper disabled",
@@ -122,7 +122,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "system",
-        "target": "/usr/libexec/ApplicationFirewall/socketfilterfw --setstealthmode off",
+        "target": "/usr/libexec/ApplicationFirewall/socketfilterfw --setstealthmode off && defaults write /Library/Preferences/com.apple.alf globalstate -int 0; sleep 1; defaults write /Library/Preferences/com.apple.alf globalstate -int 1",
         "education": [
           {
             "locale": "EN",
