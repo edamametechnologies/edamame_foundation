@@ -10,6 +10,7 @@ use std::{
     path::PathBuf,
     sync::{Arc, Mutex},
 };
+use tokio::time::Duration;
 
 #[cfg(target_os = "android")]
 use android_logger;
@@ -20,7 +21,7 @@ use oslog::OsLogger;
 use log::LevelFilter;
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-use std::thread::spawn;
+use crate::runtime::async_spawn;
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use flexi_logger::LoggerHandle;
@@ -30,9 +31,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 // Signal handling
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-use signal_hook::consts::signal;
-#[cfg(any(target_os = "macos", target_os = "linux"))]
-use signal_hook::iterator::Signals;
+use tokio::signal::unix::{signal, SignalKind};
 
 const MAX_LOG_LINES: usize = 20000;
 
@@ -230,22 +229,33 @@ pub fn init_signals(flexi_logger: LoggerHandle, log_spec: &LogSpecification) {
         log_spec.module_filters()[0].level_filter as usize,
     ));
     let current_log_level_signal = current_log_level.clone();
-
-    let mut signals = Signals::new([signal::SIGUSR1]).unwrap();
-
+    
     // Spawn a thread to handle signals and toggle log level (info / trace)
-    spawn(move || {
-        for _ in signals.forever() {
-            let current_log_level = current_log_level_signal.load(Ordering::Relaxed);
+    let current_log_level_signal_clone = current_log_level_signal.clone();
+    let flexi_logger_clone = flexi_logger.clone();
+    async_spawn(async move {
+        let mut signals = signal(SignalKind::user_defined1()).expect("Failed to set up signal handling");
 
-            let new_log_level = if current_log_level == LevelFilter::Info as usize {
-                LevelFilter::Trace
-            } else {
-                LevelFilter::Info
-            };
-            current_log_level_signal.store(new_log_level as usize, Ordering::Relaxed);
-            let new_spec = LogSpecification::env_or_parse(&new_log_level.to_string()).unwrap();
-            flexi_logger.set_new_spec(new_spec);
+        loop {
+            if signals.recv().await.is_some() {
+                let current_log_level = current_log_level_signal_clone.load(Ordering::Relaxed);
+
+                let new_log_level = if current_log_level == LevelFilter::Info as usize {
+                    LevelFilter::Trace
+                } else {
+                    LevelFilter::Info
+                };
+
+                current_log_level_signal_clone.store(new_log_level as usize, Ordering::Relaxed);
+
+                let new_spec = LogSpecification::env_or_parse(&new_log_level.to_string())
+                    .expect("Failed to parse new log specification");
+
+                flexi_logger_clone.set_new_spec(new_spec);
+            }
+
+            // Optionally sleep for a bit to avoid busy-waiting
+            tokio::time::sleep(Duration::from_secs(1)).await;
         }
     });
 }
