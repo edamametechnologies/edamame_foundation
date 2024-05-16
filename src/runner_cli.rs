@@ -40,16 +40,12 @@ pub async fn run_cli(cmd: &str, username: &str, personate: bool) -> Result<Strin
         (code, stdout, stderr)
     });
 
-    let (code, mut stdout, stderr) = match handle.await {
-        Ok(res) => res,
-        Err(e) => {
-            return Err(From::from(e.to_string()));
-        }
-    };
+    let (code, stdout, stderr) = handle.await.map_err(|e| {
+        Box::new(e) as Box<dyn Error>
+    })?;
 
     // Remove newlines from stdout
-    stdout = stdout.replace('\n', "");
-    stdout = stdout.replace('\r', "");
+    let stdout = stdout.replace('\n', "").replace('\r', "");
 
     trace!(
         "Execution results for {:?} - code : {:?} - stdout : {:?} - stderr : {:?}",
@@ -62,7 +58,7 @@ pub async fn run_cli(cmd: &str, username: &str, personate: bool) -> Result<Strin
     if execution_failed(code, &stderr) {
         Err(From::from(stderr.clone()))
     } else {
-        Ok(stdout.clone())
+        Ok(stdout)
     }
 }
 
