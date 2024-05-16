@@ -1,7 +1,7 @@
 use log::{error, trace};
 use run_script::ScriptOptions;
 use std::error::Error;
-use std::thread::spawn;
+use crate::runtime::async_spawn_blocking;
 
 use powershell_script::PsScriptBuilder;
 
@@ -15,7 +15,7 @@ pub async fn run_cli(cmd: &str, username: &str, personate: bool) -> Result<Strin
     let username_clone = username.to_string();
 
     // Spawn a thread to execute the command as neither ps nor run_script are async
-    let handle = spawn(move || -> (i32, String, String) {
+    let handle = async_spawn_blocking(move || -> (i32, String, String) {
         let (mut code, mut stdout, mut stderr) = (0, String::new(), String::new());
 
         if cfg!(target_os = "windows") {
@@ -40,8 +40,12 @@ pub async fn run_cli(cmd: &str, username: &str, personate: bool) -> Result<Strin
         (code, stdout, stderr)
     });
 
-    // Wait for the thread to finish
-    let (code, mut stdout, stderr) = handle.join().unwrap();
+    let (code, mut stdout, stderr) = match handle.await {
+        Ok(res) => res,
+        Err(e) => {
+            return Err(From::from(e.to_string()));
+        }
+    };
 
     // Remove newlines from stdout
     stdout = stdout.replace('\n', "");
