@@ -10,6 +10,7 @@ use std::{
     path::PathBuf,
     sync::{Arc, Mutex},
 };
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use tokio::time::Duration;
 
 #[cfg(target_os = "android")]
@@ -18,6 +19,7 @@ use android_logger;
 #[cfg(target_os = "ios")]
 use oslog::OsLogger;
 
+#[cfg(not(target_os = "windows"))]
 use log::LevelFilter;
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
