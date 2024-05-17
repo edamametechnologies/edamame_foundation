@@ -424,10 +424,8 @@ pub fn init_ios_logger() {
     }));
 }
 
-pub fn init_logger(url: &str, release: &str, is_helper: bool) {
-    // Init Sentry first
-    init_sentry(url, release);
-
+pub fn init_logger(is_helper: bool) {
+    
     // This is mutually exclusive with flexi_logger, use native loggers in debug mode only
     #[cfg(all(debug_assertion, target_os = "android"))]
     init_android_logger();
