@@ -35,14 +35,14 @@ pub trait ScoreTrait {
     async fn get_last_completed_metric(&self) -> ThreatMetric;
     fn get_metrics_summary(&self) -> String;
     async fn get_history(&mut self) -> Result<OrderHistory, Box<dyn Error>>;
-    async fn remediate(&mut self, name: String) -> Result<MetricOrderResult, Box<dyn Error>>;
-    async fn rollback(&mut self, name: String) -> Result<MetricOrderResult, Box<dyn Error>>;
+    async fn remediate(&mut self, name: &str) -> Result<MetricOrderResult, Box<dyn Error>>;
+    async fn rollback(&mut self, name: &str) -> Result<MetricOrderResult, Box<dyn Error>>;
     async fn update_threats(
         &mut self,
         platform: &str,
         branch: &str,
     ) -> Result<UpdateStatus, Box<dyn Error>>;
-    async fn threat_active(&mut self, name: String) -> Result<bool, Box<dyn Error>>;
+    async fn threat_active(&mut self, name: &str) -> Result<bool, Box<dyn Error>>;
 }
 
 impl Score {
