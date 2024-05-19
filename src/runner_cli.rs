@@ -1,7 +1,7 @@
+use crate::runtime::async_spawn_blocking;
 use log::{error, trace};
 use run_script::ScriptOptions;
 use std::error::Error;
-use crate::runtime::async_spawn_blocking;
 
 use powershell_script::PsScriptBuilder;
 
@@ -40,9 +40,7 @@ pub async fn run_cli(cmd: &str, username: &str, personate: bool) -> Result<Strin
         (code, stdout, stderr)
     });
 
-    let (code, stdout, stderr) = handle.await.map_err(|e| {
-        Box::new(e) as Box<dyn Error>
-    })?;
+    let (code, stdout, stderr) = handle.await.map_err(|e| Box::new(e) as Box<dyn Error>)?;
 
     // Remove newlines from stdout
     let stdout = stdout.replace('\n', "").replace('\r', "");
