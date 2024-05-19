@@ -30,7 +30,6 @@ pub struct Score {
 
 pub trait ScoreTrait {
     async fn compute(&mut self, compute_requested: bool) -> bool;
-    async fn update_state(&self, completed_metric: &MetricOrderResult);
     async fn get_progress_percent(&self) -> f32;
     async fn get_last_completed_metric(&self) -> ThreatMetric;
     fn get_metrics_summary(&self) -> String;
