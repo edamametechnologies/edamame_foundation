@@ -19,9 +19,9 @@ pub fn async_init() {
 }
 
 pub fn async_exec<R, F>(async_fn: F) -> R
-    where
-        R: 'static,
-        F: Future<Output = R> + 'static,
+where
+    R: 'static,
+    F: Future<Output = R> + 'static,
 {
     let rt = {
         let rt_lock = RUNTIME.lock().expect("Failed to lock runtime");
@@ -32,8 +32,8 @@ pub fn async_exec<R, F>(async_fn: F) -> R
 }
 
 pub fn async_spawn<F>(async_fn: F) -> JoinHandle<()>
-    where
-        F: Future<Output = ()> + 'static + Send,
+where
+    F: Future<Output = ()> + 'static + Send,
 {
     let rt = {
         let rt_lock = RUNTIME.lock().expect("Failed to lock runtime");
@@ -44,9 +44,9 @@ pub fn async_spawn<F>(async_fn: F) -> JoinHandle<()>
 }
 
 pub fn async_spawn_blocking<F, R>(blocking_fn: F) -> JoinHandle<R>
-    where
-        F: FnOnce() -> R + Send + 'static,
-        R: Send + 'static,
+where
+    F: FnOnce() -> R + Send + 'static,
+    R: Send + 'static,
 {
     let rt = {
         let rt_lock = RUNTIME.lock().expect("Failed to lock runtime");
