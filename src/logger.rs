@@ -231,12 +231,13 @@ pub fn init_signals(flexi_logger: LoggerHandle, log_spec: &LogSpecification) {
         log_spec.module_filters()[0].level_filter as usize,
     ));
     let current_log_level_signal = current_log_level.clone();
-    
+
     // Spawn a thread to handle signals and toggle log level (info / trace)
     let current_log_level_signal_clone = current_log_level_signal.clone();
     let flexi_logger_clone = flexi_logger.clone();
     async_spawn(async move {
-        let mut signals = signal(SignalKind::user_defined1()).expect("Failed to set up signal handling");
+        let mut signals =
+            signal(SignalKind::user_defined1()).expect("Failed to set up signal handling");
 
         loop {
             if signals.recv().await.is_some() {
@@ -425,7 +426,6 @@ pub fn init_ios_logger() {
 }
 
 pub fn init_logger(is_helper: bool) {
-    
     // This is mutually exclusive with flexi_logger, use native loggers in debug mode only
     #[cfg(all(debug_assertion, target_os = "android"))]
     init_android_logger();
