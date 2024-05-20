@@ -80,6 +80,7 @@ regex = "1.10.2"
 sorted-vec = "0.8.3"
 encoding_rs = "0.8.33"
 libc = "0.2.152"
+env_logger = "0.11.3"
 
 # Not WASI/WASIX/WASM
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -100,7 +101,7 @@ reqwest = { version = "0.12.2", features = ["json"] }
 
 # Not supported on iOS an Android (only implemented in Flutter for those platforms)
 [target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
-network-interface = "1.1.1"
+network-interface = "2.0.0"
 
 # Libpnet is a dependency that is not working on iOS/Android and depends on WinPcap on windows (that we don't want to ship with the binary)
 [target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
