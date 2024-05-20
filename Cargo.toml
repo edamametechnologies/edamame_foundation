@@ -115,10 +115,6 @@ system-configuration-sys = { git = "https://github.com/edamametechnologies/syste
 [target.'cfg(target_os = "android")'.dependencies]
 android_logger = "0.13.3"
 
-# iOS
-[target.'cfg(target_os = "ios")'.dependencies]
-oslog = "0.2.0"
-
 [build-dependencies]
 
 # Conditional compilation for build dependencies
