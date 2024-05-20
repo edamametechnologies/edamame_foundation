@@ -384,15 +384,12 @@ fn init_flexi_logger(is_helper: bool) {
 
 #[cfg(all(debug_assertion, target_os = "android"))]
 pub fn init_android_logger() {
-
     match android_logger::init_once(
         android_logger::Config::default()
             .with_tag("Rust")
             .with_max_level(LevelFilter::Info),
     ) {
-        Ok(_) => (
-            println!("Android logger initialized")
-        ),
+        Ok(_) => (println!("Android logger initialized")),
         Err(e) => {
             let error = format!("Failed to initialize Android logger: {:?}", e);
             eprintln!("{}", error);
