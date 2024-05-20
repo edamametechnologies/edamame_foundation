@@ -16,9 +16,6 @@ use tokio::time::Duration;
 #[cfg(target_os = "android")]
 use android_logger;
 
-#[cfg(target_os = "ios")]
-use oslog::OsLogger;
-
 #[cfg(not(target_os = "windows"))]
 use log::LevelFilter;
 
@@ -288,7 +285,7 @@ pub fn init_sentry(url: &str, release: &str) {
     forget(sentry);
 }
 
-#[cfg(not(all(debug_assertions, any(target_os = "android", target_os = "ios"))))]
+#[cfg(not(all(debug_assertions, target_os = "android")))]
 fn init_flexi_logger(is_helper: bool) {
     println!("Initializing Flexi logger");
 
@@ -385,52 +382,30 @@ fn init_flexi_logger(is_helper: bool) {
     let _ = flexi_logger;
 }
 
-#[cfg(target_os = "android")]
+#[cfg(all(debug_assertion, target_os = "android"))]
 pub fn init_android_logger() {
-    println!("Initializing Android logger");
 
-    let _ = android_logger::init_once(
+    match android_logger::init_once(
         android_logger::Config::default()
             .with_tag("Rust")
             .with_max_level(LevelFilter::Info),
-    );
-
-    // Use Sentry for panic reporting only
-    let old_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |arg| {
-        let error = format!("Panic: {:?}", arg);
-        eprintln!("{}", error);
-        sentry::capture_message(&error, sentry::Level::Error);
-        old_hook(arg);
-    }));
-}
-
-#[cfg(target_os = "ios")]
-pub fn init_ios_logger() {
-    println!("Initializing iOS logger");
-
-    let _ = OsLogger::new("com.edamametech.edamame")
-        .level_filter(LevelFilter::Debug)
-        .category_level_filter("Settings", LevelFilter::Trace)
-        .init()
-        .unwrap();
-
-    // Use Sentry for panic reporting only
-    let old_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |arg| {
-        let error = format!("Panic: {:?}", arg);
-        eprintln!("{}", error);
-        sentry::capture_message(&error, sentry::Level::Error);
-        old_hook(arg);
-    }));
+    ) {
+        Ok(_) => (
+            println!("Android logger initialized")
+        ),
+        Err(e) => {
+            let error = format!("Failed to initialize Android logger: {:?}", e);
+            eprintln!("{}", error);
+            sentry::capture_message(&error, sentry::Level::Error);
+        }
+    }
 }
 
 pub fn init_logger(is_helper: bool) {
+    #[cfg(not(all(debug_assertions, target_os = "android")))]
+    init_flexi_logger(is_helper);
     // This is mutually exclusive with flexi_logger, use native loggers in debug mode only
     #[cfg(all(debug_assertion, target_os = "android"))]
     init_android_logger();
-    #[cfg(all(debug_assertion, target_os = "ios"))]
-    init_ios_logger();
-    #[cfg(not(all(debug_assertions, any(target_os = "android", target_os = "ios"))))]
-    init_flexi_logger(is_helper);
+    // Note that on iOS the logs will be visible in Xcode without any additional setup
 }
