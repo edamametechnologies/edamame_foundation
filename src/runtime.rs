@@ -13,8 +13,11 @@ pub fn async_init() {
         .build()
         .expect("Failed to build runtime");
 
+    println!("Runtime initialized: {:?}", rt);
+    
     let rt = Arc::new(rt);
     let mut rt_lock = RUNTIME.lock().expect("Failed to lock runtime");
+
     *rt_lock = Some(rt);
 }
 
