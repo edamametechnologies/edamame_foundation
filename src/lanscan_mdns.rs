@@ -1,5 +1,5 @@
 use lazy_static::lazy_static;
-use log::{info, trace, warn};
+use tracing::{info, trace, warn};
 use regex::Regex;
 use sorted_vec::SortedVec;
 use std::collections::HashMap;

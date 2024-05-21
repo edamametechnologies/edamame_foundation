@@ -1,5 +1,5 @@
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-use log::{info, trace};
+use tracing::{info, trace};
 
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 use ipnet::ipv4_mask_to_prefix;
