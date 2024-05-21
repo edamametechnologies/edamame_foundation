@@ -1,4 +1,4 @@
-use log::{error, info, trace, warn};
+use tracing::{error, info, trace, warn};
 use once_cell::sync::Lazy;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};

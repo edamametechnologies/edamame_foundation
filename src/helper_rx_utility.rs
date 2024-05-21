@@ -1,5 +1,5 @@
 use lazy_static::lazy_static;
-use log::{error, info, warn};
+use tracing::{error, info, warn};
 use serde_json;
 use std::error::Error;
 use std::net::IpAddr;

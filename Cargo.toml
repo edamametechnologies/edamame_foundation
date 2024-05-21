@@ -20,8 +20,8 @@ crate-type = ["staticlib", "lib"]
 [dependencies]
 
 # Sentry
-sentry = "0.32.1"
-sentry-log = "0.32.1"
+sentry = "0.32.3"
+sentry-tracing = "0.32.3"
 
 # Global statics w/ mutex
 lazy_static = "1.4.0"
@@ -43,9 +43,10 @@ uuid = { version = "1.6.1", features = [
 ]}
 
 # Logging
-log = "0.4.20"
-signal-hook = "0.3"
-flexi_logger = "0.28.0"
+tracing = "0.1.40"
+tracing-subscriber = { version = "0.3.18", features = ["env-filter", "fmt"] }
+tracing-appender = "0.2.3"
+humantime = "2.1.0"
 
 # gRPC server/client, marked as optional
 tonic = { version = "0.11.0", features = ["tls"], optional = true }
@@ -79,8 +80,6 @@ anyhow = { version = "1.0.79" }
 regex = "1.10.2"
 sorted-vec = "0.8.3"
 encoding_rs = "0.8.33"
-libc = "0.2.152"
-env_logger = "0.11.3"
 
 # Not WASI/WASIX/WASM
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -114,7 +113,7 @@ system-configuration-sys = { git = "https://github.com/edamametechnologies/syste
 
 # Android
 [target.'cfg(target_os = "android")'.dependencies]
-android_logger = "0.13.3"
+tracing-android = "0.2.0"
 
 [build-dependencies]
 
