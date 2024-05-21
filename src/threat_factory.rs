@@ -1,4 +1,4 @@
-use log::{error, info, warn};
+use tracing::{error, info, warn};
 use reqwest;
 use reqwest::Client;
 use std::error::Error;

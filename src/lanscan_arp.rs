@@ -1,4 +1,4 @@
-use log::trace;
+use tracing::trace;
 use std::net::IpAddr;
 
 // Not on Windows as it depends on Packet.lib / Packet.dll that we don't want to ship with the binary
@@ -7,7 +7,7 @@ use libarp::{client::ArpClient, interfaces::Interface};
 
 // Rather just use PS...
 #[cfg(target_os = "windows")]
-use log::error;
+use tracing::error;
 #[cfg(target_os = "windows")]
 use powershell_script::PsScriptBuilder;
 #[cfg(target_os = "windows")]
