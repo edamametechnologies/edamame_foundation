@@ -1,9 +1,9 @@
 use lazy_static::lazy_static;
-use tracing::{error, info, warn};
 use serde_json;
 use std::error::Error;
 use std::net::IpAddr;
 use std::sync::Arc;
+use tracing::{error, info, warn};
 // Tokio Mutex
 use tokio::sync::Mutex;
 
