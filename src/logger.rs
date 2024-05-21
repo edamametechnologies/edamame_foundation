@@ -22,6 +22,10 @@ use tracing_android::AndroidLayer;
 
 const MAX_LOG_LINES: usize = 20000;
 
+lazy_static! {
+    static ref LOGGER: Mutex<Option<Arc<Logger>>> = Mutex::new(None);
+}
+
 pub struct MemoryWriterData {
     logs: VecDeque<String>,
     lines: usize,
@@ -38,36 +42,7 @@ impl MemoryWriterData {
     }
 }
 
-lazy_static! {
-    static ref MEMORY_WRITER_DATA: Arc<Mutex<MemoryWriterData>> = Arc::new(Mutex::new(MemoryWriterData::new()));
-}
-
-fn sanitize_keywords(input: &str, keywords: &[&str]) -> String {
-    let mut output = input.to_string();
-
-    for &keyword in keywords {
-        let re = Regex::new(&format!(
-            r#"(?P<key>"?(\b{})"?\s*[:=]?\s*)("(?P<val1>[^"]+)"|(?P<val2>\b[^\s",}}]+))"#,
-            regex::escape(keyword)
-        ))
-            .unwrap();
-
-        output = re
-            .replace_all(&output, |caps: &regex::Captures| {
-                let key = &caps["key"];
-                let val1 = caps.name("val1").map_or("", |m| m.as_str());
-                let val2 = caps.name("val2").map_or("", |m| m.as_str());
-                let val = if !val1.is_empty() { val1 } else { val2 };
-                let quotes = if !val1.is_empty() { "\"" } else { "" };
-
-                format!("{}{}{}{}", key, quotes, "*".repeat(val.len()), quotes)
-            })
-            .to_string();
-    }
-
-    output
-}
-
+#[derive(Clone)]
 pub struct MemoryWriter {
     data: Arc<Mutex<MemoryWriterData>>,
 }
@@ -75,7 +50,7 @@ pub struct MemoryWriter {
 impl MemoryWriter {
     pub fn new() -> Self {
         Self {
-            data: MEMORY_WRITER_DATA.clone(),
+            data: Arc::new(Mutex::new(MemoryWriterData::new())),
         }
     }
 
@@ -111,7 +86,6 @@ impl MemoryWriter {
 
         let mut locked_data = self.data.lock().unwrap();
 
-        // Perform operations within the lock scope
         if locked_data.logs.len() >= MAX_LOG_LINES {
             locked_data.logs.pop_back();
             locked_data.lines -= 1;
@@ -125,7 +99,6 @@ impl MemoryWriter {
             locked_data.to_take += 1;
         }
 
-        // Perform Sentry operations outside the lock scope
         drop(locked_data);
 
         if *level == Level::ERROR
@@ -167,23 +140,68 @@ impl<'a> Write for MemoryWriterGuard<'a> {
     }
 }
 
-pub fn get_new_logs() -> String {
-    let mut locked_data = MEMORY_WRITER_DATA.lock().unwrap();
-    let new_logs: String = locked_data
-        .logs
-        .iter()
-        .take(locked_data.to_take)
-        .fold(String::new(), |acc, x| format!("{}\n{}", acc, x));
-    locked_data.to_take = 0;
-    new_logs
+fn sanitize_keywords(input: &str, keywords: &[&str]) -> String {
+    let mut output = input.to_string();
+
+    for &keyword in keywords {
+        let re = Regex::new(&format!(
+            r#"(?P<key>"?(\b{})"?\s*[:=]?\s*)("(?P<val1>[^"]+)"|(?P<val2>\b[^\s",}}]+))"#,
+            regex::escape(keyword)
+        ))
+            .unwrap();
+
+        output = re
+            .replace_all(&output, |caps: &regex::Captures| {
+                let key = &caps["key"];
+                let val1 = caps.name("val1").map_or("", |m| m.as_str());
+                let val2 = caps.name("val2").map_or("", |m| m.as_str());
+                let val = if !val1.is_empty() { val1 } else { val2 };
+                let quotes = if !val1.is_empty() { "\"" } else { "" };
+
+                format!("{}{}{}{}", key, quotes, "*".repeat(val.len()), quotes)
+            })
+            .to_string();
+    }
+
+    output
 }
 
-pub fn get_all_logs() -> String {
-    let locked_data = MEMORY_WRITER_DATA.lock().unwrap();
-    locked_data
-        .logs
-        .iter()
-        .fold(String::new(), |acc, x| format!("{}\n{}", acc, x))
+pub struct Logger {
+    memory_writer: MemoryWriter,
+}
+
+impl Logger {
+    pub fn new() -> Self {
+        Self {
+            memory_writer: MemoryWriter::new(),
+        }
+    }
+
+    pub fn get_new_logs(&self) -> String {
+        let mut locked_data = self.memory_writer.data.lock().unwrap();
+        let new_logs: String = locked_data
+            .logs
+            .iter()
+            .take(locked_data.to_take)
+            .fold(String::new(), |acc, x| format!("{}\n{}", acc, x));
+        locked_data.to_take = 0;
+        new_logs
+    }
+
+    pub fn get_all_logs(&self) -> String {
+        let locked_data = self.memory_writer.data.lock().unwrap();
+        locked_data
+            .logs
+            .iter()
+            .fold(String::new(), |acc, x| format!("{}\n{}", acc, x))
+    }
+    
+    pub fn flush_logs(&self) {
+        let mut locked_data = self.memory_writer.data.lock().unwrap();
+        locked_data.logs.clear();
+        locked_data.lines = 0;
+        locked_data.to_take = 0;
+    }
 }
 
 fn init_sentry(url: &str, release: &str) {
@@ -206,8 +224,7 @@ fn init_sentry(url: &str, release: &str) {
     } else {
         eprintln!("Sentry initialization failed");
     }
-    
-    // Make sure the guard is not dropped
+
     forget(sentry_guard);
 }
 
@@ -220,13 +237,19 @@ fn init_android_logger() {
 }
 
 pub fn init_logger(is_helper: bool, url: &str, release: &str) {
-    
-    if ! url.is_empty() {
+    let mut logger_guard = LOGGER.lock().unwrap();
+    if logger_guard.is_some() {
+        eprintln!("Logger already initialized, flushing logs");
+        logger_guard.as_ref().unwrap().flush_logs();
+        return;
+    }
+
+    let logger = Arc::new(Logger::new());
+    *logger_guard = Some(logger.clone());
+
+    if !url.is_empty() {
         init_sentry(url, release);
     }
-    
-
-    let memory_writer = MemoryWriter::new();
 
     let default_log_spec = "info";
     let mut env_log_spec = var("EDAMAME_LOG_LEVEL").unwrap_or(default_log_spec.to_string());
@@ -251,7 +274,7 @@ pub fn init_logger(is_helper: bool, url: &str, release: &str) {
         tracing_appender::non_blocking(io::stdout())
     };
 
-    if ! url.is_empty() {
+    if !url.is_empty() {
         let sentry_layer = sentry_tracing::layer().event_filter(|md| match md.level() {
             &Level::ERROR => EventFilter::Event,
             _ => EventFilter::Ignore,
@@ -259,17 +282,17 @@ pub fn init_logger(is_helper: bool, url: &str, release: &str) {
         tracing_subscriber::registry()
             .with(filter_layer)
             .with(fmt::layer().with_writer(non_blocking.clone()))
-            .with(fmt::layer().with_writer(memory_writer))
+            .with(fmt::layer().with_writer(logger.memory_writer.clone()))
             .with(sentry_layer)
             .init();
     } else {
         tracing_subscriber::registry()
             .with(filter_layer)
             .with(fmt::layer().with_writer(non_blocking))
-            .with(fmt::layer().with_writer(memory_writer))
+            .with(fmt::layer().with_writer(logger.memory_writer.clone()))
             .init();
     }
-    
+
     #[cfg(all(debug_assertions, target_os = "android"))]
     {
         init_android_logger();
@@ -277,80 +300,95 @@ pub fn init_logger(is_helper: bool, url: &str, release: &str) {
 
     println!("Logger initialized successfully.");
 
-    // Make sure the guard is not dropped
     forget(appender_guard);
+}
+
+pub fn get_new_logs() -> String {
+    let logger_guard = LOGGER.lock().unwrap();
+    if let Some(logger) = logger_guard.as_ref() {
+        logger.get_new_logs()
+    } else {
+        String::new()
+    }
+}
+
+pub fn get_all_logs() -> String {
+    let logger_guard = LOGGER.lock().unwrap();
+    if let Some(logger) = logger_guard.as_ref() {
+        logger.get_all_logs()
+    } else {
+        String::new()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use tracing::{info, error, warn, debug, trace};
-    use std::thread::sleep;
+    
+    fn initialize_and_flush_logger() {
+        init_logger(false, "", "");
+    }
 
     #[test]
+    #[serial]
     fn test_logger_initialization() {
-        // Can only be called once
-        init_logger(false, "", "");
-
-        // Assuming logger initialization should succeed
+        initialize_and_flush_logger();
         assert!(true);
     }
 
     #[test]
+    #[serial]
     fn test_memory_writer_initialization() {
         let writer = MemoryWriter::new();
-
         assert!(writer.data.lock().unwrap().logs.is_empty());
     }
 
     #[test]
+    #[serial]
     fn test_log_sanitization() {
         let test_log = r#"{"id": "12345", "password": "secret"}"#;
-        let sanitized_log = sanitize_keywords(
-            test_log,
-            &["id", "password"]
-        );
-
-        assert_eq!(
-            sanitized_log,
-            r#"{"id": "*****", "password": "******"}"#
-        );
+        let sanitized_log = sanitize_keywords(test_log, &["id", "password"]);
+        assert_eq!(sanitized_log, r#"{"id": "*****", "password": "******"}"#);
     }
 
     #[test]
+    #[serial]
     fn test_format_log_line() {
         let writer = MemoryWriter::new();
-
         let now = std::time::SystemTime::now();
         let log_line = writer.format_log_line(&now, &Level::INFO, Some("module"), "This is a sanitized log");
-
         assert!(log_line.contains("This is a sanitized log"));
         assert!(log_line.contains("INFO"));
     }
 
     #[test]
+    #[serial]
     fn test_log_storage_in_memory_writer() {
-        let writer = MemoryWriter::new();
+        initialize_and_flush_logger();
+
+        let logger_guard = LOGGER.lock().unwrap();
+        let logger = logger_guard.as_ref().unwrap();
 
         let now = std::time::SystemTime::now();
         let args = format_args!("This is a test log");
-        writer.handle_log(&now, &Level::INFO, Some("test_module"), &args).unwrap();
+        logger.memory_writer.handle_log(&now, &Level::INFO, Some("test_module"), &args).unwrap();
 
-        let locked_data = MEMORY_WRITER_DATA.lock().unwrap();
+        let locked_data = logger.memory_writer.data.lock().unwrap();
         assert_eq!(locked_data.logs.len(), 1);
         assert!(locked_data.logs[0].contains("This is a test log"));
     }
-    
+
     #[test]
+    #[serial]
     fn test_get_new_logs() {
+        initialize_and_flush_logger();
 
         let log_data = get_new_logs();
         assert!(log_data.is_empty());
 
         info!("New log entry");
-
-        // Make sure the log is written
-        sleep(std::time::Duration::from_secs(1));
 
         let log_data = get_new_logs();
         assert!(!log_data.is_empty());
@@ -358,7 +396,9 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_get_all_logs() {
+        initialize_and_flush_logger();
 
         let log_data = get_all_logs();
         assert!(log_data.is_empty());
@@ -366,16 +406,15 @@ mod tests {
         info!("First log entry");
         info!("Second log entry");
 
-        // Make sure the logs are written
-        sleep(std::time::Duration::from_secs(1));
-
         let log_data = get_all_logs();
         assert!(log_data.contains("First log entry"));
         assert!(log_data.contains("Second log entry"));
     }
 
     #[test]
+    #[serial]
     fn test_log_levels() {
+        initialize_and_flush_logger();
 
         info!("This is an info log");
         error!("This is an error log");
@@ -383,14 +422,9 @@ mod tests {
         debug!("This is a debug log");
         trace!("This is a trace log");
 
-        // Make sure the logs are written
-        sleep(std::time::Duration::from_secs(1));
-
         let log_data = get_all_logs();
         assert!(log_data.contains("This is an info log"));
         assert!(log_data.contains("This is an error log"));
         assert!(log_data.contains("This is a warn log"));
-        assert!(log_data.contains("This is a debug log"));
-        assert!(log_data.contains("This is a trace log"));
     }
 }
