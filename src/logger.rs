@@ -1,12 +1,7 @@
 use fmt::MakeWriter;
 use lazy_static::lazy_static;
-use sentry_tracing::EventFilter;
-use tracing::Level;
-use tracing_subscriber::fmt;
-use tracing_subscriber::prelude::*;
-use tracing_subscriber::filter::EnvFilter;
-use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use regex::Regex;
+use sentry_tracing::EventFilter;
 use std::{
     collections::VecDeque,
     env::{current_exe, var},
@@ -16,6 +11,11 @@ use std::{
     path::PathBuf,
     sync::{Arc, Mutex},
 };
+use tracing::Level;
+use tracing_appender::rolling::{RollingFileAppender, Rotation};
+use tracing_subscriber::filter::EnvFilter;
+use tracing_subscriber::fmt;
+use tracing_subscriber::prelude::*;
 
 #[cfg(target_os = "android")]
 use tracing_android::AndroidLayer;
@@ -79,7 +79,15 @@ impl MemoryWriter {
     ) -> io::Result<()> {
         let log_line = args.to_string();
         let keywords = vec![
-            "id", "uuid", "pin", "device", "password", "key", "Device ID", "device_id", "code",
+            "id",
+            "uuid",
+            "pin",
+            "device",
+            "password",
+            "key",
+            "Device ID",
+            "device_id",
+            "code",
         ];
         let log_line_sanitized = sanitize_keywords(&log_line, &keywords);
         let log_line_formatted = self.format_log_line(now, level, module_path, &log_line_sanitized);
@@ -103,10 +111,14 @@ impl MemoryWriter {
 
         if *level == Level::ERROR
             && (!module_path.unwrap_or("").starts_with("libp2p")
-            || (!log_line_sanitized.contains("Socket is not connected")))
+                || (!log_line_sanitized.contains("Socket is not connected")))
         {
-            let log_line_formatted =
-                format!("{} [{}] {}\n", level, module_path.unwrap_or("unknown"), log_line_sanitized);
+            let log_line_formatted = format!(
+                "{} [{}] {}\n",
+                level,
+                module_path.unwrap_or("unknown"),
+                log_line_sanitized
+            );
             sentry::capture_message(&log_line_formatted, sentry::Level::Error);
         }
 
@@ -131,7 +143,8 @@ impl<'a> Write for MemoryWriterGuard<'a> {
         let log = String::from_utf8_lossy(buf).to_string();
         let now = std::time::SystemTime::now();
         let level = Level::INFO;
-        self.writer.handle_log(&now, &level, None, &format_args!("{}", log))?;
+        self.writer
+            .handle_log(&now, &level, None, &format_args!("{}", log))?;
         Ok(buf.len())
     }
 
@@ -148,7 +161,7 @@ fn sanitize_keywords(input: &str, keywords: &[&str]) -> String {
             r#"(?P<key>"?(\b{})"?\s*[:=]?\s*)("(?P<val1>[^"]+)"|(?P<val2>\b[^\s",}}]+))"#,
             regex::escape(keyword)
         ))
-            .unwrap();
+        .unwrap();
 
         output = re
             .replace_all(&output, |caps: &regex::Captures| {
@@ -195,7 +208,7 @@ impl Logger {
             .iter()
             .fold(String::new(), |acc, x| format!("{}\n{}", acc, x))
     }
-    
+
     pub fn flush_logs(&self) {
         let mut locked_data = self.memory_writer.data.lock().unwrap();
         locked_data.logs.clear();
@@ -231,9 +244,7 @@ fn init_sentry(url: &str, release: &str) {
 #[cfg(all(debug_assertions, target_os = "android"))]
 fn init_android_logger() {
     let android_layer = AndroidLayer::new();
-    tracing_subscriber::registry()
-        .with(android_layer)
-        .init();
+    tracing_subscriber::registry().with(android_layer).init();
 }
 
 pub fn init_logger(is_helper: bool, url: &str, release: &str) {
@@ -244,8 +255,8 @@ pub fn init_logger(is_helper: bool, url: &str, release: &str) {
         return;
     }
 
-    let logger = Arc::new(Logger::new());
-    *logger_guard = Some(logger.clone());
+    *logger_guard = Some(Arc::new(Logger::new()));
+    let logger = logger_guard.as_ref().unwrap();
 
     if !url.is_empty() {
         init_sentry(url, release);
@@ -260,14 +271,21 @@ pub fn init_logger(is_helper: bool, url: &str, release: &str) {
     let (non_blocking, appender_guard) = if cfg!(target_os = "windows") {
         let log_dir = if is_helper {
             let exe_path: PathBuf = current_exe().expect("Failed to get current exe");
-            exe_path.parent().expect("Failed to get parent of current exe").to_path_buf()
+            exe_path
+                .parent()
+                .expect("Failed to get parent of current exe")
+                .to_path_buf()
         } else {
             let appdata = var("APPDATA").expect("Failed to get APPDATA");
             let appdata_path = format!("{}/com.edamametech/EDAMAME Security", appdata);
             create_dir_all(&appdata_path).expect("Failed to create directory");
             PathBuf::from(appdata_path)
         };
-        let basename = if is_helper { "edamame_helper" } else { "edamame" };
+        let basename = if is_helper {
+            "edamame_helper"
+        } else {
+            "edamame"
+        };
         let file_appender = RollingFileAppender::new(Rotation::NEVER, log_dir, basename);
         tracing_appender::non_blocking(file_appender)
     } else {
@@ -325,8 +343,8 @@ pub fn get_all_logs() -> String {
 mod tests {
     use super::*;
     use serial_test::serial;
-    use tracing::{info, error, warn, debug, trace};
-    
+    use tracing::{debug, error, info, trace, warn};
+
     fn initialize_and_flush_logger() {
         init_logger(false, "", "");
     }
@@ -358,7 +376,12 @@ mod tests {
     fn test_format_log_line() {
         let writer = MemoryWriter::new();
         let now = std::time::SystemTime::now();
-        let log_line = writer.format_log_line(&now, &Level::INFO, Some("module"), "This is a sanitized log");
+        let log_line = writer.format_log_line(
+            &now,
+            &Level::INFO,
+            Some("module"),
+            "This is a sanitized log",
+        );
         assert!(log_line.contains("This is a sanitized log"));
         assert!(log_line.contains("INFO"));
     }
@@ -373,7 +396,10 @@ mod tests {
 
         let now = std::time::SystemTime::now();
         let args = format_args!("This is a test log");
-        logger.memory_writer.handle_log(&now, &Level::INFO, Some("test_module"), &args).unwrap();
+        logger
+            .memory_writer
+            .handle_log(&now, &Level::INFO, Some("test_module"), &args)
+            .unwrap();
 
         let locked_data = logger.memory_writer.data.lock().unwrap();
         assert_eq!(locked_data.logs.len(), 1);
