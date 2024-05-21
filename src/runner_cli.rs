@@ -1,5 +1,5 @@
 use crate::runtime::async_spawn_blocking;
-use log::{error, trace};
+use tracing::{error, trace};
 use run_script::ScriptOptions;
 use std::error::Error;
 

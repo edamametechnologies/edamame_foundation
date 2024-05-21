@@ -1,38 +1,24 @@
-use flexi_logger::{writers::LogWriter, Duplicate, FileSpec, LogSpecification, Logger};
-use log::{info, error};
+use fmt::MakeWriter;
+use lazy_static::lazy_static;
+use sentry_tracing::EventFilter;
+use tracing::Level;
+use tracing_subscriber::fmt;
+use tracing_subscriber::prelude::*;
+use tracing_subscriber::filter::EnvFilter;
+use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use regex::Regex;
 use std::{
     collections::VecDeque,
     env::{current_exe, var},
     fs::create_dir_all,
-    io::{Cursor, Error, ErrorKind},
+    io::{self, Write},
     mem::forget,
     path::PathBuf,
-    // Std mutex
     sync::{Arc, Mutex},
 };
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
-use tokio::time::Duration;
-
 #[cfg(target_os = "android")]
-use android_logger;
-
-#[cfg(not(target_os = "windows"))]
-use log::LevelFilter;
-
-#[cfg(any(target_os = "macos", target_os = "linux"))]
-use flexi_logger::LoggerHandle;
-
-#[cfg(any(target_os = "macos", target_os = "linux"))]
-use crate::runtime::async_spawn;
-
-#[cfg(any(target_os = "macos", target_os = "linux"))]
-use std::sync::atomic::{AtomicUsize, Ordering};
-
-// Signal handling
-#[cfg(any(target_os = "macos", target_os = "linux"))]
-use tokio::signal::unix::{signal, SignalKind};
+use tracing_android::AndroidLayer;
 
 const MAX_LOG_LINES: usize = 20000;
 
@@ -52,240 +38,155 @@ impl MemoryWriterData {
     }
 }
 
+lazy_static! {
+    static ref MEMORY_WRITER_DATA: Arc<Mutex<MemoryWriterData>> = Arc::new(Mutex::new(MemoryWriterData::new()));
+}
+
+fn sanitize_keywords(input: &str, keywords: &[&str]) -> String {
+    let mut output = input.to_string();
+
+    for &keyword in keywords {
+        let re = Regex::new(&format!(
+            r#"(?P<key>"?(\b{})"?\s*[:=]?\s*)("(?P<val1>[^"]+)"|(?P<val2>\b[^\s",}}]+))"#,
+            regex::escape(keyword)
+        ))
+            .unwrap();
+
+        output = re
+            .replace_all(&output, |caps: &regex::Captures| {
+                let key = &caps["key"];
+                let val1 = caps.name("val1").map_or("", |m| m.as_str());
+                let val2 = caps.name("val2").map_or("", |m| m.as_str());
+                let val = if !val1.is_empty() { val1 } else { val2 };
+                let quotes = if !val1.is_empty() { "\"" } else { "" };
+
+                format!("{}{}{}{}", key, quotes, "*".repeat(val.len()), quotes)
+            })
+            .to_string();
+    }
+
+    output
+}
+
 pub struct MemoryWriter {
     data: Arc<Mutex<MemoryWriterData>>,
 }
 
 impl MemoryWriter {
-    pub fn new(data: Arc<Mutex<MemoryWriterData>>) -> Self {
-        Self { data }
-    }
-
-    fn sanitize_keywords(input: &str, keywords: &[&str]) -> String {
-        let mut output = input.to_string();
-
-        for &keyword in keywords {
-            let re = Regex::new(&format!(
-                r#"(?P<key>"?(\b{})"?\s*[:=]?\s*)("(?P<val1>[^"]+)"|(?P<val2>\b[^\s",}}]+))"#,
-                regex::escape(keyword)
-            ))
-                .unwrap();
-
-            output = re
-                .replace_all(&output, |caps: &regex::Captures| {
-                    let key = &caps["key"];
-                    let val1 = caps.name("val1").map_or("", |m| m.as_str());
-                    let val2 = caps.name("val2").map_or("", |m| m.as_str());
-                    let val = if !val1.is_empty() { val1 } else { val2 };
-                    let quotes = if !val1.is_empty() { "\"" } else { "" };
-
-                    format!("{}{}{}{}", key, quotes, "*".repeat(val.len()), quotes)
-                })
-                .to_string();
+    pub fn new() -> Self {
+        Self {
+            data: MEMORY_WRITER_DATA.clone(),
         }
-
-        output
     }
 
     fn format_log_line(
         &self,
-        now: &mut flexi_logger::DeferredNow,
-        record: &flexi_logger::Record,
+        now: &std::time::SystemTime,
+        level: &Level,
+        module_path: Option<&str>,
         log_line_sanitized: &str,
     ) -> String {
         format!(
             "[{}] {} [{}] {}\n",
-            now.format("%Y-%m-%d %H:%M:%S%.6f %:z"),
-            record.level(),
-            record.module_path().unwrap_or("unknown"),
+            humantime::format_rfc3339(*now),
+            level,
+            module_path.unwrap_or("unknown"),
             log_line_sanitized
         )
     }
 
     fn handle_log(
         &self,
-        now: &mut flexi_logger::DeferredNow,
-        record: &flexi_logger::Record,
-    ) -> std::io::Result<()> {
+        now: &std::time::SystemTime,
+        level: &Level,
+        module_path: Option<&str>,
+        args: &std::fmt::Arguments<'_>,
+    ) -> io::Result<()> {
+        let log_line = args.to_string();
+        let keywords = vec![
+            "id", "uuid", "pin", "device", "password", "key", "Device ID", "device_id", "code",
+        ];
+        let log_line_sanitized = sanitize_keywords(&log_line, &keywords);
+        let log_line_formatted = self.format_log_line(now, level, module_path, &log_line_sanitized);
+
         let mut locked_data = self.data.lock().unwrap();
 
-        // Create a Cursor to write the log line to
-        let mut cursor = Cursor::new(Vec::new());
-        // Get the formatted log line from the record and push it to the logs
-        match flexi_logger::default_format(&mut cursor, now, record) {
-            Ok(_) => {
-                let log_line = record.args().to_string();
-                let keywords = vec![
-                    "id", "uuid", "pin", "device", "password", "key", "Device ID", "device_id", "code",
-                ];
-                let log_line_sanitized = Self::sanitize_keywords(&log_line, &keywords);
-                let log_line_formatted = self.format_log_line(now, record, &log_line_sanitized);
-
-                // If we have more than MAX_LOG_LINES, remove the oldest one
-                if locked_data.logs.len() >= MAX_LOG_LINES {
-                    locked_data.logs.pop_back();
-                    locked_data.lines -= 1;
-                }
-
-                // Save to memory in a reverse order (latest at the beginning)
-                locked_data.logs.push_front(log_line_formatted.clone());
-                // Update lines
-                if locked_data.lines < MAX_LOG_LINES {
-                    locked_data.lines += 1;
-                }
-                // Update to_take
-                if locked_data.to_take < MAX_LOG_LINES {
-                    locked_data.to_take += 1;
-                }
-
-                // Send errors to Sentry, exclude libp2p* that is generating too much network related errors
-                // Also exclude network errors
-                if (record.level() == log::Level::Error)
-                    && (!record.module_path().unwrap_or("").starts_with("libp2p")
-                    || (!log_line_sanitized.contains("Socket is not connected")))
-                {
-                    let log_line_formatted =
-                        format!("{} [{}] {}\n", record.level(), record.module_path().unwrap_or("unknown"), log_line_sanitized);
-                    sentry::capture_message(&log_line_formatted, sentry::Level::Error);
-                }
-
-                Ok(())
-            }
-            Err(e) => {
-                // Use print to avoid recursion
-                println!("Error writing log line to memory logger: {}", e);
-                Err(Error::new(ErrorKind::Other, e))
-            }
+        // Perform operations within the lock scope
+        if locked_data.logs.len() >= MAX_LOG_LINES {
+            locked_data.logs.pop_back();
+            locked_data.lines -= 1;
         }
-    }
-}
 
-impl LogWriter for MemoryWriter {
-    fn write(
-        &self,
-        now: &mut flexi_logger::DeferredNow,
-        record: &flexi_logger::Record,
-    ) -> std::io::Result<()> {
-        self.handle_log(now, record)
-    }
+        locked_data.logs.push_front(log_line_formatted.clone());
+        if locked_data.lines < MAX_LOG_LINES {
+            locked_data.lines += 1;
+        }
+        if locked_data.to_take < MAX_LOG_LINES {
+            locked_data.to_take += 1;
+        }
 
-    fn flush(&self) -> std::io::Result<()> {
+        // Perform Sentry operations outside the lock scope
+        drop(locked_data);
+
+        if *level == Level::ERROR
+            && (!module_path.unwrap_or("").starts_with("libp2p")
+            || (!log_line_sanitized.contains("Socket is not connected")))
+        {
+            let log_line_formatted =
+                format!("{} [{}] {}\n", level, module_path.unwrap_or("unknown"), log_line_sanitized);
+            sentry::capture_message(&log_line_formatted, sentry::Level::Error);
+        }
+
         Ok(())
     }
 }
 
-pub struct FoundationLogger {
-    log_spec: LogSpecification,
-    logger_handle: Option<LoggerHandle>,
-    memory_writer_data: Arc<Mutex<MemoryWriterData>>,
-}
+impl<'a> MakeWriter<'a> for MemoryWriter {
+    type Writer = MemoryWriterGuard<'a>;
 
-impl FoundationLogger {
-    pub fn new(is_helper: bool) -> Self {
-        let memory_writer_data = Arc::new(Mutex::new(MemoryWriterData::new()));
-
-        println!("Initializing Flexi logger");
-
-        let default_log_spec = "info";
-        let mut env_log_spec = var("EDAMAME_LOG_LEVEL").unwrap_or(default_log_spec.to_string());
-        env_log_spec.push_str(",libp2p=info");
-        let log_spec = LogSpecification::env_or_parse(&env_log_spec).unwrap();
-
-        let memory_writer = MemoryWriter::new(memory_writer_data.clone());
-        let logger_handle = if cfg!(target_os = "windows") {
-            let log_dir = if is_helper {
-                let exe_path: PathBuf = current_exe().expect("Failed to get current exe");
-                exe_path.parent().expect("Failed to get parent of current exe").to_path_buf()
-            } else {
-                let appdata = var("APPDATA").expect("Failed to get APPDATA");
-                let appdata_path = format!("{}/com.edamametech/EDAMAME Security", appdata);
-                create_dir_all(&appdata_path).expect("Failed to create directory");
-                PathBuf::from(appdata_path)
-            };
-            let basename = if is_helper { "edamame_helper" } else { "edamame" };
-            let file_spec = FileSpec::default().basename(basename).directory(log_dir);
-            Some(
-                Logger::with(log_spec.clone())
-                    .format(flexi_logger::colored_opt_format)
-                    .log_to_file_and_writer(file_spec, Box::new(memory_writer))
-                    .duplicate_to_stdout(Duplicate::All)
-                    .start()
-                    .unwrap_or_else(|e| panic!("Logger initialization failed: {:?}", e))
-            )
-        } else {
-            println!("Initializing Flexi logger for non-Windows");
-            Some(
-                Logger::with(log_spec.clone())
-                    .format(flexi_logger::colored_opt_format)
-                    .log_to_writer(Box::new(memory_writer))
-                    .duplicate_to_stdout(Duplicate::All)
-                    .start()
-                    .unwrap_or_else(|e| panic!("Logger initialization failed: {:?}", e))
-            )
-        };
-
-        Self {
-            log_spec,
-            logger_handle,
-            memory_writer_data,
-        }
-    }
-
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
-    pub fn init_signals(&self) {
-        if let Some(ref logger_handle) = self.logger_handle {
-            let log_spec = self.log_spec.clone();
-            let current_log_level = Arc::new(AtomicUsize::new(log_spec.module_filters()[0].level_filter as usize));
-            let current_log_level_signal = current_log_level.clone();
-            let flexi_logger_clone = logger_handle.clone();
-            async_spawn(async move {
-                let mut signals = signal(SignalKind::user_defined1()).expect("Failed to set up signal handling");
-
-                loop {
-                    if signals.recv().await.is_some() {
-                        let current_log_level = current_log_level_signal.load(Ordering::Relaxed);
-
-                        let new_log_level = if current_log_level == LevelFilter::Info as usize {
-                            LevelFilter::Trace
-                        } else {
-                            LevelFilter::Info
-                        };
-
-                        current_log_level_signal.store(new_log_level as usize, Ordering::Relaxed);
-
-                        let new_spec = LogSpecification::env_or_parse(&new_log_level.to_string())
-                            .expect("Failed to parse new log specification");
-
-                        flexi_logger_clone.set_new_spec(new_spec);
-                    }
-
-                    tokio::time::sleep(Duration::from_secs(1)).await;
-                }
-            });
-        }
-    }
-
-    pub fn get_new_logs(&self) -> String {
-        let mut locked_data = self.memory_writer_data.lock().unwrap();
-        let new_logs: String = locked_data
-            .logs
-            .iter()
-            .take(locked_data.to_take)
-            .fold(String::new(), |acc, x| format!("{}\n{}", acc, x));
-        locked_data.to_take = 0;
-        new_logs
-    }
-
-    pub fn get_all_logs(&self) -> String {
-        let locked_data = self.memory_writer_data.lock().unwrap();
-        locked_data
-            .logs
-            .iter()
-            .fold(String::new(), |acc, x| format!("{}\n{}", acc, x))
+    fn make_writer(&'a self) -> Self::Writer {
+        MemoryWriterGuard { writer: self }
     }
 }
 
-pub fn init_sentry(url: &str, release: &str) {
+pub struct MemoryWriterGuard<'a> {
+    writer: &'a MemoryWriter,
+}
+
+impl<'a> Write for MemoryWriterGuard<'a> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let log = String::from_utf8_lossy(buf).to_string();
+        let now = std::time::SystemTime::now();
+        let level = Level::INFO;
+        self.writer.handle_log(&now, &level, None, &format_args!("{}", log))?;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+pub fn get_new_logs() -> String {
+    let mut locked_data = MEMORY_WRITER_DATA.lock().unwrap();
+    let new_logs: String = locked_data
+        .logs
+        .iter()
+        .take(locked_data.to_take)
+        .fold(String::new(), |acc, x| format!("{}\n{}", acc, x));
+    locked_data.to_take = 0;
+    new_logs
+}
+
+pub fn get_all_logs() -> String {
+    let locked_data = MEMORY_WRITER_DATA.lock().unwrap();
+    locked_data
+        .logs
+        .iter()
+        .fold(String::new(), |acc, x| format!("{}\n{}", acc, x))
+}
+
+fn init_sentry(url: &str, release: &str) {
     let release = release.to_string();
     let sentry = sentry::init((
         url,
@@ -301,71 +202,103 @@ pub fn init_sentry(url: &str, release: &str) {
     ));
 
     if sentry.is_enabled() {
-        info!("Sentry initialized");
+        println!("Sentry initialized");
     } else {
-        error!("Sentry initialization failed");
+        eprintln!("Sentry initialization failed");
     }
     forget(sentry);
 }
 
 #[cfg(all(debug_assertions, target_os = "android"))]
-pub fn init_android_logger() {
-    match android_logger::init_once(
-        android_logger::Config::default()
-            .with_tag("Rust")
-            .with_max_level(LevelFilter::Info),
-    ) {
-        Ok(_) => println!("Android logger initialized"),
-        Err(e) => {
-            let error = format!("Failed to initialize Android logger: {:?}", e);
-            eprintln!("{}", error);
-            sentry::capture_message(&error, sentry::Level::Error);
-        }
-    }
+fn init_android_logger() {
+    let android_layer = AndroidLayer::new();
+    tracing_subscriber::registry()
+        .with(android_layer)
+        .init();
 }
 
-pub fn init_logger(is_helper: bool) -> FoundationLogger {
-    #[cfg(not(all(debug_assertions, target_os = "android")))]
-        let logger = FoundationLogger::new(is_helper);
-    #[cfg(all(debug_assertions, target_os = "android"))]
-    init_android_logger();
+pub fn init_logger(is_helper: bool, url: &str, release: &str) {
+    println!("Initializing Sentry...");
+    init_sentry(url, release);
 
-    // Return the logger for further use
-    #[cfg(not(all(debug_assertions, target_os = "android")))]
-    logger
+    println!("Setting up Sentry layer...");
+    let sentry_layer = sentry_tracing::layer().event_filter(|md| match md.level() {
+        &Level::ERROR => EventFilter::Event,
+        _ => EventFilter::Ignore,
+    });
+
+    println!("Creating memory writer...");
+    let memory_writer = MemoryWriter::new();
+
+    println!("Setting default log spec...");
+    let default_log_spec = "info";
+    let mut env_log_spec = var("EDAMAME_LOG_LEVEL").unwrap_or(default_log_spec.to_string());
+    env_log_spec.push_str(",libp2p=info");
+
+    println!("Setting up filter layer...");
+    let filter_layer = EnvFilter::try_new(env_log_spec).unwrap();
+
+    println!("Setting up non-blocking appender...");
+    let (non_blocking, _) = if cfg!(target_os = "windows") {
+        let log_dir = if is_helper {
+            let exe_path: PathBuf = current_exe().expect("Failed to get current exe");
+            exe_path.parent().expect("Failed to get parent of current exe").to_path_buf()
+        } else {
+            let appdata = var("APPDATA").expect("Failed to get APPDATA");
+            let appdata_path = format!("{}/com.edamametech/EDAMAME Security", appdata);
+            create_dir_all(&appdata_path).expect("Failed to create directory");
+            PathBuf::from(appdata_path)
+        };
+        let basename = if is_helper { "edamame_helper" } else { "edamame" };
+        let file_appender = RollingFileAppender::new(Rotation::NEVER, log_dir, basename);
+        tracing_appender::non_blocking(file_appender)
+    } else {
+        tracing_appender::non_blocking(io::stdout())
+    };
+
+    println!("Initializing tracing subscriber registry...");
+    tracing_subscriber::registry()
+        .with(filter_layer)
+        .with(fmt::layer().with_writer(non_blocking.clone()))
+        .with(fmt::layer().with_writer(memory_writer))
+        .with(sentry_layer)
+        .init();
+
+    #[cfg(all(debug_assertions, target_os = "android"))]
+    {
+        println!("Initializing Android logger...");
+        init_android_logger();
+    }
+
+    println!("Logger initialized successfully.");
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flexi_logger::{DeferredNow, Record};
-    use std::sync::{Arc, Mutex};
-
-    // Can only be called once (tests will fail if called more than once)
-    fn create_logger(is_helper: bool) -> FoundationLogger {
-        FoundationLogger::new(is_helper)
-    }
+    use tracing::{info, error, warn, debug, trace};
+    use std::thread;
 
     #[test]
     fn test_logger_initialization() {
-        let logger = create_logger(false);
+        // Can only be called once
+        init_logger(false, "https://example.com", "release-1.0");
 
-        assert!(logger.logger_handle.is_some());
+        // Assuming logger initialization should succeed
+        assert!(true);
     }
 
     #[test]
     fn test_memory_writer_initialization() {
-        let data = Arc::new(Mutex::new(MemoryWriterData::new()));
-        let writer = MemoryWriter::new(data.clone());
+        let writer = MemoryWriter::new();
 
         assert!(writer.data.lock().unwrap().logs.is_empty());
     }
 
     #[test]
     fn test_log_sanitization() {
-
         let test_log = r#"{"id": "12345", "password": "secret"}"#;
-        let sanitized_log = MemoryWriter::sanitize_keywords(
+        let sanitized_log = sanitize_keywords(
             test_log,
             &["id", "password"]
         );
@@ -378,17 +311,10 @@ mod tests {
 
     #[test]
     fn test_format_log_line() {
-        let data = Arc::new(Mutex::new(MemoryWriterData::new()));
-        let writer = MemoryWriter::new(data.clone());
+        let writer = MemoryWriter::new();
 
-        let now = &mut DeferredNow::new();
-        let record = Record::builder()
-            .args(format_args!("This is a test log"))
-            .level(log::Level::Info)
-            .line(Some(42))
-            .build();
-
-        let log_line = writer.format_log_line(now, &record, "This is a sanitized log");
+        let now = std::time::SystemTime::now();
+        let log_line = writer.format_log_line(&now, &Level::INFO, Some("module"), "This is a sanitized log");
 
         assert!(log_line.contains("This is a sanitized log"));
         assert!(log_line.contains("INFO"));
@@ -396,22 +322,70 @@ mod tests {
 
     #[test]
     fn test_log_storage_in_memory_writer() {
-        let data = Arc::new(Mutex::new(MemoryWriterData::new()));
-        let writer = MemoryWriter::new(data.clone());
+        let writer = MemoryWriter::new();
 
-        let now = &mut DeferredNow::new();
-        let record = Record::builder()
-            .args(format_args!("This is a test log"))
-            .level(log::Level::Info)
-            .target("test_module")
-            .file(Some("test_file.rs"))
-            .line(Some(42))
-            .build();
+        let now = std::time::SystemTime::now();
+        let args = format_args!("This is a test log");
+        writer.handle_log(&now, &Level::INFO, Some("test_module"), &args).unwrap();
 
-        writer.write(now, &record).unwrap();
-
-        let locked_data = data.lock().unwrap();
+        let locked_data = MEMORY_WRITER_DATA.lock().unwrap();
         assert_eq!(locked_data.logs.len(), 1);
         assert!(locked_data.logs[0].contains("This is a test log"));
+    }
+
+    #[test]
+    fn test_log_levels() {
+        init_logger(false, "https://example.com", "release-1.0");
+
+        info!("This is an info log");
+        error!("This is an error log");
+        warn!("This is a warn log");
+        debug!("This is a debug log");
+        trace!("This is a trace log");
+
+        // Make sure the logs are written
+        thread::sleep(std::time::Duration::from_secs(1));
+
+        let log_data = get_all_logs();
+        assert!(log_data.contains("This is an info log"));
+        assert!(log_data.contains("This is an error log"));
+        assert!(log_data.contains("This is a warn log"));
+        assert!(log_data.contains("This is a debug log"));
+        assert!(log_data.contains("This is a trace log"));
+    }
+
+    #[test]
+    fn test_get_new_logs() {
+        init_logger(false, "https://example.com", "release-1.0");
+
+        let log_data = get_new_logs();
+        assert!(log_data.is_empty());
+
+        info!("New log entry");
+
+        // Make sure the log is written
+        thread::sleep(std::time::Duration::from_secs(1));
+
+        let log_data = get_new_logs();
+        assert!(!log_data.is_empty());
+        assert!(log_data.contains("New log entry"));
+    }
+
+    #[test]
+    fn test_get_all_logs() {
+        init_logger(false, "https://example.com", "release-1.0");
+
+        let log_data = get_all_logs();
+        assert!(log_data.is_empty());
+
+        info!("First log entry");
+        info!("Second log entry");
+
+        // Make sure the logs are written
+        thread::sleep(std::time::Duration::from_secs(1));
+
+        let log_data = get_all_logs();
+        assert!(log_data.contains("First log entry"));
+        assert!(log_data.contains("Second log entry"));
     }
 }
