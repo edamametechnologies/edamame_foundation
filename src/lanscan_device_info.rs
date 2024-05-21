@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use log::trace;
+use tracing::trace;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
