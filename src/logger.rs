@@ -188,7 +188,7 @@ pub fn get_all_logs() -> String {
 
 fn init_sentry(url: &str, release: &str) {
     let release = release.to_string();
-    let sentry = sentry::init((
+    let sentry_guard = sentry::init((
         url,
         sentry::ClientOptions {
             release: if release.is_empty() {
@@ -201,12 +201,14 @@ fn init_sentry(url: &str, release: &str) {
         },
     ));
 
-    if sentry.is_enabled() {
+    if sentry_guard.is_enabled() {
         println!("Sentry initialized");
     } else {
         eprintln!("Sentry initialization failed");
     }
-    forget(sentry);
+    
+    // Make sure the guard is not dropped
+    forget(sentry_guard);
 }
 
 #[cfg(all(debug_assertions, target_os = "android"))]
@@ -218,28 +220,21 @@ fn init_android_logger() {
 }
 
 pub fn init_logger(is_helper: bool, url: &str, release: &str) {
-    println!("Initializing Sentry...");
-    init_sentry(url, release);
+    
+    if ! url.is_empty() {
+        init_sentry(url, release);
+    }
+    
 
-    println!("Setting up Sentry layer...");
-    let sentry_layer = sentry_tracing::layer().event_filter(|md| match md.level() {
-        &Level::ERROR => EventFilter::Event,
-        _ => EventFilter::Ignore,
-    });
-
-    println!("Creating memory writer...");
     let memory_writer = MemoryWriter::new();
 
-    println!("Setting default log spec...");
     let default_log_spec = "info";
     let mut env_log_spec = var("EDAMAME_LOG_LEVEL").unwrap_or(default_log_spec.to_string());
     env_log_spec.push_str(",libp2p=info");
 
-    println!("Setting up filter layer...");
     let filter_layer = EnvFilter::try_new(env_log_spec).unwrap();
 
-    println!("Setting up non-blocking appender...");
-    let (non_blocking, _) = if cfg!(target_os = "windows") {
+    let (non_blocking, appender_guard) = if cfg!(target_os = "windows") {
         let log_dir = if is_helper {
             let exe_path: PathBuf = current_exe().expect("Failed to get current exe");
             exe_path.parent().expect("Failed to get parent of current exe").to_path_buf()
@@ -256,33 +251,46 @@ pub fn init_logger(is_helper: bool, url: &str, release: &str) {
         tracing_appender::non_blocking(io::stdout())
     };
 
-    println!("Initializing tracing subscriber registry...");
-    tracing_subscriber::registry()
-        .with(filter_layer)
-        .with(fmt::layer().with_writer(non_blocking.clone()))
-        .with(fmt::layer().with_writer(memory_writer))
-        .with(sentry_layer)
-        .init();
-
+    if ! url.is_empty() {
+        let sentry_layer = sentry_tracing::layer().event_filter(|md| match md.level() {
+            &Level::ERROR => EventFilter::Event,
+            _ => EventFilter::Ignore,
+        });
+        tracing_subscriber::registry()
+            .with(filter_layer)
+            .with(fmt::layer().with_writer(non_blocking.clone()))
+            .with(fmt::layer().with_writer(memory_writer))
+            .with(sentry_layer)
+            .init();
+    } else {
+        tracing_subscriber::registry()
+            .with(filter_layer)
+            .with(fmt::layer().with_writer(non_blocking))
+            .with(fmt::layer().with_writer(memory_writer))
+            .init();
+    }
+    
     #[cfg(all(debug_assertions, target_os = "android"))]
     {
-        println!("Initializing Android logger...");
         init_android_logger();
     }
 
     println!("Logger initialized successfully.");
+
+    // Make sure the guard is not dropped
+    forget(appender_guard);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use tracing::{info, error, warn, debug, trace};
-    use std::thread;
+    use std::thread::sleep;
 
     #[test]
     fn test_logger_initialization() {
         // Can only be called once
-        init_logger(false, "https://example.com", "release-1.0");
+        init_logger(false, "", "");
 
         // Assuming logger initialization should succeed
         assert!(true);
@@ -332,31 +340,9 @@ mod tests {
         assert_eq!(locked_data.logs.len(), 1);
         assert!(locked_data.logs[0].contains("This is a test log"));
     }
-
-    #[test]
-    fn test_log_levels() {
-        init_logger(false, "https://example.com", "release-1.0");
-
-        info!("This is an info log");
-        error!("This is an error log");
-        warn!("This is a warn log");
-        debug!("This is a debug log");
-        trace!("This is a trace log");
-
-        // Make sure the logs are written
-        thread::sleep(std::time::Duration::from_secs(1));
-
-        let log_data = get_all_logs();
-        assert!(log_data.contains("This is an info log"));
-        assert!(log_data.contains("This is an error log"));
-        assert!(log_data.contains("This is a warn log"));
-        assert!(log_data.contains("This is a debug log"));
-        assert!(log_data.contains("This is a trace log"));
-    }
-
+    
     #[test]
     fn test_get_new_logs() {
-        init_logger(false, "https://example.com", "release-1.0");
 
         let log_data = get_new_logs();
         assert!(log_data.is_empty());
@@ -364,7 +350,7 @@ mod tests {
         info!("New log entry");
 
         // Make sure the log is written
-        thread::sleep(std::time::Duration::from_secs(1));
+        sleep(std::time::Duration::from_secs(1));
 
         let log_data = get_new_logs();
         assert!(!log_data.is_empty());
@@ -373,7 +359,6 @@ mod tests {
 
     #[test]
     fn test_get_all_logs() {
-        init_logger(false, "https://example.com", "release-1.0");
 
         let log_data = get_all_logs();
         assert!(log_data.is_empty());
@@ -382,10 +367,30 @@ mod tests {
         info!("Second log entry");
 
         // Make sure the logs are written
-        thread::sleep(std::time::Duration::from_secs(1));
+        sleep(std::time::Duration::from_secs(1));
 
         let log_data = get_all_logs();
         assert!(log_data.contains("First log entry"));
         assert!(log_data.contains("Second log entry"));
+    }
+
+    #[test]
+    fn test_log_levels() {
+
+        info!("This is an info log");
+        error!("This is an error log");
+        warn!("This is a warn log");
+        debug!("This is a debug log");
+        trace!("This is a trace log");
+
+        // Make sure the logs are written
+        sleep(std::time::Duration::from_secs(1));
+
+        let log_data = get_all_logs();
+        assert!(log_data.contains("This is an info log"));
+        assert!(log_data.contains("This is an error log"));
+        assert!(log_data.contains("This is a warn log"));
+        assert!(log_data.contains("This is a debug log"));
+        assert!(log_data.contains("This is a trace log"));
     }
 }
