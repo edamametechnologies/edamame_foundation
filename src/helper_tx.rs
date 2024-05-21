@@ -1,10 +1,10 @@
 use base64::{engine::general_purpose, Engine as _};
-use tracing::trace;
 use std::error::Error;
 use std::str;
 use std::time::Duration;
 use tokio::time::timeout;
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Identity};
+use tracing::trace;
 
 // Standard Mutex
 use lazy_static::lazy_static;

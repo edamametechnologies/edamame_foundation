@@ -1,8 +1,8 @@
-use tracing::{error, info, warn};
 use reqwest;
 use reqwest::Client;
 use std::error::Error;
 use std::time::Duration;
+use tracing::{error, info, warn};
 
 use crate::threat::*;
 use crate::threat_metrics_android::*;

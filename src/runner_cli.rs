@@ -1,7 +1,7 @@
 use crate::runtime::async_spawn_blocking;
-use tracing::{error, trace};
 use run_script::ScriptOptions;
 use std::error::Error;
+use tracing::{error, trace};
 
 use powershell_script::PsScriptBuilder;
 

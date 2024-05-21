@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
-use tracing::trace;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use tracing::trace;
 
 use crate::lanscan_device_info_backend::*;
 use crate::lanscan_port_info::*;
