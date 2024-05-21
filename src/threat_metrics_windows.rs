@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_WINDOWS: &str = r#"{
   "name": "threat model Windows",
   "extends": "none",
-  "date": "April 18th 2024",
-  "signature": "aa2ea7ea0e72ad085c7c665fbb5d13b21463e236822f045383285c7659616709",
+  "date": "May 03th 2024",
+  "signature": "56d3ccf012b79b06adfe2e0e63db7c373a614cc672b958833ce51aa4ab26ec9a",
   "metrics": [
     {
       "name": "edamame helper disabled",
@@ -1284,7 +1284,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "minversion": 10,
         "maxversion": 0,
         "class": "cli",
-        "elevation": "system",
+        "elevation": "restart",
         "target": "Set-ExecutionPolicy -ExecutionPolicy Default -Scope CurrentUser -Force",
         "education": [
           {
@@ -1304,7 +1304,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "minversion": 10,
         "maxversion": 0,
         "class": "cli",
-        "elevation": "system",
+        "elevation": "restart",
         "target": "Set-ExecutionPolicy -ExecutionPolicy Unrestricted -Scope CurrentUser -Force",
         "education": [
           {
@@ -1428,7 +1428,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "minversion": 10,
         "maxversion": 0,
         "class": "cli",
-        "elevation": "system",
+        "elevation": "restart",
         "target": "Disable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -norestart",
         "education": [
           {
@@ -1448,7 +1448,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "minversion": 10,
         "maxversion": 0,
         "class": "cli",
-        "elevation": "system",
+        "elevation": "restart",
         "target": "Enable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -norestart",
         "education": [
           {
