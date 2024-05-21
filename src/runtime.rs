@@ -12,7 +12,7 @@ pub fn async_init() {
         eprintln!("Runtime already initialized");
         return;
     }
-    
+
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_name("edamame")

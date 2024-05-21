@@ -1,7 +1,6 @@
 use crate::lanscan_port_info::*;
 use crate::lanscan_profiles_db::*;
 use crate::update::*;
-use tracing::{error, info, trace, warn};
 use once_cell::sync::Lazy;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -9,6 +8,7 @@ use std::collections::HashSet;
 use std::error::Error;
 use std::time::Duration;
 use tokio::sync::Mutex;
+use tracing::{error, info, trace, warn};
 
 const PROFILES_REPO: &str = "https://raw.githubusercontent.com/edamametechnologies/threatmodels";
 const PROFILES_NAME: &str = "lanscan-profiles-db.json";

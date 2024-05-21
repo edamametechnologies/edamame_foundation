@@ -1,5 +1,4 @@
 use lazy_static::lazy_static;
-use tracing::{info, trace, warn};
 use regex::Regex;
 use sorted_vec::SortedVec;
 use std::collections::HashMap;
@@ -9,6 +8,7 @@ use std::{net::IpAddr, sync::Arc};
 use tokio::sync::Mutex;
 use tokio::task;
 use tokio::time::Duration;
+use tracing::{info, trace, warn};
 
 // Our own fork with minor adjustements
 use wez_mdns::{Host, QueryParameters};
