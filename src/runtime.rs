@@ -7,6 +7,12 @@ use tokio::task::JoinHandle;
 static RUNTIME: Mutex<Option<Arc<Runtime>>> = Mutex::new(None);
 
 pub fn async_init() {
+    // Check if the runtime has already been initialized
+    if RUNTIME.lock().expect("Failed to lock runtime").is_some() {
+        eprintln!("Runtime already initialized");
+        return;
+    }
+    
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_name("edamame")
@@ -16,9 +22,8 @@ pub fn async_init() {
     println!("Runtime initialized");
 
     let rt = Arc::new(rt);
-    let mut rt_lock = RUNTIME.lock().expect("Failed to lock runtime");
 
-    *rt_lock = Some(rt);
+    *RUNTIME.lock().expect("Failed to lock runtime") = Some(rt);
 }
 
 pub fn async_exec<R, F>(async_fn: F) -> R
