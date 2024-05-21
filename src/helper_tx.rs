@@ -1,5 +1,5 @@
 use base64::{engine::general_purpose, Engine as _};
-use log::trace;
+use tracing::trace;
 use std::error::Error;
 use std::str;
 use std::time::Duration;

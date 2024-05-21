@@ -1,5 +1,5 @@
 use base64::{engine::general_purpose, Engine as _};
-use log::{error, info, trace, warn};
+use tracing::{error, info, trace, warn};
 use std::error::Error;
 use std::net::SocketAddr;
 use std::str;

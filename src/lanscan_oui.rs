@@ -1,4 +1,4 @@
-use log::{error, trace, warn};
+use tracing::{error, trace, warn};
 use oui::OuiDatabase;
 // Tokio Mutex
 use once_cell::sync::Lazy;

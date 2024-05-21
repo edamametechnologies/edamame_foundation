@@ -18,6 +18,12 @@ update_threat_metrics() {
     local trailer="\"#;"
     # Prevent bash parsing of escape chars
     local body="$(wget --no-cache -qO- https://raw.githubusercontent.com/edamametechnologies/threatmodels/$branch/threatmodel-$os.json)"
+    # If body is empty try again with the dev branch
+    if [ -z "$body" ]; then
+        echo "Failed to fetch threat model for $os from $branch, trying dev branch"
+        body="$(wget --no-cache -qO- https://raw.githubusercontent.com/edamametechnologies/threatmodels/dev/threatmodel-$os.json)"
+    fi
+
     # Interpret escape chars
     echo -n -e "$header" > "$target"
     # Preserve escape chars
