@@ -316,7 +316,7 @@ pub fn init_logger(is_helper: bool, url: &str, release: &str) {
         init_android_logger();
     }
 
-    println!("Logger initialized successfully.");
+    println!("Logger initialized");
 
     forget(appender_guard);
 }
