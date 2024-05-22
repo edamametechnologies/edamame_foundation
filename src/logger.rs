@@ -18,7 +18,7 @@ use tracing_subscriber::fmt;
 use tracing_subscriber::prelude::*;
 
 #[cfg(target_os = "android")]
-use tracing_android::AndroidLayer;
+use tracing_android;
 
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 use tracing_oslog::OsLogger;
@@ -313,7 +313,7 @@ pub fn init_logger(is_helper: bool, url: &str, release: &str) {
         } else if cfg!(target_os = "android") {
             #[cfg(target_os = "android")]
             {
-                let android_layer = AndroidLayer::new("com.edamametech.edamame");
+                let android_layer = tracing_android::layer("edamametech.edamame").unwrap();
 
                 tracing_subscriber::registry()
                     .with(filter_layer)
@@ -349,8 +349,8 @@ pub fn init_logger(is_helper: bool, url: &str, release: &str) {
         } else if cfg!(target_os = "android") {
             #[cfg(target_os = "android")]
             {
-                let android_layer = AndroidLayer::new("com.edamametech.edamame");
-
+                let android_layer = tracing_android::layer("edamametech.edamame").unwrap();
+                
                 tracing_subscriber::registry()
                     .with(filter_layer)
                     .with(fmt::layer().with_writer(non_blocking))
