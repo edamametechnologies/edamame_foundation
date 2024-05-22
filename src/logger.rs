@@ -20,6 +20,9 @@ use tracing_subscriber::prelude::*;
 #[cfg(target_os = "android")]
 use tracing_android::AndroidLayer;
 
+#[cfg(any(target_os = "ios", target_os = "macos"))]
+use tracing_oslog::OsLogger;
+
 const MAX_LOG_LINES: usize = 20000;
 
 lazy_static! {
@@ -241,12 +244,6 @@ fn init_sentry(url: &str, release: &str) {
     forget(sentry_guard);
 }
 
-#[cfg(all(debug_assertions, target_os = "android"))]
-fn init_android_logger() {
-    let android_layer = AndroidLayer::new();
-    tracing_subscriber::registry().with(android_layer).init();
-}
-
 pub fn init_logger(is_helper: bool, url: &str, release: &str) {
     let mut logger_guard = LOGGER.lock().unwrap();
     if logger_guard.is_some() {
@@ -266,8 +263,10 @@ pub fn init_logger(is_helper: bool, url: &str, release: &str) {
     let mut env_log_spec = var("EDAMAME_LOG_LEVEL").unwrap_or(default_log_spec.to_string());
     env_log_spec.push_str(",libp2p=info");
 
+    // Set filter
     let filter_layer = EnvFilter::try_new(env_log_spec).unwrap();
 
+    // Duplicate to stdout or file depending on platform
     let (non_blocking, appender_guard) = if cfg!(target_os = "windows") {
         let log_dir = if is_helper {
             let exe_path: PathBuf = current_exe().expect("Failed to get current exe");
@@ -291,29 +290,82 @@ pub fn init_logger(is_helper: bool, url: &str, release: &str) {
     } else {
         tracing_appender::non_blocking(io::stdout())
     };
-
+    
+    // Register the proper layers based on sentry availability and platform
     if !url.is_empty() {
         let sentry_layer = sentry_tracing::layer().event_filter(|md| match md.level() {
             &Level::ERROR => EventFilter::Event,
             _ => EventFilter::Ignore,
         });
-        tracing_subscriber::registry()
-            .with(filter_layer)
-            .with(fmt::layer().with_writer(non_blocking.clone()))
-            .with(fmt::layer().with_writer(logger.memory_writer.clone()))
-            .with(sentry_layer)
-            .init();
-    } else {
-        tracing_subscriber::registry()
-            .with(filter_layer)
-            .with(fmt::layer().with_writer(non_blocking))
-            .with(fmt::layer().with_writer(logger.memory_writer.clone()))
-            .init();
-    }
+        if cfg!(target_os = "macos") || cfg!(target_os = "ios") {
+            #[cfg(any(target_os = "ios", target_os = "macos"))]
+            {
+                let os_logger = OsLogger::new("com.edamametech.edamame", "default");
 
-    #[cfg(all(debug_assertions, target_os = "android"))]
-    {
-        init_android_logger();
+                tracing_subscriber::registry()
+                    .with(filter_layer)
+                    .with(fmt::layer().with_writer(non_blocking))
+                    .with(fmt::layer().with_writer(logger.memory_writer.clone()))
+                    .with(sentry_layer)
+                    .with(os_logger)
+                    .init();
+            }
+        } else if cfg!(target_os = "android") {
+            #[cfg(target_os = "android")]
+            {
+                let android_layer = AndroidLayer::new("com.edamametech.edamame");
+
+                tracing_subscriber::registry()
+                    .with(filter_layer)
+                    .with(fmt::layer().with_writer(non_blocking))
+                    .with(fmt::layer().with_writer(logger.memory_writer.clone()))
+                    .with(sentry_layer)
+                    .with(android_layer)
+                    .init();
+            }
+        } else {
+            // Linux and Windows
+            tracing_subscriber::registry()
+                .with(filter_layer)
+                .with(fmt::layer().with_writer(non_blocking.clone()))
+                .with(fmt::layer().with_writer(logger.memory_writer.clone()))
+                .with(sentry_layer)
+                .init();
+        }
+    } else {
+        // Without sentry
+        if cfg!(target_os = "macos") || cfg!(target_os = "ios") {
+            #[cfg(any(target_os = "ios", target_os = "macos"))]
+            {
+                let os_logger = OsLogger::new("com.edamametech.edamame", "default");
+
+                tracing_subscriber::registry()
+                    .with(filter_layer)
+                    .with(fmt::layer().with_writer(non_blocking))
+                    .with(fmt::layer().with_writer(logger.memory_writer.clone()))
+                    .with(os_logger)
+                    .init();
+            }
+        } else if cfg!(target_os = "android") {
+            #[cfg(target_os = "android")]
+            {
+                let android_layer = AndroidLayer::new("com.edamametech.edamame");
+
+                tracing_subscriber::registry()
+                    .with(filter_layer)
+                    .with(fmt::layer().with_writer(non_blocking))
+                    .with(fmt::layer().with_writer(logger.memory_writer.clone()))
+                    .with(android_layer)
+                    .init();
+            }
+        } else {
+            // Linux and Windows
+            tracing_subscriber::registry()
+                .with(filter_layer)
+                .with(fmt::layer().with_writer(non_blocking))
+                .with(fmt::layer().with_writer(logger.memory_writer.clone()))
+                .init();
+        }
     }
 
     println!("Logger initialized");
