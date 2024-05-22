@@ -57,30 +57,10 @@ impl MemoryWriter {
         }
     }
 
-    fn format_log_line(
-        &self,
-        now: &std::time::SystemTime,
-        level: &Level,
-        module_path: Option<&str>,
-        log_line_sanitized: &str,
-    ) -> String {
-        format!(
-            "[{}] {} [{}] {}\n",
-            humantime::format_rfc3339(*now),
-            level,
-            module_path.unwrap_or("unknown"),
-            log_line_sanitized
-        )
-    }
-
     fn handle_log(
         &self,
-        now: &std::time::SystemTime,
-        level: &Level,
-        module_path: Option<&str>,
-        args: &std::fmt::Arguments<'_>,
+        log_line: &str,
     ) -> io::Result<()> {
-        let log_line = args.to_string();
         let keywords = vec![
             "id",
             "uuid",
@@ -93,8 +73,11 @@ impl MemoryWriter {
             "code",
         ];
         let log_line_sanitized = sanitize_keywords(&log_line, &keywords);
-        let log_line_formatted = self.format_log_line(now, level, module_path, &log_line_sanitized);
-
+        // Remove all escape codes (x1b\[[0-9;]*m) from the log line before storing it in the log buffer x1b\[[0-9;]*m
+        let re = Regex::new(r"\x1b\[[0-9;]*m").unwrap();
+        let log_line_formatted = re.replace_all(&log_line_sanitized, "");
+        let log_line_formatted = log_line_formatted.trim().to_string();
+        
         let mut locked_data = self.data.lock().unwrap();
 
         if locked_data.logs.len() >= MAX_LOG_LINES {
@@ -111,17 +94,12 @@ impl MemoryWriter {
         }
 
         drop(locked_data);
-
-        if *level == Level::ERROR
-            && (!module_path.unwrap_or("").starts_with("libp2p")
-                || (!log_line_sanitized.contains("Socket is not connected")))
+        
+        // Catch the error logs and send them to Sentry by catching "ERROR" in the log line
+        if log_line_formatted.contains("ERROR")
+            && (!log_line_formatted.contains("libp2p")
+                || (!log_line_formatted.contains("Socket is not connected")))
         {
-            let log_line_formatted = format!(
-                "{} [{}] {}\n",
-                level,
-                module_path.unwrap_or("unknown"),
-                log_line_sanitized
-            );
             sentry::capture_message(&log_line_formatted, sentry::Level::Error);
         }
 
@@ -144,10 +122,7 @@ pub struct MemoryWriterGuard<'a> {
 impl<'a> Write for MemoryWriterGuard<'a> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         let log = String::from_utf8_lossy(buf).to_string();
-        let now = std::time::SystemTime::now();
-        let level = Level::INFO;
-        self.writer
-            .handle_log(&now, &level, None, &format_args!("{}", log))?;
+        self.writer.handle_log(&log)?;
         Ok(buf.len())
     }
 
@@ -441,32 +416,16 @@ mod tests {
 
     #[test]
     #[serial]
-    fn test_format_log_line() {
-        let writer = MemoryWriter::new();
-        let now = std::time::SystemTime::now();
-        let log_line = writer.format_log_line(
-            &now,
-            &Level::INFO,
-            Some("module"),
-            "This is a sanitized log",
-        );
-        assert!(log_line.contains("This is a sanitized log"));
-        assert!(log_line.contains("INFO"));
-    }
-
-    #[test]
-    #[serial]
     fn test_log_storage_in_memory_writer() {
         initialize_and_flush_logger();
 
         let logger_guard = LOGGER.lock().unwrap();
         let logger = logger_guard.as_ref().unwrap();
 
-        let now = std::time::SystemTime::now();
-        let args = format_args!("This is a test log");
+        let log_line = "This is a test log";
         logger
             .memory_writer
-            .handle_log(&now, &Level::INFO, Some("test_module"), &args)
+            .handle_log(log_line)
             .unwrap();
 
         let locked_data = logger.memory_writer.data.lock().unwrap();
