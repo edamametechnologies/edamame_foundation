@@ -115,6 +115,10 @@ system-configuration-sys = { git = "https://github.com/edamametechnologies/syste
 [target.'cfg(target_os = "android")'.dependencies]
 tracing-android = "0.2.0"
 
+# iOS or macOS
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+tracing-oslog = "0.1.2"
+
 [dev-dependencies]
 serial_test = "3.1.1"
 
