@@ -302,35 +302,44 @@ pub fn init_logger(is_helper: bool, url: &str, release: &str) {
             {
                 let os_logger = OsLogger::new("com.edamametech.edamame", "default");
 
-                tracing_subscriber::registry()
+                match tracing_subscriber::registry()
                     .with(filter_layer)
                     .with(fmt::layer().with_writer(non_blocking))
                     .with(fmt::layer().with_writer(logger.memory_writer.clone()))
                     .with(sentry_layer)
                     .with(os_logger)
-                    .init();
+                    .try_init() {
+                        Ok(_) => println!("Logger initialized"),
+                        Err(e) => eprintln!("Logger initialization failed: {}", e),
+                    }
             }
         } else if cfg!(target_os = "android") {
             #[cfg(target_os = "android")]
             {
                 let android_layer = tracing_android::layer("edamametech.edamame").unwrap();
 
-                tracing_subscriber::registry()
+                match tracing_subscriber::registry()
                     .with(filter_layer)
                     .with(fmt::layer().with_writer(non_blocking))
                     .with(fmt::layer().with_writer(logger.memory_writer.clone()))
                     .with(sentry_layer)
                     .with(android_layer)
-                    .init();
+                    .try_init() {
+                        Ok(_) => println!("Logger initialized"),
+                        Err(e) => eprintln!("Logger initialization failed: {}", e),
+                    }
             }
         } else {
             // Linux and Windows
-            tracing_subscriber::registry()
+            match tracing_subscriber::registry()
                 .with(filter_layer)
                 .with(fmt::layer().with_writer(non_blocking.clone()))
                 .with(fmt::layer().with_writer(logger.memory_writer.clone()))
                 .with(sentry_layer)
-                .init();
+                .try_init() {
+                    Ok(_) => println!("Logger initialized"),
+                    Err(e) => eprintln!("Logger initialization failed: {}", e),
+            }
         }
     } else {
         // Without sentry
@@ -339,37 +348,44 @@ pub fn init_logger(is_helper: bool, url: &str, release: &str) {
             {
                 let os_logger = OsLogger::new("com.edamametech.edamame", "default");
 
-                tracing_subscriber::registry()
+                match tracing_subscriber::registry()
                     .with(filter_layer)
                     .with(fmt::layer().with_writer(non_blocking))
                     .with(fmt::layer().with_writer(logger.memory_writer.clone()))
                     .with(os_logger)
-                    .init();
+                    .try_init() {
+                        Ok(_) => println!("Logger initialized"),
+                        Err(e) => eprintln!("Logger initialization failed: {}", e),
+                }
             }
         } else if cfg!(target_os = "android") {
             #[cfg(target_os = "android")]
             {
                 let android_layer = tracing_android::layer("edamametech.edamame").unwrap();
                 
-                tracing_subscriber::registry()
+                match tracing_subscriber::registry()
                     .with(filter_layer)
                     .with(fmt::layer().with_writer(non_blocking))
                     .with(fmt::layer().with_writer(logger.memory_writer.clone()))
                     .with(android_layer)
-                    .init();
+                    .try_init() {
+                        Ok(_) => println!("Logger initialized"),
+                        Err(e) => eprintln!("Logger initialization failed: {}", e),
+                    }
             }
         } else {
             // Linux and Windows
-            tracing_subscriber::registry()
+            match tracing_subscriber::registry()
                 .with(filter_layer)
                 .with(fmt::layer().with_writer(non_blocking))
                 .with(fmt::layer().with_writer(logger.memory_writer.clone()))
-                .init();
+                .try_init() {
+                    Ok(_) => println!("Logger initialized"),
+                    Err(e) => eprintln!("Logger initialization failed: {}", e),
+            }
         }
     }
-
-    println!("Logger initialized");
-
+    
     forget(appender_guard);
 }
 
