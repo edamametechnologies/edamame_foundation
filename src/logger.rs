@@ -242,7 +242,7 @@ pub fn init_logger(executable_type: &str, url: &str, release: &str) {
     let filter_layer = EnvFilter::try_new(env_log_spec).unwrap();
 
     // Duplicate to stdout or file depending on platform
-    let (non_blocking, appender_guard) = if cfg!(target_os = "windows") && matches!(executable_type, "cli") {
+    let (non_blocking, appender_guard) = if cfg!(target_os = "windows") && !matches!(executable_type, "cli") {
         let log_dir = if matches!(executable_type, "helper") {
             let exe_path: PathBuf = current_exe().expect("Failed to get current exe");
             exe_path
