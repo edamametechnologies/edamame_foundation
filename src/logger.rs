@@ -219,7 +219,7 @@ fn init_sentry(url: &str, release: &str) {
     forget(sentry_guard);
 }
 
-pub fn init_logger(is_helper: bool, url: &str, release: &str) {
+pub fn init_logger(executable_type: &str, url: &str, release: &str) {
     let mut logger_guard = LOGGER.lock().unwrap();
     if logger_guard.is_some() {
         eprintln!("Logger already initialized, flushing logs");
@@ -242,8 +242,8 @@ pub fn init_logger(is_helper: bool, url: &str, release: &str) {
     let filter_layer = EnvFilter::try_new(env_log_spec).unwrap();
 
     // Duplicate to stdout or file depending on platform
-    let (non_blocking, appender_guard) = if cfg!(target_os = "windows") {
-        let log_dir = if is_helper {
+    let (non_blocking, appender_guard) = if cfg!(target_os = "windows") && matches!(executable_type, "cli") {
+        let log_dir = if matches!(executable_type, "helper") {
             let exe_path: PathBuf = current_exe().expect("Failed to get current exe");
             exe_path
                 .parent()
@@ -255,7 +255,7 @@ pub fn init_logger(is_helper: bool, url: &str, release: &str) {
             create_dir_all(&appdata_path).expect("Failed to create directory");
             PathBuf::from(appdata_path)
         };
-        let basename = if is_helper {
+        let basename = if matches!(executable_type, "helper") {
             "edamame_helper"
         } else {
             "edamame"
@@ -275,7 +275,7 @@ pub fn init_logger(is_helper: bool, url: &str, release: &str) {
         if cfg!(target_os = "macos") || cfg!(target_os = "ios") {
             #[cfg(any(target_os = "ios", target_os = "macos"))]
             {
-                let os_logger = OsLogger::new("com.edamametech.edamame", "default");
+                let os_logger = OsLogger::new("com.edamametech.edamame", "");
 
                 match tracing_subscriber::registry()
                     .with(filter_layer)
@@ -389,7 +389,7 @@ mod tests {
     use tracing::{debug, error, info, trace, warn};
 
     fn initialize_and_flush_logger() {
-        init_logger(false, "", "");
+        init_logger("cli", "", "");
     }
 
     #[test]
