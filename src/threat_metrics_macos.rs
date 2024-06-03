@@ -143,9 +143,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
       "dimension": "system integrity",
       "severity": 5,
       "scope": "generic",
-      "tags": [
-        "Personal Posture"
-      ],
+      "tags": ["Personal Posture"],
       "description": [
         {
           "locale": "EN",
@@ -214,9 +212,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
       "dimension": "system integrity",
       "severity": 5,
       "scope": "macOS",
-      "tags": [
-        "Personal Posture"
-      ],
+      "tags": ["Personal Posture"],
       "description": [
         {
           "locale": "EN",
@@ -360,7 +356,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "minversion": 12,
         "maxversion": 0,
         "class": "cli",
-        "elevation": "admin",
+        "elevation": "globalpreferences",
         "target": "defaults read /Library/Preferences/com.apple.commerce.plist AutoUpdate 2>&1 | grep -v 1",
         "education": []
       },
@@ -412,7 +408,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "minversion": 12,
         "maxversion": 0,
         "class": "cli",
-        "elevation": "admin",
+        "elevation": "globalpreferences",
         "target": "defaults read /Library/Preferences/com.apple.alf globalstate | grep 0",
         "education": []
       },
@@ -486,7 +482,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "minversion": 12,
         "maxversion": 0,
         "class": "cli",
-        "elevation": "user",
+        "elevation": "globalpreferences",
         "target": "defaults read /Library/Preferences/com.apple.loginwindow | grep autoLoginUser",
         "education": [
           {
@@ -839,9 +835,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
       "dimension": "system integrity",
       "severity": 4,
       "scope": "generic",
-      "tags": [
-        "Personal Posture"
-      ],
+      "tags": ["Personal Posture"],
       "description": [
         {
           "locale": "EN",
@@ -1082,7 +1076,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "minversion": 12,
         "maxversion": 0,
         "class": "cli",
-        "elevation": "admin",
+        "elevation": "globalpreferences",
         "target": "defaults read /Library/Preferences/com.apple.SoftwareUpdate AutomaticallyInstallMacOSUpdates 2>&1 | grep -v 1",
         "education": []
       },
@@ -1740,7 +1734,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "minversion": 12,
         "maxversion": 0,
         "class": "cli",
-        "elevation": "admin",
+        "elevation": "globalpreferences",
         "target": "defaults read /Library/Preferences/com.apple.SoftwareUpdate.plist | grep macOS",
         "education": []
       },
