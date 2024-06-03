@@ -93,11 +93,6 @@ pub struct Health {
     pub health_habits: i32,
     pub overall: i32,
     pub stars: f64,
-    pub compute_in_progress: bool,
-    pub compute_progress_percent: f32,
-    pub last_completed_metric: String,
-    // This will be handled as an event by the UI when the compute completes
-    pub last_compute: Option<DateTime<Utc>>,
 }
 
 impl Health {
@@ -110,10 +105,6 @@ impl Health {
             health_habits: 0,
             overall: 0,
             stars: 0.0,
-            last_compute: None,
-            last_completed_metric: "".to_string(),
-            compute_progress_percent: 0.0,
-            compute_in_progress: false,
         }
     }
 }
