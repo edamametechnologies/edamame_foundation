@@ -262,11 +262,10 @@ impl DeviceInfo {
         // Or
         device.active = device.active || new_device.active;
         device.non_std_ports = device.non_std_ports || new_device.non_std_ports;
-        // And
-        device.added = device.added && new_device.added;
-        device.activated = device.activated && new_device.activated;
-        device.deactivated = device.deactivated && new_device.deactivated;
-        device.no_icmp = device.no_icmp && new_device.no_icmp;
+        device.added = device.added || new_device.added;
+        device.activated = device.activated || new_device.activated;
+        device.deactivated = device.deactivated || new_device.deactivated;
+        device.no_icmp = device.no_icmp || new_device.no_icmp;
 
         // Dynamic fields - use the latest if valid (not unknown)
         // Always update device type
