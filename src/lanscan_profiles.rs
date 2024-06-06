@@ -254,7 +254,7 @@ pub async fn update(branch: &str) -> Result<UpdateStatus, Box<dyn Error>> {
     info!("Fetching port vulns from {}", url);
 
     // Create a client with a long timeout as the file can be large
-    let client = Client::builder()
+    let client = Client::builder().gzip(true)
         .timeout(Duration::from_secs(120))
         .build()?;
 
