@@ -192,7 +192,8 @@ impl ThreatMetrics {
 
         info!("Fetching threat model from {}", url);
         // Create a client with a timeout
-        let client = Client::builder().timeout(Duration::from_secs(20)).build()?;
+        let client = Client::builder().gzip(true)
+            .timeout(Duration::from_secs(20)).build()?;
 
         // Use the client to make a request
         let response = client.get(&url).send().await;
