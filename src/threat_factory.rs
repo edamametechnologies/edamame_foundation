@@ -1,9 +1,7 @@
 use reqwest;
 use reqwest::Client;
-use std::error::Error;
 use std::time::Duration;
 use tracing::{error, info, warn};
-
 use crate::threat::*;
 use crate::threat_metrics_android::*;
 use crate::threat_metrics_ios::*;
@@ -11,6 +9,7 @@ use crate::threat_metrics_linux::*;
 use crate::threat_metrics_macos::*;
 use crate::threat_metrics_windows::*;
 use crate::update::*;
+use anyhow::{anyhow, Result};
 
 static THREAT_MODEL_URL: &str =
     "https://raw.githubusercontent.com/edamametechnologies/threatmodels";
@@ -91,7 +90,7 @@ impl ThreatMetrics {
     }
 
     // Get the appropriate threat model JSON file based on the platform
-    fn get_model_name(platform: &str) -> Result<&'static str, Box<dyn Error>> {
+    fn get_model_name(platform: &str) -> Result<&'static str> {
         if !platform.is_empty() {
             if platform == "macos" {
                 Ok("threatmodel-macOS.json")
@@ -104,7 +103,7 @@ impl ThreatMetrics {
             } else if platform == "linux" {
                 Ok("threatmodel-Linux.json")
             } else {
-                Err(format!("Unsupported platform: {}", platform).into())
+                Err(anyhow!("Unsupported platform: {}", platform.to_string()))
             }
         } else if cfg!(target_os = "macos") {
             Ok("threatmodel-macOS.json")
@@ -117,7 +116,7 @@ impl ThreatMetrics {
         } else if cfg!(target_os = "linux") {
             Ok("threatmodel-Linux.json")
         } else {
-            Err(format!("Unsupported operating system: {}", std::env::consts::OS).into())
+            Err(anyhow!("Unsupported operating system: {}", std::env::consts::OS).into())
         }
     }
 
@@ -170,7 +169,7 @@ impl ThreatMetrics {
         &mut self,
         platform: &str,
         branch: &str,
-    ) -> Result<UpdateStatus, Box<dyn Error>> {
+    ) -> Result<UpdateStatus> {
         info!("Starting threat model update from backend");
 
         let mut status = UpdateStatus::NotUpdated;
