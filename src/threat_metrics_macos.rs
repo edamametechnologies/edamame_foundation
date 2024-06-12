@@ -3,7 +3,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
   "name": "threat model macOS",
   "extends": "none",
   "date": "April 29th 2024",
-  "signature": "c5b6c67afec6e7067be5d06d5a19b2b33d3fa4260215bac8ba93c8b912325d4d",
+  "signature": "c5b6c67afec6e7067be5d06d5a19b2b33d3fa4260215bac8ba93e8b912325d4d",
   "metrics": [
     {
       "name": "edamame helper disabled",
@@ -1077,7 +1077,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "globalpreferences",
-        "target": "defaults read /Library/Preferences/com.apple.SoftwareUpdate AutomaticallyInstallMacOSUpdates 2>&1 | grep -v 1",
+        "target": "defaults read /Library/Preferences/com.apple.SoftwareUpdate AutomaticallyInstallMacOSUpdates 2>/dev/null | grep -qv 0 || echo 'macosupdate auto is not enabled or key is missing'",
         "education": []
       },
       "remediation": {
