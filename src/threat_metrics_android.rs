@@ -3,7 +3,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
   "name": "threat model Android",
   "extends": "none",
   "date": "April 17th 2024",
-  "signature": "edcd1640587552e638f11cd9f60d4608324029f420ad8b2b65063b6cf4eaa0d3",
+  "signature": "edcd1640587552e638f11cd9f60d4638324029f420ad8b2b65063b6cf4eaa0d3",
   "metrics": [
     {
       "name": "MDM profiles",
@@ -11,9 +11,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       "dimension": "system integrity",
       "severity": 5,
       "scope": "generic",
-      "tags": [
-        "Personal Posture"
-      ],
+      "tags": ["Personal Posture"],
       "description": [
         {
           "locale": "EN",
@@ -92,7 +90,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
         {
           "locale": "EN",
           "title": "Screen lock disabled",
-          "summary": "Your device doesn't have a screensaver enabled with a password. It leaves it open for phsyical access by anyone. This is very dangerous!"
+          "summary": "Your device doesn't have a screensaver enabled with a password. It leaves it open for physical access by anyone. This is very dangerous!"
         },
         {
           "locale": "FR",
@@ -171,7 +169,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
         {
           "locale": "FR",
           "title": "Votre appareil est jailbreaké",
-          "summary": "Votre appareil est jailbreaké. Soit vous l'avez fait vous-même, soit un acteur malveillant l'a fait pour accéder à vos données personnel. C'est très dangereux ! Vous devez restaurer votre appareil aux paramètres d'usine."
+          "summary": "Votre appareil est jailbreaké. Soit vous l'avez fait vous-même, soit un acteur malveillant l'a fait pour accéder à vos données personnelles. C'est très dangereux ! Vous devez restaurer votre appareil aux paramètres d'usine."
         }
       ],
       "implementation": {
@@ -511,6 +509,298 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
             "locale": "FR",
             "class": "youtube",
             "target": "https://www.youtube.com/watch?v=or1OJxptpqQ"
+          }
+        ]
+      }
+    },
+    {
+      "name": "password is too weak",
+      "metrictype": "bool",
+      "dimension": "credentials",
+      "severity": 4,
+      "scope": "generic",
+      "tags": [
+        "ISO 27001/2,Access Control",
+        "PCI-DSS,Requirement-8.2.3",
+        "SOC 2,CC-Access Control"
+      ],
+      "description": [
+        {
+          "locale": "EN",
+          "title": "Weak password",
+          "summary": "Your device password strength is insufficient. Ensure you are using at least a 6-digit PIN for better security."
+        },
+        {
+          "locale": "FR",
+          "title": "Force du mot de passe insuffisante",
+          "summary": "La force de votre mot de passe est insuffisante. Assurez-vous d'utiliser au moins un code PIN à 6 chiffres pour une meilleure sécurité."
+        }
+      ],
+      "implementation": {
+        "system": "Android",
+        "minversion": 13,
+        "maxversion": 0,
+        "class": "internal",
+        "elevation": "user",
+        "target": "password_check",
+        "education": []
+      },
+      "remediation": {
+        "system": "Android",
+        "minversion": 13,
+        "maxversion": 0,
+        "class": "",
+        "elevation": "",
+        "target": "",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "link",
+            "target": "https://support.google.com/android/answer/9079129?hl=en"
+          },
+          {
+            "locale": "FR",
+            "class": "link",
+            "target": "https://support.google.com/android/answer/9079129?hl=fr"
+          }
+        ]
+      },
+      "rollback": {
+        "system": "Android",
+        "minversion": 13,
+        "maxversion": 0,
+        "class": "",
+        "elevation": "",
+        "target": "",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "link",
+            "target": "https://support.google.com/android/answer/9079129?hl=en"
+          },
+          {
+            "locale": "FR",
+            "class": "link",
+            "target": "https://support.google.com/android/answer/9079129?hl=fr"
+          }
+        ]
+      }
+    },
+    {
+      "name": "biometric authentication disabled",
+      "metrictype": "bool",
+      "dimension": "credentials",
+      "severity": 4,
+      "scope": "generic",
+      "tags": [
+        "ISO 27001/2,Access Control",
+        "PCI-DSS,Requirement-8.2.3",
+        "SOC 2,CC-Access Control"
+      ],
+      "description": [
+        {
+          "locale": "EN",
+          "title": "Biometric authentication disabled",
+          "summary": "Your device's biometric authentication is disabled. Enabling biometric authentication can significantly improve your device's security."
+        },
+        {
+          "locale": "FR",
+          "title": "Authentification biométrique désactivée",
+          "summary": "L'authentification biométrique de votre appareil est désactivée. Activer l'authentification biométrique peut améliorer considérablement la sécurité de votre appareil."
+        }
+      ],
+      "implementation": {
+        "system": "Android",
+        "minversion": 13,
+        "maxversion": 0,
+        "class": "internal",
+        "elevation": "user",
+        "target": "biometric_check",
+        "education": []
+      },
+      "remediation": {
+        "system": "Android",
+        "minversion": 13,
+        "maxversion": 0,
+        "class": "",
+        "elevation": "",
+        "target": "",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "link",
+            "target": "https://support.google.com/pixelphone/answer/9517039?hl=en"
+          },
+          {
+            "locale": "FR",
+            "class": "link",
+            "target": "https://support.google.com/pixelphone/answer/9517039?hl=fr"
+          }
+        ]
+      },
+      "rollback": {
+        "system": "Android",
+        "minversion": 13,
+        "maxversion": 0,
+        "class": "",
+        "elevation": "",
+        "target": "",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "link",
+            "target": "https://support.google.com/pixelphone/answer/9517039?hl=en"
+          },
+          {
+            "locale": "FR",
+            "class": "link",
+            "target": "https://support.google.com/pixelphone/answer/9517039?hl=fr"
+          }
+        ]
+      }
+    },
+    {
+      "name": "play protect disabled",
+      "metrictype": "bool",
+      "dimension": "applications",
+      "severity": 4,
+      "scope": "generic",
+      "tags": [
+        "ISO 27001/2,Access Control",
+        "PCI-DSS,Requirement-8.2.3",
+        "SOC 2,CC-Access Control"
+      ],
+      "description": [
+        {
+          "locale": "EN",
+          "title": "Play Protect disabled",
+          "summary": "Google Play Protect is disabled on your device. Enable Play Protect to improve security against harmful apps."
+        },
+        {
+          "locale": "FR",
+          "title": "Play Protect désactivé",
+          "summary": "Google Play Protect est désactivé sur votre appareil. Activez Play Protect pour améliorer la sécurité contre les applications nuisibles."
+        }
+      ],
+      "implementation": {
+        "system": "Android",
+        "minversion": 13,
+        "maxversion": 0,
+        "class": "internal",
+        "elevation": "user",
+        "target": "play_protect_check",
+        "education": []
+      },
+      "remediation": {
+        "system": "Android",
+        "minversion": 13,
+        "maxversion": 0,
+        "class": "",
+        "elevation": "",
+        "target": "",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "link",
+            "target": "https://support.google.com/googleplay/answer/2812853?hl=en"
+          },
+          {
+            "locale": "FR",
+            "class": "link",
+            "target": "https://support.google.com/googleplay/answer/2812853?hl=fr"
+          }
+        ]
+      },
+      "rollback": {
+        "system": "Android",
+        "minversion": 13,
+        "maxversion": 0,
+        "class": "",
+        "elevation": "",
+        "target": "",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "link",
+            "target": "https://support.google.com/googleplay/answer/2812853?hl=en"
+          },
+          {
+            "locale": "FR",
+            "class": "link",
+            "target": "https://support.google.com/googleplay/answer/2812853?hl=fr"
+          }
+        ]
+      }
+    },
+    {
+      "name": "device encryption disabled",
+      "metrictype": "bool",
+      "dimension": "system integrity",
+      "severity": 5,
+      "scope": "generic",
+      "tags": [
+        "ISO 27001/2,Access Control",
+        "PCI-DSS,Requirement-8.2.3",
+        "SOC 2,CC-Access Control"
+      ],
+      "description": [
+        {
+          "locale": "EN",
+          "title": "Device encryption disabled",
+          "summary": "Your device's storage is not encrypted. Enable encryption to protect your data from unauthorized access."
+        },
+        {
+          "locale": "FR",
+          "title": "Chiffrement de l'appareil désactivé",
+          "summary": "Le stockage de votre appareil n'est pas chiffré. Activez le chiffrement pour protéger vos données contre tout accès non autorisé."
+        }
+      ],
+      "implementation": {
+        "system": "Android",
+        "minversion": 13,
+        "maxversion": 0,
+        "class": "internal",
+        "elevation": "user",
+        "target": "encryption_check",
+        "education": []
+      },
+      "remediation": {
+        "system": "Android",
+        "minversion": 13,
+        "maxversion": 0,
+        "class": "",
+        "elevation": "",
+        "target": "",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "link",
+            "target": "https://support.google.com/nexus/answer/2844831?hl=en"
+          },
+          {
+            "locale": "FR",
+            "class": "link",
+            "target": "https://support.google.com/nexus/answer/2844831?hl=fr"
+          }
+        ]
+      },
+      "rollback": {
+        "system": "Android",
+        "minversion": 13,
+        "maxversion": 0,
+        "class": "",
+        "elevation": "",
+        "target": "",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "link",
+            "target": "https://support.google.com/nexus/answer/2844831?hl=en"
+          },
+          {
+            "locale": "FR",
+            "class": "link",
+            "target": "https://support.google.com/nexus/answer/2844831?hl=fr"
           }
         ]
       }

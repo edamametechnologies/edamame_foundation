@@ -1,7 +1,7 @@
 use crate::runtime::async_spawn_blocking;
 use run_script::ScriptOptions;
 use std::error::Error;
-use tracing::{error, trace};
+use tracing::{error, debug};
 
 use powershell_script::PsScriptBuilder;
 
@@ -45,14 +45,6 @@ pub async fn run_cli(cmd: &str, username: &str, personate: bool) -> Result<Strin
     // Remove newlines from stdout
     let stdout = stdout.replace('\n', "").replace('\r', "");
 
-    trace!(
-        "Execution results for {:?} - code : {:?} - stdout : {:?} - stderr : {:?}",
-        cmd,
-        code,
-        stdout,
-        stderr
-    );
-
     if execution_failed(code, &stderr) {
         Err(From::from(stderr.clone()))
     } else {
@@ -90,11 +82,13 @@ fn execute_windows_ps(
         .hidden(true)
         .print_commands(false)
         .build();
+    debug!("Executing powershell command: {}", cmd);
     match ps.run(cmd) {
         Ok(output) => {
             *stdout = output.stdout().as_deref().unwrap_or("").to_string();
             *stderr = output.stderr().as_deref().unwrap_or("").to_string();
             *code = if output.success() { 0 } else { 1 };
+            debug!("Execution results: code : {:?} - stdout : {:?} - stderr : {:?}", code, stdout, stderr);
             Ok(())
         }
         Err(e) => {
@@ -124,10 +118,11 @@ fn execute_unix_command(
     } else {
         cmd.to_string()
     };
-    trace!("Executing shell command: {}", extcmd);
+    debug!("Executing shell command: {}", extcmd);
     let output = run_script::run(&extcmd, &args, &options)?;
     *code = output.0;
     *stdout = output.1;
     *stderr = output.2;
+    debug!("Execution results: code : {:?} - stdout : {:?} - stderr : {:?}", code, stdout, stderr);
     Ok(())
 }
