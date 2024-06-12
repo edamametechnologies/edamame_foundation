@@ -275,18 +275,31 @@ pub fn init_logger(executable_type: &str, url: &str, release: &str) {
         if cfg!(target_os = "macos") || cfg!(target_os = "ios") {
             #[cfg(any(target_os = "ios", target_os = "macos"))]
             {
-                let os_logger = OsLogger::new("com.edamametech.edamame", "");
+                // OsLogger if not a helper
+                if !matches!(executable_type, "helper") {
+                    let os_logger = OsLogger::new("com.edamametech.edamame", "");
 
-                match tracing_subscriber::registry()
-                    .with(filter_layer)
-                    .with(fmt::layer().with_writer(non_blocking))
-                    .with(fmt::layer().with_writer(logger.memory_writer.clone()))
-                    .with(sentry_layer)
-                    .with(os_logger)
-                    .try_init() {
+                    match tracing_subscriber::registry()
+                        .with(filter_layer)
+                        .with(fmt::layer().with_writer(non_blocking))
+                        .with(fmt::layer().with_writer(logger.memory_writer.clone()))
+                        .with(sentry_layer)
+                        .with(os_logger)
+                        .try_init() {
                         Ok(_) => println!("Logger initialized"),
                         Err(e) => eprintln!("Logger initialization failed: {}", e),
                     }
+                } else {
+                    match tracing_subscriber::registry()
+                        .with(filter_layer)
+                        .with(fmt::layer().with_writer(non_blocking))
+                        .with(fmt::layer().with_writer(logger.memory_writer.clone()))
+                        .with(sentry_layer)
+                        .try_init() {
+                        Ok(_) => println!("Logger initialized"),
+                        Err(e) => eprintln!("Logger initialization failed: {}", e),
+                    }
+                }
             }
         } else if cfg!(target_os = "android") {
             #[cfg(target_os = "android")]
