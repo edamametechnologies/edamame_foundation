@@ -366,8 +366,19 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "system",
-        "target": "defaults write /Library/Preferences/com.apple.commerce.plist AutoUpdate -bool true; defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticallyInstallAppUpdates -bool true",
-        "education": []
+        "target": "defaults write /Library/Preferences/com.apple.commerce.plist AutoUpdate -bool true; defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticallyInstallAppUpdates -bool true; defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticallyInstallMacOSUpdates -bool true",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "html",
+            "target": "<p>This command enables automatic updates for App Store applications and macOS.</p> <p>To achieve the same through the GUI, go to <a href='x-apple.systempreferences:com.apple.preferences.softwareupdate'>Software Update</a> in System Preferences. Click on the 'i' icon next to 'Automatic Updates' and ensure the box for 'Install application updates from the App Store' is checked.</p>"
+          },
+          {
+            "locale": "FR",
+            "class": "html",
+            "target": "<p>Cette commande active les mises à jour automatiques pour les applications de l'App Store et macOS.</p> <p> Pour réaliser la même chose via l'interface graphique, allez dans <a href='x-apple.systempreferences:com.apple.preferences.softwareupdate'>Mise à jour de logiciels</a> dans les Préférences Système. Cliquez sur l'icône 'i' à côté de 'Mises à jour automatiques' et assurez-vous que la case 'Installer les mises à jour d’apps depuis l’App Store' est cochée.</p>"
+          }
+        ]
       },
       "rollback": {
         "system": "macOS",
@@ -375,8 +386,19 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "system",
-        "target": "defaults write /Library/Preferences/com.apple.commerce.plist AutoUpdate -bool false; defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticallyInstallAppUpdates -bool false",
-        "education": []
+        "target": "defaults write /Library/Preferences/com.apple.commerce.plist AutoUpdate -bool false; defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticallyInstallAppUpdates -bool false; defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticallyInstallMacOSUpdates -bool false",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "html",
+            "target": "<p>This command disables automatic updates for App Store applications and macOS.</p> <p> To achieve the same through the GUI, go to <a href='x-apple.systempreferences:com.apple.preferences.softwareupdate'>Software Update</a> in System Preferences. Click on the 'i' icon next to 'Automatic Updates' and ensure the box for 'Install application updates from the App Store' is unchecked.</p>"
+          },
+          {
+            "locale": "FR",
+            "class": "html",
+            "target": "<p>Cette commande désactive les mises à jour automatiques pour les applications de l'App Store et macOS.</p> <p> Pour réaliser la même chose via l'interface graphique, allez dans <a href='x-apple.systempreferences:com.apple.preferences.softwareupdate'>Mise à jour de logiciels</a> dans les Préférences Système. Cliquez sur l'icône 'i' à côté de 'Mises à jour automatiques' et assurez-vous que la case 'Installer les mises à jour d’apps depuis l’App Store' est décochée.</p>"
+          }
+        ]
       }
     },
     {
@@ -488,12 +510,12 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
           {
             "locale": "EN",
             "class": "html",
-            "target": "<p>Disabling automatic login enhances your security by requiring authentication at startup. Execute the CLI command <code>defaults delete /Library/Preferences/com.apple.loginwindow autoLoginUser</code> to turn it off. This ensures that unauthorized users cannot access your system without entering the correct credentials.</p>"
+            "target": "<p>Disabling automatic login enhances your security by requiring authentication at startup. Execute the CLI command <code>defaults delete /Library/Preferences/com.apple.loginwindow autoLoginUser</code> to turn it off. This ensures that unauthorized users cannot access your system without entering the correct credentials. To achieve the same through the GUI, go to <a href='x-apple.systempreferences:com.apple.preferences.users'>Users & Groups</a> in System Preferences. Click on 'Automatic login' and set it to 'Off'.</p>"
           },
           {
             "locale": "FR",
             "class": "html",
-            "target": "<p>Désactiver la connexion automatique améliore votre sécurité en exigeant une authentification au démarrage. Exécutez la commande CLI <code>defaults delete /Library/Preferences/com.apple.loginwindow autoLoginUser</code> pour la désactiver. Cela garantit que les utilisateurs non autorisés ne peuvent pas accéder à votre système sans saisir les identifiants corrects.</p>"
+            "target": "<p>Désactiver la connexion automatique améliore votre sécurité en exigeant une authentification au démarrage. Exécutez la commande CLI <code>defaults delete /Library/Preferences/com.apple.loginwindow autoLoginUser</code> pour la désactiver. Cela garantit que les utilisateurs non autorisés ne peuvent pas accéder à votre système sans saisir les identifiants corrects. Pour réaliser la même chose via l'interface graphique, allez dans <a href='x-apple.systempreferences:com.apple.preferences.users'>Utilisateurs et groupes</a> dans les Préférences Système. Cliquez sur 'Connexion automatique' et définissez-la sur 'Non'.</p>"
           }
         ]
       },
@@ -508,12 +530,12 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
           {
             "locale": "EN",
             "class": "html",
-            "target": "<p>Disabling automatic login enhances your security by requiring authentication at startup. Execute the CLI command <code>defaults delete /Library/Preferences/com.apple.loginwindow autoLoginUser</code> to turn it off. This ensures that unauthorized users cannot access your system without entering the correct credentials.</p>"
+            "target": "<p>Disabling automatic login enhances your security by requiring authentication at startup. Execute the CLI command <code>defaults delete /Library/Preferences/com.apple.loginwindow autoLoginUser</code> to turn it off. This ensures that unauthorized users cannot access your system without entering the correct credentials. To achieve the same through the GUI, go to <a href='x-apple.systempreferences:com.apple.preferences.users'>Users & Groups</a> in System Preferences. Click on 'Automatic login' and set it to 'Off'.</p>"
           },
           {
             "locale": "FR",
             "class": "html",
-            "target": "<p>Désactiver la connexion automatique améliore votre sécurité en exigeant une authentification au démarrage. Exécutez la commande CLI <code>defaults delete /Library/Preferences/com.apple.loginwindow autoLoginUser</code> pour la désactiver. Cela garantit que les utilisateurs non autorisés ne peuvent pas accéder à votre système sans saisir les identifiants corrects.</p>"
+            "target": "<p>Désactiver la connexion automatique améliore votre sécurité en exigeant une authentification au démarrage. Exécutez la commande CLI <code>defaults delete /Library/Preferences/com.apple.loginwindow autoLoginUser</code> pour la désactiver. Cela garantit que les utilisateurs non autorisés ne peuvent pas accéder à votre système sans saisir les identifiants corrects. Pour réaliser la même chose via l'interface graphique, allez dans <a href='x-apple.systempreferences:com.apple.preferences.users'>Utilisateurs et groupes</a> dans les Préférences Système. Cliquez sur 'Connexion automatique' et définissez-la sur 'Non'.</p>"
           }
         ]
       },
@@ -521,14 +543,19 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "system": "macOS",
         "minversion": 12,
         "maxversion": 0,
-        "class": "",
+        "class": "html",
         "elevation": "",
         "target": "",
         "education": [
           {
             "locale": "EN",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=G89On8uvQuQ"
+            "class": "html",
+            "target": "<p>To enable automatic login again, follow these steps:<ul><li>Open <a href='x-apple.systempreferences:com.apple.preferences.users'>Users & Groups</a> in System Preferences.</li><li>Click on 'Automatic login'.</li><li>Choose the desired user from the dropdown menu.</li><li>If prompted, enter the password for the selected user.</li></ul></p>"
+          },
+          {
+            "locale": "FR",
+            "class": "html",
+            "target": "<p>Pour réactiver la connexion automatique, suivez ces étapes:<ul><li>Ouvrez <a href='x-apple.systempreferences:com.apple.preferences.users'>Utilisateurs et groupes</a> dans les Préférences Système.</li><li>Cliquez sur 'Connexion automatique'.</li><li>Choisissez l'utilisateur désiré dans le menu déroulant.</li><li>Si vous y êtes invité, saisissez le mot de passe de l'utilisateur sélectionné.</li></ul></p>"
           }
         ]
       }
@@ -799,12 +826,12 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
           {
             "locale": "EN",
             "class": "html",
-            "target": "<p>Disabling file sharing on your macOS system can significantly enhance your data security. Use the CLI command <code>launchctl unload -w /System/Library/LaunchDaemons/com.apple.smbd.plist</code> to turn off SMB file sharing. This action ensures that your files are not inadvertently shared across the network, reducing the risk of unauthorized access.</p>"
+            "target": "<p>To enhance your macOS security, disable remote Apple events, which are often unnecessary and can be exploited. Execute the CLI command <code>systemsetup -setremoteappleevents off</code> to disable them. This will prevent unauthorized remote control of your system.</p>"
           },
           {
             "locale": "FR",
             "class": "html",
-            "target": "<p>Désactiver le partage de fichiers sur votre système macOS peut considérablement renforcer la sécurité de vos données. Utilisez la commande CLI <code>launchctl unload -w /System/Library/LaunchDaemons/com.apple.smbd.plist</code> pour désactiver le partage de fichiers SMB. Cette action garantit que vos fichiers ne sont pas partagés par inadvertance sur le réseau, réduisant ainsi le risque d'accès non autorisé.</p>"
+            "target": "<p>Pour améliorer la sécurité de votre macOS, désactivez les événements Apple à distance, souvent inutiles et exploitables. Exécutez la commande CLI <code>systemsetup -setremoteappleevents off</code> pour les désactiver. Cela empêchera le contrôle à distance non autorisé de votre système.</p>"
           }
         ]
       },
@@ -819,12 +846,12 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
           {
             "locale": "EN",
             "class": "html",
-            "target": "<p>Re-enabling file sharing on macOS allows for easy file access and sharing within a network. To enable SMB file sharing, use the CLI command <code>launchctl load -w /System/Library/LaunchDaemons/com.apple.smbd.plist && defaults write /Library/Preferences/SystemConfiguration/com.apple.smb.server.plist EnabledServices -array disk</code>. Ensure proper security measures are in place to protect shared data.</p>"
+            "target": "<p>If you need to re-enable remote Apple events for specific purposes, execute the CLI command <code>systemsetup -setremoteappleevents on</code>. Ensure you have the necessary security measures in place to protect your system from unauthorized access.</p>"
           },
           {
             "locale": "FR",
             "class": "html",
-            "target": "<p>Réactiver le partage de fichiers sur macOS permet un accès et un partage de fichiers faciles au sein d'un réseau. Pour activer le partage de fichiers SMB, utilisez la commande CLI <code>launchctl load -w /System/Library/LaunchDaemons/com.apple.smbd.plist && defaults write /Library/Preferences/SystemConfiguration/com.apple.smb.server.plist EnabledServices -array disk</code>. Assurez-vous que des mesures de sécurité appropriées sont en place pour protéger les données partagées.</p>"
+            "target": "<p>Si vous avez besoin de réactiver les événements Apple à distance pour des raisons spécifiques, exécutez la commande CLI <code>systemsetup -setremoteappleevents on</code>. Assurez-vous d'avoir les mesures de sécurité nécessaires en place pour protéger votre système contre tout accès non autorisé.</p>"
           }
         ]
       }
@@ -935,19 +962,19 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "system": "macOS",
         "minversion": 12,
         "maxversion": 0,
-        "class": "",
+        "class": "link",
         "elevation": "",
-        "target": "",
+        "target": "x-apple.systempreferences:com.apple.preference.security?FileVault",
         "education": [
           {
             "locale": "EN",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=ETgLlx3Npqg"
+            "class": "html",
+            "target": "<p>To enable FileVault, go to <a href='x-apple.systempreferences:com.apple.preference.security?FileVault'>Security & Privacy preferences</a> in System Preferences, and click 'Turn On FileVault'. Follow the prompts to set up a recovery key and restart your Mac. You will see an option to use your iCloud account to unlock your disk or create a recovery key. Select your preference and proceed.</p>"
           },
           {
             "locale": "FR",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=Ovr9nyIagTY"
+            "class": "html",
+            "target": "<p>Pour activer FileVault, allez dans les <a href='x-apple.systempreferences:com.apple.preference.security?FileVault'>préférences Sécurité et confidentialité</a> dans les Préférences Système, et cliquez sur 'Activer FileVault'. Suivez les instructions pour configurer une clé de récupération et redémarrez votre Mac. Vous verrez une option pour utiliser votre compte iCloud pour déverrouiller votre disque ou créer une clé de récupération. Sélectionnez votre préférence et continuez.</p>"
           }
         ]
       },
@@ -955,19 +982,19 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "system": "macOS",
         "minversion": 12,
         "maxversion": 0,
-        "class": "",
+        "class": "link",
         "elevation": "",
-        "target": "",
+        "target": "x-apple.systempreferences:com.apple.preference.security?FileVault",
         "education": [
           {
             "locale": "EN",
-            "class": "link",
-            "target": "https://www.youtube.com/watch?v=ETgLlx3Npqg"
+            "class": "html",
+            "target": "<p>To disable FileVault, go to <a href='x-apple.systempreferences:com.apple.preference.security?FileVault'>Security & Privacy preferences</a> in System Preferences, and click 'Turn Off FileVault'. Follow the prompts to decrypt your disk.</p>"
           },
           {
             "locale": "FR",
-            "class": "link",
-            "target": "https://www.youtube.com/watch?v=Ovr9nyIagTY"
+            "class": "html",
+            "target": "<p>Pour désactiver FileVault, allez dans les <a href='x-apple.systempreferences:com.apple.preference.security?FileVault'>préférences Sécurité et confidentialité</a> dans les Préférences Système, et cliquez sur 'Désactiver FileVault'. Suivez les instructions pour déchiffrer votre disque.</p>"
           }
         ]
       }
@@ -1091,12 +1118,12 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
           {
             "locale": "EN",
             "class": "html",
-            "target": "<p>Automating system updates is crucial for maintaining the security and efficiency of your macOS system. Enable automatic updates with the CLI command <code>defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticCheckEnabled -bool true; defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticDownload -bool true; defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticallyInstallMacOSUpdates -bool true; defaults write /Library/Preferences/com.apple.SoftwareUpdate CriticalUpdateInstall -bool true; defaults write /Library/Preferences/com.apple.SoftwareUpdate ConfigDataInstall -bool true; softwareupdate --schedule on</code>. This ensures your system always has the latest security patches and improvements.</p>"
+            "target": "<p>Automating system updates is crucial for maintaining the security and efficiency of your macOS system. Enable automatic updates with the CLI command <code>defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticCheckEnabled -bool true; defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticDownload -bool true; defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticallyInstallMacOSUpdates -bool true; defaults write /Library/Preferences/com.apple.SoftwareUpdate CriticalUpdateInstall -bool true; defaults write /Library/Preferences/com.apple.SoftwareUpdate ConfigDataInstall -bool true; softwareupdate --schedule on</code>. This ensures your system always has the latest security patches and improvements.</p> <p>To do this via the GUI, go to <a href='x-apple.systempreferences:com.apple.preferences.softwareupdate'>Software Update</a> in System Preferences. Click on the 'i' icon next to 'Automatic Updates' and ensure the following options are checked:<ul><li>Check for updates</li><li>Download new updates when available</li><li>Install macOS updates</li></ul></p>"
           },
           {
             "locale": "FR",
             "class": "html",
-            "target": "<p>Automatiser les mises à jour système est crucial pour maintenir la sécurité et l'efficacité de votre système macOS. Activez les mises à jour automatiques avec la commande CLI <code>defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticCheckEnabled -bool true; defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticDownload -bool true; defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticallyInstallMacOSUpdates -bool true; defaults write /Library/Preferences/com.apple.SoftwareUpdate CriticalUpdateInstall -bool true; defaults write /Library/Preferences/com.apple.SoftwareUpdate ConfigDataInstall -bool true; softwareupdate --schedule on</code>. Cela garantit que votre système dispose toujours des derniers correctifs de sécurité et améliorations.</p>"
+            "target": "<p>Automatiser les mises à jour système est crucial pour maintenir la sécurité et l'efficacité de votre système macOS. Activez les mises à jour automatiques avec la commande CLI <code>defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticCheckEnabled -bool true; defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticDownload -bool true; defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticallyInstallMacOSUpdates -bool true; defaults write /Library/Preferences/com.apple.SoftwareUpdate CriticalUpdateInstall -bool true; defaults write /Library/Preferences/com.apple.SoftwareUpdate ConfigDataInstall -bool true; softwareupdate --schedule on</code>. Cela garantit que votre système dispose toujours des derniers correctifs de sécurité et améliorations.</p> <p> Pour ce faire via l'interface graphique, allez dans <a href='x-apple.systempreferences:com.apple.preferences.softwareupdate'>Mise à jour de logiciels</a> dans les Préférences Système. Cliquez sur l'icône 'i' à côté de 'Mises à jour automatiques' et assurez-vous que les options suivantes sont cochées:<ul><li>Rechercher les mises à jour</li><li>Télécharger les nouvelles mises à jour lorsqu’elles sont disponibles</li><li>Installer les mises à jour de macOS</li></ul></p>"
           }
         ]
       },
@@ -1111,12 +1138,12 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
           {
             "locale": "EN",
             "class": "html",
-            "target": "<p>If you need to disable automatic system updates, perhaps for testing or other specific scenarios, use the CLI command <code>defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticCheckEnabled -bool false; defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticDownload -bool false; defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticallyInstallMacOSUpdates -bool false; defaults write /Library/Preferences/com.apple.SoftwareUpdate CriticalUpdateInstall -bool false; defaults write /Library/Preferences/com.apple.SoftwareUpdate ConfigDataInstall -bool false; softwareupdate --schedule off</code>. Remember, this action might leave your system vulnerable to security threats.</p>"
+            "target": "<p>If you need to disable automatic system updates, perhaps for testing or other specific scenarios, use the CLI command <code>defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticCheckEnabled -bool false; defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticDownload -bool false; defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticallyInstallMacOSUpdates -bool false; defaults write /Library/Preferences/com.apple.SoftwareUpdate CriticalUpdateInstall -bool false; defaults write /Library/Preferences/com.apple.SoftwareUpdate ConfigDataInstall -bool false; softwareupdate --schedule off</code>. Remember, this action might leave your system vulnerable to security threats.</p> <p> To do this via the GUI, go to <a href='x-apple.systempreferences:com.apple.preferences.softwareupdate'>Software Update</a> in System Preferences. Click on the 'i' icon next to 'Automatic Updates' and disable all options.</p>"
           },
           {
             "locale": "FR",
             "class": "html",
-            "target": "<p>Si vous devez désactiver les mises à jour automatiques du système, peut-être pour des tests ou d'autres scénarios spécifiques, utilisez la commande CLI <code>defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticCheckEnabled -bool false; defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticDownload -bool false; defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticallyInstallMacOSUpdates -bool false; defaults write /Library/Preferences/com.apple.SoftwareUpdate CriticalUpdateInstall -bool false; defaults write /Library/Preferences/com.apple.SoftwareUpdate ConfigDataInstall -bool false; softwareupdate --schedule off</code>. N'oubliez pas, cette action pourrait laisser votre système vulnérable aux menaces de sécurité.</p>"
+            "target": "<p>Si vous devez désactiver les mises à jour automatiques du système, peut-être pour des tests ou d'autres scénarios spécifiques, utilisez la commande CLI <code>defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticCheckEnabled -bool false; defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticDownload -bool false; defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticallyInstallMacOSUpdates -bool false; defaults write /Library/Preferences/com.apple.SoftwareUpdate CriticalUpdateInstall -bool false; defaults write /Library/Preferences/com.apple.SoftwareUpdate ConfigDataInstall -bool false; softwareupdate --schedule off</code>. N'oubliez pas, cette action pourrait laisser votre système vulnérable aux menaces de sécurité.</p> <p> Pour ce faire via l'interface graphique, allez dans <a href='x-apple.systempreferences:com.apple.preferences.softwareupdate'>Mise à jour de logiciels</a> dans les Préférences Système. Cliquez sur l'icône 'i' à côté de 'Mises à jour automatiques' et désactivez toutes les options.</p>"
           }
         ]
       }
@@ -1137,7 +1164,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         {
           "locale": "EN",
           "title": "Screen lock disabled",
-          "summary": "Your computer doesn't have a screensaver enabled with a password. It leaves it open for phsyical access by anyone. This is very dangerous!"
+          "summary": "Your computer doesn't have a screensaver enabled with a password. It leaves it open for physical access by anyone. This is very dangerous!"
         },
         {
           "locale": "FR",
@@ -1158,19 +1185,19 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "system": "macOS",
         "minversion": 12,
         "maxversion": 0,
-        "class": "",
+        "class": "link",
         "elevation": "",
-        "target": "",
+        "target": "x-apple.systempreferences:com.apple.Lock-Screen-Settings.extension",
         "education": [
           {
             "locale": "EN",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=C6of13nZTpM"
+            "class": "html",
+            "target": "<p>To enable screensaver lock, go to <a href='x-apple.systempreferences:com.apple.Lock-Screen-Settings.extension'>Lock Screen settings</a> in System Preferences. In the 'Lock Screen' settings, check the box for 'Require password after screen saver begins or display is turned off' and set the desired time interval.</p>"
           },
           {
             "locale": "FR",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=C6of13nZTpM"
+            "class": "html",
+            "target": "<p>Pour activer le verrouillage de l'écran de veille, allez dans les <a href='x-apple.systempreferences:com.apple.Lock-Screen-Settings.extension'>paramètres de l'écran de verrouillage</a> dans les Préférences Système. Dans les paramètres de l'écran de verrouillage, cochez la case 'Exiger le mot de passe après la mise en veille ou l'extinction de l'affichage' et définissez l'intervalle de temps souhaité.</p>"
           }
         ]
       },
@@ -1178,19 +1205,19 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "system": "macOS",
         "minversion": 12,
         "maxversion": 0,
-        "class": "",
+        "class": "link",
         "elevation": "",
-        "target": "",
+        "target": "x-apple.systempreferences:com.apple.Lock-Screen-Settings.extension",
         "education": [
           {
             "locale": "EN",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=C6of13nZTpM"
+            "class": "html",
+            "target": "<p>To disable screensaver lock, go to <a href='x-apple.systempreferences:com.apple.Lock-Screen-Settings.extension'>Lock Screen settings</a> in System Preferences. In the 'Lock Screen' settings, uncheck the box for 'Require password after screen saver begins or display is turned off'.</p>"
           },
           {
             "locale": "FR",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=C6of13nZTpM"
+            "class": "html",
+            "target": "<p>Pour désactiver le verrouillage de l'écran de veille, allez dans les <a href='x-apple.systempreferences:com.apple.Lock-Screen-Settings.extension'>paramètres de l'écran de verrouillage</a> dans les Préférences Système. Dans les paramètres de l'écran de verrouillage, décochez la case 'Exiger le mot de passe après la mise en veille ou l'extinction de l'affichage'.</p>"
           }
         ]
       }
@@ -1574,12 +1601,12 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         {
           "locale": "EN",
           "title": "Potentially compromised email address",
-          "summary": "Your email address might have recently appeared in a data breach. Please set your email in the Identity tab, review the breaches if any and follow instructions."
+          "summary": "Check if your email address might have recently appeared in a data breach."
         },
         {
           "locale": "FR",
           "title": "Adresse e-mail potentiellement compromise",
-          "summary": "Votre adresse e-mail est peut-être apparue récemment dans une fuite de données. Renseignez votre email dans le tab Identité, examinez les fuites éventuelles et suivez les instructions."
+          "summary": "Vérifiez si votre adresse e-mail est peut-être apparue récemment dans une fuite de données."
         }
       ],
       "implementation": {
@@ -1601,13 +1628,13 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "education": [
           {
             "locale": "EN",
-            "class": "link",
-            "target": "https://en.wikipedia.org/wiki/Have_I_Been_Pwned"
+            "class": "html",
+            "target": "<p>To verify and mitigate the impact of a breach associated with your email, follow these steps:</p><ul><li>Navigate to the 'Identity' tab.</li><li>Enter your email address in the provided field.</li><li>Review the list of breaches associated with your email.</li><li>Select a breach to view detailed information and perform an AI-driven analysis.</li><li>Based on the analysis, decide whether to dismiss the breach or take further action if it's significant.</li><li>Once all threats are addressed, this alert will be marked as inactive.</li></ul>"
           },
           {
             "locale": "FR",
-            "class": "link",
-            "target": "https://www.futura-sciences.com/tech/actualites/internet-voici-savoir-si-vos-donnees-personnelles-internet-ont-ete-piratees-103095/"
+            "class": "html",
+            "target": "<p>Pour vérifier et atténuer l'impact d'une fuite de données associée à votre email, suivez ces étapes :</p><ul><li>Allez dans l'onglet 'Identité'.</li><li>Entrez votre adresse e-mail dans le champ prévu.</li><li>Examinez la liste des fuites associées à votre email.</li><li>Sélectionnez une fuite pour voir les informations détaillées et effectuer une analyse assistée par IA.</li><li>En fonction de l'analyse, décidez de rejeter la fuite ou de prendre des mesures supplémentaires si elle est significative.</li><li>Une fois toutes les menaces traitées, cette alerte sera marquée comme inactive.</li></ul>"
           }
         ]
       },
@@ -1675,13 +1702,13 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "education": [
           {
             "locale": "EN",
-            "class": "link",
-            "target": "https://en.wikipedia.org/wiki/Port_scanner"
+            "class": "html",
+            "target": "<p>Scan your network to identify all connected devices and assess potential threats.</p><h4>Steps to verify a critical device</h4><ul><li>Navigate to the 'Network' tab.</li><li>Devices of critical importance are marked with yellow for medium criticality and red for high criticality.</li><li>Select a critical device.</li><li>Assess each port's criticality by reading the associated CVEs and analyzing potential issues with AI.</li><li>If a port is determined to be safe, mark it as verified.</li></ul><p>Once all devices are deemed safe, this threat will be marked as inactive.</p>"
           },
           {
             "locale": "FR",
-            "class": "link",
-            "target": "https://fr.wikipedia.org/wiki/Balayage_de_ports"
+            "class": "html",
+            "target": "<p>Scannez votre réseau pour identifier tous les appareils connectés et évaluer les menaces potentielles.</p><h4>Étapes pour vérifier un appareil critique</h4><ul><li>Allez dans l'onglet 'Réseau'.</li><li>Les appareils de grande importance sont marqués en jaune pour une criticité moyenne et en rouge pour une criticité élevée.</li><li>Sélectionnez un appareil critique.</li><li>Évaluez la criticité de chaque port en lisant les CVE associés et en analysant les problèmes potentiels avec l'IA.</li><li>Si un port est déterminé comme sûr, marquez-le comme vérifié.</li></ul><p>Une fois que tous les appareils sont considérés comme sûrs, cette menace sera marquée comme inactive.</p>"
           }
         ]
       },
@@ -1742,19 +1769,19 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "system": "macOS",
         "minversion": 12,
         "maxversion": 0,
-        "class": "",
+        "class": "link",
         "elevation": "",
-        "target": "",
+        "target": "x-apple.systempreferences:com.apple.preferences.softwareupdate",
         "education": [
           {
             "locale": "EN",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=FG2DXkPA93g&t=124s"
+            "class": "html",
+            "target": "<p>To update your macOS, go to <a href='x-apple.systempreferences:com.apple.preferences.softwareupdate'>Software Update</a> in System Preferences. Click 'Update Now' or 'Upgrade Now' if an update is available and follow the prompts to install the latest version.</p>"
           },
           {
             "locale": "FR",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=FG2DXkPA93g&t=124s"
+            "class": "html",
+            "target": "<p>Pour mettre à jour votre macOS, allez dans <a href='x-apple.systempreferences:com.apple.preferences.softwareupdate'>Mise à jour de logiciels</a> dans les Préférences Système. Cliquez sur 'Mettre à jour maintenant' ou 'Mettre à niveau maintenant' si une mise à jour est disponible et suivez les instructions pour installer la dernière version.</p>"
           }
         ]
       },
@@ -1762,19 +1789,19 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "system": "macOS",
         "minversion": 12,
         "maxversion": 0,
-        "class": "",
+        "class": "link",
         "elevation": "",
-        "target": "",
+        "target": "x-apple.systempreferences:com.apple.preferences.softwareupdate",
         "education": [
           {
             "locale": "EN",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=FG2DXkPA93g&t=124s"
+            "class": "html",
+            "target": "<p>To revert to a previous macOS version, go to <a href='x-apple.systempreferences:com.apple.preferences.softwareupdate'>Software Update</a> in System Preferences and follow the appropriate steps to downgrade if supported.</p>"
           },
           {
             "locale": "FR",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=FG2DXkPA93g&t=124s"
+            "class": "html",
+            "target": "<p>Pour revenir à une version précédente de macOS, allez dans <a href='x-apple.systempreferences:com.apple.preferences.softwareupdate'>Mise à jour de logiciels</a> dans les Préférences Système et suivez les étapes appropriées pour rétrograder si pris en charge.</p>"
           }
         ]
       }
