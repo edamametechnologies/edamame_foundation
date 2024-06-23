@@ -173,19 +173,19 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "system": "Windows",
         "minversion": 10,
         "maxversion": 0,
-        "class": "",
-        "elevation": "",
-        "target": "",
+        "class": "link",
+        "elevation": "user",
+        "target": "ms-settings:windowsdefender",
         "education": [
           {
             "locale": "EN",
-            "class": "link",
-            "target": "https://support.microsoft.com/en-us/windows/stay-protected-with-windows-security-2ae0363d-0ada-c064-8b56-6a39afb6a963"
+            "class": "html",
+            "target": "<p>This remediation will direct you to the Windows Security settings where you can enable or install an antivirus program. Ensure you have a robust antivirus solution enabled to protect your system from malware and other threats. For more detailed instructions, visit the <a href='https://support.microsoft.com/en-us/windows/stay-protected-with-windows-security-2ae0363d-0ada-c064-8b56-6a39afb6a963'>support page</a>.</p>"
           },
           {
             "locale": "FR",
-            "class": "link",
-            "target": "https://support.microsoft.com/fr-fr/windows/rester-prot%C3%A9g%C3%A9-avec-s%C3%A9curit%C3%A9-windows-2ae0363d-0ada-c064-8b56-6a39afb6a963"
+            "class": "html",
+            "target": "<p>Cette remédiation vous dirigera vers les paramètres de Sécurité Windows où vous pourrez activer ou installer un programme antivirus. Assurez-vous d'avoir une solution antivirus robuste activée pour protéger votre système contre les logiciels malveillants et autres menaces. Pour des instructions plus détaillées, visitez la <a href='https://support.microsoft.com/fr-fr/windows/rester-prot%C3%A9g%C3%A9-avec-s%C3%A9curit%C3%A9-windows-2ae0363d-0ada-c064-8b56-6a39afb6a963'>page de support</a>.</p>"
           }
         ]
       },
@@ -193,19 +193,19 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "system": "Windows",
         "minversion": 10,
         "maxversion": 0,
-        "class": "",
-        "elevation": "",
-        "target": "",
+        "class": "link",
+        "elevation": "user",
+        "target": "ms-settings:windowsdefender",
         "education": [
           {
             "locale": "EN",
-            "class": "link",
-            "target": "https://support.microsoft.com/en-us/windows/stay-protected-with-windows-security-2ae0363d-0ada-c064-8b56-6a39afb6a963"
+            "class": "html",
+            "target": "<p>If you need to revert the changes, go back to the Windows Security settings and adjust your antivirus settings accordingly. Ensure you understand the security implications of any changes you make. For more information, visit the <a href='https://support.microsoft.com/en-us/windows/stay-protected-with-windows-security-2ae0363d-0ada-c064-8b56-6a39afb6a963'>support page</a>.</p>"
           },
           {
             "locale": "FR",
-            "class": "link",
-            "target": "https://support.microsoft.com/fr-fr/windows/rester-prot%C3%A9g%C3%A9-avec-s%C3%A9curit%C3%A9-windows-2ae0363d-0ada-c064-8b56-6a39afb6a963"
+            "class": "html",
+            "target": "<p>Si vous devez annuler les modifications, retournez dans les paramètres de Sécurité Windows et ajustez les paramètres de votre antivirus en conséquence. Assurez-vous de comprendre les implications de sécurité des modifications apportées. Pour plus d'informations, visitez la <a href='https://support.microsoft.com/fr-fr/windows/rester-prot%C3%A9g%C3%A9-avec-s%C3%A9curit%C3%A9-windows-2ae0363d-0ada-c064-8b56-6a39afb6a963'>page de support</a>.</p>"
           }
         ]
       }
@@ -448,12 +448,12 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         {
           "locale": "EN",
           "title": "Potentially compromised email address",
-          "summary": "Your email address might have recently appeared in a data breach. Please set your email in the Identity tab, review the breaches if any and follow instructions."
+          "summary": "Check if your email address might have recently appeared in a data breach."
         },
         {
           "locale": "FR",
           "title": "Adresse e-mail potentiellement compromise",
-          "summary": "Votre adresse e-mail est peut-être apparue récemment dans une fuite de données. Renseignez votre email dans le tab Identité, examinez les fuites éventuelles et suivez les instructions."
+          "summary": "Vérifiez si votre adresse e-mail est peut-être apparue récemment dans une fuite de données."
         }
       ],
       "implementation": {
@@ -475,13 +475,13 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "education": [
           {
             "locale": "EN",
-            "class": "link",
-            "target": "https://en.wikipedia.org/wiki/Have_I_Been_Pwned"
+            "class": "html",
+            "target": "<p>To verify and mitigate the impact of a breach associated with your email, follow these steps:</p><ul><li>Navigate to the 'Identity' tab.</li><li>Enter your email address in the provided field.</li><li>Review the list of breaches associated with your email.</li><li>Select a breach to view detailed information and perform an AI-driven analysis.</li><li>Based on the analysis, decide whether to dismiss the breach or take further action if it's significant.</li><li>Once all threats are addressed, this alert will be marked as inactive.</li></ul>"
           },
           {
             "locale": "FR",
-            "class": "link",
-            "target": "https://www.futura-sciences.com/tech/actualites/internet-voici-savoir-si-vos-donnees-personnelles-internet-ont-ete-piratees-103095/"
+            "class": "html",
+            "target": "<p>Pour vérifier et atténuer l'impact d'une fuite de données associée à votre email, suivez ces étapes :</p><ul><li>Allez dans l'onglet 'Identité'.</li><li>Entrez votre adresse e-mail dans le champ prévu.</li><li>Examinez la liste des fuites associées à votre email.</li><li>Sélectionnez une fuite pour voir les informations détaillées et effectuer une analyse assistée par IA.</li><li>En fonction de l'analyse, décidez de rejeter la fuite ou de prendre des mesures supplémentaires si elle est significative.</li><li>Une fois toutes les menaces traitées, cette alerte sera marquée comme inactive.</li></ul>"
           }
         ]
       },
@@ -549,13 +549,13 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "education": [
           {
             "locale": "EN",
-            "class": "link",
-            "target": "https://en.wikipedia.org/wiki/Port_scanner"
+            "class": "html",
+            "target": "<p>This feature allows you to scan your network to identify all connected devices. During the scan, the app checks for open ports and associated CVEs. You can then analyze these potential issues with the help of AI and decide if the threat should be ignored. Once all devices are deemed safe, this threat will be marked as inactive.</p>"
           },
           {
             "locale": "FR",
-            "class": "link",
-            "target": "https://fr.wikipedia.org/wiki/Balayage_de_ports"
+            "class": "html",
+            "target": "<p>Cette fonction vous permet de scanner votre réseau pour identifier tous les appareils connectés. Pendant le scan, l'application vérifie les ports ouverts et les CVE associés. Vous pouvez ensuite analyser ces problèmes potentiels avec l'aide de l'IA et décider si la menace doit être ignorée. Une fois que tous les appareils sont considérés comme sûrs, cette menace sera marquée comme inactive.</p>"
           }
         ]
       },
@@ -1458,6 +1458,329 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
             "locale": "FR",
             "class": "html",
             "target": "<p>Après les modifications automatiques, un redémarrage du système est requis pour activer le retour en arrière.</p>"
+          }
+        ]
+      }
+    },
+    {
+      "name": "no sign-in options protection",
+      "metrictype": "bool",
+      "dimension": "credentials",
+      "severity": 5,
+      "scope": "generic",
+      "tags": [],
+      "description": [
+        {
+          "locale": "EN",
+          "title": "No sign-in options enabled",
+          "summary": "Your system currently does not have any sign-in options enabled. It is important to enable sign-in options like passwords, PIN, or Windows Hello to ensure your device is securely protected."
+        },
+        {
+          "locale": "FR",
+          "title": "Aucune option de connexion activée",
+          "summary": "Votre système n'a actuellement activé aucune option de connexion. Il est important d'activer des options de connexion telles que des mots de passe, un code PIN ou Windows Hello pour assurer la protection sécurisée de votre appareil."
+        }
+      ],
+      "implementation": {
+        "system": "Windows",
+        "minversion": 10,
+        "maxversion": 0,
+        "class": "cli",
+        "elevation": "user",
+        "target": "$pinEnabled = (Get-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Authentication\\LogonUI\\Pin\\Status' -Name 'value' -ErrorAction SilentlyContinue).value; $windowsHelloEnabled = (Get-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\PolicyManager\\default\\Settings\\AllowSignInOptions' -Name 'value' -ErrorAction SilentlyContinue).value; $passwordRequired = (net user $env:USERNAME | Select-String 'Password required' | ForEach-Object { $_.Line -match ': (.*)$' | Out-Null; $matches[1].Trim() }) -eq 'Yes'; if ($pinEnabled -eq 1 -or $windowsHelloEnabled -eq 1 -or $passwordRequired -eq 'Yes') { '' } else { 'No sign-in options are enabled.' }",
+        "education": []
+      },
+      "remediation": {
+        "system": "Windows",
+        "minversion": 10,
+        "maxversion": 0,
+        "class": "link",
+        "elevation": "",
+        "target": "ms-settings:signinoptions",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "html",
+            "target": "<p>To enable sign-in options, go to Settings > Accounts > Sign-in options. Follow the guide to set up a password, PIN, or Windows Hello. <a href='https://support.microsoft.com/en-us/windows/windows-sign-in-options-and-account-protection-7b34d4cf-794f-f6bd-ddcc-e73cdf1a6fbf'>Learn more</a></p>"
+          },
+          {
+            "locale": "FR",
+            "class": "html",
+            "target": "<p>Pour activer les options de connexion, allez dans Paramètres > Comptes > Options de connexion. Suivez le guide pour configurer un mot de passe, un code PIN ou Windows Hello. <a href='https://support.microsoft.com/fr-fr/windows/options-de-connexion-de-windows-10-et-protection-des-comptes-7b34d4cf-794f-f6bd-ddcc-e73cdf1a6fbf'>En savoir plus</a></p>"
+          }
+        ]
+      },
+      "rollback": {
+        "system": "Windows",
+        "minversion": 10,
+        "maxversion": 0,
+        "class": "",
+        "elevation": "",
+        "target": "",
+        "education": []
+      }
+    },
+    {
+      "name": "Windows Hello availability",
+      "metrictype": "bool",
+      "dimension": "credentials",
+      "severity": 5,
+      "scope": "generic",
+      "tags": [],
+      "description": [
+        {
+          "locale": "EN",
+          "title": "Windows Hello is not available",
+          "summary": "Windows Hello, a crucial security feature, is not available on your system. Enabling it provides advanced security mechanisms such as PIN and biometric authentication."
+        },
+        {
+          "locale": "FR",
+          "title": "Windows Hello n'est pas disponible",
+          "summary": "Windows Hello, une fonctionnalité de sécurité essentielle, n'est pas disponible sur votre système. L'activer fournit des mécanismes de sécurité avancés tels que l'authentification par PIN et biométrique."
+        }
+      ],
+      "implementation": {
+        "system": "Windows",
+        "minversion": 10,
+        "maxversion": 0,
+        "class": "cli",
+        "elevation": "user",
+        "target": "if (Test-Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Authentication\\Ngc\\Status') { '' } else { 'Windows Hello is not available.' }",
+        "education": []
+      },
+      "remediation": {
+        "system": "Windows",
+        "minversion": 10,
+        "maxversion": 0,
+        "class": "link",
+        "elevation": "user",
+        "target": "ms-settings:signinoptions",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "html",
+            "target": "<p>To enable Windows Hello, go to <a href='ms-settings:signinoptions'>Settings > Accounts > Sign-in options</a>. Please note that your device needs to support Windows Hello. If it does not, you might need to upgrade your hardware or check for available updates from your device manufacturer. For more information, visit the <a href='https://support.microsoft.com/en-us/windows/configure-windows-hello-dae28983-8242-bb2a-d3d1-87c9d265a5f0'>support page</a>.</p>"
+          },
+          {
+            "locale": "FR",
+            "class": "html",
+            "target": "<p>Pour activer Windows Hello, allez dans <a href='ms-settings:signinoptions'>Paramètres > Comptes > Options de connexion</a>. Veuillez noter que votre appareil doit prendre en charge Windows Hello. Si ce n'est pas le cas, vous devrez peut-être mettre à niveau votre matériel ou vérifier les mises à jour disponibles auprès du fabricant de votre appareil. Pour plus d'informations, visitez la <a href='https://support.microsoft.com/fr-fr/windows/configurer-windows-hello-dae28983-8242-bb2a-d3d1-87c9d265a5f0'>page de support</a>.</p>"
+          }
+        ]
+      },
+      "rollback": {
+        "system": "Windows",
+        "minversion": 10,
+        "maxversion": 0,
+        "class": "",
+        "elevation": "",
+        "target": "",
+        "education": []
+      }
+    },
+    {
+      "name": "Windows Hello PIN configuration",
+      "metrictype": "bool",
+      "dimension": "credentials",
+      "severity": 5,
+      "scope": "generic",
+      "tags": [],
+      "description": [
+        {
+          "locale": "EN",
+          "title": "Windows Hello PIN not sufficient",
+          "summary": "If Windows Hello PIN is used, it must meet the minimum length requirement of 6 digits to ensure secure and convenient protection for your system."
+        },
+        {
+          "locale": "FR",
+          "title": "PIN Windows Hello insuffisant",
+          "summary": "Si le PIN Windows Hello est utilisé, il doit répondre à l'exigence minimale de 6 chiffres pour garantir une protection sécurisée et pratique de votre système."
+        }
+      ],
+      "implementation": {
+        "system": "Windows",
+        "minversion": 10,
+        "maxversion": 0,
+        "class": "cli",
+        "elevation": "user",
+        "target": "$lastLoggedOnProvider = (Get-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Authentication\\LogonUI' -Name 'LastLoggedOnProvider' -ErrorAction SilentlyContinue).LastLoggedOnProvider; if ($lastLoggedOnProvider -like '*NgcPin*') { $pinLength = (Get-ItemProperty -Path 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\PassportForWork\\PINComplexity' -Name 'MinimumPINLength' -ErrorAction SilentlyContinue).MinimumPINLength; if ($pinLength -lt 6) { 'Windows Hello PIN does not meet the minimum length requirement.' } else { '' } } else { '' }",
+        "education": []
+      },
+      "remediation": {
+        "system": "Windows",
+        "minversion": 10,
+        "maxversion": 0,
+        "class": "cli",
+        "elevation": "system",
+        "target": "Set-ItemProperty -Path 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\PassportForWork\\PINComplexity' -Name 'MinimumPINLength' -Value 6 -Type DWord",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "html",
+            "target": "<p>This remediation will set the minimum PIN length policy to 6 digits by updating the registry. After applying this change, you will need to manually ensure your PIN meets this requirement by going to <a href='ms-settings:signinoptions'>Settings > Accounts > Sign-in options</a>. For more information, visit the <a href='https://support.microsoft.com/en-us/windows/configure-windows-hello-dae28983-8242-bb2a-d3d1-87c9d265a5f0'>support page</a>.</p>"
+          },
+          {
+            "locale": "FR",
+            "class": "html",
+            "target": "<p>Cette remédiation définira la politique de longueur minimale du PIN à 6 chiffres en mettant à jour le registre. Après avoir appliqué ce changement, vous devrez vous assurer manuellement que votre PIN répond à cette exigence en allant dans <a href='ms-settings:signinoptions'>Paramètres > Comptes > Options de connexion</a>. Pour plus d'informations, visitez la <a href='https://support.microsoft.com/fr-fr/windows/configurer-windows-hello-dae28983-8242-bb2a-d3d1-87c9d265a5f0'>page de support</a>.</p>"
+          }
+        ]
+      },
+      "rollback": {
+        "system": "Windows",
+        "minversion": 10,
+        "maxversion": 0,
+        "class": "cli",
+        "elevation": "system",
+        "target": "Set-ItemProperty -Path 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\PassportForWork\\PINComplexity' -Name 'MinimumPINLength' -Value 4 -Type DWord",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "html",
+            "target": "<p>This rollback will revert the minimum PIN length policy to 4 digits by updating the registry. Be cautious, as reducing the PIN length may lower the security level of your system. Ensure you update your PIN manually if it does not already meet the required length. For more information, visit the <a href='https://support.microsoft.com/en-us/windows/configure-windows-hello-dae28983-8242-bb2a-d3d1-87c9d265a5f0'>support page</a>.</p>"
+          },
+          {
+            "locale": "FR",
+            "class": "html",
+            "target": "<p>Ce retour en arrière ramènera la politique de longueur minimale du PIN à 4 chiffres en mettant à jour le registre. Soyez prudent, car réduire la longueur du PIN peut diminuer le niveau de sécurité de votre système. Assurez-vous de mettre à jour votre PIN manuellement s'il ne répond pas déjà à la longueur requise. Pour plus d'informations, visitez la <a href='https://support.microsoft.com/fr-fr/windows/configurer-windows-hello-dae28983-8242-bb2a-d3d1-87c9d265a5f0'>page de support</a>.</p>"
+          }
+        ]
+      }
+    },
+    {
+      "name": "facial recognition and no anti-spoofing",
+      "metrictype": "bool",
+      "dimension": "credentials",
+      "severity": 5,
+      "scope": "generic",
+      "tags": [],
+      "description": [
+        {
+          "locale": "EN",
+          "title": "Facial recognition is used without anti-spoofing",
+          "summary": "If facial recognition is used, enhanced anti-spoofing must be enabled to ensure secure and convenient protection for your system."
+        },
+        {
+          "locale": "FR",
+          "title": "Reconnaissance faciale utilisée sans l'anti-usurpation avancée",
+          "summary": "Si la reconnaissance faciale est utilisée, l'anti-usurpation avancée doit être activée pour garantir une protection sécurisée et pratique de votre système."
+        }
+      ],
+      "implementation": {
+        "system": "Windows",
+        "minversion": 10,
+        "maxversion": 0,
+        "class": "cli",
+        "elevation": "user",
+        "target": "$lastLoggedOnProvider = (Get-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Authentication\\LogonUI' -Name 'LastLoggedOnProvider' -ErrorAction SilentlyContinue).LastLoggedOnProvider; if ($lastLoggedOnProvider -like '*NgcFace*') { $antiSpoofingEnabled = (Get-ItemProperty -Path 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\Biometrics\\FacialFeatures' -Name 'EnhancedAntiSpoofing' -ErrorAction SilentlyContinue).EnhancedAntiSpoofing; if ($antiSpoofingEnabled -ne 1) { 'Enhanced anti-spoofing is not enabled for facial recognition.' } else { '' } } else { '' }",
+        "education": []
+      },
+      "remediation": {
+        "system": "Windows",
+        "minversion": 10,
+        "maxversion": 0,
+        "class": "cli",
+        "elevation": "system",
+        "target": "Set-ItemProperty -Path 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\Biometrics\\FacialFeatures' -Name 'EnhancedAntiSpoofing' -Value 1 -Type DWord",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "html",
+            "target": "<p>This remediation will enable enhanced anti-spoofing for facial recognition by updating the registry. Note that enhanced anti-spoofing may not be available on all devices. If this remediation fails, consider using another login method. For more information, visit the <a href='https://support.microsoft.com/en-us/windows/configure-windows-hello-dae28983-8242-bb2a-d3d1-87c9d265a5f0'>support page</a>.</p>"
+          },
+          {
+            "locale": "FR",
+            "class": "html",
+            "target": "<p>Cette remédiation activera l'anti-usurpation avancée pour la reconnaissance faciale en mettant à jour le registre. Notez que l'anti-usurpation avancée peut ne pas être disponible sur tous les appareils. Si cette remédiation échoue, envisagez d'utiliser une autre méthode de connexion. Pour plus d'informations, visitez la <a href='https://support.microsoft.com/fr-fr/windows/configurer-windows-hello-dae28983-8242-bb2a-d3d1-87c9d265a5f0'>page de support</a>.</p>"
+          }
+        ]
+      },
+      "rollback": {
+        "system": "Windows",
+        "minversion": 10,
+        "maxversion": 0,
+        "class": "cli",
+        "elevation": "system",
+        "target": "Set-ItemProperty -Path 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\Biometrics\\FacialFeatures' -Name 'EnhancedAntiSpoofing' -Value 0 -Type DWord",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "html",
+            "target": "<p>This rollback will disable enhanced anti-spoofing for facial recognition by updating the registry. Be cautious, as disabling this feature may lower the security level of your system. For more information, visit the <a href='https://support.microsoft.com/en-us/windows/configure-windows-hello-dae28983-8242-bb2a-d3d1-87c9d265a5f0'>support page</a>.</p>"
+          },
+          {
+            "locale": "FR",
+            "class": "html",
+            "target": "<p>Ce retour en arrière désactivera l'anti-usurpation avancée pour la reconnaissance faciale en mettant à jour le registre. Soyez prudent, car désactiver cette fonctionnalité peut diminuer le niveau de sécurité de votre système. Pour plus d'informations, visitez la <a href='https://support.microsoft.com/fr-fr/windows/configurer-windows-hello-dae28983-8242-bb2a-d3d1-87c9d265a5f0'>page de support</a>.</p>"
+          }
+        ]
+      }
+    },
+    {
+      "name": "too slow or disabled screensaver lock",
+      "metrictype": "bool",
+      "dimension": "system integrity",
+      "severity": 4,
+      "scope": "generic",
+      "tags": [],
+      "description": [
+        {
+          "locale": "EN",
+          "title": "Screensaver lock is not properly configured",
+          "summary": "The screensaver lock settings are not properly configured. Ensuring a secure and active screensaver with a reasonable timeout enhances the physical security of your system."
+        },
+        {
+          "locale": "FR",
+          "title": "Le verrouillage de l'économiseur d'écran n'est pas correctement configuré",
+          "summary": "Les paramètres de verrouillage de l'économiseur d'écran ne sont pas correctement configurés. Assurer un économiseur d'écran sécurisé et actif avec un délai raisonnable améliore la sécurité physique de votre système."
+        }
+      ],
+      "implementation": {
+        "system": "Windows",
+        "minversion": 10,
+        "maxversion": 0,
+        "class": "cli",
+        "elevation": "user",
+        "target": "$screensaverTimeout = (Get-ItemProperty -Path 'HKCU:\\Control Panel\\Desktop' -Name 'ScreenSaveTimeOut' -ErrorAction SilentlyContinue).ScreenSaveTimeOut; $screensaverActive = (Get-ItemProperty -Path 'HKCU:\\Control Panel\\Desktop' -Name 'ScreenSaveActive' -ErrorAction SilentlyContinue).ScreenSaveActive; $secureScreensaver = (Get-ItemProperty -Path 'HKCU:\\Control Panel\\Desktop' -Name 'ScreenSaverIsSecure' -ErrorAction SilentlyContinue).ScreenSaverIsSecure; if ($screensaverActive -eq '1' -and $secureScreensaver -eq '1' -and $screensaverTimeout -le 600) { '' } else { 'Screensaver lock is not properly configured.' }",
+        "education": []
+      },
+      "remediation": {
+        "system": "Windows",
+        "minversion": 10,
+        "maxversion": 0,
+        "class": "cli",
+        "elevation": "system",
+        "target": "Set-ItemProperty -Path 'HKCU:\\Control Panel\\Desktop' -Name 'ScreenSaveTimeOut' -Value 600; Set-ItemProperty -Path 'HKCU:\\Control Panel\\Desktop' -Name 'ScreenSaveActive' -Value 1; Set-ItemProperty -Path 'HKCU:\\Control Panel\\Desktop' -Name 'ScreenSaverIsSecure' -Value 1",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "html",
+            "target": "<p>This remediation configures your screensaver settings to ensure it is active and set to lock after 10 minutes of inactivity. For more detailed instructions, visit the <a href='https://support.microsoft.com/en-us/windows/change-your-screen-saver-settings-a9dc2a0c-dc8e-9161-d270-aaccc252082a'>support page</a>.</p>"
+          },
+          {
+            "locale": "FR",
+            "class": "html",
+            "target": "<p>Cette remédiation configure les paramètres de votre économiseur d'écran pour qu'il soit actif et configuré pour se verrouiller après 10 minutes d'inactivité. Pour des instructions plus détaillées, visitez la <a href='https://support.microsoft.com/fr-fr/windows/modifier-vos-param%C3%A8tres-d-%C3%A9cran-de-veille-a9dc2a0c-dc8e-9161-d270-aaccc252082a'>page de support</a>.</p>"
+          }
+        ]
+      },
+      "rollback": {
+        "system": "Windows",
+        "minversion": 10,
+        "maxversion": 0,
+        "class": "link",
+        "elevation": "",
+        "target": "ms-settings:lockscreen",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "html",
+            "target": "<p>If you need to revert the changes, go back to the lock screen settings and adjust the screensaver timeout and security settings accordingly. Ensure you understand the security implications of any changes you make. For more information, visit the <a href='https://support.microsoft.com/en-us/windows/change-your-screen-saver-settings-a9dc2a0c-dc8e-9161-d270-aaccc252082a'>support page</a>.</p>"
+          },
+          {
+            "locale": "FR",
+            "class": "html",
+            "target": "<p>Si vous devez annuler les modifications, retournez dans les paramètres de l'écran de verrouillage et ajustez les paramètres de délai d'attente et de sécurité de l'économiseur d'écran en conséquence. Assurez-vous de comprendre les implications de sécurité des modifications apportées. Pour plus d'informations, visitez la <a href='https://support.microsoft.com/fr-fr/windows/modifier-vos-param%C3%A8tres-d-%C3%A9cran-de-veille-a9dc2a0c-dc8e-9161-d270-aaccc252082a'>page de support</a>.</p>"
           }
         ]
       }
