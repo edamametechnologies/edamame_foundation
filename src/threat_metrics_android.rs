@@ -26,7 +26,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       ],
       "implementation": {
         "system": "Android",
-        "minversion": 13,
+        "minversion": 12,
         "maxversion": 0,
         "class": "internal",
         "elevation": "user",
@@ -35,7 +35,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       },
       "remediation": {
         "system": "Android",
-        "minversion": 13,
+        "minversion": 12,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -55,7 +55,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       },
       "rollback": {
         "system": "Android",
-        "minversion": 13,
+        "minversion": 12,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -100,7 +100,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       ],
       "implementation": {
         "system": "Android",
-        "minversion": 13,
+        "minversion": 12,
         "maxversion": 0,
         "class": "internal",
         "elevation": "user",
@@ -109,7 +109,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       },
       "remediation": {
         "system": "Android",
-        "minversion": 13,
+        "minversion": 12,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -129,7 +129,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       },
       "rollback": {
         "system": "Android",
-        "minversion": 13,
+        "minversion": 12,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -174,7 +174,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       ],
       "implementation": {
         "system": "Android",
-        "minversion": 13,
+        "minversion": 12,
         "maxversion": 0,
         "class": "internal",
         "elevation": "user",
@@ -183,7 +183,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       },
       "remediation": {
         "system": "Android",
-        "minversion": 13,
+        "minversion": 12,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -203,7 +203,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       },
       "rollback": {
         "system": "Android",
-        "minversion": 13,
+        "minversion": 12,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -238,17 +238,17 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
         {
           "locale": "EN",
           "title": "Potentially compromised email address",
-          "summary": "Your email address might have recently appeared in a data breach. Please set your email in the Identity tab, review the breaches if any and follow instructions."
+          "summary": "Check if your email address might have recently appeared in a data breach."
         },
         {
           "locale": "FR",
           "title": "Adresse e-mail potentiellement compromise",
-          "summary": "Votre adresse e-mail est peut-être apparue récemment dans une fuite de données. Renseignez votre email dans le tab Identité, examinez les fuites éventuelles et suivez les instructions."
+          "summary": "Vérifiez si votre adresse e-mail est peut-être apparue récemment dans une fuite de données."
         }
       ],
       "implementation": {
         "system": "Android",
-        "minversion": 13,
+        "minversion": 12,
         "maxversion": 0,
         "class": "internal",
         "elevation": "user",
@@ -257,7 +257,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       },
       "remediation": {
         "system": "Android",
-        "minversion": 13,
+        "minversion": 12,
         "maxversion": 0,
         "class": "internal",
         "elevation": "",
@@ -265,19 +265,19 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
         "education": [
           {
             "locale": "EN",
-            "class": "link",
-            "target": "https://en.wikipedia.org/wiki/Have_I_Been_Pwned"
+            "class": "html",
+            "target": "<p>To verify and mitigate the impact of a breach associated with your email, follow these steps:</p><ul><li>Navigate to the 'Identity' tab.</li><li>Enter your email address in the provided field.</li><li>Review the list of breaches associated with your email.</li><li>Select a breach to view detailed information and perform an AI-driven analysis.</li><li>Based on the analysis, decide whether to dismiss the breach or take further action if it's significant.</li><li>Once all threats are addressed, this alert will be marked as inactive.</li></ul>"
           },
           {
             "locale": "FR",
-            "class": "link",
-            "target": "https://www.futura-sciences.com/tech/actualites/internet-voici-savoir-si-vos-donnees-personnelles-internet-ont-ete-piratees-103095/"
+            "class": "html",
+            "target": "<p>Pour vérifier et atténuer l'impact d'une fuite de données associée à votre email, suivez ces étapes :</p><ul><li>Allez dans l'onglet 'Identité'.</li><li>Entrez votre adresse e-mail dans le champ prévu.</li><li>Examinez la liste des fuites associées à votre email.</li><li>Sélectionnez une fuite pour voir les informations détaillées et effectuer une analyse assistée par IA.</li><li>En fonction de l'analyse, décidez de rejeter la fuite ou de prendre des mesures supplémentaires si elle est significative.</li><li>Une fois toutes les menaces traitées, cette alerte sera marquée comme inactive.</li></ul>"
           }
         ]
       },
       "rollback": {
         "system": "Android",
-        "minversion": 13,
+        "minversion": 12,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -322,7 +322,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       ],
       "implementation": {
         "system": "Android",
-        "minversion": 13,
+        "minversion": 12,
         "maxversion": 0,
         "class": "internal",
         "elevation": "user",
@@ -331,7 +331,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       },
       "remediation": {
         "system": "Android",
-        "minversion": 13,
+        "minversion": 12,
         "maxversion": 0,
         "class": "internal",
         "elevation": "",
@@ -339,19 +339,19 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
         "education": [
           {
             "locale": "EN",
-            "class": "link",
-            "target": "https://en.wikipedia.org/wiki/Port_scanner"
+            "class": "html",
+            "target": "<p>This feature allows you to scan your network to identify all connected devices. During the scan, the app checks for open ports and associated CVEs. You can then analyze these potential issues with the help of AI and decide if the threat should be ignored. Once all devices are deemed safe, this threat will be marked as inactive.</p>"
           },
           {
             "locale": "FR",
-            "class": "link",
-            "target": "https://fr.wikipedia.org/wiki/Balayage_de_ports"
+            "class": "html",
+            "target": "<p>Cette fonction vous permet de scanner votre réseau pour identifier tous les appareils connectés. Pendant le scan, l'application vérifie les ports ouverts et les CVE associés. Vous pouvez ensuite analyser ces problèmes potentiels avec l'aide de l'IA et décider si la menace doit être ignorée. Une fois que tous les appareils sont considérés comme sûrs, cette menace sera marquée comme inactive.</p>"
           }
         ]
       },
       "rollback": {
         "system": "Android",
-        "minversion": 13,
+        "minversion": 12,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -391,7 +391,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       ],
       "implementation": {
         "system": "Android",
-        "minversion": 13,
+        "minversion": 12,
         "maxversion": 0,
         "class": "internal",
         "elevation": "user",
@@ -400,7 +400,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       },
       "remediation": {
         "system": "Android",
-        "minversion": 13,
+        "minversion": 12,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -420,7 +420,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       },
       "rollback": {
         "system": "Android",
-        "minversion": 13,
+        "minversion": 12,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -465,7 +465,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       ],
       "implementation": {
         "system": "Android",
-        "minversion": 13,
+        "minversion": 12,
         "maxversion": 0,
         "class": "internal",
         "elevation": "user",
@@ -474,7 +474,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       },
       "remediation": {
         "system": "Android",
-        "minversion": 13,
+        "minversion": 12,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -494,7 +494,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       },
       "rollback": {
         "system": "Android",
-        "minversion": 13,
+        "minversion": 12,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -538,7 +538,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       ],
       "implementation": {
         "system": "Android",
-        "minversion": 13,
+        "minversion": 12,
         "maxversion": 0,
         "class": "internal",
         "elevation": "user",
@@ -547,7 +547,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       },
       "remediation": {
         "system": "Android",
-        "minversion": 13,
+        "minversion": 12,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -567,7 +567,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       },
       "rollback": {
         "system": "Android",
-        "minversion": 13,
+        "minversion": 12,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -611,7 +611,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       ],
       "implementation": {
         "system": "Android",
-        "minversion": 13,
+        "minversion": 12,
         "maxversion": 0,
         "class": "internal",
         "elevation": "user",
@@ -620,7 +620,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       },
       "remediation": {
         "system": "Android",
-        "minversion": 13,
+        "minversion": 12,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -640,7 +640,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       },
       "rollback": {
         "system": "Android",
-        "minversion": 13,
+        "minversion": 12,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -684,7 +684,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       ],
       "implementation": {
         "system": "Android",
-        "minversion": 13,
+        "minversion": 12,
         "maxversion": 0,
         "class": "internal",
         "elevation": "user",
@@ -693,7 +693,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       },
       "remediation": {
         "system": "Android",
-        "minversion": 13,
+        "minversion": 12,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -713,7 +713,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       },
       "rollback": {
         "system": "Android",
-        "minversion": 13,
+        "minversion": 12,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -757,7 +757,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       ],
       "implementation": {
         "system": "Android",
-        "minversion": 13,
+        "minversion": 12,
         "maxversion": 0,
         "class": "internal",
         "elevation": "user",
@@ -766,7 +766,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       },
       "remediation": {
         "system": "Android",
-        "minversion": 13,
+        "minversion": 12,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -786,7 +786,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       },
       "rollback": {
         "system": "Android",
-        "minversion": 13,
+        "minversion": 12,
         "maxversion": 0,
         "class": "",
         "elevation": "",
