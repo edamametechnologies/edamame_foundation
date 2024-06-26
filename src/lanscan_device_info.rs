@@ -160,10 +160,10 @@ impl DeviceInfo {
     pub fn merge(device: &mut DeviceInfo, new_device: &DeviceInfo) {
         // Priority to the first device
         if device.ip_address.is_empty() {
-            device.ip_address = new_device.ip_address.clone();
+            device.ip_address.clone_from(&new_device.ip_address);
         }
         if device.mac_address.is_empty() {
-            device.mac_address = new_device.mac_address.clone();
+            device.mac_address.clone_from(&new_device.mac_address);
         }
 
         // Merge the ip addresses
@@ -186,19 +186,19 @@ impl DeviceInfo {
 
         // Allow fields to be updated
         if !new_device.hostname.is_empty() {
-            device.hostname = new_device.hostname.clone();
+            device.hostname.clone_from(&new_device.hostname);
         }
 
         if !new_device.custom_name.is_empty() {
-            device.custom_name = new_device.custom_name.clone();
+            device.custom_name.clone_from(&new_device.custom_name);
         }
 
         if !new_device.os_name.is_empty() {
-            device.os_name = new_device.os_name.clone();
+            device.os_name.clone_from(&new_device.os_name);
         }
 
         if !new_device.os_version.is_empty() {
-            device.os_version = new_device.os_version.clone();
+            device.os_version.clone_from(&new_device.os_version);
         }
 
         // Merge open ports
@@ -270,17 +270,17 @@ impl DeviceInfo {
         // Dynamic fields - use the latest if valid (not unknown)
         // Always update device type
         if new_device.device_type != "Unknown" {
-            device.device_type = new_device.device_type.clone();
+            device.device_type.clone_from(&new_device.device_type);
         }
 
         // Always update device vendor
         if !new_device.device_vendor.is_empty() {
-            device.device_vendor = new_device.device_vendor.clone();
+            device.device_vendor.clone_from(&new_device.device_vendor);
         }
 
         // Always update device criticality
         if new_device.criticality != "Unknown" {
-            device.criticality = new_device.criticality.clone();
+            device.criticality.clone_from(&new_device.criticality);
         }
     }
 }

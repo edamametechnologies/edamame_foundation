@@ -125,7 +125,7 @@ pub async fn get_vulns_of_port(port: u16) -> Vec<VulnerabilityInfo> {
         .map_or(Vec::new(), |port_info| port_info.vulnerabilities.clone())
 }
 
-pub async fn get_device_criticality(port_info_list: &Vec<PortInfo>) -> String {
+pub async fn get_device_criticality(port_info_list: &[PortInfo]) -> String {
     let vulns = VULNS.lock().await;
 
     // Compute the sum of vulnerabilities count in the port info list
