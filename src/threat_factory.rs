@@ -116,7 +116,7 @@ impl ThreatMetrics {
         } else if cfg!(target_os = "linux") {
             Ok("threatmodel-Linux.json")
         } else {
-            Err(anyhow!("Unsupported operating system: {}", std::env::consts::OS).into())
+            Err(anyhow!("Unsupported operating system: {}", std::env::consts::OS))
         }
     }
 

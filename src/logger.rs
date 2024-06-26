@@ -72,7 +72,7 @@ impl MemoryWriter {
             "device_id",
             "code",
         ];
-        let log_line_sanitized = sanitize_keywords(&log_line, &keywords);
+        let log_line_sanitized = sanitize_keywords(log_line, &keywords);
         // Remove all escape codes (x1b\[[0-9;]*m) from the log line before storing it in the log buffer x1b\[[0-9;]*m
         let re = Regex::new(r"\x1b\[[0-9;]*m").unwrap();
         let log_line_formatted = re.replace_all(&log_line_sanitized, "");
@@ -409,7 +409,6 @@ mod tests {
     #[serial]
     fn test_logger_initialization() {
         initialize_and_flush_logger();
-        assert!(true);
     }
 
     #[test]
