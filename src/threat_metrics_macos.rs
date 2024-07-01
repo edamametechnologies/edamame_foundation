@@ -543,9 +543,9 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "system": "macOS",
         "minversion": 12,
         "maxversion": 0,
-        "class": "html",
+        "class": "link",
         "elevation": "",
-        "target": "",
+        "target": "x-apple.systempreferences:com.apple.preferences.users",
         "education": [
           {
             "locale": "EN",
