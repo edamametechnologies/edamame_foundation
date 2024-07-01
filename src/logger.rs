@@ -12,6 +12,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 use tracing::Level;
+use tracing_appender::non_blocking::NonBlocking;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::fmt;
@@ -240,9 +241,10 @@ pub fn init_logger(executable_type: &str, url: &str, release: &str) {
 
     // Set filter
     let filter_layer = EnvFilter::try_new(env_log_spec).unwrap();
-
-    // Duplicate to stdout or file depending on platform
-    let (non_blocking, appender_guard) = if cfg!(target_os = "windows") && !matches!(executable_type, "cli") {
+    
+    // Optional file writer
+    // Duplicate to file on Windows depending on platform
+    let file_writer= if cfg!(target_os = "windows") && !matches!(executable_type, "cli") {
         let log_dir = if matches!(executable_type, "helper") {
             let exe_path: PathBuf = current_exe().expect("Failed to get current exe");
             exe_path
@@ -260,11 +262,14 @@ pub fn init_logger(executable_type: &str, url: &str, release: &str) {
         } else {
             "edamame"
         };
-        let file_appender = RollingFileAppender::new(Rotation::NEVER, log_dir, basename);
+        let file_appender = RollingFileAppender::new(Rotation::DAILY, log_dir, basename);
         tracing_appender::non_blocking(file_appender)
     } else {
-        tracing_appender::non_blocking(io::stdout())
+        NonBlocking::new(io::sink())
     };
+    
+    // Duplicate to stdout
+    let stdout_writer = NonBlocking::new(io::stdout());
     
     // Register the proper layers based on sentry availability and platform
     if !url.is_empty() {
@@ -281,7 +286,7 @@ pub fn init_logger(executable_type: &str, url: &str, release: &str) {
 
                     match tracing_subscriber::registry()
                         .with(filter_layer)
-                        .with(fmt::layer().with_writer(non_blocking))
+                        .with(fmt::layer().with_writer(stdout_writer.0))
                         .with(fmt::layer().with_writer(logger.memory_writer.clone()))
                         .with(sentry_layer)
                         .with(os_logger)
@@ -292,7 +297,7 @@ pub fn init_logger(executable_type: &str, url: &str, release: &str) {
                 } else {
                     match tracing_subscriber::registry()
                         .with(filter_layer)
-                        .with(fmt::layer().with_writer(non_blocking))
+                        .with(fmt::layer().with_writer(stdout_writer.0))
                         .with(fmt::layer().with_writer(logger.memory_writer.clone()))
                         .with(sentry_layer)
                         .try_init() {
@@ -308,7 +313,7 @@ pub fn init_logger(executable_type: &str, url: &str, release: &str) {
 
                 match tracing_subscriber::registry()
                     .with(filter_layer)
-                    .with(fmt::layer().with_writer(non_blocking))
+                    .with(fmt::layer().with_writer(stdout_writer.0))
                     .with(fmt::layer().with_writer(logger.memory_writer.clone()))
                     .with(sentry_layer)
                     .with(android_layer)
@@ -317,11 +322,24 @@ pub fn init_logger(executable_type: &str, url: &str, release: &str) {
                         Err(e) => eprintln!("Logger initialization failed: {}", e),
                     }
             }
-        } else {
-            // Linux and Windows
+        } else if cfg!(target_os = "windows") {
+            // Windows
             match tracing_subscriber::registry()
                 .with(filter_layer)
-                .with(fmt::layer().with_writer(non_blocking.clone()))
+                .with(fmt::layer().with_writer(file_writer.0))
+                .with(fmt::layer().with_writer(logger.memory_writer.clone()))
+                .with(sentry_layer)
+                // Duplicate to stdout
+                .with(fmt::layer().with_writer(stdout_writer.0))
+                .try_init() {
+                Ok(_) => println!("Logger initialized"),
+                Err(e) => eprintln!("Logger initialization failed: {}", e),
+            }
+        } else {
+            // Linux
+            match tracing_subscriber::registry()
+                .with(filter_layer)
+                .with(fmt::layer().with_writer(file_writer.0))
                 .with(fmt::layer().with_writer(logger.memory_writer.clone()))
                 .with(sentry_layer)
                 .try_init() {
@@ -338,7 +356,7 @@ pub fn init_logger(executable_type: &str, url: &str, release: &str) {
 
                 match tracing_subscriber::registry()
                     .with(filter_layer)
-                    .with(fmt::layer().with_writer(non_blocking))
+                    .with(fmt::layer().with_writer(file_writer.0))
                     .with(fmt::layer().with_writer(logger.memory_writer.clone()))
                     .with(os_logger)
                     .try_init() {
@@ -353,7 +371,7 @@ pub fn init_logger(executable_type: &str, url: &str, release: &str) {
                 
                 match tracing_subscriber::registry()
                     .with(filter_layer)
-                    .with(fmt::layer().with_writer(non_blocking))
+                    .with(fmt::layer().with_writer(file_writer))
                     .with(fmt::layer().with_writer(logger.memory_writer.clone()))
                     .with(android_layer)
                     .try_init() {
@@ -361,11 +379,23 @@ pub fn init_logger(executable_type: &str, url: &str, release: &str) {
                         Err(e) => eprintln!("Logger initialization failed: {}", e),
                     }
             }
-        } else {
-            // Linux and Windows
+        } else if cfg!(target_os = "windows") {
+            // Windows
             match tracing_subscriber::registry()
                 .with(filter_layer)
-                .with(fmt::layer().with_writer(non_blocking))
+                .with(fmt::layer().with_writer(file_writer.0))
+                .with(fmt::layer().with_writer(logger.memory_writer.clone()))
+                // Duplicate to stdout
+                .with(fmt::layer().with_writer(stdout_writer.0))
+                .try_init() {
+                    Ok(_) => println!("Logger initialized"),
+                    Err(e) => eprintln!("Logger initialization failed: {}", e),
+            }
+        } else {
+            // Linux
+            match tracing_subscriber::registry()
+                .with(filter_layer)
+                .with(fmt::layer().with_writer(file_writer.0))
                 .with(fmt::layer().with_writer(logger.memory_writer.clone()))
                 .try_init() {
                     Ok(_) => println!("Logger initialized"),
@@ -374,7 +404,8 @@ pub fn init_logger(executable_type: &str, url: &str, release: &str) {
         }
     }
     
-    forget(appender_guard);
+    forget(file_writer.1);
+    forget(stdout_writer.1);
 }
 
 pub fn get_new_logs() -> String {
