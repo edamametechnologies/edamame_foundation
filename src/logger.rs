@@ -291,7 +291,7 @@ pub fn init_logger(executable_type: &str, url: &str, release: &str) {
                         .with(sentry_layer)
                         .with(os_logger)
                         .try_init() {
-                        Ok(_) => println!("Logger initialized"),
+                        Ok(_) => println!("Apple logger for helper initialized with Sentry"),
                         Err(e) => eprintln!("Logger initialization failed: {}", e),
                     }
                 } else {
@@ -301,7 +301,7 @@ pub fn init_logger(executable_type: &str, url: &str, release: &str) {
                         .with(fmt::layer().with_writer(logger.memory_writer.clone()))
                         .with(sentry_layer)
                         .try_init() {
-                        Ok(_) => println!("Logger initialized"),
+                        Ok(_) => println!("Apple logger for non helper initialized with Sentry"),
                         Err(e) => eprintln!("Logger initialization failed: {}", e),
                     }
                 }
@@ -318,7 +318,7 @@ pub fn init_logger(executable_type: &str, url: &str, release: &str) {
                     .with(sentry_layer)
                     .with(android_layer)
                     .try_init() {
-                        Ok(_) => println!("Logger initialized"),
+                        Ok(_) => println!("Android logger initialized with Sentry"),
                         Err(e) => eprintln!("Logger initialization failed: {}", e),
                     }
             }
@@ -326,24 +326,25 @@ pub fn init_logger(executable_type: &str, url: &str, release: &str) {
             // Windows
             match tracing_subscriber::registry()
                 .with(filter_layer)
+                // File writer
                 .with(fmt::layer().with_writer(file_writer.0))
                 .with(fmt::layer().with_writer(logger.memory_writer.clone()))
                 .with(sentry_layer)
                 // Duplicate to stdout
                 .with(fmt::layer().with_writer(stdout_writer.0))
                 .try_init() {
-                Ok(_) => println!("Logger initialized"),
+                Ok(_) => println!("Windows logger initialized with Sentry"),
                 Err(e) => eprintln!("Logger initialization failed: {}", e),
             }
         } else {
             // Linux
             match tracing_subscriber::registry()
                 .with(filter_layer)
-                .with(fmt::layer().with_writer(file_writer.0))
+                .with(fmt::layer().with_writer(stdout_writer.0))
                 .with(fmt::layer().with_writer(logger.memory_writer.clone()))
                 .with(sentry_layer)
                 .try_init() {
-                    Ok(_) => println!("Logger initialized"),
+                    Ok(_) => println!("Generic logger initialized with Sentry"),
                     Err(e) => eprintln!("Logger initialization failed: {}", e),
             }
         }
@@ -356,11 +357,11 @@ pub fn init_logger(executable_type: &str, url: &str, release: &str) {
 
                 match tracing_subscriber::registry()
                     .with(filter_layer)
-                    .with(fmt::layer().with_writer(file_writer.0))
+                    .with(fmt::layer().with_writer(stdout_writer.0))
                     .with(fmt::layer().with_writer(logger.memory_writer.clone()))
                     .with(os_logger)
                     .try_init() {
-                        Ok(_) => println!("Logger initialized"),
+                        Ok(_) => println!("Apple logger initialized"),
                         Err(e) => eprintln!("Logger initialization failed: {}", e),
                 }
             }
@@ -371,11 +372,11 @@ pub fn init_logger(executable_type: &str, url: &str, release: &str) {
                 
                 match tracing_subscriber::registry()
                     .with(filter_layer)
-                    .with(fmt::layer().with_writer(file_writer))
+                    .with(fmt::layer().with_writer(stdout_writer.0))
                     .with(fmt::layer().with_writer(logger.memory_writer.clone()))
                     .with(android_layer)
                     .try_init() {
-                        Ok(_) => println!("Logger initialized"),
+                        Ok(_) => println!("Android logger initialized"),
                         Err(e) => eprintln!("Logger initialization failed: {}", e),
                     }
             }
@@ -383,22 +384,23 @@ pub fn init_logger(executable_type: &str, url: &str, release: &str) {
             // Windows
             match tracing_subscriber::registry()
                 .with(filter_layer)
+                // File writer
                 .with(fmt::layer().with_writer(file_writer.0))
                 .with(fmt::layer().with_writer(logger.memory_writer.clone()))
                 // Duplicate to stdout
                 .with(fmt::layer().with_writer(stdout_writer.0))
                 .try_init() {
-                    Ok(_) => println!("Logger initialized"),
+                    Ok(_) => println!("Windows logger initialized"),
                     Err(e) => eprintln!("Logger initialization failed: {}", e),
             }
         } else {
             // Linux
             match tracing_subscriber::registry()
                 .with(filter_layer)
-                .with(fmt::layer().with_writer(file_writer.0))
+                .with(fmt::layer().with_writer(stdout_writer.0))
                 .with(fmt::layer().with_writer(logger.memory_writer.clone()))
                 .try_init() {
-                    Ok(_) => println!("Logger initialized"),
+                    Ok(_) => println!("Generic logger initialized"),
                     Err(e) => eprintln!("Logger initialization failed: {}", e),
             }
         }
