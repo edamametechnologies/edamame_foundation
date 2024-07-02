@@ -6,20 +6,22 @@ use tokio::sync::oneshot;
 use tonic::transport::{Certificate, Identity, Server, ServerTlsConfig};
 use tonic::{Code, Request, Response, Status};
 use tracing::{error, info, trace, warn};
-
 use lazy_static::lazy_static;
 // Tokio Mutex
 use std::sync::Arc;
 use tokio::sync::Mutex;
-
 use crate::helper_proto::*;
 use crate::runner_cli::*;
 use crate::threat::*;
-
 use crate::helper_rx_utility::*;
-
 use edamame_proto::edamame_helper_server::{EdamameHelper, EdamameHelperServer};
 use edamame_proto::{HelperRequest, HelperResponse};
+#[cfg(target_os = "macos")]
+use std::io::ErrorKind;
+#[cfg(target_os = "macos")]
+use libc::EACCES;
+#[cfg(target_os = "macos")]
+use std::fs::File;
 
 lazy_static! {
     pub static ref THREATS: Arc<Mutex<ThreatMetrics>> = Arc::new(Mutex::new(ThreatMetrics::new("")));
@@ -367,7 +369,39 @@ pub async fn rpc_run(
             }
             "helper_check" => {
                 // Return the current helper version
-                Ok(CARGO_PKG_VERSION.to_string())
+                let mut result = CARGO_PKG_VERSION.to_string();
+                Ok(result)
+            }
+            "helper_flags" => {
+                // Return additional information in the form flag=value,...
+                let mut result = "".to_string();
+
+                // On macOS, we can also return the full disk access status
+                #[cfg(target_os = "macos")]
+                {
+                    let path = "/Library/Application Support/com.apple.TCC/TCC.db";
+
+                    let file_result = File::open(path);
+
+                    let full_disk_access = match file_result {
+                        Ok(_) => {
+                            true
+                        }
+                        Err(ref e) if e.kind() == ErrorKind::PermissionDenied => {
+                            false
+                        }
+                        Err(ref e) if e.raw_os_error() == Some(EACCES) => {
+                            false
+                        }
+                        Err(e) => {
+                            // Handle other errors
+                            error!("Failed to check full disk access: {}", e);
+                            false
+                        }
+                    };
+                    result = format!("full_disk_access={}", full_disk_access);
+                }
+                Ok(result)
             }
             _ => order_error(
                 &format!("unknown or unimplemented utilityorder {}", subordertype),
