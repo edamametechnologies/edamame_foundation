@@ -80,6 +80,7 @@ anyhow = { version = "1.0.79" }
 regex = "1.10.2"
 sorted-vec = "0.8.3"
 encoding_rs = "0.8.33"
+libc = "0.2.155"
 
 # Not WASI/WASIX/WASM
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
