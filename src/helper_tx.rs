@@ -19,7 +19,7 @@ use edamame_proto::HelperRequest;
 
 // Implement a flag to detect if the helper is in fatal state
 lazy_static! {
-    pub static ref FATAL_ERROR: Mutex<bool> = Mutex::new(false);
+    pub static ref HELPER_FATAL_ERROR: Mutex<bool> = Mutex::new(false);
 }
 
 // Version
@@ -50,16 +50,16 @@ pub async fn helper_run_utility(
     {
         Ok(result) => {
             // Set the fatal error flag
-            trace!("Unsetting the FATAL_ERROR flag");
-            let mut fatal_error = FATAL_ERROR.lock().unwrap();
+            trace!("Unsetting the HELPER_FATAL_ERROR flag");
+            let mut fatal_error = HELPER_FATAL_ERROR.lock().unwrap();
             *fatal_error = false;
             Ok(result)
         }
         Err(e) => {
             if e.to_string().contains("Fatal") {
                 // Set the fatal error flag
-                trace!("Setting the FATAL_ERROR flag");
-                let mut fatal_error = FATAL_ERROR.lock().unwrap();
+                trace!("Setting the HELPER_FATAL_ERROR flag");
+                let mut fatal_error = HELPER_FATAL_ERROR.lock().unwrap();
                 *fatal_error = true;
             }
             Err(e)
@@ -93,16 +93,16 @@ pub async fn helper_run_metric(
     {
         Ok(result) => {
             // Set the fatal error flag
-            trace!("Unsetting the FATAL_ERROR flag");
-            let mut fatal_error = FATAL_ERROR.lock().unwrap();
+            trace!("Unsetting the HELPER_FATAL_ERROR flag");
+            let mut fatal_error = HELPER_FATAL_ERROR.lock().unwrap();
             *fatal_error = false;
             Ok(result)
         }
         Err(e) => {
             if e.to_string().contains("Fatal") {
                 // Set the fatal error flag
-                trace!("Setting the FATAL_ERROR flag");
-                let mut fatal_error = FATAL_ERROR.lock().unwrap();
+                trace!("Setting the HELPER_FATAL_ERROR flag");
+                let mut fatal_error = HELPER_FATAL_ERROR.lock().unwrap();
                 *fatal_error = true;
             }
             Err(e)
