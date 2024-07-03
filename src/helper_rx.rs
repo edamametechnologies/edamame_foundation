@@ -373,10 +373,8 @@ pub async fn rpc_run(
                 Ok(result)
             }
             "helper_flags" => {
-                // Return additional information in the form flag=value,...
-                let mut result = "".to_string();
 
-                // On macOS, we can also return the full disk access status
+                // Return additional information in the form flag=value,...
                 #[cfg(target_os = "macos")]
                 {
                     let path = "/Library/Application Support/com.apple.TCC/TCC.db";
@@ -399,9 +397,14 @@ pub async fn rpc_run(
                             false
                         }
                     };
-                    result = format!("full_disk_access={}", full_disk_access);
+                    let result = format!("full_disk_access={}", full_disk_access);
+                    Ok(result)
                 }
-                Ok(result)
+                
+                #[cfg(not(target_os = "macos"))]
+                {
+                    Ok("".to_string())
+                }
             }
             _ => order_error(
                 &format!("unknown or unimplemented utilityorder {}", subordertype),
