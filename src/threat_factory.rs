@@ -1,7 +1,3 @@
-use reqwest;
-use reqwest::Client;
-use std::time::Duration;
-use tracing::{error, info, warn};
 use crate::threat::*;
 use crate::threat_metrics_android::*;
 use crate::threat_metrics_ios::*;
@@ -10,6 +6,10 @@ use crate::threat_metrics_macos::*;
 use crate::threat_metrics_windows::*;
 use crate::update::*;
 use anyhow::{anyhow, Result};
+use reqwest;
+use reqwest::Client;
+use std::time::Duration;
+use tracing::{error, info, warn};
 
 static THREAT_MODEL_URL: &str =
     "https://raw.githubusercontent.com/edamametechnologies/threatmodels";
@@ -116,7 +116,10 @@ impl ThreatMetrics {
         } else if cfg!(target_os = "linux") {
             Ok("threatmodel-Linux.json")
         } else {
-            Err(anyhow!("Unsupported operating system: {}", std::env::consts::OS))
+            Err(anyhow!(
+                "Unsupported operating system: {}",
+                std::env::consts::OS
+            ))
         }
     }
 
@@ -165,11 +168,7 @@ impl ThreatMetrics {
     }
 
     // Update the threat model from the backend
-    pub async fn update(
-        &mut self,
-        platform: &str,
-        branch: &str,
-    ) -> Result<UpdateStatus> {
+    pub async fn update(&mut self, platform: &str, branch: &str) -> Result<UpdateStatus> {
         info!("Starting threat model update from backend");
 
         let mut status = UpdateStatus::NotUpdated;
@@ -191,8 +190,10 @@ impl ThreatMetrics {
 
         info!("Fetching threat model from {}", url);
         // Create a client with a timeout
-        let client = Client::builder().gzip(true)
-            .timeout(Duration::from_secs(20)).build()?;
+        let client = Client::builder()
+            .gzip(true)
+            .timeout(Duration::from_secs(20))
+            .build()?;
 
         // Use the client to make a request
         let response = client.get(&url).send().await;
