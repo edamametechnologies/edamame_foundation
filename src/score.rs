@@ -1,13 +1,13 @@
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
-use serde_with::serde_as;
-use std::collections::{HashMap, HashSet};
-use tracing::trace;
 use crate::history::*;
 use crate::order::MetricOrderResult;
 use crate::threat::*;
 use crate::update::UpdateStatus;
 use anyhow::Result;
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use serde_with::serde_as;
+use std::collections::{HashMap, HashSet};
+use tracing::trace;
 
 // Score
 #[serde_as]
@@ -47,7 +47,7 @@ impl Score {
             last_compute: None,
         }
     }
-    
+
     pub async fn compute_score(&mut self) {
         trace!("Starting score calculation");
 
@@ -202,10 +202,6 @@ pub trait ScoreTrait {
     async fn get_history(&self) -> Result<OrderHistory>;
     async fn remediate(&self, name: &str) -> Result<MetricOrderResult>;
     async fn rollback(&self, name: &str) -> Result<MetricOrderResult>;
-    async fn update_threats(
-        &mut self,
-        platform: &str,
-        branch: &str,
-    ) -> Result<UpdateStatus>;
+    async fn update_threats(&mut self, platform: &str, branch: &str) -> Result<UpdateStatus>;
     async fn threat_active(&self, name: &str) -> Result<bool>;
 }
