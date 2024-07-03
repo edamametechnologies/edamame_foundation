@@ -1,4 +1,5 @@
 use base64::{engine::general_purpose, Engine as _};
+use lazy_static::lazy_static;
 use std::error::Error;
 use std::net::SocketAddr;
 use std::str;
@@ -6,22 +7,21 @@ use tokio::sync::oneshot;
 use tonic::transport::{Certificate, Identity, Server, ServerTlsConfig};
 use tonic::{Code, Request, Response, Status};
 use tracing::{error, info, trace, warn};
-use lazy_static::lazy_static;
 // Tokio Mutex
-use std::sync::Arc;
-use tokio::sync::Mutex;
 use crate::helper_proto::*;
+use crate::helper_rx_utility::*;
 use crate::runner_cli::*;
 use crate::threat::*;
-use crate::helper_rx_utility::*;
 use edamame_proto::edamame_helper_server::{EdamameHelper, EdamameHelperServer};
 use edamame_proto::{HelperRequest, HelperResponse};
-#[cfg(target_os = "macos")]
-use std::io::ErrorKind;
 #[cfg(target_os = "macos")]
 use libc::EACCES;
 #[cfg(target_os = "macos")]
 use std::fs::File;
+#[cfg(target_os = "macos")]
+use std::io::ErrorKind;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 lazy_static! {
     pub static ref THREATS: Arc<Mutex<ThreatMetrics>> = Arc::new(Mutex::new(ThreatMetrics::new("")));
@@ -373,7 +373,6 @@ pub async fn rpc_run(
                 Ok(result)
             }
             "helper_flags" => {
-
                 // Return additional information in the form flag=value,...
                 #[cfg(target_os = "macos")]
                 {
@@ -382,15 +381,9 @@ pub async fn rpc_run(
                     let file_result = File::open(path);
 
                     let full_disk_access = match file_result {
-                        Ok(_) => {
-                            true
-                        }
-                        Err(ref e) if e.kind() == ErrorKind::PermissionDenied => {
-                            false
-                        }
-                        Err(ref e) if e.raw_os_error() == Some(EACCES) => {
-                            false
-                        }
+                        Ok(_) => true,
+                        Err(ref e) if e.kind() == ErrorKind::PermissionDenied => false,
+                        Err(ref e) if e.raw_os_error() == Some(EACCES) => false,
                         Err(e) => {
                             // Handle other errors
                             error!("Failed to check full disk access: {}", e);
@@ -400,7 +393,7 @@ pub async fn rpc_run(
                     let result = format!("full_disk_access={}", full_disk_access);
                     Ok(result)
                 }
-                
+
                 #[cfg(not(target_os = "macos"))]
                 {
                     Ok("".to_string())

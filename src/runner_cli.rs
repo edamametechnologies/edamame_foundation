@@ -1,7 +1,7 @@
 use crate::runtime::async_spawn_blocking;
 use run_script::ScriptOptions;
 use std::error::Error;
-use tracing::{error, debug};
+use tracing::{debug, error};
 
 use powershell_script::PsScriptBuilder;
 
@@ -88,7 +88,10 @@ fn execute_windows_ps(
             *stdout = output.stdout().as_deref().unwrap_or("").to_string();
             *stderr = output.stderr().as_deref().unwrap_or("").to_string();
             *code = if output.success() { 0 } else { 1 };
-            debug!("Execution results: code : {:?} - stdout : {:?} - stderr : {:?}", code, stdout, stderr);
+            debug!(
+                "Execution results: code : {:?} - stdout : {:?} - stderr : {:?}",
+                code, stdout, stderr
+            );
             Ok(())
         }
         Err(e) => {
@@ -123,6 +126,9 @@ fn execute_unix_command(
     *code = output.0;
     *stdout = output.1;
     *stderr = output.2;
-    debug!("Execution results: code : {:?} - stdout : {:?} - stderr : {:?}", code, stdout, stderr);
+    debug!(
+        "Execution results: code : {:?} - stdout : {:?} - stderr : {:?}",
+        code, stdout, stderr
+    );
     Ok(())
 }
