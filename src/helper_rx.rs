@@ -369,7 +369,7 @@ pub async fn rpc_run(
             }
             "helper_check" => {
                 // Return the current helper version
-                let mut result = CARGO_PKG_VERSION.to_string();
+                let result = CARGO_PKG_VERSION.to_string();
                 Ok(result)
             }
             "helper_flags" => {
