@@ -1,9 +1,8 @@
 use anyhow::Result;
-
-use crate::lanscan_device_info_backend::*;
-use crate::lanscan_dislike_device_info_backend::DislikeDeviceInfoBackend;
-use crate::pwned_breach_backend::BreachDetailBackend;
-use crate::score_backend::*;
+use edamame_backend::lanscan_device_info_backend::*;
+use edamame_backend::lanscan_dislike_device_info_backend::DislikeDeviceInfoBackend;
+use edamame_backend::pwned_breach_backend::BreachDetailBackend;
+use edamame_backend::score_backend::*;
 
 pub trait Backend {
     // Request PIN
