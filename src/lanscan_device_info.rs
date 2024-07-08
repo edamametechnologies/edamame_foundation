@@ -3,7 +3,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use tracing::trace;
 
-use crate::lanscan_device_info_backend::*;
+use edamame_backend::lanscan_device_info_backend::*;
 use crate::lanscan_port_info::*;
 use crate::lanscan_vulnerability_info::*;
 
@@ -75,8 +75,9 @@ impl DeviceInfo {
         let mut device_backend = DeviceInfoBackend {
             mdns_services: device.mdns_services.clone(),
             device_vendor: device.device_vendor.clone(),
-            vulnerabilities: device.vulnerabilities.clone(),
-            open_ports: device.open_ports.clone(),
+            // Convert the vectors using into
+            vulnerabilities: device.vulnerabilities.iter().map(|v| v.clone().into()).collect(),
+            open_ports: device.open_ports.clone().iter().map(|p| p.clone().into()).collect(),
         };
 
         // mDNS instances can be prefixed by the device's serial, mac, ip address.
