@@ -1,4 +1,4 @@
-use crate::pwned_breach_backend::PwnedCriticalityBackend;
+use edamame_backend::pwned_breach_backend::PwnedCriticalityBackend;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
