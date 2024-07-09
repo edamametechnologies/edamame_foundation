@@ -1,6 +1,6 @@
+use edamame_backend::order_type_backend::MetricOrderTypeBackend;
 use serde::{Deserialize, Serialize};
 use std::fmt;
-use edamame_backend::order_type_backend::MetricOrderTypeBackend;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, PartialOrd)]
 pub enum MetricOrderType {
