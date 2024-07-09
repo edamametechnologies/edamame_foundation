@@ -3,9 +3,9 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use tracing::trace;
 
-use edamame_backend::lanscan_device_info_backend::*;
 use crate::lanscan_port_info::*;
 use crate::lanscan_vulnerability_info::*;
+use edamame_backend::lanscan_device_info_backend::*;
 
 pub static DEVICE_ACTIVITY_TIMEOUT: i64 = 900;
 
@@ -76,8 +76,17 @@ impl DeviceInfo {
             mdns_services: device.mdns_services.clone(),
             device_vendor: device.device_vendor.clone(),
             // Convert the vectors using into
-            vulnerabilities: device.vulnerabilities.iter().map(|v| v.clone().into()).collect(),
-            open_ports: device.open_ports.clone().iter().map(|p| p.clone().into()).collect(),
+            vulnerabilities: device
+                .vulnerabilities
+                .iter()
+                .map(|v| v.clone().into())
+                .collect(),
+            open_ports: device
+                .open_ports
+                .clone()
+                .iter()
+                .map(|p| p.clone().into())
+                .collect(),
         };
 
         // mDNS instances can be prefixed by the device's serial, mac, ip address.
