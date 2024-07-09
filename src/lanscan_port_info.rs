@@ -1,6 +1,6 @@
 use crate::lanscan_vulnerability_info::*;
-use serde::{Deserialize, Serialize};
 use edamame_backend::lanscan_port_info_backend::PortInfoBackend;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone, Ord, Eq, PartialEq, PartialOrd)]
 pub struct PortInfo {
