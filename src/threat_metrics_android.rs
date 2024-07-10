@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_ANDROID: &str = r#"{
   "name": "threat model Android",
   "extends": "none",
-  "date": "April 17th 2024",
-  "signature": "edcd1640587552e638f11cd9f60d4638324029f420ad8b2b65063b6cf4eaa0d3",
+  "date": "July 09th 2024",
+  "signature": "c7219208028c1051c1980528b2ae3f2da72afa9adcb4dedf29b6e77b710a6936",
   "metrics": [
     {
       "name": "MDM profiles",
@@ -11,7 +11,9 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       "dimension": "system integrity",
       "severity": 5,
       "scope": "generic",
-      "tags": ["Personal Posture"],
+      "tags": [
+        "Personal Posture"
+      ],
       "description": [
         {
           "locale": "EN",
@@ -26,7 +28,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       ],
       "implementation": {
         "system": "Android",
-        "minversion": 12,
+        "minversion": 11,
         "maxversion": 0,
         "class": "internal",
         "elevation": "user",
@@ -35,7 +37,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       },
       "remediation": {
         "system": "Android",
-        "minversion": 12,
+        "minversion": 11,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -55,7 +57,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       },
       "rollback": {
         "system": "Android",
-        "minversion": 12,
+        "minversion": 11,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -100,7 +102,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       ],
       "implementation": {
         "system": "Android",
-        "minversion": 12,
+        "minversion": 11,
         "maxversion": 0,
         "class": "internal",
         "elevation": "user",
@@ -109,7 +111,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       },
       "remediation": {
         "system": "Android",
-        "minversion": 12,
+        "minversion": 11,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -129,7 +131,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       },
       "rollback": {
         "system": "Android",
-        "minversion": 12,
+        "minversion": 11,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -174,7 +176,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       ],
       "implementation": {
         "system": "Android",
-        "minversion": 12,
+        "minversion": 11,
         "maxversion": 0,
         "class": "internal",
         "elevation": "user",
@@ -183,7 +185,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       },
       "remediation": {
         "system": "Android",
-        "minversion": 12,
+        "minversion": 11,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -203,7 +205,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       },
       "rollback": {
         "system": "Android",
-        "minversion": 12,
+        "minversion": 11,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -248,7 +250,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       ],
       "implementation": {
         "system": "Android",
-        "minversion": 12,
+        "minversion": 11,
         "maxversion": 0,
         "class": "internal",
         "elevation": "user",
@@ -257,7 +259,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       },
       "remediation": {
         "system": "Android",
-        "minversion": 12,
+        "minversion": 11,
         "maxversion": 0,
         "class": "internal",
         "elevation": "",
@@ -277,7 +279,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       },
       "rollback": {
         "system": "Android",
-        "minversion": 12,
+        "minversion": 11,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -322,7 +324,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       ],
       "implementation": {
         "system": "Android",
-        "minversion": 12,
+        "minversion": 11,
         "maxversion": 0,
         "class": "internal",
         "elevation": "user",
@@ -331,7 +333,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       },
       "remediation": {
         "system": "Android",
-        "minversion": 12,
+        "minversion": 11,
         "maxversion": 0,
         "class": "internal",
         "elevation": "",
@@ -351,7 +353,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       },
       "rollback": {
         "system": "Android",
-        "minversion": 12,
+        "minversion": 11,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -391,7 +393,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       ],
       "implementation": {
         "system": "Android",
-        "minversion": 12,
+        "minversion": 11,
         "maxversion": 0,
         "class": "internal",
         "elevation": "user",
@@ -400,7 +402,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       },
       "remediation": {
         "system": "Android",
-        "minversion": 12,
+        "minversion": 11,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -420,7 +422,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       },
       "rollback": {
         "system": "Android",
-        "minversion": 12,
+        "minversion": 11,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -465,7 +467,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       ],
       "implementation": {
         "system": "Android",
-        "minversion": 12,
+        "minversion": 11,
         "maxversion": 0,
         "class": "internal",
         "elevation": "user",
@@ -474,7 +476,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       },
       "remediation": {
         "system": "Android",
-        "minversion": 12,
+        "minversion": 11,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -494,7 +496,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       },
       "rollback": {
         "system": "Android",
-        "minversion": 12,
+        "minversion": 11,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -538,7 +540,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       ],
       "implementation": {
         "system": "Android",
-        "minversion": 12,
+        "minversion": 11,
         "maxversion": 0,
         "class": "internal",
         "elevation": "user",
@@ -547,7 +549,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       },
       "remediation": {
         "system": "Android",
-        "minversion": 12,
+        "minversion": 11,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -567,7 +569,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       },
       "rollback": {
         "system": "Android",
-        "minversion": 12,
+        "minversion": 11,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -611,7 +613,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       ],
       "implementation": {
         "system": "Android",
-        "minversion": 12,
+        "minversion": 11,
         "maxversion": 0,
         "class": "internal",
         "elevation": "user",
@@ -620,7 +622,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       },
       "remediation": {
         "system": "Android",
-        "minversion": 12,
+        "minversion": 11,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -640,7 +642,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       },
       "rollback": {
         "system": "Android",
-        "minversion": 12,
+        "minversion": 11,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -684,7 +686,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       ],
       "implementation": {
         "system": "Android",
-        "minversion": 12,
+        "minversion": 11,
         "maxversion": 0,
         "class": "internal",
         "elevation": "user",
@@ -693,7 +695,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       },
       "remediation": {
         "system": "Android",
-        "minversion": 12,
+        "minversion": 11,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -713,7 +715,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       },
       "rollback": {
         "system": "Android",
-        "minversion": 12,
+        "minversion": 11,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -757,7 +759,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       ],
       "implementation": {
         "system": "Android",
-        "minversion": 12,
+        "minversion": 11,
         "maxversion": 0,
         "class": "internal",
         "elevation": "user",
@@ -766,7 +768,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       },
       "remediation": {
         "system": "Android",
-        "minversion": 12,
+        "minversion": 11,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -786,7 +788,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       },
       "rollback": {
         "system": "Android",
-        "minversion": 12,
+        "minversion": 11,
         "maxversion": 0,
         "class": "",
         "elevation": "",
