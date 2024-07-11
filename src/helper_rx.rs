@@ -1,27 +1,26 @@
-use base64::{engine::general_purpose, Engine as _};
-use lazy_static::lazy_static;
-use std::error::Error;
-use std::net::SocketAddr;
-use std::str;
-use tokio::sync::oneshot;
-use tonic::transport::{Certificate, Identity, Server, ServerTlsConfig};
-use tonic::{Code, Request, Response, Status};
-use tracing::{error, info, trace, warn};
-// Tokio Mutex
 use crate::helper_proto::*;
 use crate::helper_rx_utility::*;
 use crate::runner_cli::*;
 use crate::threat::*;
+use base64::{engine::general_purpose, Engine as _};
 use edamame_proto::edamame_helper_server::{EdamameHelper, EdamameHelperServer};
 use edamame_proto::{HelperRequest, HelperResponse};
+use lazy_static::lazy_static;
 #[cfg(target_os = "macos")]
 use libc::EACCES;
+use std::error::Error;
 #[cfg(target_os = "macos")]
 use std::fs::File;
 #[cfg(target_os = "macos")]
 use std::io::ErrorKind;
+use std::net::SocketAddr;
+use std::str;
 use std::sync::Arc;
+use tokio::sync::oneshot;
 use tokio::sync::Mutex;
+use tonic::transport::{Certificate, Identity, Server, ServerTlsConfig};
+use tonic::{Code, Request, Response, Status};
+use tracing::{error, info, trace, warn};
 
 lazy_static! {
     pub static ref THREATS: Arc<Mutex<ThreatMetrics>> = Arc::new(Mutex::new(ThreatMetrics::new("")));
