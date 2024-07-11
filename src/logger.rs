@@ -334,6 +334,7 @@ pub fn init_logger(executable_type: &str, url: &str, release: &str) {
 
                 match tracing_subscriber::registry()
                     .with(filter_layer)
+                    .with(fmt::layer().with_writer(stdout_writer.0))
                     .with(fmt::layer().with_writer(logger.memory_writer.clone()))
                     .with(sentry_layer)
                     .with(android_layer)
@@ -412,6 +413,7 @@ pub fn init_logger(executable_type: &str, url: &str, release: &str) {
 
                 match tracing_subscriber::registry()
                     .with(filter_layer)
+                    .with(fmt::layer().with_writer(stdout_writer.0))
                     .with(fmt::layer().with_writer(logger.memory_writer.clone()))
                     .with(android_layer)
                     .try_init()
