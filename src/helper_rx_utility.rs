@@ -1,15 +1,13 @@
+use crate::lanscan_arp::*;
+use crate::lanscan_interface::*;
+use crate::lanscan_mdns::*;
 use lazy_static::lazy_static;
 use serde_json;
 use std::error::Error;
 use std::net::IpAddr;
 use std::sync::Arc;
-use tracing::{error, info, warn};
-// Tokio Mutex
 use tokio::sync::Mutex;
-
-use crate::lanscan_arp::*;
-use crate::lanscan_interface::*;
-use crate::lanscan_mdns::*;
+use tracing::{error, info, warn};
 
 lazy_static! {
     static ref INTERFACES: Arc<Mutex<Vec<(String, u8, String)>>> =

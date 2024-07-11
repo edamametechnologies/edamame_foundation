@@ -224,7 +224,10 @@ pub fn init_logger(executable_type: &str, url: &str, release: &str) {
         logger_guard.as_ref().unwrap().flush_logs();
         return;
     } else {
-        println!("Initializing logger with executable_type: {}, url: {}, release: {}", executable_type, url, release);
+        println!(
+            "Initializing logger with executable_type: {}, url: {}, release: {}",
+            executable_type, url, release
+        );
     }
 
     *logger_guard = Some(Arc::new(Logger::new()));
@@ -243,9 +246,11 @@ pub fn init_logger(executable_type: &str, url: &str, release: &str) {
 
     // Optional file writer
     // Duplicate to file on Windows for the app and helper, or for the posture
-    let file_writer = if matches!(executable_type, "posture") 
-        || (cfg!(target_os = "windows") && !matches!(executable_type, "cli")) {
-        let log_dir = if matches!(executable_type, "helper") || matches!(executable_type, "posture") {
+    let file_writer = if matches!(executable_type, "posture")
+        || (cfg!(target_os = "windows") && !matches!(executable_type, "cli"))
+    {
+        let log_dir = if matches!(executable_type, "helper") || matches!(executable_type, "posture")
+        {
             let exe_path: PathBuf = current_exe().expect("Failed to get current exe");
             exe_path
                 .parent()
@@ -266,7 +271,10 @@ pub fn init_logger(executable_type: &str, url: &str, release: &str) {
             "edamame"
         };
         let file_appender = RollingFileAppender::new(Rotation::DAILY, log_dir.clone(), basename);
-        println!("Logging to rolling file with basename {} in directory {:?}", basename, log_dir); 
+        println!(
+            "Logging to rolling file with basename {} in directory {:?}",
+            basename, log_dir
+        );
         tracing_appender::non_blocking(file_appender)
     } else {
         NonBlocking::new(io::sink())
@@ -278,7 +286,7 @@ pub fn init_logger(executable_type: &str, url: &str, release: &str) {
     } else {
         NonBlocking::new(io::stdout())
     };
-    
+
     // Register the proper layers based on sentry availability and platform
     if !url.is_empty() {
         let sentry_layer = sentry_tracing::layer().event_filter(|md| match md.level() {
