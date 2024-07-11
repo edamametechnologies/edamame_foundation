@@ -1,10 +1,8 @@
-use oui::OuiDatabase;
-use tracing::{error, trace, warn};
-// Tokio Mutex
-use once_cell::sync::Lazy;
-use tokio::sync::Mutex;
-
 use crate::lanscan_oui_db::*;
+use once_cell::sync::Lazy;
+use oui::OuiDatabase;
+use tokio::sync::Mutex;
+use tracing::{error, trace, warn};
 
 // TODO load from the cloud regularly and store locally
 // const OUI_DB_URL: &str = "https://www.wireshark.org/download/automated/data/manuf";
