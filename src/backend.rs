@@ -1,10 +1,10 @@
-use std::fmt;
-use anyhow::{Result, Error};
+use anyhow::{Error, Result};
 use edamame_backend::lanscan_device_info_backend::*;
 use edamame_backend::lanscan_dislike_device_info_backend::DislikeDeviceInfoBackend;
 use edamame_backend::pwned_breach_backend::BreachDetailBackend;
 use edamame_backend::score_backend::*;
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 #[derive(thiserror::Error, Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub enum BackendErrorCode {
@@ -18,7 +18,7 @@ pub enum BackendErrorCode {
     NonExistentUser,
     DisabledUser,
     Unknown,
-    None
+    None,
 }
 
 impl fmt::Display for BackendErrorCode {
