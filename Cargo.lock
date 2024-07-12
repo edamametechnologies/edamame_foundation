@@ -747,6 +747,7 @@ dependencies = [
  "sorted-vec",
  "strum",
  "strum_macros",
+ "thiserror",
  "tokio",
  "tonic",
  "tonic-build",
