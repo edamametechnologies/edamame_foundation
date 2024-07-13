@@ -1,6 +1,6 @@
 use std::future::Future;
 use std::sync::{Arc, Mutex};
-use tokio::runtime::{Runtime, Handle};
+use tokio::runtime::{Handle, Runtime};
 use tokio::task::JoinHandle;
 
 // Use Arc to wrap the Runtime for safe sharing across threads
@@ -21,7 +21,7 @@ pub fn async_init() {
         .thread_name("edamame")
         .build()
         .expect("Failed to build runtime");
-    
+
     // Store the new runtime in the global static variable
     let rt = Arc::new(rt);
     *RUNTIME.lock().expect("Failed to lock runtime") = Some(rt);
