@@ -21,9 +21,7 @@ pub fn async_init() {
         .thread_name("edamame")
         .build()
         .expect("Failed to build runtime");
-
-    println!("Runtime initialized");
-
+    
     // Store the new runtime in the global static variable
     let rt = Arc::new(rt);
     *RUNTIME.lock().expect("Failed to lock runtime") = Some(rt);
