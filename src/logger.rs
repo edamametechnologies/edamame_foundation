@@ -476,7 +476,7 @@ mod tests {
     use tracing::{debug, error, info, trace, warn};
 
     fn initialize_and_flush_logger() {
-        init_logger("cli", "", "");
+        init_logger("posture", "", "");
     }
 
     #[test]
