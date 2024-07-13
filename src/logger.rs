@@ -208,10 +208,8 @@ fn init_sentry(url: &str, release: &str) {
         },
     ));
 
-    if sentry_guard.is_enabled() {
-        println!("Sentry initialized");
-    } else {
-        println!("Sentry initialization failed");
+    if !sentry_guard.is_enabled() {
+        eprintln!("Sentry initialization failed");
     }
 
     forget(sentry_guard);
@@ -220,14 +218,9 @@ fn init_sentry(url: &str, release: &str) {
 pub fn init_logger(executable_type: &str, url: &str, release: &str) {
     let mut logger_guard = LOGGER.lock().unwrap();
     if logger_guard.is_some() {
-        println!("Logger already initialized, flushing logs");
+        eprintln!("Logger already initialized, flushing logs");
         logger_guard.as_ref().unwrap().flush_logs();
         return;
-    } else {
-        println!(
-            "Initializing logger with executable_type: {}, url: {}, release: {}",
-            executable_type, url, release
-        );
     }
 
     *logger_guard = Some(Arc::new(Logger::new()));
@@ -237,7 +230,12 @@ pub fn init_logger(executable_type: &str, url: &str, release: &str) {
         init_sentry(url, release);
     }
 
-    let default_log_spec = "info";
+    // Keep the default log level to error for the posture
+    let default_log_spec = if executable_type == "cli" {
+        "error"
+    } else {
+        "info"
+    };
     let mut env_log_spec = var("EDAMAME_LOG_LEVEL").unwrap_or(default_log_spec.to_string());
     env_log_spec.push_str(",libp2p=info");
 
