@@ -12,10 +12,9 @@ helper = ["tonic", "prost", "tonic-build", "run_script", "powershell_script"] # 
 disable-helper = [] # When this feature is enabled, `helper` dependencies are excluded
 
 [lib]
-# Dynamic lib version is not used on apple platforms as it's painful, but we must use it on windows and linux
+# Dynamic lib version is not used on apple platforms as it's painful, but we must use it on Windows, Linux and Android
 # We must keep lib if we want to build targets with cargo
-# Adding cdylib is required for windows but is messing up the build on macOS and iOS
-crate-type = ["staticlib", "lib"]
+crate-type = ["staticlib", "cdylib", "lib"]
 
 [dependencies]
 edamame_backend = { git = "https://github.com/edamametechnologies/edamame_backend", version = "0.3.3" }
