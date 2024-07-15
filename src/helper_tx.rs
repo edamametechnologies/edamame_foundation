@@ -176,3 +176,49 @@ async fn helper_run(
     trace!("Helper response: {:?}", output);
     Ok(output)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_certificate_decoding_and_creation() {
+        let ca_pem = std::env::var("EDAMAME_CA_PEM").unwrap_or("".to_string());
+        let client_pem = std::env::var("EDAMAME_CLIENT_PEM").unwrap_or("".to_string());
+        let client_key = std::env::var("EDAMAME_CLIENT_KEY").unwrap_or("".to_string());
+
+        // Decode the CA certificate
+        let server_root_ca_cert_base64 = ca_pem;
+        let server_root_ca_cert_decoded = general_purpose::STANDARD
+            .decode(&server_root_ca_cert_base64)
+            .expect("Failed to decode server root CA certificate");
+        let server_root_ca_cert = str::from_utf8(&server_root_ca_cert_decoded)
+            .expect("Failed to convert server root CA certificate to string");
+        let server_root_ca_cert = Certificate::from_pem(server_root_ca_cert);
+
+        // Decode the client certificate
+        let client_cert_base64 = client_pem;
+        let client_cert_decoded = general_purpose::STANDARD
+            .decode(&client_cert_base64)
+            .expect("Failed to decode client certificate");
+        let client_cert = str::from_utf8(&client_cert_decoded)
+            .expect("Failed to convert client certificate to string");
+
+        // Decode the client key
+        let client_key_base64 = client_key;
+        let client_key_decoded = general_purpose::STANDARD
+            .decode(&client_key_base64)
+            .expect("Failed to decode client key");
+        let client_key =
+            str::from_utf8(&client_key_decoded).expect("Failed to convert client key to string");
+
+        // Create client identity
+        let client_identity = Identity::from_pem(client_cert, client_key);
+
+        // Create TLS config
+        let _ = ClientTlsConfig::new()
+            .domain_name("localhost")
+            .ca_certificate(server_root_ca_cert)
+            .identity(client_identity);
+    }
+}
