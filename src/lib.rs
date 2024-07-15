@@ -1,13 +1,13 @@
 pub mod backend;
 pub mod foundation;
 pub mod health;
-#[cfg(not(feature = "disable-helper"))]
+#[cfg(not(feature = "nohelper"))]
 pub mod helper_proto;
-#[cfg(not(feature = "disable-helper"))]
+#[cfg(not(feature = "nohelper"))]
 pub mod helper_rx;
-#[cfg(not(feature = "disable-helper"))]
+#[cfg(not(feature = "nohelper"))]
 pub mod helper_rx_utility;
-#[cfg(not(feature = "disable-helper"))]
+#[cfg(not(feature = "nohelper"))]
 pub mod helper_tx;
 pub mod history;
 pub mod lanscan_arp;
@@ -28,7 +28,7 @@ pub mod logger;
 pub mod order;
 pub mod order_type;
 pub mod pwned_breach;
-#[cfg(not(feature = "disable-helper"))]
+#[cfg(not(feature = "nohelper"))]
 pub mod runner_cli;
 pub mod runtime;
 pub mod score;
