@@ -2,7 +2,8 @@ use crate::helper_proto::*;
 use crate::helper_rx_utility::*;
 use crate::runner_cli::*;
 use crate::threat::*;
-use base64::{engine::general_purpose, Engine as _};
+use base64::engine::general_purpose;
+use base64::Engine;
 use edamame_proto::edamame_helper_server::{EdamameHelper, EdamameHelperServer};
 use edamame_proto::{HelperRequest, HelperResponse};
 use lazy_static::lazy_static;
@@ -419,4 +420,52 @@ fn order_error(comment: &str, fatal: bool) -> Result<String, Box<dyn Error>> {
 
     error!("{}", msg);
     Err(From::from(msg))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tonic::transport::{Certificate, ClientTlsConfig, Identity};
+    use std::str;
+
+    #[test]
+    fn test_certificate_decoding_and_creation() {
+        let server_pem = std::env::var("EDAMAME_SERVER_PEM").unwrap_or("".to_string());
+        let server_key = std::env::var("EDAMAME_SERVER_KEY").unwrap_or("".to_string());
+        let client_ca_cert = std::env::var("EDAMAME_CLIENT_CA_PEM").unwrap_or("".to_string());
+
+        // Decode the server certificate
+        let cert_base64 = server_pem.to_string();
+        let cert_decoded = general_purpose::STANDARD
+            .decode(&cert_base64)
+            .expect("Failed to decode server certificate");
+        let cert = str::from_utf8(&cert_decoded)
+            .expect("Failed to convert server certificate to string");
+
+        // Decode the server key
+        let key_base64 = server_key.to_string();
+        let key_decoded = general_purpose::STANDARD
+            .decode(&key_base64)
+            .expect("Failed to decode server key");
+        let key = str::from_utf8(&key_decoded)
+            .expect("Failed to convert server key to string");
+
+        // Decode the client CA certificate
+        let ca_cert_base64 = client_ca_cert.to_string();
+        let ca_cert_decoded = general_purpose::STANDARD
+            .decode(&ca_cert_base64)
+            .expect("Failed to decode client CA certificate");
+        let ca_cert = str::from_utf8(&ca_cert_decoded)
+            .expect("Failed to convert client CA certificate to string");
+        let ca_certificate = Certificate::from_pem(ca_cert);
+
+        // Create client identity
+        let client_identity = Identity::from_pem(cert, key);
+
+        // Create TLS config
+        let _ = ClientTlsConfig::new()
+            .domain_name("localhost")
+            .ca_certificate(ca_certificate)
+            .identity(client_identity);
+    }
 }
