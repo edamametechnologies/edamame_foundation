@@ -1,3 +1,5 @@
+.PHONY: upgrade unused_dependencies format clean test
+
 upgrade:
 	rustup update
 	cargo install -f cargo-upgrades
@@ -9,3 +11,11 @@ unused_dependencies:
 
 format:
 	cargo fmt
+
+clean:
+	cargo clean
+	rm -rf ./build/
+	rm -rf ./target/
+
+test:
+	cargo test
