@@ -9,7 +9,7 @@ async_fn_in_trait = "allow"
 [features]
 default = ["helper"]
 helper = ["tonic", "prost", "tonic-build", "run_script", "powershell_script"] # Include helper related dependencies by default
-disable-helper = [] # When this feature is enabled, `helper` dependencies are excluded
+nohelper = [] # When this feature is enabled, `helper` dependencies are excluded
 
 [lib]
 # Dynamic lib version is not used on apple platforms as it's painful, but we must use it on Windows, Linux and Android
