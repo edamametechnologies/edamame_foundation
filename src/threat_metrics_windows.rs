@@ -97,12 +97,12 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
           {
             "locale": "EN",
             "class": "html",
-            "target": "<p>Disabling cached logon credentials enhances the security of your Windows system by preventing attackers from utilizing cached information to gain unauthorized access. Use the provided CLI command to modify the registry setting, effectively disabling password caching. This action requires administrative privileges.</p>"
+            "target": "Disabling cached logon credentials enhances the security of your Windows system by preventing attackers from utilizing cached information to gain unauthorized access. Use the provided CLI command to modify the registry setting, effectively disabling password caching. This action requires administrative privileges."
           },
           {
             "locale": "FR",
             "class": "html",
-            "target": "<p>Désactiver les identifiants de connexion mis en cache améliore la sécurité de votre système Windows en empêchant les attaquants d'utiliser des informations mises en cache pour accéder sans autorisation. Utilisez la commande CLI fournie pour modifier le paramètre du registre, désactivant ainsi efficacement la mise en cache des mots de passe. Cette action nécessite des privilèges administratifs.</p>"
+            "target": "Désactiver les identifiants de connexion mis en cache améliore la sécurité de votre système Windows en empêchant les attaquants d'utiliser des informations mises en cache pour accéder sans autorisation. Utilisez la commande CLI fournie pour modifier le paramètre du registre, désactivant ainsi efficacement la mise en cache des mots de passe. Cette action nécessite des privilèges administratifs."
           }
         ]
       },
@@ -117,12 +117,12 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
           {
             "locale": "EN",
             "class": "html",
-            "target": "<p>Re-enabling cached logon credentials allows for the storage of credentials on the system for future logons. While this may improve convenience, it can also increase security risks. If you need to enable it for specific scenarios, use the provided CLI command with caution and ensure your system's physical security.</p>"
+            "target": "Re-enabling cached logon credentials allows for the storage of credentials on the system for future logons. While this may improve convenience, it can also increase security risks. If you need to enable it for specific scenarios, use the provided CLI command with caution and ensure your system's physical security."
           },
           {
             "locale": "FR",
             "class": "html",
-            "target": "<p>Réactiver les identifiants de connexion mis en cache permet de stocker des identifiants sur le système pour les connexions futures. Bien que cela puisse améliorer la commodité, cela peut également augmenter les risques de sécurité. Si vous devez l'activer pour des scénarios spécifiques, utilisez la commande CLI fournie avec prudence et assurez-vous de la sécurité physique de votre système.</p>"
+            "target": "Réactiver les identifiants de connexion mis en cache permet de stocker des identifiants sur le système pour les connexions futures. Bien que cela puisse améliorer la commodité, cela peut également augmenter les risques de sécurité. Si vous devez l'activer pour des scénarios spécifiques, utilisez la commande CLI fournie avec prudence et assurez-vous de la sécurité physique de votre système."
           }
         ]
       },
@@ -166,7 +166,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "user",
-        "target": "Function Get-AVStatus { [cmdletbinding()] Param() Process { $AV = Get-CimInstance -Namespace 'root/SecurityCenter2' -ClassName 'AntivirusProduct'; $enabledAVs = $AV | Where-Object { $productState = '0x{0:x}' -f $_.ProductState; $enabled = $productState.Substring(3, 2) -match '10|11'; return $enabled }; if (-not $enabledAVs) { Write-Output 'no epp' } } }; Get-AVStatus",
+        "target": "Function Get-AVStatus { [cmdletbinding()] Param() Process { $AV = Get-CimInstance -Namespace 'root/SecurityCenter2' -ClassName 'AntivirusProduct'; $enabledAVs = $AV | Where-Object { $productState = '0x{0:x}' -f $_.ProductState; $enabled = $productState.Substring(3, 2) -match '10|11'; return $enabled }; if (-not $enabledAVs) { Write-Output 'epp_disabled' } } }; Get-AVStatus",
         "education": []
       },
       "remediation": {
@@ -180,12 +180,12 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
           {
             "locale": "EN",
             "class": "html",
-            "target": "<p>This remediation will direct you to the Windows Security settings where you can enable or install an antivirus program. Ensure you have a robust antivirus solution enabled to protect your system from malware and other threats. For more detailed instructions, visit the <a href='https://support.microsoft.com/en-us/windows/stay-protected-with-windows-security-2ae0363d-0ada-c064-8b56-6a39afb6a963'>support page</a>.</p>"
+            "target": "This remediation will direct you to the Windows Security settings where you can enable or install an antivirus program. Ensure you have a robust antivirus solution enabled to protect your system from malware and other threats. For more detailed instructions, visit the <a href='https://support.microsoft.com/en-us/windows/stay-protected-with-windows-security-2ae0363d-0ada-c064-8b56-6a39afb6a963'>support page</a>."
           },
           {
             "locale": "FR",
             "class": "html",
-            "target": "<p>Cette remédiation vous dirigera vers les paramètres de Sécurité Windows où vous pourrez activer ou installer un programme antivirus. Assurez-vous d'avoir une solution antivirus robuste activée pour protéger votre système contre les logiciels malveillants et autres menaces. Pour des instructions plus détaillées, visitez la <a href='https://support.microsoft.com/fr-fr/windows/rester-prot%C3%A9g%C3%A9-avec-s%C3%A9curit%C3%A9-windows-2ae0363d-0ada-c064-8b56-6a39afb6a963'>page de support</a>.</p>"
+            "target": "Cette remédiation vous dirigera vers les paramètres de Sécurité Windows où vous pourrez activer ou installer un programme antivirus. Assurez-vous d'avoir une solution antivirus robuste activée pour protéger votre système contre les logiciels malveillants et autres menaces. Pour des instructions plus détaillées, visitez la <a href='https://support.microsoft.com/fr-fr/windows/rester-prot%C3%A9g%C3%A9-avec-s%C3%A9curit%C3%A9-windows-2ae0363d-0ada-c064-8b56-6a39afb6a963'>page de support</a>."
           }
         ]
       },
@@ -200,12 +200,12 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
           {
             "locale": "EN",
             "class": "html",
-            "target": "<p>If you need to revert the changes, go back to the Windows Security settings and adjust your antivirus settings accordingly. Ensure you understand the security implications of any changes you make. For more information, visit the <a href='https://support.microsoft.com/en-us/windows/stay-protected-with-windows-security-2ae0363d-0ada-c064-8b56-6a39afb6a963'>support page</a>.</p>"
+            "target": "If you need to revert the changes, go back to the Windows Security settings and adjust your antivirus settings accordingly. Ensure you understand the security implications of any changes you make. For more information, visit the <a href='https://support.microsoft.com/en-us/windows/stay-protected-with-windows-security-2ae0363d-0ada-c064-8b56-6a39afb6a963'>support page</a>."
           },
           {
             "locale": "FR",
             "class": "html",
-            "target": "<p>Si vous devez annuler les modifications, retournez dans les paramètres de Sécurité Windows et ajustez les paramètres de votre antivirus en conséquence. Assurez-vous de comprendre les implications de sécurité des modifications apportées. Pour plus d'informations, visitez la <a href='https://support.microsoft.com/fr-fr/windows/rester-prot%C3%A9g%C3%A9-avec-s%C3%A9curit%C3%A9-windows-2ae0363d-0ada-c064-8b56-6a39afb6a963'>page de support</a>.</p>"
+            "target": "Si vous devez annuler les modifications, retournez dans les paramètres de Sécurité Windows et ajustez les paramètres de votre antivirus en conséquence. Assurez-vous de comprendre les implications de sécurité des modifications apportées. Pour plus d'informations, visitez la <a href='https://support.microsoft.com/fr-fr/windows/rester-prot%C3%A9g%C3%A9-avec-s%C3%A9curit%C3%A9-windows-2ae0363d-0ada-c064-8b56-6a39afb6a963'>page de support</a>."
           }
         ]
       }
@@ -328,12 +328,12 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
           {
             "locale": "EN",
             "class": "html",
-            "target": "<p>Enabling User Account Control (UAC) is crucial for security. It prompts for authorization on actions that could affect your system's operation or change settings that require administrative privileges. To enable UAC, use the command <code>Set-ItemProperty -Path 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System' -Name EnableLUA -Value 1 -Type DWord</code>. This ensures that any attempt to make changes to your system is authorized by you, significantly reducing the risk of malware infections.</p>"
+            "target": "Enabling User Account Control (UAC) is crucial for security. It prompts for authorization on actions that could affect your system's operation or change settings that require administrative privileges. This ensures that any attempt to make changes to your system is authorized by you, significantly reducing the risk of malware infections."
           },
           {
             "locale": "FR",
             "class": "html",
-            "target": "<p>Activer le Contrôle de compte d'utilisateur (UAC) est crucial pour la sécurité. Il demande une autorisation pour les actions qui pourraient affecter le fonctionnement de votre système ou modifier les paramètres nécessitant des privilèges administratifs. Pour activer l'UAC, utilisez la commande <code>Set-ItemProperty -Path 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System' -Name EnableLUA -Value 1 -Type DWord</code>. Cela garantit que toute tentative de modification de votre système est autorisée par vous, réduisant considérablement le risque d'infections par des logiciels malveillants.</p>"
+            "target": "Activer le Contrôle de compte d'utilisateur (UAC) est crucial pour la sécurité. Il demande une autorisation pour les actions qui pourraient affecter le fonctionnement de votre système ou modifier les paramètres nécessitant des privilèges administratifs. Cela garantit que toute tentative de modification de votre système est autorisée par vous, réduisant considérablement le risque d'infections par des logiciels malveillants."
           }
         ]
       },
@@ -348,12 +348,12 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
           {
             "locale": "EN",
             "class": "html",
-            "target": "<p>While it's generally not recommended, there might be specific scenarios where you need to disable UAC, such as for troubleshooting or running certain applications that are not compatible with UAC. If you must disable it, use the command <code>Set-ItemProperty -Path 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System' -Name EnableLUA -Value 0 -Type DWord</code>, but be aware of the increased security risk. Always ensure to re-enable UAC as soon as possible.</p>"
+            "target": "While it's generally not recommended, there might be specific scenarios where you need to disable UAC, such as for troubleshooting or running certain applications that are not compatible with UAC. Always ensure to re-enable UAC as soon as possible."
           },
           {
             "locale": "FR",
             "class": "html",
-            "target": "<p>Bien que cela ne soit généralement pas recommandé, il pourrait y avoir des scénarios spécifiques nécessitant la désactivation de l'UAC, comme pour le dépannage ou l'exécution de certaines applications non compatibles avec l'UAC. Si vous devez le désactiver, utilisez la commande <code>Set-ItemProperty -Path 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System' -Name EnableLUA -Value 0 -Type DWord</code>, mais soyez conscient du risque de sécurité accru. Assurez-vous toujours de réactiver l'UAC dès que possible.</p>"
+            "target": "Bien que cela ne soit généralement pas recommandé, il pourrait y avoir des scénarios spécifiques nécessitant la désactivation de l'UAC, comme pour le dépannage ou l'exécution de certaines applications non compatibles avec l'UAC. Assurez-vous toujours de réactiver l'UAC dès que possible."
           }
         ]
       }
@@ -402,12 +402,12 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
           {
             "locale": "EN",
             "class": "html",
-            "target": "<p>Disabling automatic login is crucial for enhancing the security of your Windows system. When automatic login is enabled, anyone with physical access to the computer can gain access without needing to enter a username or password. To disable this feature, use the command <code>Set-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon' -Name AutoAdminLogon -Value 0</code>. This action requires you to enter your credentials upon startup, thereby providing an additional layer of security.</p>"
+            "target": "Disabling automatic login is crucial for enhancing the security of your Windows system. When automatic login is enabled, anyone with physical access to the computer can gain access without needing to enter a username or password. This action requires you to enter your credentials upon startup, thereby providing an additional layer of security."
           },
           {
             "locale": "FR",
             "class": "html",
-            "target": "<p>Désactiver la connexion automatique est crucial pour renforcer la sécurité de votre système Windows. Lorsque la connexion automatique est activée, toute personne ayant accès physique à l'ordinateur peut y accéder sans avoir besoin de saisir un nom d'utilisateur ou un mot de passe. Pour désactiver cette fonctionnalité, utilisez la commande <code>Set-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon' -Name AutoAdminLogon -Value 0</code>. Cette action nécessite que vous saisissiez vos identifiants au démarrage, fournissant ainsi une couche supplémentaire de sécurité.</p>"
+            "target": "Désactiver la connexion automatique est crucial pour renforcer la sécurité de votre système Windows. Lorsque la connexion automatique est activée, toute personne ayant accès physique à l'ordinateur peut y accéder sans avoir besoin de saisir un nom d'utilisateur ou un mot de passe. Cette action nécessite que vous saisissiez vos identifiants au démarrage, fournissant ainsi une couche supplémentaire de sécurité."
           }
         ]
       },
@@ -422,12 +422,12 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
           {
             "locale": "EN",
             "class": "html",
-            "target": "<p>Re-enabling automatic login should be done with caution and only in environments where physical security is guaranteed. This feature can be convenient for systems that do not require strict security measures and are in secure locations. To re-enable automatic login, use the command <code>Set-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon' -Name AutoAdminLogon -Value 1</code>. Remember, this lowers the security of your system by allowing access without credentials.</p>"
+            "target": "Re-enabling automatic login should be done with caution and only in environments where physical security is guaranteed. This feature can be convenient for systems that do not require strict security measures and are in secure locations. Remember, this lowers the security of your system by allowing access without credentials."
           },
           {
             "locale": "FR",
             "class": "html",
-            "target": "<p>Réactiver la connexion automatique doit être fait avec prudence et uniquement dans des environnements où la sécurité physique est garantie. Cette fonctionnalité peut être pratique pour les systèmes qui n'exigent pas de mesures de sécurité strictes et qui se trouvent dans des lieux sécurisés. Pour réactiver la connexion automatique, utilisez la commande <code>Set-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon' -Name AutoAdminLogon -Value 1</code>. Rappelez-vous, cela diminue la sécurité de votre système en permettant l'accès sans identifiants.</p>"
+            "target": "Réactiver la connexion automatique doit être fait avec prudence et uniquement dans des environnements où la sécurité physique est garantie. Cette fonctionnalité peut être pratique pour les systèmes qui n'exigent pas de mesures de sécurité strictes et qui se trouvent dans des lieux sécurisés. Rappelez-vous, cela diminue la sécurité de votre système en permettant l'accès sans identifiants."
           }
         ]
       }
@@ -624,12 +624,12 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
           {
             "locale": "EN",
             "class": "html",
-            "target": "<p>Disabling Windows Script Host (WSH) is a preventative measure against certain types of malware attacks that utilize scripting languages like VBScript or JScript. To disable WSH, execute the command <code>reg add HKLM\\SOFTWARE\\Microsoft\\'Windows Script Host'\\Settings /v Enabled /t REG_DWORD /d 0 /f</code>. This action prevents scripts from running, thereby enhancing your system's security against script-based threats.</p>"
+            "target": "Disabling Windows Script Host (WSH) is a preventative measure against certain types of malware attacks that utilize scripting languages like VBScript or JScript. This action prevents scripts from running, thereby enhancing your system's security against script-based threats."
           },
           {
             "locale": "FR",
             "class": "html",
-            "target": "<p>Désactiver Windows Script Host (WSH) est une mesure préventive contre certains types d'attaques de logiciels malveillants qui utilisent des langages de script comme VBScript ou JScript. Pour désactiver WSH, exécutez la commande <code>reg add HKLM\\SOFTWARE\\Microsoft\\'Windows Script Host'\\Settings /v Enabled /t REG_DWORD /d 0 /f</code>. Cette action empêche l'exécution de scripts, renforçant ainsi la sécurité de votre système contre les menaces basées sur des scripts.</p>"
+            "target": "Désactiver Windows Script Host (WSH) est une mesure préventive contre certains types d'attaques de logiciels malveillants qui utilisent des langages de script comme VBScript ou JScript. Cette action empêche l'exécution de scripts, renforçant ainsi la sécurité de votre système contre les menaces basées sur des scripts."
           }
         ]
       },
@@ -644,12 +644,12 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
           {
             "locale": "EN",
             "class": "html",
-            "target": "<p>Enabling Windows Script Host (WSH) should be considered carefully, especially if specific scripts are necessary for your operations. To re-enable WSH, use the command <code>reg add HKLM\\SOFTWARE\\Microsoft\\'Windows Script Host'\\Settings /v Enabled /t REG_DWORD /d 1 /f</code>. Be mindful of the scripts you execute to maintain system security.</p>"
+            "target": "Enabling Windows Script Host (WSH) should be considered carefully, especially if specific scripts are necessary for your operations. Be mindful of the scripts you execute to maintain system security."
           },
           {
             "locale": "FR",
             "class": "html",
-            "target": "<p>L'activation de Windows Script Host (WSH) doit être considérée avec soin, notamment si des scripts spécifiques sont nécessaires pour vos opérations. Pour réactiver WSH, utilisez la commande <code>reg add HKLM\\SOFTWARE\\Microsoft\\'Windows Script Host'\\Settings /v Enabled /t REG_DWORD /d 1 /f</code>. Soyez attentif aux scripts que vous exécutez pour maintenir la sécurité du système.</p>"
+            "target": "L'activation de Windows Script Host (WSH) doit être considérée avec soin, notamment si des scripts spécifiques sont nécessaires pour vos opérations. Soyez attentif aux scripts que vous exécutez pour maintenir la sécurité du système."
           }
         ]
       }
@@ -698,12 +698,12 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
           {
             "locale": "EN",
             "class": "html",
-            "target": "<p>Disabling Remote Desktop Protocol (RDP) is crucial for securing your system against unauthorized remote access. To disable RDP and protect your computer, execute the command: <code>Set-ItemProperty -Path 'HKLM:\\System\\CurrentControlSet\\Control\\Terminal Server' -Name fDenyTSConnections -Value 1</code>. This ensures that no remote connections can be established, significantly reducing the risk of cyber attacks.</p>"
+            "target": "Disabling Remote Desktop Protocol (RDP) is crucial for securing your system against unauthorized remote access. This ensures that no remote connections can be established, significantly reducing the risk of cyber attacks."
           },
           {
             "locale": "FR",
             "class": "html",
-            "target": "<p>Désactiver le Protocole de Bureau à distance (RDP) est crucial pour sécuriser votre système contre l'accès à distance non autorisé. Pour désactiver RDP et protéger votre ordinateur, exécutez la commande : <code>Set-ItemProperty -Path 'HKLM:\\System\\CurrentControlSet\\Control\\Terminal Server' -Name fDenyTSConnections -Value 1</code>. Cela garantit qu'aucune connexion à distance ne peut être établie, réduisant considérablement le risque d'attaques cybernétiques.</p>"
+            "target": "Désactiver le Protocole de Bureau à distance (RDP) est crucial pour sécuriser votre système contre l'accès à distance non autorisé. Cela garantit qu'aucune connexion à distance ne peut être établie, réduisant considérablement le risque d'attaques cybernétiques."
           }
         ]
       },
@@ -718,12 +718,12 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
           {
             "locale": "EN",
             "class": "html",
-            "target": "<p>If you need to enable Remote Desktop Protocol (RDP) for specific purposes, ensure your system is secured with strong passwords and access is restricted to trusted users only. To re-enable RDP, use the command: <code>Set-ItemProperty -Path 'HKLM:\\System\\CurrentControlSet\\Control\\Terminal Server' -Name fDenyTSConnections -Value 0</code>. Additionally, consider implementing network level authentication and firewall rules to safeguard your system.</p>"
+            "target": "If you need to enable Remote Desktop Protocol (RDP) for specific purposes, ensure your system is secured with strong passwords and access is restricted to trusted users only. Additionally, consider implementing network level authentication and firewall rules to safeguard your system."
           },
           {
             "locale": "FR",
             "class": "html",
-            "target": "<p>Si vous devez activer le Protocole de Bureau à distance (RDP) pour des besoins spécifiques, assurez-vous que votre système est sécurisé avec des mots de passe forts et que l'accès est limité aux utilisateurs de confiance uniquement. Pour réactiver RDP, utilisez la commande : <code>Set-ItemProperty -Path 'HKLM:\\System\\CurrentControlSet\\Control\\Terminal Server' -Name fDenyTSConnections -Value 0</code>. De plus, envisagez de mettre en œuvre une authentification au niveau du réseau et des règles de pare-feu pour protéger votre système.</p>"
+            "target": "Si vous devez activer le Protocole de Bureau à distance (RDP) pour des besoins spécifiques, assurez-vous que votre système est sécurisé avec des mots de passe forts et que l'accès est limité aux utilisateurs de confiance uniquement. De plus, envisagez de mettre en œuvre une authentification au niveau du réseau et des règles de pare-feu pour protéger votre système."
           }
         ]
       }
@@ -772,12 +772,12 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
           {
             "locale": "EN",
             "class": "html",
-            "target": "<p>Enabling automatic updates is crucial for maintaining system security. To ensure your system automatically downloads and installs updates, execute the provided command. This action helps protect your computer against vulnerabilities by keeping it updated with the latest security patches.</p>"
+            "target": "Enabling automatic updates is crucial for maintaining system security. To ensure your system automatically downloads and installs updates, execute the provided command. This action helps protect your computer against vulnerabilities by keeping it updated with the latest security patches."
           },
           {
             "locale": "FR",
             "class": "html",
-            "target": "<p>Activer les mises à jour automatiques est crucial pour maintenir la sécurité du système. Pour que votre système télécharge et installe automatiquement les mises à jour, exécutez la commande fournie. Cette action aide à protéger votre ordinateur contre les vulnérabilités en le gardant à jour avec les derniers correctifs de sécurité.</p>"
+            "target": "Activer les mises à jour automatiques est crucial pour maintenir la sécurité du système. Pour que votre système télécharge et installe automatiquement les mises à jour, exécutez la commande fournie. Cette action aide à protéger votre ordinateur contre les vulnérabilités en le gardant à jour avec les derniers correctifs de sécurité."
           }
         ]
       },
@@ -792,12 +792,12 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
           {
             "locale": "EN",
             "class": "html",
-            "target": "<p>If you need to disable automatic updates, be aware that this may expose your system to security risks. Manual updates require regular monitoring to ensure your system's security. Use the provided command to switch back to manual updates, but consider the potential vulnerabilities and ensure to manually check for updates regularly.</p>"
+            "target": "If you need to disable automatic updates, be aware that this may expose your system to security risks. Manual updates require regular monitoring to ensure your system's security. Use the provided command to switch back to manual updates, but consider the potential vulnerabilities and ensure to manually check for updates regularly."
           },
           {
             "locale": "FR",
             "class": "html",
-            "target": "<p>Si vous devez désactiver les mises à jour automatiques, sachez que cela peut exposer votre système à des risques de sécurité. Les mises à jour manuelles nécessitent une surveillance régulière pour garantir la sécurité de votre système. Utilisez la commande fournie pour revenir aux mises à jour manuelles, mais prenez en compte les vulnérabilités potentielles et assurez-vous de vérifier manuellement les mises à jour régulièrement.</p>"
+            "target": "Si vous devez désactiver les mises à jour automatiques, sachez que cela peut exposer votre système à des risques de sécurité. Les mises à jour manuelles nécessitent une surveillance régulière pour garantir la sécurité de votre système. Utilisez la commande fournie pour revenir aux mises à jour manuelles, mais prenez en compte les vulnérabilités potentielles et assurez-vous de vérifier manuellement les mises à jour régulièrement."
           }
         ]
       }
@@ -846,12 +846,12 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
           {
             "locale": "EN",
             "class": "html",
-            "target": "<p>Disabling the Guest account is a critical step towards securing your Windows system. The Guest account, by default, has limited access but can still be a potential entry point for unauthorized access. Use the provided CLI command to disable this account and protect your system from unnecessary exposure.</p>"
+            "target": "Disabling the Guest account is a critical step towards securing your Windows system. The Guest account, by default, has limited access but can still be a potential entry point for unauthorized access. Use the provided CLI command to disable this account and protect your system from unnecessary exposure."
           },
           {
             "locale": "FR",
             "class": "html",
-            "target": "<p>Désactiver le compte Invité est une étape cruciale pour sécuriser votre système Windows. Le compte Invité, par défaut, a un accès limité mais peut encore être un point d'entrée potentiel pour un accès non autorisé. Utilisez la commande CLI fournie pour désactiver ce compte et protéger votre système d'une exposition inutile.</p>"
+            "target": "Désactiver le compte Invité est une étape cruciale pour sécuriser votre système Windows. Le compte Invité, par défaut, a un accès limité mais peut encore être un point d'entrée potentiel pour un accès non autorisé. Utilisez la commande CLI fournie pour désactiver ce compte et protéger votre système d'une exposition inutile."
           }
         ]
       },
@@ -866,12 +866,12 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
           {
             "locale": "EN",
             "class": "html",
-            "target": "<p>If there's a specific need to enable the Guest account, it should be done with caution. Ensure that the use of the Guest account is monitored and that its access is limited to only what is necessary. Use the provided CLI command to re-enable the Guest account as needed.</p>"
+            "target": "If there's a specific need to enable the Guest account, it should be done with caution. Ensure that the use of the Guest account is monitored and that its access is limited to only what is necessary. Use the provided CLI command to re-enable the Guest account as needed."
           },
           {
             "locale": "FR",
             "class": "html",
-            "target": "<p>S'il y a un besoin spécifique d'activer le compte Invité, cela devrait être fait avec prudence. Assurez-vous que l'utilisation du compte Invité est surveillée et que son accès est limité à ce qui est nécessaire. Utilisez la commande CLI fournie pour réactiver le compte Invité selon les besoins.</p>"
+            "target": "S'il y a un besoin spécifique d'activer le compte Invité, cela devrait être fait avec prudence. Assurez-vous que l'utilisation du compte Invité est surveillée et que son accès est limité à ce qui est nécessaire. Utilisez la commande CLI fournie pour réactiver le compte Invité selon les besoins."
           }
         ]
       }
@@ -920,12 +920,12 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
           {
             "locale": "EN",
             "class": "html",
-            "target": "<p>Disabling the built-in Administrator account reduces the risk of unauthorized system changes and potential security breaches. This account has full system access and should be disabled in a normal user environment. Use the provided CLI command for disabling the Administrator account to enhance your system's security posture.</p>"
+            "target": "Disabling the built-in Administrator account reduces the risk of unauthorized system changes and potential security breaches. This account has full system access and should be disabled in a normal user environment. Use the provided CLI command for disabling the Administrator account to enhance your system's security posture."
           },
           {
             "locale": "FR",
             "class": "html",
-            "target": "<p>Désactiver le compte administrateur intégré réduit le risque de modifications non autorisées du système et de violations potentielles de la sécurité. Ce compte a un accès complet au système et devrait être désactivé dans un environnement utilisateur normal. Utilisez la commande CLI fournie pour désactiver le compte administrateur afin d'améliorer la posture de sécurité de votre système.</p>"
+            "target": "Désactiver le compte administrateur intégré réduit le risque de modifications non autorisées du système et de violations potentielles de la sécurité. Ce compte a un accès complet au système et devrait être désactivé dans un environnement utilisateur normal. Utilisez la commande CLI fournie pour désactiver le compte administrateur afin d'améliorer la posture de sécurité de votre système."
           }
         ]
       },
@@ -940,12 +940,12 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
           {
             "locale": "EN",
             "class": "html",
-            "target": "<p>Re-enabling the built-in Administrator account should be done with specific operational requirements in mind. Ensure that its use is strictly controlled and monitored. Use the provided CLI command to re-enable the Administrator account when necessary, but always prioritize security and minimize its use to when absolutely needed.</p>"
+            "target": "Re-enabling the built-in Administrator account should be done with specific operational requirements in mind. Ensure that its use is strictly controlled and monitored. Use the provided CLI command to re-enable the Administrator account when necessary, but always prioritize security and minimize its use to when absolutely needed."
           },
           {
             "locale": "FR",
             "class": "html",
-            "target": "<p>Réactiver le compte administrateur intégré doit être fait en tenant compte de besoins opérationnels spécifiques. Assurez-vous que son utilisation est strictement contrôlée et surveillée. Utilisez la commande CLI fournie pour réactiver le compte administrateur lorsque nécessaire, mais toujours prioriser la sécurité et minimiser son utilisation à quand absolument nécessaire.</p>"
+            "target": "Réactiver le compte administrateur intégré doit être fait en tenant compte de besoins opérationnels spécifiques. Assurez-vous que son utilisation est strictement contrôlée et surveillée. Utilisez la commande CLI fournie pour réactiver le compte administrateur lorsque nécessaire, mais toujours prioriser la sécurité et minimiser son utilisation à quand absolument nécessaire."
           }
         ]
       }
@@ -994,12 +994,12 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
           {
             "locale": "EN",
             "class": "html",
-            "target": "<p>Enabling Windows Firewall is crucial for defending your computer against unauthorized network access and potential cyber threats. The Windows Firewall provides a first line of defense by controlling incoming and outgoing network traffic based on security rules. By using the provided CLI command, you can ensure that your firewall is active and contributing to the overall security of your system.</p>"
+            "target": "Enabling Windows Firewall is crucial for defending your computer against unauthorized network access and potential cyber threats. The Windows Firewall provides a first line of defense by controlling incoming and outgoing network traffic based on security rules. By using the provided CLI command, you can ensure that your firewall is active and contributing to the overall security of your system."
           },
           {
             "locale": "FR",
             "class": "html",
-            "target": "<p>Activer le pare-feu Windows est essentiel pour défendre votre ordinateur contre les accès réseau non autorisés et les menaces cybernétiques potentielles. Le pare-feu Windows offre une première ligne de défense en contrôlant le trafic réseau entrant et sortant en fonction des règles de sécurité. En utilisant la commande CLI fournie, vous pouvez vous assurer que votre pare-feu est actif et contribue à la sécurité globale de votre système.</p>"
+            "target": "Activer le pare-feu Windows est essentiel pour défendre votre ordinateur contre les accès réseau non autorisés et les menaces cybernétiques potentielles. Le pare-feu Windows offre une première ligne de défense en contrôlant le trafic réseau entrant et sortant en fonction des règles de sécurité. En utilisant la commande CLI fournie, vous pouvez vous assurer que votre pare-feu est actif et contribue à la sécurité globale de votre système."
           }
         ]
       },
@@ -1014,12 +1014,12 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
           {
             "locale": "EN",
             "class": "html",
-            "target": "<p>Disabling the Windows Firewall should be considered only under specific circumstances where it is necessary for certain applications or services to function correctly. However, this action increases your system's vulnerability to network-based attacks. Ensure alternative security measures are in place before proceeding with the provided CLI command to disable the firewall.</p>"
+            "target": "Disabling the Windows Firewall should be considered only under specific circumstances where it is necessary for certain applications or services to function correctly. However, this action increases your system's vulnerability to network-based attacks. Ensure alternative security measures are in place before proceeding with the provided CLI command to disable the firewall."
           },
           {
             "locale": "FR",
             "class": "html",
-            "target": "<p>Désactiver le pare-feu Windows ne devrait être envisagé que dans des circonstances spécifiques où cela est nécessaire pour le bon fonctionnement de certaines applications ou services. Cependant, cette action augmente la vulnérabilité de votre système aux attaques basées sur le réseau. Assurez-vous que des mesures de sécurité alternatives sont en place avant de procéder avec la commande CLI fournie pour désactiver le pare-feu.</p>"
+            "target": "Désactiver le pare-feu Windows ne devrait être envisagé que dans des circonstances spécifiques où cela est nécessaire pour le bon fonctionnement de certaines applications ou services. Cependant, cette action augmente la vulnérabilité de votre système aux attaques basées sur le réseau. Assurez-vous que des mesures de sécurité alternatives sont en place avant de procéder avec la commande CLI fournie pour désactiver le pare-feu."
           }
         ]
       }
@@ -1068,12 +1068,12 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
           {
             "locale": "EN",
             "class": "html",
-            "target": "<p>Disabling the Remote Registry Service is recommended to reduce the attack surface of your Windows system. This service, if left enabled, can provide a potential pathway for attackers to modify registry settings remotely, leading to unauthorized changes or malicious activities. Secure your system by using the provided CLI command to disable this service.</p>"
+            "target": "Disabling the Remote Registry Service is recommended to reduce the attack surface of your Windows system. This service, if left enabled, can provide a potential pathway for attackers to modify registry settings remotely, leading to unauthorized changes or malicious activities. Secure your system by using the provided CLI command to disable this service."
           },
           {
             "locale": "FR",
             "class": "html",
-            "target": "<p>Il est recommandé de désactiver le Service Registre Distant pour réduire la surface d'attaque de votre système Windows. Ce service, s'il reste activé, peut fournir un chemin potentiel pour que les attaquants modifient à distance les paramètres du registre, conduisant à des changements non autorisés ou à des activités malveillantes. Sécurisez votre système en utilisant la commande CLI fournie pour désactiver ce service.</p>"
+            "target": "Il est recommandé de désactiver le Service Registre Distant pour réduire la surface d'attaque de votre système Windows. Ce service, s'il reste activé, peut fournir un chemin potentiel pour que les attaquants modifient à distance les paramètres du registre, conduisant à des changements non autorisés ou à des activités malveillantes. Sécurisez votre système en utilisant la commande CLI fournie pour désactiver ce service."
           }
         ]
       },
@@ -1088,12 +1088,12 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
           {
             "locale": "EN",
             "class": "html",
-            "target": "<p>Re-enabling the Remote Registry Service should be done with caution and only if it is strictly necessary for your operational needs. Keep in mind that this can expose your system to additional risks. Ensure that appropriate security controls and monitoring are in place before using the provided CLI command to re-enable this service.</p>"
+            "target": "Re-enabling the Remote Registry Service should be done with caution and only if it is strictly necessary for your operational needs. Keep in mind that this can expose your system to additional risks. Ensure that appropriate security controls and monitoring are in place before using the provided CLI command to re-enable this service."
           },
           {
             "locale": "FR",
             "class": "html",
-            "target": "<p>Réactiver le Service Registre Distant doit être fait avec prudence et seulement si cela est strictement nécessaire pour vos besoins opérationnels. Gardez à l'esprit que cela peut exposer votre système à des risques supplémentaires. Assurez-vous que des contrôles de sécurité appropriés et une surveillance sont en place avant d'utiliser la commande CLI fournie pour réactiver ce service.</p>"
+            "target": "Réactiver le Service Registre Distant doit être fait avec prudence et seulement si cela est strictement nécessaire pour vos besoins opérationnels. Gardez à l'esprit que cela peut exposer votre système à des risques supplémentaires. Assurez-vous que des contrôles de sécurité appropriés et une surveillance sont en place avant d'utiliser la commande CLI fournie pour réactiver ce service."
           }
         ]
       }
@@ -1142,12 +1142,12 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
           {
             "locale": "EN",
             "class": "html",
-            "target": "<p>Disabling LM and NTLMv1 protocols enhances security by preventing the use of these older, less secure authentication methods. Modern authentication protocols offer stronger encryption and better protection against attacks. Follow the provided CLI command to update your system's settings to use more secure authentication methods.</p>"
+            "target": "Disabling LM and NTLMv1 protocols enhances security by preventing the use of these older, less secure authentication methods. Modern authentication protocols offer stronger encryption and better protection against attacks. Follow the provided CLI command to update your system's settings to use more secure authentication methods."
           },
           {
             "locale": "FR",
             "class": "html",
-            "target": "<p>Désactiver les protocoles LM et NTLMv1 améliore la sécurité en empêchant l'utilisation de ces méthodes d'authentification plus anciennes et moins sécurisées. Les protocoles d'authentification modernes offrent un cryptage plus fort et une meilleure protection contre les attaques. Suivez la commande CLI fournie pour mettre à jour les paramètres de votre système afin d'utiliser des méthodes d'authentification plus sécurisées.</p>"
+            "target": "Désactiver les protocoles LM et NTLMv1 améliore la sécurité en empêchant l'utilisation de ces méthodes d'authentification plus anciennes et moins sécurisées. Les protocoles d'authentification modernes offrent un cryptage plus fort et une meilleure protection contre les attaques. Suivez la commande CLI fournie pour mettre à jour les paramètres de votre système afin d'utiliser des méthodes d'authentification plus sécurisées."
           }
         ]
       },
@@ -1162,12 +1162,12 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
           {
             "locale": "EN",
             "class": "html",
-            "target": "<p>Re-enabling LM and NTLMv1 should be done with caution and only if there is a specific requirement for these older protocols due to legacy systems or applications. Be aware that enabling these protocols can expose your system to increased security risks. Ensure that you have strong mitigations and monitoring in place.</p>"
+            "target": "Re-enabling LM and NTLMv1 should be done with caution and only if there is a specific requirement for these older protocols due to legacy systems or applications. Be aware that enabling these protocols can expose your system to increased security risks. Ensure that you have strong mitigations and monitoring in place."
           },
           {
             "locale": "FR",
             "class": "html",
-            "target": "<p>Réactiver LM et NTLMv1 doit être fait avec prudence et seulement s'il existe une exigence spécifique pour ces protocoles plus anciens en raison de systèmes ou d'applications hérités. Soyez conscient que l'activation de ces protocoles peut exposer votre système à des risques de sécurité accrus. Assurez-vous que vous avez en place de fortes atténuations et une surveillance.</p>"
+            "target": "Réactiver LM et NTLMv1 doit être fait avec prudence et seulement s'il existe une exigence spécifique pour ces protocoles plus anciens en raison de systèmes ou d'applications hérités. Soyez conscient que l'activation de ces protocoles peut exposer votre système à des risques de sécurité accrus. Assurez-vous que vous avez en place de fortes atténuations et une surveillance."
           }
         ]
       }
@@ -1216,12 +1216,12 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
           {
             "locale": "EN",
             "class": "html",
-            "target": "<p>Enabling Lsass process protection is crucial for securing the system against attacks targeting the Local Security Authority Subsystem Service (LSASS), which handles user logins and password changes. This setting ensures that the LSASS process runs with additional protections, making it harder for attackers to exploit vulnerabilities. Implement the provided CLI command to enhance the security of your system.</p>"
+            "target": "Enabling Lsass process protection is crucial for securing the system against attacks targeting the Local Security Authority Subsystem Service (LSASS), which handles user logins and password changes. This setting ensures that the LSASS process runs with additional protections, making it harder for attackers to exploit vulnerabilities. Implement the provided CLI command to enhance the security of your system."
           },
           {
             "locale": "FR",
             "class": "html",
-            "target": "<p>Activer la protection du processus Lsass est crucial pour sécuriser le système contre les attaques ciblant le Service de sous-système d'autorité de sécurité locale (LSASS), qui gère les connexions des utilisateurs et les changements de mot de passe. Ce paramètre garantit que le processus LSASS fonctionne avec des protections supplémentaires, rendant plus difficile pour les attaquants d'exploiter les vulnérabilités. Implémentez la commande CLI fournie pour renforcer la sécurité de votre système.</p>"
+            "target": "Activer la protection du processus Lsass est crucial pour sécuriser le système contre les attaques ciblant le Service de sous-système d'autorité de sécurité locale (LSASS), qui gère les connexions des utilisateurs et les changements de mot de passe. Ce paramètre garantit que le processus LSASS fonctionne avec des protections supplémentaires, rendant plus difficile pour les attaquants d'exploiter les vulnérabilités. Implémentez la commande CLI fournie pour renforcer la sécurité de votre système."
           }
         ]
       },
@@ -1236,12 +1236,12 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
           {
             "locale": "EN",
             "class": "html",
-            "target": "<p>Disabling Lsass process protection should be carefully considered as it removes additional security layers from the LSASS process. If you must disable this protection due to compatibility issues or other specific requirements, ensure you understand the risks and have alternative security measures in place.</p>"
+            "target": "Disabling Lsass process protection should be carefully considered as it removes additional security layers from the LSASS process. If you must disable this protection due to compatibility issues or other specific requirements, ensure you understand the risks and have alternative security measures in place."
           },
           {
             "locale": "FR",
             "class": "html",
-            "target": "<p>Désactiver la protection du processus Lsass doit être soigneusement considéré car cela supprime des couches de sécurité supplémentaires du processus LSASS. Si vous devez désactiver cette protection en raison de problèmes de compatibilité ou d'autres exigences spécifiques, assurez-vous de comprendre les risques et d'avoir des mesures de sécurité alternatives en place.</p>"
+            "target": "Désactiver la protection du processus Lsass doit être soigneusement considéré car cela supprime des couches de sécurité supplémentaires du processus LSASS. Si vous devez désactiver cette protection en raison de problèmes de compatibilité ou d'autres exigences spécifiques, assurez-vous de comprendre les risques et d'avoir des mesures de sécurité alternatives en place."
           }
         ]
       }
@@ -1290,12 +1290,12 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
           {
             "locale": "EN",
             "class": "html",
-            "target": "<p>Setting PowerShell's execution policy to Default helps prevent the execution of malicious scripts by requiring that all scripts and configuration files downloaded from the Internet are signed by a trusted publisher. This setting is a balance between security and functionality, allowing locally created scripts to run while protecting against untrusted scripts. Apply the provided CLI command to adjust your PowerShell execution policy.</p>"
+            "target": "Setting PowerShell's execution policy to Default helps prevent the execution of malicious scripts by requiring that all scripts and configuration files downloaded from the Internet are signed by a trusted publisher. This setting is a balance between security and functionality, allowing locally created scripts to run while protecting against untrusted scripts. Apply the provided CLI command to adjust your PowerShell execution policy."
           },
           {
             "locale": "FR",
             "class": "html",
-            "target": "<p>Définir la politique d'exécution de PowerShell sur Default aide à prévenir l'exécution de scripts malveillants en exigeant que tous les scripts et fichiers de configuration téléchargés depuis Internet soient signés par un éditeur de confiance. Ce paramètre est un équilibre entre sécurité et fonctionnalité, permettant l'exécution de scripts créés localement tout en protégeant contre les scripts non fiables. Appliquez la commande CLI fournie pour ajuster votre politique d'exécution PowerShell.</p>"
+            "target": "Définir la politique d'exécution de PowerShell sur Default aide à prévenir l'exécution de scripts malveillants en exigeant que tous les scripts et fichiers de configuration téléchargés depuis Internet soient signés par un éditeur de confiance. Ce paramètre est un équilibre entre sécurité et fonctionnalité, permettant l'exécution de scripts créés localement tout en protégeant contre les scripts non fiables. Appliquez la commande CLI fournie pour ajuster votre politique d'exécution PowerShell."
           }
         ]
       },
@@ -1310,12 +1310,12 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
           {
             "locale": "EN",
             "class": "html",
-            "target": "<p>Reverting PowerShell's execution policy to Unrestricted removes the requirement for scripts to be signed, significantly increasing the risk of executing malicious scripts. Only proceed with this action if there is a compelling need and you have adequate security measures to mitigate potential risks. Be sure to apply strict controls and monitoring to detect and respond to malicious activities.</p>"
+            "target": "Reverting PowerShell's execution policy to Unrestricted removes the requirement for scripts to be signed, significantly increasing the risk of executing malicious scripts. Only proceed with this action if there is a compelling need and you have adequate security measures to mitigate potential risks. Be sure to apply strict controls and monitoring to detect and respond to malicious activities."
           },
           {
             "locale": "FR",
             "class": "html",
-            "target": "<p>Revenir à la politique d'exécution de PowerShell sur Non restreint supprime l'exigence pour les scripts d'être signés, augmentant considérablement le risque d'exécuter des scripts malveillants. Ne procédez à cette action que s'il y a un besoin impérieux et que vous disposez de mesures de sécurité adéquates pour atténuer les risques potentiels. Assurez-vous d'appliquer des contrôles stricts et une surveillance pour détecter et répondre aux activités malveillantes.</p>"
+            "target": "Revenir à la politique d'exécution de PowerShell sur Non restreint supprime l'exigence pour les scripts d'être signés, augmentant considérablement le risque d'exécuter des scripts malveillants. Ne procédez à cette action que s'il y a un besoin impérieux et que vous disposez de mesures de sécurité adéquates pour atténuer les risques potentiels. Assurez-vous d'appliquer des contrôles stricts et une surveillance pour détecter et répondre aux activités malveillantes."
           }
         ]
       }
@@ -1434,12 +1434,12 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
           {
             "locale": "EN",
             "class": "html",
-            "target": "<p>Following the automatic changes, a system restart is required to activate the remediation.</p>"
+            "target": "Following the automatic changes, a system restart is required to activate the remediation."
           },
           {
             "locale": "FR",
             "class": "html",
-            "target": "<p>Après les modifications automatiques, un redémarrage du système est requis pour activer la remédiation.</p>"
+            "target": "Après les modifications automatiques, un redémarrage du système est requis pour activer la remédiation."
           }
         ]
       },
@@ -1454,12 +1454,12 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
           {
             "locale": "EN",
             "class": "html",
-            "target": "<p>Following the automatic changes, a system restart is required to activate the rollback.</p>"
+            "target": "Following the automatic changes, a system restart is required to activate the rollback."
           },
           {
             "locale": "FR",
             "class": "html",
-            "target": "<p>Après les modifications automatiques, un redémarrage du système est requis pour activer le retour en arrière.</p>"
+            "target": "Après les modifications automatiques, un redémarrage du système est requis pour activer le retour en arrière."
           }
         ]
       }
@@ -1503,12 +1503,12 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
           {
             "locale": "EN",
             "class": "html",
-            "target": "<p>To enable sign-in options, go to Settings > Accounts > Sign-in options. Follow the guide to set up a password, PIN, or Windows Hello. <a href='https://support.microsoft.com/en-us/windows/windows-sign-in-options-and-account-protection-7b34d4cf-794f-f6bd-ddcc-e73cdf1a6fbf'>Learn more</a></p>"
+            "target": "To enable sign-in options, go to Settings > Accounts > Sign-in options. Follow the guide to set up a password, PIN, or Windows Hello. <a href='https://support.microsoft.com/en-us/windows/windows-sign-in-options-and-account-protection-7b34d4cf-794f-f6bd-ddcc-e73cdf1a6fbf'>Learn more</a>"
           },
           {
             "locale": "FR",
             "class": "html",
-            "target": "<p>Pour activer les options de connexion, allez dans Paramètres > Comptes > Options de connexion. Suivez le guide pour configurer un mot de passe, un code PIN ou Windows Hello. <a href='https://support.microsoft.com/fr-fr/windows/options-de-connexion-de-windows-10-et-protection-des-comptes-7b34d4cf-794f-f6bd-ddcc-e73cdf1a6fbf'>En savoir plus</a></p>"
+            "target": "Pour activer les options de connexion, allez dans Paramètres > Comptes > Options de connexion. Suivez le guide pour configurer un mot de passe, un code PIN ou Windows Hello. <a href='https://support.microsoft.com/fr-fr/windows/options-de-connexion-de-windows-10-et-protection-des-comptes-7b34d4cf-794f-f6bd-ddcc-e73cdf1a6fbf'>En savoir plus</a>"
           }
         ]
       },
@@ -1561,12 +1561,12 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
           {
             "locale": "EN",
             "class": "html",
-            "target": "<p>To enable Windows Hello, go to <a href='ms-settings:signinoptions'>Settings > Accounts > Sign-in options</a>. Please note that your device needs to support Windows Hello. If it does not, you might need to upgrade your hardware or check for available updates from your device manufacturer. For more information, visit the <a href='https://support.microsoft.com/en-us/windows/configure-windows-hello-dae28983-8242-bb2a-d3d1-87c9d265a5f0'>support page</a>.</p>"
+            "target": "To enable Windows Hello, go to <a href='ms-settings:signinoptions'>Settings > Accounts > Sign-in options</a>. Please note that your device needs to support Windows Hello. If it does not, you might need to upgrade your hardware or check for available updates from your device manufacturer. For more information, visit the <a href='https://support.microsoft.com/en-us/windows/configure-windows-hello-dae28983-8242-bb2a-d3d1-87c9d265a5f0'>support page</a>."
           },
           {
             "locale": "FR",
             "class": "html",
-            "target": "<p>Pour activer Windows Hello, allez dans <a href='ms-settings:signinoptions'>Paramètres > Comptes > Options de connexion</a>. Veuillez noter que votre appareil doit prendre en charge Windows Hello. Si ce n'est pas le cas, vous devrez peut-être mettre à niveau votre matériel ou vérifier les mises à jour disponibles auprès du fabricant de votre appareil. Pour plus d'informations, visitez la <a href='https://support.microsoft.com/fr-fr/windows/configurer-windows-hello-dae28983-8242-bb2a-d3d1-87c9d265a5f0'>page de support</a>.</p>"
+            "target": "Pour activer Windows Hello, allez dans <a href='ms-settings:signinoptions'>Paramètres > Comptes > Options de connexion</a>. Veuillez noter que votre appareil doit prendre en charge Windows Hello. Si ce n'est pas le cas, vous devrez peut-être mettre à niveau votre matériel ou vérifier les mises à jour disponibles auprès du fabricant de votre appareil. Pour plus d'informations, visitez la <a href='https://support.microsoft.com/fr-fr/windows/configurer-windows-hello-dae28983-8242-bb2a-d3d1-87c9d265a5f0'>page de support</a>."
           }
         ]
       },
@@ -1619,12 +1619,12 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
           {
             "locale": "EN",
             "class": "html",
-            "target": "<p>This remediation will set the minimum PIN length policy to 6 digits by updating the registry. After applying this change, you will need to manually ensure your PIN meets this requirement by going to <a href='ms-settings:signinoptions'>Settings > Accounts > Sign-in options</a>. For more information, visit the <a href='https://support.microsoft.com/en-us/windows/configure-windows-hello-dae28983-8242-bb2a-d3d1-87c9d265a5f0'>support page</a>.</p>"
+            "target": "This remediation will set the minimum PIN length policy to 6 digits by updating the registry. After applying this change, you will need to manually ensure your PIN meets this requirement by going to <a href='ms-settings:signinoptions'>Settings > Accounts > Sign-in options</a>. For more information, visit the <a href='https://support.microsoft.com/en-us/windows/configure-windows-hello-dae28983-8242-bb2a-d3d1-87c9d265a5f0'>support page</a>."
           },
           {
             "locale": "FR",
             "class": "html",
-            "target": "<p>Cette remédiation définira la politique de longueur minimale du PIN à 6 chiffres en mettant à jour le registre. Après avoir appliqué ce changement, vous devrez vous assurer manuellement que votre PIN répond à cette exigence en allant dans <a href='ms-settings:signinoptions'>Paramètres > Comptes > Options de connexion</a>. Pour plus d'informations, visitez la <a href='https://support.microsoft.com/fr-fr/windows/configurer-windows-hello-dae28983-8242-bb2a-d3d1-87c9d265a5f0'>page de support</a>.</p>"
+            "target": "Cette remédiation définira la politique de longueur minimale du PIN à 6 chiffres en mettant à jour le registre. Après avoir appliqué ce changement, vous devrez vous assurer manuellement que votre PIN répond à cette exigence en allant dans <a href='ms-settings:signinoptions'>Paramètres > Comptes > Options de connexion</a>. Pour plus d'informations, visitez la <a href='https://support.microsoft.com/fr-fr/windows/configurer-windows-hello-dae28983-8242-bb2a-d3d1-87c9d265a5f0'>page de support</a>."
           }
         ]
       },
@@ -1639,12 +1639,12 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
           {
             "locale": "EN",
             "class": "html",
-            "target": "<p>This rollback will revert the minimum PIN length policy to 4 digits by updating the registry. Be cautious, as reducing the PIN length may lower the security level of your system. Ensure you update your PIN manually if it does not already meet the required length. For more information, visit the <a href='https://support.microsoft.com/en-us/windows/configure-windows-hello-dae28983-8242-bb2a-d3d1-87c9d265a5f0'>support page</a>.</p>"
+            "target": "This rollback will revert the minimum PIN length policy to 4 digits by updating the registry. Be cautious, as reducing the PIN length may lower the security level of your system. Ensure you update your PIN manually if it does not already meet the required length. For more information, visit the <a href='https://support.microsoft.com/en-us/windows/configure-windows-hello-dae28983-8242-bb2a-d3d1-87c9d265a5f0'>support page</a>."
           },
           {
             "locale": "FR",
             "class": "html",
-            "target": "<p>Ce retour en arrière ramènera la politique de longueur minimale du PIN à 4 chiffres en mettant à jour le registre. Soyez prudent, car réduire la longueur du PIN peut diminuer le niveau de sécurité de votre système. Assurez-vous de mettre à jour votre PIN manuellement s'il ne répond pas déjà à la longueur requise. Pour plus d'informations, visitez la <a href='https://support.microsoft.com/fr-fr/windows/configurer-windows-hello-dae28983-8242-bb2a-d3d1-87c9d265a5f0'>page de support</a>.</p>"
+            "target": "Ce retour en arrière ramènera la politique de longueur minimale du PIN à 4 chiffres en mettant à jour le registre. Soyez prudent, car réduire la longueur du PIN peut diminuer le niveau de sécurité de votre système. Assurez-vous de mettre à jour votre PIN manuellement s'il ne répond pas déjà à la longueur requise. Pour plus d'informations, visitez la <a href='https://support.microsoft.com/fr-fr/windows/configurer-windows-hello-dae28983-8242-bb2a-d3d1-87c9d265a5f0'>page de support</a>."
           }
         ]
       }
@@ -1688,12 +1688,12 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
           {
             "locale": "EN",
             "class": "html",
-            "target": "<p>This remediation will enable enhanced anti-spoofing for facial recognition by updating the registry. Note that enhanced anti-spoofing may not be available on all devices. If this remediation fails, consider using another login method. For more information, visit the <a href='https://support.microsoft.com/en-us/windows/configure-windows-hello-dae28983-8242-bb2a-d3d1-87c9d265a5f0'>support page</a>.</p>"
+            "target": "This remediation will enable enhanced anti-spoofing for facial recognition by updating the registry. Note that enhanced anti-spoofing may not be available on all devices. If this remediation fails, consider using another login method. For more information, visit the <a href='https://support.microsoft.com/en-us/windows/configure-windows-hello-dae28983-8242-bb2a-d3d1-87c9d265a5f0'>support page</a>."
           },
           {
             "locale": "FR",
             "class": "html",
-            "target": "<p>Cette remédiation activera l'anti-usurpation avancée pour la reconnaissance faciale en mettant à jour le registre. Notez que l'anti-usurpation avancée peut ne pas être disponible sur tous les appareils. Si cette remédiation échoue, envisagez d'utiliser une autre méthode de connexion. Pour plus d'informations, visitez la <a href='https://support.microsoft.com/fr-fr/windows/configurer-windows-hello-dae28983-8242-bb2a-d3d1-87c9d265a5f0'>page de support</a>.</p>"
+            "target": "Cette remédiation activera l'anti-usurpation avancée pour la reconnaissance faciale en mettant à jour le registre. Notez que l'anti-usurpation avancée peut ne pas être disponible sur tous les appareils. Si cette remédiation échoue, envisagez d'utiliser une autre méthode de connexion. Pour plus d'informations, visitez la <a href='https://support.microsoft.com/fr-fr/windows/configurer-windows-hello-dae28983-8242-bb2a-d3d1-87c9d265a5f0'>page de support</a>."
           }
         ]
       },
@@ -1708,12 +1708,12 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
           {
             "locale": "EN",
             "class": "html",
-            "target": "<p>This rollback will disable enhanced anti-spoofing for facial recognition by updating the registry. Be cautious, as disabling this feature may lower the security level of your system. For more information, visit the <a href='https://support.microsoft.com/en-us/windows/configure-windows-hello-dae28983-8242-bb2a-d3d1-87c9d265a5f0'>support page</a>.</p>"
+            "target": "This rollback will disable enhanced anti-spoofing for facial recognition by updating the registry. Be cautious, as disabling this feature may lower the security level of your system. For more information, visit the <a href='https://support.microsoft.com/en-us/windows/configure-windows-hello-dae28983-8242-bb2a-d3d1-87c9d265a5f0'>support page</a>."
           },
           {
             "locale": "FR",
             "class": "html",
-            "target": "<p>Ce retour en arrière désactivera l'anti-usurpation avancée pour la reconnaissance faciale en mettant à jour le registre. Soyez prudent, car désactiver cette fonctionnalité peut diminuer le niveau de sécurité de votre système. Pour plus d'informations, visitez la <a href='https://support.microsoft.com/fr-fr/windows/configurer-windows-hello-dae28983-8242-bb2a-d3d1-87c9d265a5f0'>page de support</a>.</p>"
+            "target": "Ce retour en arrière désactivera l'anti-usurpation avancée pour la reconnaissance faciale en mettant à jour le registre. Soyez prudent, car désactiver cette fonctionnalité peut diminuer le niveau de sécurité de votre système. Pour plus d'informations, visitez la <a href='https://support.microsoft.com/fr-fr/windows/configurer-windows-hello-dae28983-8242-bb2a-d3d1-87c9d265a5f0'>page de support</a>."
           }
         ]
       }
@@ -1757,12 +1757,12 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
           {
             "locale": "EN",
             "class": "html",
-            "target": "<p>This remediation configures your screensaver settings to ensure it is active and set to lock after 10 minutes of inactivity. For more detailed instructions, visit the <a href='https://support.microsoft.com/en-us/windows/change-your-screen-saver-settings-a9dc2a0c-dc8e-9161-d270-aaccc252082a'>support page</a>.</p>"
+            "target": "This remediation configures your screensaver settings to ensure it is active and set to lock after 10 minutes of inactivity. For more detailed instructions, visit the <a href='https://support.microsoft.com/en-us/windows/change-your-screen-saver-settings-a9dc2a0c-dc8e-9161-d270-aaccc252082a'>support page</a>."
           },
           {
             "locale": "FR",
             "class": "html",
-            "target": "<p>Cette remédiation configure les paramètres de votre économiseur d'écran pour qu'il soit actif et configuré pour se verrouiller après 10 minutes d'inactivité. Pour des instructions plus détaillées, visitez la <a href='https://support.microsoft.com/fr-fr/windows/modifier-vos-param%C3%A8tres-d-%C3%A9cran-de-veille-a9dc2a0c-dc8e-9161-d270-aaccc252082a'>page de support</a>.</p>"
+            "target": "Cette remédiation configure les paramètres de votre économiseur d'écran pour qu'il soit actif et configuré pour se verrouiller après 10 minutes d'inactivité. Pour des instructions plus détaillées, visitez la <a href='https://support.microsoft.com/fr-fr/windows/modifier-vos-param%C3%A8tres-d-%C3%A9cran-de-veille-a9dc2a0c-dc8e-9161-d270-aaccc252082a'>page de support</a>."
           }
         ]
       },
@@ -1777,12 +1777,12 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
           {
             "locale": "EN",
             "class": "html",
-            "target": "<p>If you need to revert the changes, go back to the lock screen settings and adjust the screensaver timeout and security settings accordingly. Ensure you understand the security implications of any changes you make. For more information, visit the <a href='https://support.microsoft.com/en-us/windows/change-your-screen-saver-settings-a9dc2a0c-dc8e-9161-d270-aaccc252082a'>support page</a>.</p>"
+            "target": "If you need to revert the changes, go back to the lock screen settings and adjust the screensaver timeout and security settings accordingly. Ensure you understand the security implications of any changes you make. For more information, visit the <a href='https://support.microsoft.com/en-us/windows/change-your-screen-saver-settings-a9dc2a0c-dc8e-9161-d270-aaccc252082a'>support page</a>."
           },
           {
             "locale": "FR",
             "class": "html",
-            "target": "<p>Si vous devez annuler les modifications, retournez dans les paramètres de l'écran de verrouillage et ajustez les paramètres de délai d'attente et de sécurité de l'économiseur d'écran en conséquence. Assurez-vous de comprendre les implications de sécurité des modifications apportées. Pour plus d'informations, visitez la <a href='https://support.microsoft.com/fr-fr/windows/modifier-vos-param%C3%A8tres-d-%C3%A9cran-de-veille-a9dc2a0c-dc8e-9161-d270-aaccc252082a'>page de support</a>.</p>"
+            "target": "Si vous devez annuler les modifications, retournez dans les paramètres de l'écran de verrouillage et ajustez les paramètres de délai d'attente et de sécurité de l'économiseur d'écran en conséquence. Assurez-vous de comprendre les implications de sécurité des modifications apportées. Pour plus d'informations, visitez la <a href='https://support.microsoft.com/fr-fr/windows/modifier-vos-param%C3%A8tres-d-%C3%A9cran-de-veille-a9dc2a0c-dc8e-9161-d270-aaccc252082a'>page de support</a>."
           }
         ]
       }
