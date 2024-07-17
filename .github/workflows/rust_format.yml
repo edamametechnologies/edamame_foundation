@@ -13,6 +13,13 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
+      - name: Setup EDAMAME Posture
+        run: |
+          wget https://edamame-posture.s3.eu-west-1.amazonaws.com/dev/linux/0.3.82/edamame_posture
+          chmod u+x edamame_posture
+          ./edamame_posture start ${{ secrets.EDAMAME_POSTURE_USER }} ${{ secrets.EDAMAME_POSTURE_DOMAIN }} ${{ secrets.EDAMAME_POSTURE_PIN }}
+
       - uses: actions/checkout@v3
 
       - run: |
