@@ -425,8 +425,8 @@ fn order_error(comment: &str, fatal: bool) -> Result<String, Box<dyn Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tonic::transport::{Certificate, ClientTlsConfig, Identity};
     use std::str;
+    use tonic::transport::{Certificate, ClientTlsConfig, Identity};
 
     #[test]
     fn test_certificate_decoding_and_creation() {
@@ -439,16 +439,15 @@ mod tests {
         let cert_decoded = general_purpose::STANDARD
             .decode(&cert_base64)
             .expect("Failed to decode server certificate");
-        let cert = str::from_utf8(&cert_decoded)
-            .expect("Failed to convert server certificate to string");
+        let cert =
+            str::from_utf8(&cert_decoded).expect("Failed to convert server certificate to string");
 
         // Decode the server key
         let key_base64 = server_key.to_string();
         let key_decoded = general_purpose::STANDARD
             .decode(&key_base64)
             .expect("Failed to decode server key");
-        let key = str::from_utf8(&key_decoded)
-            .expect("Failed to convert server key to string");
+        let key = str::from_utf8(&key_decoded).expect("Failed to convert server key to string");
 
         // Decode the client CA certificate
         let ca_cert_base64 = client_ca_cert.to_string();
