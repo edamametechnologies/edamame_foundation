@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_ANDROID: &str = r#"{
   "name": "threat model Android",
   "extends": "none",
-  "date": "July 09th 2024",
-  "signature": "c7219208028c1051c1980528b2ae3f2da72afa9adcb4dedf29b6e77b710a6936",
+  "date": "April 17th 2024",
+  "signature": "edcd1640587552e638f11cd9f60d4608324029f420ad8b2b65063b6cf4eaa0d3",
   "metrics": [
     {
       "name": "MDM profiles",
@@ -28,7 +28,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       ],
       "implementation": {
         "system": "Android",
-        "minversion": 11,
+        "minversion": 13,
         "maxversion": 0,
         "class": "internal",
         "elevation": "user",
@@ -37,7 +37,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       },
       "remediation": {
         "system": "Android",
-        "minversion": 11,
+        "minversion": 13,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -57,7 +57,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       },
       "rollback": {
         "system": "Android",
-        "minversion": 11,
+        "minversion": 13,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -92,7 +92,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
         {
           "locale": "EN",
           "title": "Screen lock disabled",
-          "summary": "Your device doesn't have a screensaver enabled with a password. It leaves it open for physical access by anyone. This is very dangerous!"
+          "summary": "Your device doesn't have a screensaver enabled with a password. It leaves it open for phsyical access by anyone. This is very dangerous!"
         },
         {
           "locale": "FR",
@@ -102,7 +102,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       ],
       "implementation": {
         "system": "Android",
-        "minversion": 11,
+        "minversion": 13,
         "maxversion": 0,
         "class": "internal",
         "elevation": "user",
@@ -111,7 +111,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       },
       "remediation": {
         "system": "Android",
-        "minversion": 11,
+        "minversion": 13,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -131,7 +131,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       },
       "rollback": {
         "system": "Android",
-        "minversion": 11,
+        "minversion": 13,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -171,12 +171,12 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
         {
           "locale": "FR",
           "title": "Votre appareil est jailbreaké",
-          "summary": "Votre appareil est jailbreaké. Soit vous l'avez fait vous-même, soit un acteur malveillant l'a fait pour accéder à vos données personnelles. C'est très dangereux ! Vous devez restaurer votre appareil aux paramètres d'usine."
+          "summary": "Votre appareil est jailbreaké. Soit vous l'avez fait vous-même, soit un acteur malveillant l'a fait pour accéder à vos données personnel. C'est très dangereux ! Vous devez restaurer votre appareil aux paramètres d'usine."
         }
       ],
       "implementation": {
         "system": "Android",
-        "minversion": 11,
+        "minversion": 13,
         "maxversion": 0,
         "class": "internal",
         "elevation": "user",
@@ -185,7 +185,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       },
       "remediation": {
         "system": "Android",
-        "minversion": 11,
+        "minversion": 13,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -205,7 +205,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       },
       "rollback": {
         "system": "Android",
-        "minversion": 11,
+        "minversion": 13,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -240,17 +240,17 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
         {
           "locale": "EN",
           "title": "Potentially compromised email address",
-          "summary": "Check if your email address might have recently appeared in a data breach."
+          "summary": "Your email address might have recently appeared in a data breach. Please set your email in the Identity tab, review the breaches if any and follow instructions."
         },
         {
           "locale": "FR",
           "title": "Adresse e-mail potentiellement compromise",
-          "summary": "Vérifiez si votre adresse e-mail est peut-être apparue récemment dans une fuite de données."
+          "summary": "Votre adresse e-mail est peut-être apparue récemment dans une fuite de données. Renseignez votre email dans le tab Identité, examinez les fuites éventuelles et suivez les instructions."
         }
       ],
       "implementation": {
         "system": "Android",
-        "minversion": 11,
+        "minversion": 13,
         "maxversion": 0,
         "class": "internal",
         "elevation": "user",
@@ -259,7 +259,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       },
       "remediation": {
         "system": "Android",
-        "minversion": 11,
+        "minversion": 13,
         "maxversion": 0,
         "class": "internal",
         "elevation": "",
@@ -267,19 +267,19 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
         "education": [
           {
             "locale": "EN",
-            "class": "html",
-            "target": "<p>To verify and mitigate the impact of a breach associated with your email, follow these steps:</p><ul><li>Navigate to the 'Identity' tab.</li><li>Enter your email address in the provided field.</li><li>Review the list of breaches associated with your email.</li><li>Select a breach to view detailed information and perform an AI-driven analysis.</li><li>Based on the analysis, decide whether to dismiss the breach or take further action if it's significant.</li><li>Once all threats are addressed, this alert will be marked as inactive.</li></ul>"
+            "class": "link",
+            "target": "https://en.wikipedia.org/wiki/Have_I_Been_Pwned"
           },
           {
             "locale": "FR",
-            "class": "html",
-            "target": "<p>Pour vérifier et atténuer l'impact d'une fuite de données associée à votre email, suivez ces étapes :</p><ul><li>Allez dans l'onglet 'Identité'.</li><li>Entrez votre adresse e-mail dans le champ prévu.</li><li>Examinez la liste des fuites associées à votre email.</li><li>Sélectionnez une fuite pour voir les informations détaillées et effectuer une analyse assistée par IA.</li><li>En fonction de l'analyse, décidez de rejeter la fuite ou de prendre des mesures supplémentaires si elle est significative.</li><li>Une fois toutes les menaces traitées, cette alerte sera marquée comme inactive.</li></ul>"
+            "class": "link",
+            "target": "https://www.futura-sciences.com/tech/actualites/internet-voici-savoir-si-vos-donnees-personnelles-internet-ont-ete-piratees-103095/"
           }
         ]
       },
       "rollback": {
         "system": "Android",
-        "minversion": 11,
+        "minversion": 13,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -324,7 +324,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       ],
       "implementation": {
         "system": "Android",
-        "minversion": 11,
+        "minversion": 13,
         "maxversion": 0,
         "class": "internal",
         "elevation": "user",
@@ -333,7 +333,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       },
       "remediation": {
         "system": "Android",
-        "minversion": 11,
+        "minversion": 13,
         "maxversion": 0,
         "class": "internal",
         "elevation": "",
@@ -341,19 +341,19 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
         "education": [
           {
             "locale": "EN",
-            "class": "html",
-            "target": "<p>Scan your network to identify all connected devices and assess potential threats.</p><h4>Steps to verify a critical device</h4><ul><li>Navigate to the 'Network' tab.</li><li>Devices of critical importance are marked with yellow for medium criticality and red for high criticality.</li><li>Select a critical device.</li><li>Assess each port's criticality by reading the associated CVEs and analyzing potential issues with AI.</li><li>If a port is determined to be safe, mark it as verified.</li></ul><p>Once all devices are deemed safe, this threat will be marked as inactive.</p>"
+            "class": "link",
+            "target": "https://en.wikipedia.org/wiki/Port_scanner"
           },
           {
             "locale": "FR",
-            "class": "html",
-            "target": "<p>Scannez votre réseau pour identifier tous les appareils connectés et évaluer les menaces potentielles.</p><h4>Étapes pour vérifier un appareil critique</h4><ul><li>Allez dans l'onglet 'Réseau'.</li><li>Les appareils de grande importance sont marqués en jaune pour une criticité moyenne et en rouge pour une criticité élevée.</li><li>Sélectionnez un appareil critique.</li><li>Évaluez la criticité de chaque port en lisant les CVE associés et en analysant les problèmes potentiels avec l'IA.</li><li>Si un port est déterminé comme sûr, marquez-le comme vérifié.</li></ul><p>Une fois que tous les appareils sont considérés comme sûrs, cette menace sera marquée comme inactive.</p>"
+            "class": "link",
+            "target": "https://fr.wikipedia.org/wiki/Balayage_de_ports"
           }
         ]
       },
       "rollback": {
         "system": "Android",
-        "minversion": 11,
+        "minversion": 13,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -393,7 +393,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       ],
       "implementation": {
         "system": "Android",
-        "minversion": 11,
+        "minversion": 13,
         "maxversion": 0,
         "class": "internal",
         "elevation": "user",
@@ -402,7 +402,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       },
       "remediation": {
         "system": "Android",
-        "minversion": 11,
+        "minversion": 13,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -422,7 +422,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       },
       "rollback": {
         "system": "Android",
-        "minversion": 11,
+        "minversion": 13,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -467,7 +467,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       ],
       "implementation": {
         "system": "Android",
-        "minversion": 11,
+        "minversion": 13,
         "maxversion": 0,
         "class": "internal",
         "elevation": "user",
@@ -476,7 +476,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       },
       "remediation": {
         "system": "Android",
-        "minversion": 11,
+        "minversion": 13,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -496,7 +496,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       },
       "rollback": {
         "system": "Android",
-        "minversion": 11,
+        "minversion": 13,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -511,298 +511,6 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
             "locale": "FR",
             "class": "youtube",
             "target": "https://www.youtube.com/watch?v=or1OJxptpqQ"
-          }
-        ]
-      }
-    },
-    {
-      "name": "password is too weak",
-      "metrictype": "bool",
-      "dimension": "credentials",
-      "severity": 4,
-      "scope": "generic",
-      "tags": [
-        "ISO 27001/2,Access Control",
-        "PCI-DSS,Requirement-8.2.3",
-        "SOC 2,CC-Access Control"
-      ],
-      "description": [
-        {
-          "locale": "EN",
-          "title": "Weak password",
-          "summary": "Your device password strength is insufficient. Ensure you are using at least a 6-digit PIN for better security."
-        },
-        {
-          "locale": "FR",
-          "title": "Force du mot de passe insuffisante",
-          "summary": "La force de votre mot de passe est insuffisante. Assurez-vous d'utiliser au moins un code PIN à 6 chiffres pour une meilleure sécurité."
-        }
-      ],
-      "implementation": {
-        "system": "Android",
-        "minversion": 11,
-        "maxversion": 0,
-        "class": "internal",
-        "elevation": "user",
-        "target": "password_check",
-        "education": []
-      },
-      "remediation": {
-        "system": "Android",
-        "minversion": 11,
-        "maxversion": 0,
-        "class": "",
-        "elevation": "",
-        "target": "",
-        "education": [
-          {
-            "locale": "EN",
-            "class": "link",
-            "target": "https://support.google.com/android/answer/9079129?hl=en"
-          },
-          {
-            "locale": "FR",
-            "class": "link",
-            "target": "https://support.google.com/android/answer/9079129?hl=fr"
-          }
-        ]
-      },
-      "rollback": {
-        "system": "Android",
-        "minversion": 11,
-        "maxversion": 0,
-        "class": "",
-        "elevation": "",
-        "target": "",
-        "education": [
-          {
-            "locale": "EN",
-            "class": "link",
-            "target": "https://support.google.com/android/answer/9079129?hl=en"
-          },
-          {
-            "locale": "FR",
-            "class": "link",
-            "target": "https://support.google.com/android/answer/9079129?hl=fr"
-          }
-        ]
-      }
-    },
-    {
-      "name": "biometric authentication disabled",
-      "metrictype": "bool",
-      "dimension": "credentials",
-      "severity": 4,
-      "scope": "generic",
-      "tags": [
-        "ISO 27001/2,Access Control",
-        "PCI-DSS,Requirement-8.2.3",
-        "SOC 2,CC-Access Control"
-      ],
-      "description": [
-        {
-          "locale": "EN",
-          "title": "Biometric authentication disabled",
-          "summary": "Your device's biometric authentication is disabled. Enabling biometric authentication can significantly improve your device's security."
-        },
-        {
-          "locale": "FR",
-          "title": "Authentification biométrique désactivée",
-          "summary": "L'authentification biométrique de votre appareil est désactivée. Activer l'authentification biométrique peut améliorer considérablement la sécurité de votre appareil."
-        }
-      ],
-      "implementation": {
-        "system": "Android",
-        "minversion": 11,
-        "maxversion": 0,
-        "class": "internal",
-        "elevation": "user",
-        "target": "biometric_check",
-        "education": []
-      },
-      "remediation": {
-        "system": "Android",
-        "minversion": 11,
-        "maxversion": 0,
-        "class": "",
-        "elevation": "",
-        "target": "",
-        "education": [
-          {
-            "locale": "EN",
-            "class": "link",
-            "target": "https://support.google.com/pixelphone/answer/9517039?hl=en"
-          },
-          {
-            "locale": "FR",
-            "class": "link",
-            "target": "https://support.google.com/pixelphone/answer/9517039?hl=fr"
-          }
-        ]
-      },
-      "rollback": {
-        "system": "Android",
-        "minversion": 11,
-        "maxversion": 0,
-        "class": "",
-        "elevation": "",
-        "target": "",
-        "education": [
-          {
-            "locale": "EN",
-            "class": "link",
-            "target": "https://support.google.com/pixelphone/answer/9517039?hl=en"
-          },
-          {
-            "locale": "FR",
-            "class": "link",
-            "target": "https://support.google.com/pixelphone/answer/9517039?hl=fr"
-          }
-        ]
-      }
-    },
-    {
-      "name": "play protect disabled",
-      "metrictype": "bool",
-      "dimension": "applications",
-      "severity": 4,
-      "scope": "generic",
-      "tags": [
-        "ISO 27001/2,Access Control",
-        "PCI-DSS,Requirement-8.2.3",
-        "SOC 2,CC-Access Control"
-      ],
-      "description": [
-        {
-          "locale": "EN",
-          "title": "Play Protect disabled",
-          "summary": "Google Play Protect is disabled on your device. Enable Play Protect to improve security against harmful apps."
-        },
-        {
-          "locale": "FR",
-          "title": "Play Protect désactivé",
-          "summary": "Google Play Protect est désactivé sur votre appareil. Activez Play Protect pour améliorer la sécurité contre les applications nuisibles."
-        }
-      ],
-      "implementation": {
-        "system": "Android",
-        "minversion": 11,
-        "maxversion": 0,
-        "class": "internal",
-        "elevation": "user",
-        "target": "play_protect_check",
-        "education": []
-      },
-      "remediation": {
-        "system": "Android",
-        "minversion": 11,
-        "maxversion": 0,
-        "class": "",
-        "elevation": "",
-        "target": "",
-        "education": [
-          {
-            "locale": "EN",
-            "class": "link",
-            "target": "https://support.google.com/googleplay/answer/2812853?hl=en"
-          },
-          {
-            "locale": "FR",
-            "class": "link",
-            "target": "https://support.google.com/googleplay/answer/2812853?hl=fr"
-          }
-        ]
-      },
-      "rollback": {
-        "system": "Android",
-        "minversion": 11,
-        "maxversion": 0,
-        "class": "",
-        "elevation": "",
-        "target": "",
-        "education": [
-          {
-            "locale": "EN",
-            "class": "link",
-            "target": "https://support.google.com/googleplay/answer/2812853?hl=en"
-          },
-          {
-            "locale": "FR",
-            "class": "link",
-            "target": "https://support.google.com/googleplay/answer/2812853?hl=fr"
-          }
-        ]
-      }
-    },
-    {
-      "name": "device encryption disabled",
-      "metrictype": "bool",
-      "dimension": "system integrity",
-      "severity": 5,
-      "scope": "generic",
-      "tags": [
-        "ISO 27001/2,Access Control",
-        "PCI-DSS,Requirement-8.2.3",
-        "SOC 2,CC-Access Control"
-      ],
-      "description": [
-        {
-          "locale": "EN",
-          "title": "Device encryption disabled",
-          "summary": "Your device's storage is not encrypted. Enable encryption to protect your data from unauthorized access."
-        },
-        {
-          "locale": "FR",
-          "title": "Chiffrement de l'appareil désactivé",
-          "summary": "Le stockage de votre appareil n'est pas chiffré. Activez le chiffrement pour protéger vos données contre tout accès non autorisé."
-        }
-      ],
-      "implementation": {
-        "system": "Android",
-        "minversion": 11,
-        "maxversion": 0,
-        "class": "internal",
-        "elevation": "user",
-        "target": "encryption_check",
-        "education": []
-      },
-      "remediation": {
-        "system": "Android",
-        "minversion": 11,
-        "maxversion": 0,
-        "class": "",
-        "elevation": "",
-        "target": "",
-        "education": [
-          {
-            "locale": "EN",
-            "class": "link",
-            "target": "https://support.google.com/nexus/answer/2844831?hl=en"
-          },
-          {
-            "locale": "FR",
-            "class": "link",
-            "target": "https://support.google.com/nexus/answer/2844831?hl=fr"
-          }
-        ]
-      },
-      "rollback": {
-        "system": "Android",
-        "minversion": 11,
-        "maxversion": 0,
-        "class": "",
-        "elevation": "",
-        "target": "",
-        "education": [
-          {
-            "locale": "EN",
-            "class": "link",
-            "target": "https://support.google.com/nexus/answer/2844831?hl=en"
-          },
-          {
-            "locale": "FR",
-            "class": "link",
-            "target": "https://support.google.com/nexus/answer/2844831?hl=fr"
           }
         ]
       }
