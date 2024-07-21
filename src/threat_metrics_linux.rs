@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_LINUX: &str = r#"{
   "name": "threat model Linux",
   "extends": "none",
-  "date": "January 18th 2024",
-  "signature": "86789acc8042abe52a2968c61a07274fc5819c0d8b87ecb9ccea03e5ec920349",
+  "date": "July 21th 2024",
+  "signature": "cd733e15e72c21aa259e73e7dc9e5ad374eaf6157b2644d0a75b1aae8abd81b2",
   "metrics": [
     {
       "name": "edamame helper disabled",
@@ -26,7 +26,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       ],
       "implementation": {
         "system": "Linux",
-        "minversion": 6,
+        "minversion": 5,
         "maxversion": 0,
         "class": "internal",
         "elevation": "user",
@@ -35,7 +35,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       },
       "remediation": {
         "system": "Linux",
-        "minversion": 6,
+        "minversion": 5,
         "maxversion": 0,
         "class": "installer",
         "elevation": "user",
@@ -44,11 +44,11 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       },
       "rollback": {
         "system": "Linux",
-        "minversion": 6,
+        "minversion": 5,
         "maxversion": 0,
         "class": "cli",
         "elevation": "system",
-        "target": "",
+        "target": "apt remove edamame_helper",
         "education": []
       }
     },
@@ -77,16 +77,16 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       ],
       "implementation": {
         "system": "Linux",
-        "minversion": 6,
+        "minversion": 5,
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
-        "target": "sentinelctl version 2>/dev/null | grep -q \"Agent version\" || echo noepp",
+        "target": "sentinelctl version 2>/dev/null | grep -q 'Agent version' || echo epp_disabled",
         "education": []
       },
       "remediation": {
         "system": "Linux",
-        "minversion": 6,
+        "minversion": 5,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -106,7 +106,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       },
       "rollback": {
         "system": "Linux",
-        "minversion": 6,
+        "minversion": 5,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -126,6 +126,110 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       }
     },
     {
+      "name": "encrypted private folder disabled",
+      "metrictype": "bool",
+      "dimension": "system services",
+      "severity": 4,
+      "scope": "generic",
+      "tags": [
+        "CIS Benchmark Level 1,ubuntu_security/home_encryption_enforce",
+        "ISO 27001/2,Information Security Incident Management",
+        "PCI-DSS,Requirement-3.4",
+        "SOC 2,CC-Data Protection"
+      ],
+      "description": [
+        {
+          "locale": "EN",
+          "title": "Private directory disabled",
+          "summary": "Your home folder private encrypted directory is not enabled. Enabling home folder encryption helps protect your personal data from unauthorized access."
+        },
+        {
+          "locale": "FR",
+          "title": "Dossier privé désactivé",
+          "summary": "Le dossier privé de votre dossier personnel n'est pas crypté. Activer le cryptage du dossier personnel aide à protéger vos données personnelles contre tout accès non autorisé."
+        }
+      ],
+      "implementation": {
+        "system": "Ubuntu",
+        "minversion": 20,
+        "maxversion": 0,
+        "class": "cli",
+        "elevation": "user",
+        "target": "ecryptfs-setup-private 2>&1 | grep -q 'wrapped-passphrase file already exists' || echo encryption_inactive",
+        "education": []
+      },
+      "remediation": {
+        "system": "Ubuntu",
+        "minversion": 20,
+        "maxversion": 0,
+        "class": "link",
+        "elevation": "",
+        "target": "https://help.ubuntu.com/community/EncryptedHome",
+        "education": []
+      },
+      "rollback": {
+        "system": "Ubuntu",
+        "minversion": 20,
+        "maxversion": 0,
+        "class": "link",
+        "elevation": "",
+        "target": "https://help.ubuntu.com/community/EncryptedHome",
+        "education": []
+      }
+    },
+    {
+      "name": "encrypted disk disabled",
+      "metrictype": "bool",
+      "dimension": "system services",
+      "severity": 4,
+      "scope": "generic",
+      "tags": [
+        "CIS Benchmark Level 1,ubuntu_security/disk_encryption_enforce",
+        "ISO 27001/2,Information Security Incident Management",
+        "PCI-DSS,Requirement-3.4",
+        "SOC 2,CC-Data Protection"
+      ],
+      "description": [
+        {
+          "locale": "EN",
+          "title": "Disk encryption disabled",
+          "summary": "Your main disk and swap are not encrypted. Enabling disk encryption helps protect your data from unauthorized access."
+        },
+        {
+          "locale": "FR",
+          "title": "Cryptage du disque désactivé",
+          "summary": "Votre disque principal et votre swap ne sont pas crypté. Activer le cryptage du disque aide à protéger vos données contre tout accès non autorisé."
+        }
+      ],
+      "implementation": {
+        "system": "Ubuntu",
+        "minversion": 20,
+        "maxversion": 0,
+        "class": "cli",
+        "elevation": "user",
+        "target": "grep -qE '(hypervisor|vmware|virtualbox|qemu|kvm|xen)' /proc/cpuinfo || { lsblk -o MOUNTPOINT,FSTYPE | grep '/$' | grep -q 'crypt' || echo encryption_disabled; lsblk -o MOUNTPOINT,FSTYPE | grep '/swap' | grep -q 'crypt' || echo encryption_disabled; }",
+        "education": []
+      },
+      "remediation": {
+        "system": "Ubuntu",
+        "minversion": 20,
+        "maxversion": 0,
+        "class": "link",
+        "elevation": "",
+        "target": "https://help.ubuntu.com/community/FullDiskEncryptionHowto",
+        "education": []
+      },
+      "rollback": {
+        "system": "Ubuntu",
+        "minversion": 20,
+        "maxversion": 0,
+        "class": "link",
+        "elevation": "",
+        "target": "https://help.ubuntu.com/community/FullDiskEncryptionHowto",
+        "education": []
+      }
+    },
+    {
       "name": "pwned",
       "metrictype": "bool",
       "dimension": "credentials",
@@ -141,17 +245,17 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         {
           "locale": "EN",
           "title": "Potentially compromised email address",
-          "summary": "Your email address might have recently appeared in a data breach. Please set your email in the Identity tab, review the breaches if any and follow instructions."
+          "summary": "Check if your email address might have recently appeared in a data breach."
         },
         {
           "locale": "FR",
           "title": "Adresse e-mail potentiellement compromise",
-          "summary": "Votre adresse e-mail est peut-être apparue récemment dans une fuite de données. Renseignez votre email dans le tab Identité, examinez les fuites éventuelles et suivez les instructions."
+          "summary": "Vérifiez si votre adresse e-mail est peut-être apparue récemment dans une fuite de données."
         }
       ],
       "implementation": {
         "system": "Linux",
-        "minversion": 6,
+        "minversion": 5,
         "maxversion": 0,
         "class": "internal",
         "elevation": "user",
@@ -160,7 +264,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       },
       "remediation": {
         "system": "Linux",
-        "minversion": 6,
+        "minversion": 5,
         "maxversion": 0,
         "class": "internal",
         "elevation": "",
@@ -168,19 +272,19 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "education": [
           {
             "locale": "EN",
-            "class": "link",
-            "target": "https://en.wikipedia.org/wiki/Have_I_Been_Pwned"
+            "class": "html",
+            "target": "<p>To verify and mitigate the impact of a breach associated with your email, follow these steps:</p><ul><li>Navigate to the 'Identity' tab.</li><li>Enter your email address in the provided field.</li><li>Review the list of breaches associated with your email.</li><li>Select a breach to view detailed information and perform an AI-driven analysis.</li><li>Based on the analysis, decide whether to dismiss the breach or take further action if it's significant.</li><li>Once all threats are addressed, this alert will be marked as inactive.</li></ul>"
           },
           {
             "locale": "FR",
-            "class": "link",
-            "target": "https://www.futura-sciences.com/tech/actualites/internet-voici-savoir-si-vos-donnees-personnelles-internet-ont-ete-piratees-103095/"
+            "class": "html",
+            "target": "<p>Pour vérifier et atténuer l'impact d'une fuite de données associée à votre email, suivez ces étapes :</p><ul><li>Allez dans l'onglet 'Identité'.</li><li>Entrez votre adresse e-mail dans le champ prévu.</li><li>Examinez la liste des fuites associées à votre email.</li><li>Sélectionnez une fuite pour voir les informations détaillées et effectuer une analyse assistée par IA.</li><li>En fonction de l'analyse, décidez de rejeter la fuite ou de prendre des mesures supplémentaires si elle est significative.</li><li>Une fois toutes les menaces traitées, cette alerte sera marquée comme inactive.</li></ul>"
           }
         ]
       },
       "rollback": {
         "system": "Linux",
-        "minversion": 6,
+        "minversion": 5,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -225,7 +329,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       ],
       "implementation": {
         "system": "Linux",
-        "minversion": 6,
+        "minversion": 5,
         "maxversion": 0,
         "class": "internal",
         "elevation": "user",
@@ -234,7 +338,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       },
       "remediation": {
         "system": "Linux",
-        "minversion": 6,
+        "minversion": 5,
         "maxversion": 0,
         "class": "internal",
         "elevation": "",
@@ -242,19 +346,19 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "education": [
           {
             "locale": "EN",
-            "class": "link",
-            "target": "https://en.wikipedia.org/wiki/Port_scanner"
+            "class": "html",
+            "target": "<p>Scan your network to identify all connected devices and assess potential threats.</p><h4>Steps to verify a critical device</h4><ul><li>Navigate to the 'Network' tab.</li><li>Devices of critical importance are marked with yellow for medium criticality and red for high criticality.</li><li>Select a critical device.</li><li>Assess each port's criticality by reading the associated CVEs and analyzing potential issues with AI.</li><li>If a port is determined to be safe, mark it as verified.</li></ul><p>Once all devices are deemed safe, this threat will be marked as inactive.</p>"
           },
           {
             "locale": "FR",
-            "class": "link",
-            "target": "https://fr.wikipedia.org/wiki/Balayage_de_ports"
+            "class": "html",
+            "target": "<p>Scannez votre réseau pour identifier tous les appareils connectés et évaluer les menaces potentielles.</p><h4>Étapes pour vérifier un appareil critique</h4><ul><li>Allez dans l'onglet 'Réseau'.</li><li>Les appareils de grande importance sont marqués en jaune pour une criticité moyenne et en rouge pour une criticité élevée.</li><li>Sélectionnez un appareil critique.</li><li>Évaluez la criticité de chaque port en lisant les CVE associés et en analysant les problèmes potentiels avec l'IA.</li><li>Si un port est déterminé comme sûr, marquez-le comme vérifié.</li></ul><p>Une fois que tous les appareils sont considérés comme sûrs, cette menace sera marquée comme inactive.</p>"
           }
         ]
       },
       "rollback": {
         "system": "Linux",
-        "minversion": 6,
+        "minversion": 5,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -274,7 +378,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       }
     },
     {
-      "name": "/etc/passwd permissions",
+      "name": "passwd permissions",
       "metrictype": "bool",
       "dimension": "system integrity",
       "severity": 5,
@@ -299,25 +403,25 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       ],
       "implementation": {
         "system": "Linux",
-        "minversion": 6,
+        "minversion": 5,
         "maxversion": 0,
         "class": "cli",
-        "elevation": "system",
+        "elevation": "user",
         "target": "stat /etc/passwd | grep '(0644/-rw-r--r--)' | grep -v grep > /dev/null || echo bad_permissions",
         "education": []
       },
       "remediation": {
         "system": "Linux",
-        "minversion": 6,
+        "minversion": 5,
         "maxversion": 0,
         "class": "cli",
-        "elevation": "system",
-        "target": "chmod 664 /etc/passwd",
+        "elevation": "admin",
+        "target": "sudo chmod 644 /etc/passwd",
         "education": []
       },
       "rollback": {
         "system": "Linux",
-        "minversion": 6,
+        "minversion": 5,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -326,7 +430,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       }
     },
     {
-      "name": "/etc/shadow permissions",
+      "name": "shadow permissions",
       "metrictype": "bool",
       "dimension": "system integrity",
       "severity": 5,
@@ -351,25 +455,25 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       ],
       "implementation": {
         "system": "Linux",
-        "minversion": 6,
+        "minversion": 5,
         "maxversion": 0,
         "class": "cli",
-        "elevation": "system",
+        "elevation": "user",
         "target": "stat /etc/shadow | grep '(0600/-rw-------)' | grep -v grep > /dev/null || echo bad_permissions",
         "education": []
       },
       "remediation": {
         "system": "Linux",
-        "minversion": 6,
+        "minversion": 5,
         "maxversion": 0,
         "class": "cli",
-        "elevation": "system",
-        "target": "chmod 600 /etc/shadow",
+        "elevation": "admin",
+        "target": "sudo chmod 600 /etc/shadow",
         "education": []
       },
       "rollback": {
         "system": "Linux",
-        "minversion": 6,
+        "minversion": 5,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -378,7 +482,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       }
     },
     {
-      "name": "/etc/fstab permissions",
+      "name": "fstab permissions",
       "metrictype": "bool",
       "dimension": "system integrity",
       "severity": 5,
@@ -403,25 +507,25 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       ],
       "implementation": {
         "system": "Linux",
-        "minversion": 6,
+        "minversion": 5,
         "maxversion": 0,
         "class": "cli",
-        "elevation": "system",
+        "elevation": "user",
         "target": "stat /etc/fstab | grep '(0644/-rw-r--r--)' | grep -v grep > /dev/null || echo bad_permissions",
         "education": []
       },
       "remediation": {
         "system": "Linux",
-        "minversion": 6,
+        "minversion": 5,
         "maxversion": 0,
         "class": "cli",
-        "elevation": "system",
-        "target": "chmod 644 /etc/fstab",
+        "elevation": "admin",
+        "target": "sudo chmod 644 /etc/fstab",
         "education": []
       },
       "rollback": {
         "system": "Linux",
-        "minversion": 6,
+        "minversion": 5,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -430,7 +534,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       }
     },
     {
-      "name": "/etc/group permissions",
+      "name": "group permissions",
       "metrictype": "bool",
       "dimension": "system integrity",
       "severity": 5,
@@ -455,25 +559,25 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       ],
       "implementation": {
         "system": "Linux",
-        "minversion": 6,
+        "minversion": 5,
         "maxversion": 0,
         "class": "cli",
-        "elevation": "system",
+        "elevation": "user",
         "target": "stat /etc/group | grep '(0644/-rw-r--r--)' | grep -v grep > /dev/null || echo bad_permissions",
         "education": []
       },
       "remediation": {
         "system": "Linux",
-        "minversion": 6,
+        "minversion": 5,
         "maxversion": 0,
         "class": "cli",
-        "elevation": "system",
-        "target": "chmod 644 /etc/group",
+        "elevation": "admin",
+        "target": "sudo chmod 644 /etc/group",
         "education": []
       },
       "rollback": {
         "system": "Linux",
-        "minversion": 6,
+        "minversion": 5,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -482,7 +586,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       }
     },
     {
-      "name": "/etc/group group",
+      "name": "group group",
       "metrictype": "bool",
       "dimension": "system integrity",
       "severity": 5,
@@ -507,25 +611,25 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       ],
       "implementation": {
         "system": "Linux",
-        "minversion": 6,
+        "minversion": 5,
         "maxversion": 0,
         "class": "cli",
-        "elevation": "system",
+        "elevation": "user",
         "target": "ls -l /etc/group | grep 'root root' | grep -v grep > /dev/null || echo bad_group",
         "education": []
       },
       "remediation": {
         "system": "Linux",
-        "minversion": 6,
+        "minversion": 5,
         "maxversion": 0,
         "class": "cli",
-        "elevation": "system",
-        "target": "chown root /etc/group",
+        "elevation": "admin",
+        "target": "sudo chown root:root /etc/group",
         "education": []
       },
       "rollback": {
         "system": "Linux",
-        "minversion": 6,
+        "minversion": 5,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -534,7 +638,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       }
     },
     {
-      "name": "/etc/shadow group",
+      "name": "shadow group",
       "metrictype": "bool",
       "dimension": "system integrity",
       "severity": 5,
@@ -559,77 +663,25 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       ],
       "implementation": {
         "system": "Linux",
-        "minversion": 6,
+        "minversion": 5,
         "maxversion": 0,
         "class": "cli",
-        "elevation": "system",
-        "target": "ls -l /etc/shadow | grep 'root root' | grep -v grep > /dev/null || echo bad_group",
+        "elevation": "user",
+        "target": "ls -l /etc/shadow | grep 'root shadow' | grep -v grep > /dev/null || echo bad_group",
         "education": []
       },
       "remediation": {
         "system": "Linux",
-        "minversion": 6,
-        "maxversion": 0,
-        "class": "cli",
-        "elevation": "system",
-        "target": "chown root /etc/shadow",
-        "education": []
-      },
-      "rollback": {
-        "system": "Linux",
-        "minversion": 6,
-        "maxversion": 0,
-        "class": "",
-        "elevation": "",
-        "target": "",
-        "education": []
-      }
-    },
-    {
-      "name": "restrict cron to root",
-      "metrictype": "bool",
-      "dimension": "system integrity",
-      "severity": 5,
-      "scope": "generic",
-      "tags": [
-        "CIS Benchmark Level 1,Job Scheduling",
-        "ISO 27001/2,Operations Security",
-        "PCI-DSS,Requirement-6",
-        "SOC 2,CC-System Operations"
-      ],
-      "description": [
-        {
-          "locale": "EN",
-          "title": "Cron is not restricted to root only",
-          "summary": "Cron is a time-based job scheduler in Unix-like operating systems. Users can schedule jobs (commands or scripts) to run periodically at fixed times, dates, or intervals. It's a powerful tool, but can also pose security risks if not managed properly. Restricting cron jobs to the root user is generally considered good practice."
-        },
-        {
-          "locale": "FR",
-          "title": "Cron n'est pas restreint à l'utilisateur root",
-          "summary": "Cron est un planificateur de tâches basé sur le temps dans les systèmes d'exploitation de type Unix. Les utilisateurs peuvent programmer des tâches (commandes ou scripts) pour qu'elles s'exécutent périodiquement à des heures, des dates ou des intervalles fixes. C'est un outil puissant, mais qui peut également poser des risques de sécurité s'il n'est pas géré correctement. Restreindre les tâches cron à l'utilisateur root est généralement considéré comme une bonne pratique."
-        }
-      ],
-      "implementation": {
-        "system": "Linux",
-        "minversion": 6,
+        "minversion": 5,
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
-        "target": "cd /etc ; [ -f cron.deny ] && echo bad_config ; grep -v root cron.allow",
-        "education": []
-      },
-      "remediation": {
-        "system": "Linux",
-        "minversion": 6,
-        "maxversion": 0,
-        "class": "cli",
-        "elevation": "system",
-        "target": "cd /etc ; [ -f cron.deny ] && mv cron.deny cron.deny.edamame_save ; [ -f cron.allow ] && mv cron.allow cron.allow.edamame_save ; echo root > cron.allow ; chown root cron.allow ; chmod 400 cron.allow",
+        "target": "sudo chown root:shadow /etc/shadow",
         "education": []
       },
       "rollback": {
         "system": "Linux",
-        "minversion": 6,
+        "minversion": 5,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -663,25 +715,25 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       ],
       "implementation": {
         "system": "Linux",
-        "minversion": 6,
+        "minversion": 5,
         "maxversion": 0,
         "class": "cli",
         "elevation": "system",
-        "target": "checkupdates; [ $? -eq 0 ] && echo updates_required",
+        "target": "apt list --upgradeable 2>/dev/null | grep \"upgradable\"",
         "education": []
       },
       "remediation": {
         "system": "Linux",
-        "minversion": 6,
+        "minversion": 5,
         "maxversion": 0,
         "class": "cli",
         "elevation": "system",
-        "target": "pacman -Syu --noconfirm",
+        "target": "sudo apt update && sudo apt upgrade -y",
         "education": []
       },
       "rollback": {
         "system": "Linux",
-        "minversion": 6,
+        "minversion": 5,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -704,47 +756,343 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       "description": [
         {
           "locale": "EN",
-          "title": "Uncomplicated firewall (ufw) not installed",
-          "summary": "A firewall is a crucial part of any network security framework. Firewalls control the incoming and outgoing network traffic based on predetermined security rules. They establish a barrier between trusted internal networks and untrusted external networks. It can also block unauthorized access to or from private networks, preventing intruders from accessing sensitive information. Uncomplicated firewall provides a command line interface and aims to be uncomplicated and easy to use."
+          "title": "Local firewall disabled",
+          "summary": "Your local firewall is disabled. This is fine in a trusted environment but dangerous if you happened to connect to public networks. You should turn it on by default."
         },
         {
           "locale": "FR",
-          "title": "Uncomplicated firewall (ufw) non installé",
-          "summary": "Un pare-feu est un élément crucial de tout cadre de sécurité réseau. Les pare-feu contrôlent le trafic réseau entrant et sortant en fonction de règles de sécurité prédéterminées. Ils établissent une barrière entre les réseaux internes de confiance et les réseaux externes non fiables. Il peut également bloquer l'accès non autorisé vers ou depuis des réseaux privés, empêchant les intrus d'accéder à des informations sensibles. Uncomplicated firewall fournit une interface en ligne de commande et vise à être simple d'utilisation."
+          "title": "Pare-feu local désactivé",
+          "summary": "Votre pare-feu local est désactivé. C'est bien dans un environnement de confiance mais dangereux si vous vous connectez à des réseaux publics. Vous devriez l'activer par défaut."
         }
       ],
       "implementation": {
         "system": "Linux",
-        "minversion": 6,
+        "minversion": 5,
         "maxversion": 0,
         "class": "cli",
-        "elevation": "system",
-        "target": "pacman -Qi ufw > /dev/null || echo not_found",
+        "elevation": "admin",
+        "target": "sudo ufw status | grep -q 'Status: active' || echo firewall_disabled",
         "education": []
       },
       "remediation": {
         "system": "Linux",
-        "minversion": 6,
+        "minversion": 5,
         "maxversion": 0,
         "class": "cli",
-        "elevation": "system",
-        "target": "pacman -S ufw; ufw enable; ufw default deny; ufw allow from 192.168.0.0/24; ufw allow Deluge; ufw limit ssh",
+        "elevation": "admin",
+        "target": "sudo apt install ufw && sudo ufw enable",
         "education": [
           {
             "locale": "EN",
             "class": "link",
-            "target": "https://wiki.archlinux.org/title/Uncomplicated_Firewall"
+            "target": "https://help.ubuntu.com/community/UFW"
           }
         ]
       },
       "rollback": {
         "system": "Linux",
-        "minversion": 6,
+        "minversion": 5,
         "maxversion": 0,
         "class": "",
-        "elevation": "",
-        "target": "pacman -R ufw",
+        "elevation": "admin",
+        "target": "sudo ufw disable",
         "education": []
+      }
+    },
+    {
+      "name": "remote login enabled",
+      "metrictype": "bool",
+      "dimension": "system integrity",
+      "severity": 4,
+      "scope": "generic",
+      "tags": [
+        "CIS Benchmark Level 1,linux_security/sysprefs_ssh_disable",
+        "ISO 27001/2,Access Control",
+        "PCI-DSS,Requirement-8",
+        "SOC 2,CC-System Integrity"
+      ],
+      "description": [
+        {
+          "locale": "EN",
+          "title": "Remote login enabled",
+          "summary": "Remote login is enabled. This is not necessary unless your are an IT professional. This is unusual and dangerous for most users."
+        },
+        {
+          "locale": "FR",
+          "title": "Accès à distance activé",
+          "summary": "L'accès à distance est activée. Ce n'est pas nécessaire sauf si vous êtes un professionnel de l'informatique. Ceci est inhabituel et dangereux pour la plupart des utilisateurs."
+        }
+      ],
+      "implementation": {
+        "system": "Linux",
+        "minversion": 5,
+        "maxversion": 0,
+        "class": "cli",
+        "elevation": "admin",
+        "target": "systemctl is-active ssh | grep -q 'inactive' || echo remote_login_enabled",
+        "education": []
+      },
+      "remediation": {
+        "system": "Linux",
+        "minversion": 5,
+        "maxversion": 0,
+        "class": "cli",
+        "elevation": "admin",
+        "target": "sudo systemctl stop ssh && sudo systemctl disable ssh",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "html",
+            "target": "Disabling remote login secures your Linux system by preventing unauthorized remote access. This command requires superuser permissions to execute and ensures that your system is only accessible by authorized users locally."
+          },
+          {
+            "locale": "FR",
+            "class": "html",
+            "target": "Désactiver l'accès à distance sécurise votre système Linux en empêchant l'accès à distance non autorisé. Cette commande nécessite des permissions de super utilisateur pour s'exécuter et garantit que votre système est uniquement accessible localement par les utilisateurs autorisés."
+          }
+        ]
+      },
+      "rollback": {
+        "system": "Linux",
+        "minversion": 5,
+        "maxversion": 0,
+        "class": "cli",
+        "elevation": "admin",
+        "target": "sudo systemctl enable ssh && sudo systemctl start ssh",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "html",
+            "target": "Enabling remote login on Linux allows remote users to access the system via SSH, which can be useful for remote administration but increases the risk of unauthorized access. Use this feature cautiously and ensure your firewall and user access permissions are properly configured."
+          },
+          {
+            "locale": "FR",
+            "class": "html",
+            "target": "L'activation de l'accès à distance sur Linux permet aux utilisateurs distants d'accéder au système via SSH, ce qui peut être utile pour l'administration à distance mais augmente le risque d'accès non autorisé. Utilisez cette fonction avec prudence et assurez-vous que votre pare-feu et les permissions d'accès utilisateur sont correctement configurés."
+          }
+        ]
+      }
+    },
+    {
+      "name": "remote desktop enabled",
+      "metrictype": "bool",
+      "dimension": "system integrity",
+      "severity": 4,
+      "scope": "generic",
+      "tags": [
+        "CIS Benchmark Level 1,linux_security/sysprefs_remote_management_disable",
+        "ISO 27001/2,Access Control",
+        "PCI-DSS,Requirement-8",
+        "SOC 2,CC-System Integrity"
+      ],
+      "description": [
+        {
+          "locale": "EN",
+          "title": "Remote desktop enabled",
+          "summary": "Remote desktop is enabled. This is not necessary unless your are an IT professional. This is unusual and dangerous for most users."
+        },
+        {
+          "locale": "FR",
+          "title": "Bureau à distance activé",
+          "summary": "La connexion au bureau à distance est activée. Ce n'est pas nécessaire sauf si vous êtes un professionnel de l'informatique. Ceci est inhabituel et dangereux pour la plupart des utilisateurs."
+        }
+      ],
+      "implementation": {
+        "system": "Linux",
+        "minversion": 5,
+        "maxversion": 0,
+        "class": "cli",
+        "elevation": "user",
+        "target": "systemctl is-active xrdp 2>/dev/null | grep -q 'inactive' || echo rdp_enabled",
+        "education": []
+      },
+      "remediation": {
+        "system": "Linux",
+        "minversion": 5,
+        "maxversion": 0,
+        "class": "cli",
+        "elevation": "admin",
+        "target": "sudo systemctl stop xrdp && sudo systemctl disable xrdp",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "html",
+            "target": "Disabling remote desktop access can significantly enhance the security of your Linux system. This prevents unauthorized remote desktop access, ensuring only approved users can control the system remotely."
+          },
+          {
+            "locale": "FR",
+            "class": "html",
+            "target": "Désactiver l'accès au bureau à distance peut considérablement renforcer la sécurité de votre système Linux. Cela empêche l'accès à distance non autorisé au bureau, garantissant que seuls les utilisateurs approuvés peuvent contrôler le système à distance."
+          }
+        ]
+      },
+      "rollback": {
+        "system": "Linux",
+        "minversion": 5,
+        "maxversion": 0,
+        "class": "cli",
+        "elevation": "admin",
+        "target": "sudo systemctl start xrdp && sudo systemctl enable xrdp",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "html",
+            "target": "Re-enabling remote desktop services on Linux enables remote management capabilities. It's crucial to ensure that only trusted users have access and that your network is secure to mitigate potential security risks."
+          },
+          {
+            "locale": "FR",
+            "class": "html",
+            "target": "Réactiver les services de bureau à distance sur Linux active les capacités de gestion à distance. Il est crucial de s'assurer que seuls les utilisateurs de confiance ont accès et que votre réseau est sécurisé pour atténuer les risques de sécurité potentiels."
+          }
+        ]
+      }
+    },
+    {
+      "name": "file sharing enabled",
+      "metrictype": "bool",
+      "dimension": "system services",
+      "severity": 4,
+      "scope": "generic",
+      "tags": [
+        "CIS Benchmark Level 1,linux_security/sysprefs_smbd_disable",
+        "ISO 27001/2,Information Security Policies",
+        "PCI-DSS,Requirement-9",
+        "SOC 2,CC-System Services"
+      ],
+      "description": [
+        {
+          "locale": "EN",
+          "title": "File sharing enabled",
+          "summary": "File sharing is enabled. While this could be intentional we strongly recommend to turn it off. It's not that easy to configure and can expose your data to unwanted people."
+        },
+        {
+          "locale": "FR",
+          "title": "Partage de fichiers activé",
+          "summary": "Le partage de fichiers est activé. Bien que cela puisse être intentionnel, nous vous recommandons fortement de le désactiver. Ce n'est pas si facile à configurer et cela peut exposer vos données à des personnes indésirables."
+        }
+      ],
+      "implementation": {
+        "system": "Linux",
+        "minversion": 5,
+        "maxversion": 0,
+        "class": "cli",
+        "elevation": "user",
+        "target": "systemctl is-active nfs-kernel-server 2>/dev/null | grep -q 'inactive' || echo nfs_enabled;  systemctl is-active smbd 2>/dev/null | grep -q 'inactive' || echo smb_enabled",
+        "education": []
+      },
+      "remediation": {
+        "system": "Linux",
+        "minversion": 5,
+        "maxversion": 0,
+        "class": "cli",
+        "elevation": "admin",
+        "target": "sudo systemctl stop smbd && sudo systemctl disable smbd; sudo systemctl stop nfs-kernel-server && sudo systemctl disable nfs-kernel-server",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "html",
+            "target": "Disabling file sharing on your Linux system can significantly enhance your data security. This action ensures that your files are not inadvertently accessible to unauthorized users over the network."
+          },
+          {
+            "locale": "FR",
+            "class": "html",
+            "target": "Désactiver le partage de fichiers sur votre système Linux peut considérablement améliorer la sécurité de vos données. Cette action garantit que vos fichiers ne sont pas accessibles par inadvertance à des utilisateurs non autorisés sur le réseau."
+          }
+        ]
+      },
+      "rollback": {
+        "system": "Linux",
+        "minversion": 5,
+        "maxversion": 0,
+        "class": "cli",
+        "elevation": "admin",
+        "target": "sudo systemctl start smbd && sudo systemctl enable smbd; sudo systemctl start nfs-kernel-server && sudo systemctl enable nfs-kernel-server",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "html",
+            "target": "If you re-enable file sharing services can allow for file sharing capabilities, make sure that appropriate security measures and user permissions are in place to protect sensitive data."
+          },
+          {
+            "locale": "FR",
+            "class": "html",
+            "target": "Si vous éactivez les services de partage de fichiers, assurez-vous que des mesures de sécurité appropriées et des permissions utilisateur sont en place pour protéger les données sensibles."
+          }
+        ]
+      }
+    },
+    {
+      "name": "too slow or disabled screensaver lock",
+      "metrictype": "bool",
+      "dimension": "credentials",
+      "severity": 3,
+      "scope": "generic",
+      "tags": [
+        "CIS Benchmark Level 1,linux_security/sysprefs_screensaver_password_enable",
+        "ISO 27001/2,Access Control",
+        "PCI-DSS,Requirement-8",
+        "SOC 2,CC-Logical Access"
+      ],
+      "description": [
+        {
+          "locale": "EN",
+          "title": "Screen saver requires password disabled",
+          "summary": "When the screen saver is active, we recommend that a password is required to exit it. Otherwise anyone could access your computer while you are away."
+        },
+        {
+          "locale": "FR",
+          "title": "Économiseur d'écran nécessite un mot de passe désactivé",
+          "summary": "Lorsque l'économiseur d'écran est actif, nous recommandons qu'un mot de passe soit requis pour en sortir. Sinon, n'importe qui pourrait accéder à votre ordinateur pendant votre absence."
+        }
+      ],
+      "implementation": {
+        "system": "Linux",
+        "minversion": 5,
+        "maxversion": 0,
+        "class": "cli",
+        "elevation": "user",
+        "target": "gsettings get org.gnome.desktop.screensaver lock-enabled",
+        "education": []
+      },
+      "remediation": {
+        "system": "Linux",
+        "minversion": 5,
+        "maxversion": 0,
+        "class": "cli",
+        "elevation": "user",
+        "target": "gsettings set org.gnome.desktop.screensaver lock-enabled true",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "html",
+            "target": "Enabling screen locking on your Linux system ensures that a password is required to exit the screensaver, protecting your system from unauthorized access when unattended."
+          },
+          {
+            "locale": "FR",
+            "class": "html",
+            "target": "L'activation du verrouillage de l'écran sur votre système Linux garantit qu'un mot de passe est requis pour quitter l'économiseur d'écran, protégeant votre système contre les accès non autorisés en votre absence."
+          }
+        ]
+      },
+      "rollback": {
+        "system": "Linux",
+        "minversion": 5,
+        "maxversion": 0,
+        "class": "cli",
+        "elevation": "user",
+        "target": "gsettings set org.gnome.desktop.screensaver lock-enabled false",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "html",
+            "target": "Disabling screen locking reduces the security of your system by allowing anyone to access it when the screensaver is active."
+          },
+          {
+            "locale": "FR",
+            "class": "html",
+            "target": "Désactiver le verrouillage de l'écran réduit la sécurité de votre système en permettant à quiconque d'y accéder lorsque l'économiseur d'écran est actif."
+          }
+        ]
       }
     }
   ]
