@@ -15,10 +15,11 @@ jobs:
     steps:
 
       - name: Setup EDAMAME Posture
-        run: |
-          wget https://edamame-posture.s3.eu-west-1.amazonaws.com/dev/linux/0.3.82/edamame_posture
-          chmod u+x edamame_posture
-          ./edamame_posture start ${{ secrets.EDAMAME_POSTURE_USER }} ${{ secrets.EDAMAME_POSTURE_DOMAIN }} ${{ secrets.EDAMAME_POSTURE_PIN }}
+        uses: edamametechnologies/edamame_posture_action@v0.3.83
+        with:
+          edamame_user: ${{ secrets.EDAMAME_POSTURE_USER }}
+          edamame_domain: ${{ secrets.EDAMAME_POSTURE_DOMAIN }}
+          edamame_pin: ${{ secrets.EDAMAME_POSTURE_PIN }}
 
       - uses: actions/checkout@v3
 
