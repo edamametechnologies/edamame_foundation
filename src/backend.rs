@@ -17,6 +17,7 @@ pub enum BackendErrorCode {
     NonExistentDomain,
     NonExistentUser,
     DisabledUser,
+    BadVersion,
     Unknown,
     None,
 }
@@ -35,6 +36,7 @@ impl fmt::Display for BackendErrorCode {
             BackendErrorCode::NonExistentDomain => write!(f, "NonExistentDomain"),
             BackendErrorCode::NonExistentUser => write!(f, "NonExistentUser"),
             BackendErrorCode::DisabledUser => write!(f, "DisabledUser"),
+            BackendErrorCode::BadVersion => write!(f, "BadVersion"),
             BackendErrorCode::Unknown => write!(f, "Unknown"),
             BackendErrorCode::None => write!(f, "None"),
         }
