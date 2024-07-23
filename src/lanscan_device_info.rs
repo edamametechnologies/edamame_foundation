@@ -2,7 +2,6 @@ use chrono::{DateTime, Utc};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use tracing::trace;
-
 use crate::lanscan_port_info::*;
 use crate::lanscan_vulnerability_info::*;
 use edamame_backend::lanscan_device_info_backend::*;
@@ -58,7 +57,8 @@ impl DeviceInfo {
             vulnerabilities: Vec::new(),
             open_ports: Vec::new(),
             dismissed_ports: Vec::new(),
-            last_detected: Utc::now(),
+            // Initialize the last detected time to UNIX_EPOCH
+            last_detected: DateTime::from_timestamp(0, 0).unwrap(),
             active: false,
             added: false,
             activated: false,
