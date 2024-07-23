@@ -1,10 +1,10 @@
+use crate::lanscan_port_info::*;
+use crate::lanscan_vulnerability_info::*;
 use chrono::{DateTime, Utc};
+use edamame_backend::lanscan_device_info_backend::*;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use tracing::trace;
-use crate::lanscan_port_info::*;
-use crate::lanscan_vulnerability_info::*;
-use edamame_backend::lanscan_device_info_backend::*;
 
 pub static DEVICE_ACTIVITY_TIMEOUT: i64 = 900;
 
