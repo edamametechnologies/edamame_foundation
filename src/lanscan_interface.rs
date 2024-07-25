@@ -17,7 +17,7 @@ pub fn get_valid_network_interfaces() -> Vec<(String, u8, String)> {
 
         let excluded_prefixes = [
             "feth", "zt", "utun", "wg", "tun", "tap", "ipsec", "ppp", "bridge", "awdl", "llw",
-            "lo", "rmnet", "ccmni", "clat", "pdp_ip", "docker", "veth", "br-", "vboxnet", "virbr",
+            "lo", "rmnet", "ccmni", "clat", "pdp_ip", "docker", "veth", "br-", "vboxnet", "virbr", "vEthernet"
         ];
 
         let valid_interfaces: Vec<(String, u8, String)> = interfaces
