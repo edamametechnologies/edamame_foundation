@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_MACOS: &str = r#"{
   "name": "threat model macOS",
   "extends": "none",
-  "date": "July 21th 2024",
-  "signature": "3c1fbca27e85a0dacede6c0c6b14b27aa71a1afb5445670b3d474bbea23713da",
+  "date": "July 26th 2024",
+  "signature": "24c4ab1cbfb7ee153a6b1a41b1bbab836ccf827f29de4321b316fbaec671026e",
   "metrics": [
     {
       "name": "edamame helper disabled",
@@ -40,7 +40,18 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "class": "installer",
         "elevation": "user",
         "target": "https://github.com/edamametechnologies/edamame_helper/releases/download",
-        "education": []
+        "education": [
+          {
+            "locale": "EN",
+            "class": "link",
+            "target": "https://github.com/edamametechnologies/edamame_helper"
+          },
+          {
+            "locale": "FR",
+            "class": "link",
+            "target": "https://github.com/edamametechnologies/edamame_helper"
+          }
+        ]
       },
       "rollback": {
         "system": "macOS",
@@ -961,7 +972,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
-        "target": "fdesetup isactive | grep false",
+        "target": "system_profiler SPHardwareDataType | grep -q 'Virtual' || fdesetup isactive | grep false",
         "education": []
       },
       "remediation": {
@@ -1317,12 +1328,12 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         {
           "locale": "EN",
           "title": "System Integrity Protection disabled",
-          "summary": "System Integrity Protection is a great ability of macOS that prevents any software to change system files and components. To some extent it's a \"good enough\" antivirus for your Mac. Having it disabled is... unusual and dangerous. It should be enabled by default on your Mac. This content will explain a way to enable it again. Bear with me .. it's somewhat hard to achieve!"
+          "summary": "System Integrity Protection is a great ability of macOS that prevents any software to change system files and components. To some extent it's a 'good enough' antivirus for your Mac. Having it disabled is... unusual and dangerous. It should be enabled by default on your Mac. This content will explain a way to enable it again. Bear with me .. it's somewhat hard to achieve!"
         },
         {
           "locale": "FR",
           "title": "Protection d'intégrité système désactivée",
-          "summary": "La Protection de l'Intégrité du Système est une capacité clé de macOS qui empêche tous logiciels de modifier les fichiers et les composants du système. Dans une certaine mesure, c'est un antivirus \"assez bon\" pour votre Mac. Le désactiver est... inhabituel et dangereux. Il devrait être activé par défaut sur votre Mac. Ce contenu vous expliquera comment l'activer à nouveau. Soyez courageux... c'est un peu difficile à réaliser !"
+          "summary": "La Protection de l'Intégrité du Système est une capacité clé de macOS qui empêche tous logiciels de modifier les fichiers et les composants du système. Dans une certaine mesure, c'est un antivirus 'assez bon' pour votre Mac. Le désactiver est... inhabituel et dangereux. Il devrait être activé par défaut sur votre Mac. Ce contenu vous expliquera comment l'activer à nouveau. Soyez courageux... c'est un peu difficile à réaliser !"
         }
       ],
       "implementation": {
@@ -1473,7 +1484,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "user",
-        "target": "dscl . -read /Users/root Password | grep \"\\*\\*\"",
+        "target": "dscl . -read /Users/root Password | grep '\\*\\*'",
         "education": []
       },
       "remediation": {
@@ -1556,7 +1567,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "system",
-        "target": "security authorizationdb read system.preferences > /tmp/system.preferences.plist; /usr/libexec/PlistBuddy -c \"Set :shared false\" /tmp/system.preferences.plist; security authorizationdb write system.preferences < /tmp/system.preferences.plist",
+        "target": "security authorizationdb read system.preferences > /tmp/system.preferences.plist; /usr/libexec/PlistBuddy -c 'Set :shared false' /tmp/system.preferences.plist; security authorizationdb write system.preferences < /tmp/system.preferences.plist",
         "education": [
           {
             "locale": "EN",
@@ -1576,7 +1587,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "system",
-        "target": "security authorizationdb read system.preferences > /tmp/system.preferences.plist; /usr/libexec/PlistBuddy -c \"Set :shared true\" /tmp/system.preferences.plist; security authorizationdb write system.preferences < /tmp/system.preferences.plist",
+        "target": "security authorizationdb read system.preferences > /tmp/system.preferences.plist; /usr/libexec/PlistBuddy -c 'Set :shared true' /tmp/system.preferences.plist; security authorizationdb write system.preferences < /tmp/system.preferences.plist",
         "education": [
           {
             "locale": "EN",
@@ -1680,13 +1691,13 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
       "description": [
         {
           "locale": "EN",
-          "title": "Unverified network environment",
-          "summary": "The network you are connected to is not a known one. If you are allowed to scan this network, go to the network tab and verify the presence of potentially dangerous devices."
+          "title": "Unverified or unsafe network environment",
+          "summary": "The network you are connected to is not a known one or it contains unsafe devices. If you are allowed to scan this network, go to the network tab and verify the presence of potentially dangerous devices."
         },
         {
           "locale": "FR",
-          "title": "Environement réseau non vérifié",
-          "summary": "Le réseau auquel vous êtes connecté n'est pas connu. Si vous êtes autorisé à scanner ce réseau, allez dans l'onglet réseau et vérifiez la présence de périphériques potentiellement dangereux."
+          "title": "Environement réseau non vérifié ou non sécurisé",
+          "summary": "Le réseau auquel vous êtes connecté n'est pas connu ou contient des appareils non sécurisés. Si vous êtes autorisé à scanner ce réseau, allez dans l'onglet réseau et vérifiez la présence de périphériques potentiellement dangereux."
         }
       ],
       "implementation": {
