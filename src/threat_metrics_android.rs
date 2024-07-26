@@ -313,13 +313,13 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       "description": [
         {
           "locale": "EN",
-          "title": "Unverified network environment",
-          "summary": "The network you are connected to is not a known one. If you are allowed to scan this network, go to the network tab and verify the presence of potentially dangerous devices."
+          "title": "Unverified or unsafe network environment",
+          "summary": "The network you are connected to is not a known one or it contains unsafe devices. If you are allowed to scan this network, go to the network tab and verify the presence of potentially dangerous devices."
         },
         {
           "locale": "FR",
-          "title": "Environement réseau non vérifié",
-          "summary": "Le réseau auquel vous êtes connecté n'est pas connu. Si vous êtes autorisé à scanner ce réseau, allez dans l'onglet réseau et vérifiez la présence de périphériques potentiellement dangereux."
+          "title": "Environement réseau non vérifié ou non sécurisé",
+          "summary": "Le réseau auquel vous êtes connecté n'est pas connu ou contient des appareils non sécurisés. Si vous êtes autorisé à scanner ce réseau, allez dans l'onglet réseau et vérifiez la présence de périphériques potentiellement dangereux."
         }
       ],
       "implementation": {

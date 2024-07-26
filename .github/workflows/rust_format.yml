@@ -20,6 +20,7 @@ jobs:
           edamame_user: ${{ secrets.EDAMAME_POSTURE_USER }}
           edamame_domain: ${{ secrets.EDAMAME_POSTURE_DOMAIN }}
           edamame_pin: ${{ secrets.EDAMAME_POSTURE_PIN }}
+          edamame_id: ${{ github.run_id }}
 
       - uses: actions/checkout@v3
 

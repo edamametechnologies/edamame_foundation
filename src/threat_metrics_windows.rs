@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_WINDOWS: &str = r#"{
   "name": "threat model Windows",
   "extends": "none",
-  "date": "July 21th 2024",
-  "signature": "525f5df9ef84c8671911fe8c73265f5400a97bea642e5012d9b7e1840b2be041",
+  "date": "July 26th 2024",
+  "signature": "4d25df3119454c9c14b56f2d74de93f67d43e209064a96633ec3b9b43de948fc",
   "metrics": [
     {
       "name": "edamame helper disabled",
@@ -40,7 +40,18 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "class": "installer",
         "elevation": "user",
         "target": "https://github.com/edamametechnologies/edamame_helper/releases/download",
-        "education": []
+        "education": [
+          {
+            "locale": "EN",
+            "class": "link",
+            "target": "https://github.com/edamametechnologies/edamame_helper"
+          },
+          {
+            "locale": "FR",
+            "class": "link",
+            "target": "https://github.com/edamametechnologies/edamame_helper"
+          }
+        ]
       },
       "rollback": {
         "system": "Windows",
@@ -240,7 +251,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
-        "target": "manage-bde -status | findstr 'Protection Off'",
+        "target": "if ((Get-WmiObject -Class Win32_ComputerSystem).Model -notmatch 'Virtual') { if ((Get-BitLockerVolume).ProtectionStatus -eq 'Off') { Write-Output 'File system not encrypted' } }",
         "education": []
       },
       "remediation": {
@@ -521,13 +532,13 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
       "description": [
         {
           "locale": "EN",
-          "title": "Unverified network environment",
-          "summary": "The network you are connected to is not a known one. If you are allowed to scan this network, go to the network tab and verify the presence of potentially dangerous devices."
+          "title": "Unverified or unsafe network environment",
+          "summary": "The network you are connected to is not a known one or it contains unsafe devices. If you are allowed to scan this network, go to the network tab and verify the presence of potentially dangerous devices."
         },
         {
           "locale": "FR",
-          "title": "Environement réseau non vérifié",
-          "summary": "Le réseau auquel vous êtes connecté n'est pas connu. Si vous êtes autorisé à scanner ce réseau, allez dans l'onglet réseau et vérifiez la présence de périphériques potentiellement dangereux."
+          "title": "Environement réseau non vérifié ou non sécurisé",
+          "summary": "Le réseau auquel vous êtes connecté n'est pas connu ou contient des appareils non sécurisés. Si vous êtes autorisé à scanner ce réseau, allez dans l'onglet réseau et vérifiez la présence de périphériques potentiellement dangereux."
         }
       ],
       "implementation": {
@@ -1349,7 +1360,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "user",
-        "target": "$path = 'HKLM:\\SOFTWARE\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Google Chrome'; if (Test-Path $path) { $local_version = (Get-ItemProperty -Path $path).DisplayVersion; $web_content = Invoke-WebRequest -UseBasicParsing 'https://chromiumdash.appspot.com/fetch_releases?channel=Stable&platform=Windows&num=1'; $latest_version = ($web_content.Content | ConvertFrom-Json)[0].version; if ([version]$latest_version -le [version]$local_version) { Write-Output '' } else { Write-Output \"Chrome is not up to date (Installed: $local_version, Latest: $latest_version)\"; } } else { Write-Output '' }",
+        "target": "$path = 'HKLM:\\SOFTWARE\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Google Chrome'; if (Test-Path $path) { $local_version = (Get-ItemProperty -Path $path).DisplayVersion; $web_content = Invoke-WebRequest -UseBasicParsing 'https://chromiumdash.appspot.com/fetch_releases?channel=Stable&platform=Windows&num=1'; $latest_version = ($web_content.Content | ConvertFrom-Json)[0].version; if ([version]$latest_version -le [version]$local_version) { Write-Output '' } else { Write-Output 'Chrome is not up to date (Installed: $local_version, Latest: $latest_version)'; } } else { Write-Output '' }",
         "education": []
       },
       "remediation": {
