@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_LINUX: &str = r#"{
   "name": "threat model Linux",
   "extends": "none",
-  "date": "July 21th 2024",
-  "signature": "cd733e15e72c21aa259e73e7dc9e5ad374eaf6157b2644d0a75b1aae8abd81b2",
+  "date": "July 26th 2024",
+  "signature": "3a3048dd6c0108aa02b8c45692c792f4d36ca2e68c733f3a330d9e6be99bf81b",
   "metrics": [
     {
       "name": "edamame helper disabled",
@@ -31,7 +31,18 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "class": "internal",
         "elevation": "user",
         "target": "helper_check",
-        "education": []
+        "education": [
+          {
+            "locale": "EN",
+            "class": "link",
+            "target": "https://github.com/edamametechnologies/edamame_helper"
+          },
+          {
+            "locale": "FR",
+            "class": "link",
+            "target": "https://github.com/edamametechnologies/edamame_helper"
+          }
+        ]
       },
       "remediation": {
         "system": "Linux",
@@ -206,8 +217,8 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "minversion": 20,
         "maxversion": 0,
         "class": "cli",
-        "elevation": "user",
-        "target": "grep -qE '(hypervisor|vmware|virtualbox|qemu|kvm|xen)' /proc/cpuinfo || { lsblk -o MOUNTPOINT,FSTYPE | grep '/$' | grep -q 'crypt' || echo encryption_disabled; lsblk -o MOUNTPOINT,FSTYPE | grep '/swap' | grep -q 'crypt' || echo encryption_disabled; }",
+        "elevation": "admin",
+        "target": "sudo apt install virt-what -y > /dev/null 2>&1 && output=$(sudo virt-what) && [ -z \"$output\" ] && { lsblk -o MOUNTPOINT,FSTYPE | grep '/ ' | grep -q 'crypt' || echo encryption_disabled; lsblk -o MOUNTPOINT,FSTYPE | grep '/swap' | grep -q 'crypt' || echo encryption_disabled; }",
         "education": []
       },
       "remediation": {
@@ -318,13 +329,13 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       "description": [
         {
           "locale": "EN",
-          "title": "Unverified network environment",
-          "summary": "The network you are connected to is not a known one. If you are allowed to scan this network, go to the network tab and verify the presence of potentially dangerous devices."
+          "title": "Unverified or unsafe network environment",
+          "summary": "The network you are connected to is not a known one or it contains unsafe devices. If you are allowed to scan this network, go to the network tab and verify the presence of potentially dangerous devices."
         },
         {
           "locale": "FR",
-          "title": "Environement réseau non vérifié",
-          "summary": "Le réseau auquel vous êtes connecté n'est pas connu. Si vous êtes autorisé à scanner ce réseau, allez dans l'onglet réseau et vérifiez la présence de périphériques potentiellement dangereux."
+          "title": "Environement réseau non vérifié ou non sécurisé",
+          "summary": "Le réseau auquel vous êtes connecté n'est pas connu ou contient des appareils non sécurisés. Si vous êtes autorisé à scanner ce réseau, allez dans l'onglet réseau et vérifiez la présence de périphériques potentiellement dangereux."
         }
       ],
       "implementation": {
@@ -719,7 +730,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "system",
-        "target": "apt list --upgradeable 2>/dev/null | grep \"upgradable\"",
+        "target": "apt list --upgradeable 2>/dev/null | grep 'upgradable'",
         "education": []
       },
       "remediation": {
