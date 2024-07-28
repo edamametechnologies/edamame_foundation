@@ -205,4 +205,5 @@ pub trait ScoreTrait {
     async fn update_threats(&mut self, platform: &str, branch: &str) -> Result<UpdateStatus>;
     async fn threat_active(&self, name: &str) -> Result<bool>;
     async fn get_threats_info(&self) -> String;
+    async fn get_threats_url(&self) -> String;
 }
