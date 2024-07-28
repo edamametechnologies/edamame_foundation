@@ -167,12 +167,7 @@ impl ThreatMetrics {
         metrics
     }
 
-    // Update the threat model from the backend
-    pub async fn update(&mut self, platform: &str, branch: &str) -> Result<UpdateStatus> {
-        info!("Starting threat model update from backend");
-
-        let mut status = UpdateStatus::NotUpdated;
-
+    pub async fn get_model_url(platform: &str, branch: &str) -> Result<String> {
         let model = match Self::get_model_name(platform) {
             Ok(_model) => {
                 // Use the appropriate threat model JSON file
@@ -186,7 +181,16 @@ impl ThreatMetrics {
             }
         };
 
-        let url = format!("{}/{}/{}", THREAT_MODEL_URL, branch, model);
+        Ok(format!("{}/{}/{}", THREAT_MODEL_URL, branch, model))
+    }
+
+    // Update the threat model from the backend
+    pub async fn update(&mut self, platform: &str, branch: &str) -> Result<UpdateStatus> {
+        info!("Starting threat model update from backend");
+
+        let mut status = UpdateStatus::NotUpdated;
+
+        let url = Self::get_model_url(platform, branch).await?;
 
         info!("Fetching threat model from {}", url);
         // Create a client with a timeout
