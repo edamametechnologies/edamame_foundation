@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_MACOS: &str = r#"{
   "name": "threat model macOS",
   "extends": "none",
-  "date": "July 26th 2024",
-  "signature": "24c4ab1cbfb7ee153a6b1a41b1bbab836ccf827f29de4321b316fbaec671026e",
+  "date": "July 28th 2024",
+  "signature": "30e5f205e5482de9a6f6c50155c4de8aef2b1d0e8d349e02b3426c817072f4de",
   "metrics": [
     {
       "name": "edamame helper disabled",
@@ -1894,58 +1894,6 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
             "target": "https://support.google.com/chrome/a/answer/6350036?hl=fr"
           }
         ]
-      }
-    },
-    {
-      "name": "ssh root login enabled",
-      "metrictype": "bool",
-      "dimension": "system integrity",
-      "severity": 5,
-      "scope": "generic",
-      "tags": [
-        "CIS Benchmark Level 1,Access Control",
-        "ISO 27001/2,Access Control",
-        "PCI-DSS,Requirement-8",
-        "SOC 2,CC-System Integrity"
-      ],
-      "description": [
-        {
-          "locale": "EN",
-          "title": "SSH root login enabled",
-          "summary": "Allowing root login via SSH is a security risk. It is recommended to disable SSH root login and use sudo for administrative tasks."
-        },
-        {
-          "locale": "FR",
-          "title": "Connexion SSH root activée",
-          "summary": "Autoriser la connexion root via SSH est un risque de sécurité. Il est recommandé de désactiver la connexion SSH root et d'utiliser sudo pour les tâches administratives."
-        }
-      ],
-      "implementation": {
-        "system": "macOS",
-        "minversion": 12,
-        "maxversion": 0,
-        "class": "cli",
-        "elevation": "admin",
-        "target": "sudo grep -E '^PermitRootLogin' /etc/ssh/sshd_config | grep -q 'yes' && echo ssh_root_login_enabled",
-        "education": []
-      },
-      "remediation": {
-        "system": "macOS",
-        "minversion": 10,
-        "maxversion": 0,
-        "class": "cli",
-        "elevation": "system",
-        "target": "sudo sed -i '' 's/^PermitRootLogin yes/PermitRootLogin no/' /etc/ssh/sshd_config && sudo launchctl stop com.openssh.sshd && sudo launchctl start com.openssh.sshd",
-        "education": []
-      },
-      "rollback": {
-        "system": "macOS",
-        "minversion": 10,
-        "maxversion": 0,
-        "class": "cli",
-        "elevation": "system",
-        "target": "sudo sed -i '' 's/^PermitRootLogin no/PermitRootLogin yes/' /etc/ssh/sshd_config && sudo launchctl stop com.openssh.sshd && sudo launchctl start com.openssh.sshd",
-        "education": []
       }
     }
   ]
