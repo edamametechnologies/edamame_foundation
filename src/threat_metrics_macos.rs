@@ -1895,6 +1895,58 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
           }
         ]
       }
+    },
+    {
+      "name": "ssh root login enabled",
+      "metrictype": "bool",
+      "dimension": "system integrity",
+      "severity": 5,
+      "scope": "generic",
+      "tags": [
+        "CIS Benchmark Level 1,Access Control",
+        "ISO 27001/2,Access Control",
+        "PCI-DSS,Requirement-8",
+        "SOC 2,CC-System Integrity"
+      ],
+      "description": [
+        {
+          "locale": "EN",
+          "title": "SSH root login enabled",
+          "summary": "Allowing root login via SSH is a security risk. It is recommended to disable SSH root login and use sudo for administrative tasks."
+        },
+        {
+          "locale": "FR",
+          "title": "Connexion SSH root activée",
+          "summary": "Autoriser la connexion root via SSH est un risque de sécurité. Il est recommandé de désactiver la connexion SSH root et d'utiliser sudo pour les tâches administratives."
+        }
+      ],
+      "implementation": {
+        "system": "macOS",
+        "minversion": 12,
+        "maxversion": 0,
+        "class": "cli",
+        "elevation": "admin",
+        "target": "sudo grep -E '^PermitRootLogin' /etc/ssh/sshd_config | grep -q 'yes' && echo ssh_root_login_enabled",
+        "education": []
+      },
+      "remediation": {
+        "system": "macOS",
+        "minversion": 10,
+        "maxversion": 0,
+        "class": "cli",
+        "elevation": "system",
+        "target": "sudo sed -i '' 's/^PermitRootLogin yes/PermitRootLogin no/' /etc/ssh/sshd_config && sudo launchctl stop com.openssh.sshd && sudo launchctl start com.openssh.sshd",
+        "education": []
+      },
+      "rollback": {
+        "system": "macOS",
+        "minversion": 10,
+        "maxversion": 0,
+        "class": "cli",
+        "elevation": "system",
+        "target": "sudo sed -i '' 's/^PermitRootLogin no/PermitRootLogin yes/' /etc/ssh/sshd_config && sudo launchctl stop com.openssh.sshd && sudo launchctl start com.openssh.sshd",
+        "education": []
+      }
     }
   ]
 }"#;

@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_LINUX: &str = r#"{
   "name": "threat model Linux",
   "extends": "none",
-  "date": "July 26th 2024",
-  "signature": "3a3048dd6c0108aa02b8c45692c792f4d36ca2e68c733f3a330d9e6be99bf81b",
+  "date": "July 28th 2024",
+  "signature": "63db3c5eb3dfcfeb345b9701901cead2e6faf1b8b4196d5e7edec6db4ab73754",
   "metrics": [
     {
       "name": "edamame helper disabled",
@@ -1104,6 +1104,206 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
             "target": "Désactiver le verrouillage de l'écran réduit la sécurité de votre système en permettant à quiconque d'y accéder lorsque l'économiseur d'écran est actif."
           }
         ]
+      }
+    },
+    {
+      "name": "secure boot disabled",
+      "metrictype": "bool",
+      "dimension": "system services",
+      "severity": 5,
+      "scope": "generic",
+      "tags": [
+        "CIS Benchmark Level 1,linux_security/secure_boot_enable",
+        "ISO 27001/2,System and Information Integrity",
+        "PCI-DSS,Requirement-10",
+        "SOC 2,CC-System Operations"
+      ],
+      "description": [
+        {
+          "locale": "EN",
+          "title": "Secure boot disabled",
+          "summary": "Secure Boot is a security standard developed to ensure that a device boots using only software that is trusted by the Original Equipment Manufacturer (OEM). Enabling Secure Boot helps protect against bootloader attacks."
+        },
+        {
+          "locale": "FR",
+          "title": "Secure Boot désactivé",
+          "summary": "Le Secure Boot est une norme de sécurité développée pour garantir qu'un appareil démarre uniquement avec des logiciels de confiance par le fabricant d'équipements d'origine (OEM). Activer Secure Boot aide à protéger contre les attaques de démarrage."
+        }
+      ],
+      "implementation": {
+        "system": "Linux",
+        "minversion": 5,
+        "maxversion": 0,
+        "class": "cli",
+        "elevation": "user",
+        "target": "mokutil --sb-state | grep 'SecureBoot enabled' || echo secure_boot_disabled",
+        "education": []
+      },
+      "remediation": {
+        "system": "Linux",
+        "minversion": 5,
+        "maxversion": 0,
+        "class": "",
+        "elevation": "",
+        "target": "",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "link",
+            "target": "https://wiki.debian.org/SecureBoot"
+          },
+          {
+            "locale": "FR",
+            "class": "link",
+            "target": "https://wiki.debian.org/SecureBoot"
+          }
+        ]
+      },
+      "rollback": {
+        "system": "Linux",
+        "minversion": 5,
+        "maxversion": 0,
+        "class": "link",
+        "elevation": "",
+        "target": "",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "link",
+            "target": "https://wiki.debian.org/SecureBoot"
+          },
+          {
+            "locale": "FR",
+            "class": "link",
+            "target": "https://wiki.debian.org/SecureBoot"
+          }
+        ]
+      }
+    },
+    {
+      "name": "password policy is too weak",
+      "metrictype": "bool",
+      "dimension": "credentials",
+      "severity": 4,
+      "scope": "generic",
+      "tags": [
+        "CIS Benchmark Level 1,linux_security/password_policy",
+        "ISO 27001/2,Access Control",
+        "PCI-DSS,Requirement-8",
+        "SOC 2,CC-Access Control"
+      ],
+      "description": [
+        {
+          "locale": "EN",
+          "title": "Weak password policy",
+          "summary": "Enforcing a strong password policy is essential to protect against unauthorized access. Ensure that the system has a robust password policy implemented."
+        },
+        {
+          "locale": "FR",
+          "title": "Politique de mot de passe faible",
+          "summary": "L'application d'une politique de mot de passe robuste est essentielle pour se protéger contre les accès non autorisés. Assurez-vous que le système dispose d'une politique de mot de passe solide."
+        }
+      ],
+      "implementation": {
+        "system": "Linux",
+        "minversion": 5,
+        "maxversion": 0,
+        "class": "cli",
+        "elevation": "user",
+        "target": "grep -E 'minlen|dcredit|ucredit|ocredit|lcredit' /etc/security/pwquality.conf || echo weak_password_policy",
+        "education": []
+      },
+      "remediation": {
+        "system": "Linux",
+        "minversion": 5,
+        "maxversion": 0,
+        "class": "cli",
+        "elevation": "",
+        "target": "",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "link",
+            "target": "https://manpages.ubuntu.com/manpages/oracular/en/man3/pwquality.3.html"
+          },
+          {
+            "locale": "FR",
+            "class": "link",
+            "target": "https://manpages.ubuntu.com/manpages/oracular/en/man3/pwquality.3.html"
+          }
+        ]
+      },
+      "rollback": {
+        "system": "Linux",
+        "minversion": 5,
+        "maxversion": 0,
+        "class": "cli",
+        "elevation": "",
+        "target": "",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "link",
+            "target": "https://manpages.ubuntu.com/manpages/oracular/en/man3/pwquality.3.html"
+          },
+          {
+            "locale": "FR",
+            "class": "link",
+            "target": "https://manpages.ubuntu.com/manpages/oracular/en/man3/pwquality.3.html"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ssh root login enabled",
+      "metrictype": "bool",
+      "dimension": "system integrity",
+      "severity": 5,
+      "scope": "generic",
+      "tags": [
+        "CIS Benchmark Level 1,Access Control",
+        "ISO 27001/2,Access Control",
+        "PCI-DSS,Requirement-8",
+        "SOC 2,CC-System Integrity"
+      ],
+      "description": [
+        {
+          "locale": "EN",
+          "title": "SSH root login enabled",
+          "summary": "Allowing root login via SSH is a security risk. It is recommended to disable SSH root login and use sudo for administrative tasks."
+        },
+        {
+          "locale": "FR",
+          "title": "Connexion SSH root activée",
+          "summary": "Autoriser la connexion root via SSH est un risque de sécurité. Il est recommandé de désactiver la connexion SSH root et d'utiliser sudo pour les tâches administratives."
+        }
+      ],
+      "implementation": {
+        "system": "Linux",
+        "minversion": 5,
+        "maxversion": 0,
+        "class": "cli",
+        "elevation": "admin",
+        "target": "grep -E '^PermitRootLogin' /etc/ssh/sshd_config | grep -q 'yes' && echo ssh_root_login_enabled",
+        "education": []
+      },
+      "remediation": {
+        "system": "Linux",
+        "minversion": 5,
+        "maxversion": 0,
+        "class": "cli",
+        "elevation": "admin",
+        "target": "sudo sed -i 's/^PermitRootLogin yes/PermitRootLogin no/' /etc/ssh/sshd_config && sudo systemctl reload sshd",
+        "education": []
+      },
+      "rollback": {
+        "system": "Linux",
+        "minversion": 5,
+        "maxversion": 0,
+        "class": "cli",
+        "elevation": "admin",
+        "target": "sudo sed -i 's/^PermitRootLogin no/PermitRootLogin yes/' /etc/ssh/sshd_config && sudo systemctl reload sshd",
+        "education": []
       }
     }
   ]
