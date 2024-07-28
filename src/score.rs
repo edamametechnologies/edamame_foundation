@@ -204,6 +204,5 @@ pub trait ScoreTrait {
     async fn rollback(&self, name: &str) -> Result<MetricOrderResult>;
     async fn update_threats(&mut self, platform: &str, branch: &str) -> Result<UpdateStatus>;
     async fn threat_active(&self, name: &str) -> Result<bool>;
-    async fn get_threats_info(&self, platform: &str, branch: &str) -> String;
     async fn get_threats_url(&self, platform: &str, branch: &str) -> String;
 }
