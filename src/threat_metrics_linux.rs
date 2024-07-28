@@ -3,7 +3,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
   "name": "threat model Linux",
   "extends": "none",
   "date": "July 28th 2024",
-  "signature": "63db3c5eb3dfcfeb345b9701901cead2e6faf1b8b4196d5e7edec6db4ab73754",
+  "signature": "9a51c6aa1151a21e23f82a46ab12feef75e5bf02011065d7d1265086af0b245b",
   "metrics": [
     {
       "name": "edamame helper disabled",
@@ -1252,58 +1252,6 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
             "target": "https://manpages.ubuntu.com/manpages/oracular/en/man3/pwquality.3.html"
           }
         ]
-      }
-    },
-    {
-      "name": "ssh root login enabled",
-      "metrictype": "bool",
-      "dimension": "system integrity",
-      "severity": 5,
-      "scope": "generic",
-      "tags": [
-        "CIS Benchmark Level 1,Access Control",
-        "ISO 27001/2,Access Control",
-        "PCI-DSS,Requirement-8",
-        "SOC 2,CC-System Integrity"
-      ],
-      "description": [
-        {
-          "locale": "EN",
-          "title": "SSH root login enabled",
-          "summary": "Allowing root login via SSH is a security risk. It is recommended to disable SSH root login and use sudo for administrative tasks."
-        },
-        {
-          "locale": "FR",
-          "title": "Connexion SSH root activée",
-          "summary": "Autoriser la connexion root via SSH est un risque de sécurité. Il est recommandé de désactiver la connexion SSH root et d'utiliser sudo pour les tâches administratives."
-        }
-      ],
-      "implementation": {
-        "system": "Linux",
-        "minversion": 5,
-        "maxversion": 0,
-        "class": "cli",
-        "elevation": "admin",
-        "target": "grep -E '^PermitRootLogin' /etc/ssh/sshd_config | grep -q 'yes' && echo ssh_root_login_enabled",
-        "education": []
-      },
-      "remediation": {
-        "system": "Linux",
-        "minversion": 5,
-        "maxversion": 0,
-        "class": "cli",
-        "elevation": "admin",
-        "target": "sudo sed -i 's/^PermitRootLogin yes/PermitRootLogin no/' /etc/ssh/sshd_config && sudo systemctl reload sshd",
-        "education": []
-      },
-      "rollback": {
-        "system": "Linux",
-        "minversion": 5,
-        "maxversion": 0,
-        "class": "cli",
-        "elevation": "admin",
-        "target": "sudo sed -i 's/^PermitRootLogin no/PermitRootLogin yes/' /etc/ssh/sshd_config && sudo systemctl reload sshd",
-        "education": []
       }
     }
   ]
