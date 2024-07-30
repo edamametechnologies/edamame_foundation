@@ -1,5 +1,4 @@
 pub mod backend;
-pub mod foundation;
 pub mod health;
 #[cfg(not(feature = "nohelper"))]
 pub mod helper_proto;
@@ -40,3 +39,4 @@ pub mod threat_metrics_linux;
 pub mod threat_metrics_macos;
 pub mod threat_metrics_windows;
 pub mod update;
+pub mod version;
