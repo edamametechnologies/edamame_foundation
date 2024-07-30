@@ -82,7 +82,8 @@ pub async fn rpc_run_safe(
             Response::new(response)
         })
         .map_err(|e| {
-            error!("Error while executing order: {}", e);
+            // No error but a warning to prevent flooding Sentry in case we upgrade the helper
+            warn!("Error while executing order: {}", e);
             Status::new(Code::Internal, e.to_string())
         })
 }
