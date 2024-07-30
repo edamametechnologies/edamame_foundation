@@ -215,7 +215,13 @@ fn init_sentry(url: &str, release: &str) {
     forget(sentry_guard);
 }
 
-pub fn init_logger(executable_type: &str, url: &str, release: &str, provided_env_log_spec: &str, sentry_error_filter: &[&str]) {
+pub fn init_logger(
+    executable_type: &str,
+    url: &str,
+    release: &str,
+    provided_env_log_spec: &str,
+    sentry_error_filter: &[&str],
+) {
     let mut logger_guard = LOGGER.lock().unwrap();
     if logger_guard.is_some() {
         eprintln!("Logger already initialized, flushing logs");
@@ -289,7 +295,8 @@ pub fn init_logger(executable_type: &str, url: &str, release: &str, provided_env
 
     // Register the proper layers based on sentry availability and platform
     if !url.is_empty() {
-        let filter_strings: Vec<String> = sentry_error_filter.iter().map(|&s| s.to_string()).collect();
+        let filter_strings: Vec<String> =
+            sentry_error_filter.iter().map(|&s| s.to_string()).collect();
         let sentry_layer = sentry_tracing::layer().event_filter(move |md| match md.level() {
             &Level::ERROR => {
                 if filter_strings.iter().any(|s| md.target().contains(s)) {
@@ -297,7 +304,7 @@ pub fn init_logger(executable_type: &str, url: &str, release: &str, provided_env
                 } else {
                     EventFilter::Event
                 }
-            },
+            }
             _ => EventFilter::Ignore,
         });
         if cfg!(target_os = "macos") || cfg!(target_os = "ios") {
