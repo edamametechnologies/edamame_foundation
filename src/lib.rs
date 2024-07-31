@@ -6,6 +6,7 @@ pub mod helper_proto;
 pub mod helper_rx;
 #[cfg(not(feature = "nohelper"))]
 pub mod helper_rx_utility;
+pub mod helper_state;
 #[cfg(not(feature = "nohelper"))]
 pub mod helper_tx;
 pub mod history;
