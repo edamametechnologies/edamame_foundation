@@ -58,11 +58,11 @@ fn execution_failed(code: i32, stderr: &str) -> bool {
 }
 
 fn check_platform_support() -> Result<(), Box<dyn Error>> {
-    if cfg!(target_os = "ios") || cfg!(target_os = "Android") {
+    if cfg!(target_os = "ios") || cfg!(target_os = "android") {
         let os_name = if cfg!(target_os = "ios") {
             "iOS"
         } else {
-            "Android"
+            "android"
         };
         error!("{} is not supported", os_name);
         return Err(From::from(format!("{} is not supported", os_name)));
