@@ -3,7 +3,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
   "name": "threat model Linux",
   "extends": "none",
   "date": "July 28th 2024",
-  "signature": "63db3c5eb3dfcfeb345b9701901cead2e6faf1b8b4196d5e7edec6db4ab73754",
+  "signature": "9a51c6aa1151a21e23f82a46ab12feef75e5bf02011065d7d1265086af0b245b",
   "metrics": [
     {
       "name": "edamame helper disabled",
@@ -218,7 +218,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
-        "target": "sudo apt install virt-what -y > /dev/null 2>&1 && output=$(sudo virt-what) && [ -z \"$output\" ] && { lsblk -o MOUNTPOINT,FSTYPE | grep '/ ' | grep -q 'crypt' || echo encryption_disabled; lsblk -o MOUNTPOINT,FSTYPE | grep '/swap' | grep -q 'crypt' || echo encryption_disabled; }",
+        "target": "sudo apt install virt-what -y > /dev/null 2>&1 && output=$(sudo virt-what) && [ -z \"$output\" ] && { lsblk -o MOUNTPOINT,FSTYPE | grep \"/ \" | grep -q 'crypt' || echo encryption_disabled; lsblk -o MOUNTPOINT,FSTYPE | grep '/swap' | grep -q 'crypt' || echo encryption_disabled; }",
         "education": []
       },
       "remediation": {
@@ -701,27 +701,26 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       }
     },
     {
-      "name": "manual system updates",
+      "name": "latest os",
       "metrictype": "bool",
       "dimension": "system integrity",
-      "severity": 5,
+      "severity": 2,
       "scope": "generic",
       "tags": [
-        "CIS Benchmark Level 1,System Patching",
-        "ISO 27001/2,Information Systems Maintenance",
-        "PCI-DSS,Requirement-6",
-        "SOC 2,CC-System Operations"
+        "ISO 27001/2,System Acquisition, Development and Maintenance",
+        "PCI-DSS,Requirement-6.2",
+        "SOC 2,CC-System Maintenance"
       ],
       "description": [
         {
           "locale": "EN",
-          "title": "Missing system updates",
-          "summary": "Keeping a Linux system (or any operating system) up-to-date is crucial for several reasons, particularly when it comes to security: developers regularly find and fix security vulnerabilities in software. These fixes, known as patches, are distributed via updates. By regularly updating your system, you ensure these patches are applied promptly, reducing the chance of a successful attack."
+          "title": "Your OS is not up to date",
+          "summary": "Your operating system is not up to date, please proceed to upgrade to get the latest security patches."
         },
         {
           "locale": "FR",
-          "title": "Système non à jour",
-          "summary": "Garder un système Linux (ou tout autre système d'exploitation) à jour est crucial pour plusieurs raisons, en particulier en ce qui concerne la sécurité : les développeurs trouvent et corrigent régulièrement des vulnérabilités de sécurité dans les logiciels. Ces correctifs, appelés patches, sont distribués via des mises à jour. En mettant régulièrement à jour votre système, vous assurez l'application rapide de ces patches, réduisant ainsi les chances d'une attaque réussie."
+          "title": "Votre OS n'est pas à jour",
+          "summary": "Votre système d'exploitation n'est pas à jour, veuillez procéder à sa mise à niveau afin d'obtenir les derniers correctifs de sécurité."
         }
       ],
       "implementation": {
@@ -791,7 +790,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
-        "target": "sudo apt install ufw && sudo ufw enable",
+        "target": "sudo apt install ufw -y > /dev/null 2>&1 && sudo ufw enable",
         "education": [
           {
             "locale": "EN",
@@ -943,7 +942,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
-        "target": "sudo systemctl start xrdp && sudo systemctl enable xrdp",
+        "target": "sudo apt install xrdp -y > /dev/null 2>&1 && sudo systemctl start xrdp && sudo systemctl enable xrdp",
         "education": [
           {
             "locale": "EN",
@@ -1017,7 +1016,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
-        "target": "sudo systemctl start smbd && sudo systemctl enable smbd; sudo systemctl start nfs-kernel-server && sudo systemctl enable nfs-kernel-server",
+        "target": "sudo apt install samba -y > /dev/null 2>&1 && sudo systemctl start smbd && sudo systemctl enable smbd; sudo apt install nfs-kernel-server -y > /dev/null 2>&1 && sudo systemctl start nfs-kernel-server && sudo systemctl enable nfs-kernel-server",
         "education": [
           {
             "locale": "EN",
@@ -1210,14 +1209,14 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "user",
-        "target": "grep -E 'minlen|dcredit|ucredit|ocredit|lcredit' /etc/security/pwquality.conf || echo weak_password_policy",
+        "target": "[ -f /etc/security/pwquality.conf ] && grep -E 'minlen|dcredit|ucredit|ocredit|lcredit' /etc/security/pwquality.conf || echo weak_password_policy",
         "education": []
       },
       "remediation": {
         "system": "Linux",
         "minversion": 5,
         "maxversion": 0,
-        "class": "cli",
+        "class": "",
         "elevation": "",
         "target": "",
         "education": [
@@ -1237,7 +1236,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "system": "Linux",
         "minversion": 5,
         "maxversion": 0,
-        "class": "cli",
+        "class": "",
         "elevation": "",
         "target": "",
         "education": [

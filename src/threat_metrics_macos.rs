@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_MACOS: &str = r#"{
   "name": "threat model macOS",
   "extends": "none",
-  "date": "July 26th 2024",
-  "signature": "24c4ab1cbfb7ee153a6b1a41b1bbab836ccf827f29de4321b316fbaec671026e",
+  "date": "July 28th 2024",
+  "signature": "30e5f205e5482de9a6f6c50155c4de8aef2b1d0e8d349e02b3426c817072f4de",
   "metrics": [
     {
       "name": "edamame helper disabled",
@@ -1268,7 +1268,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
-        "target": "if ! { pgrep BDLDaemon >/dev/null || pgrep RTProtectionDaemon >/dev/null || sentinelctl version 2>/dev/null | grep -q 'Agent version'; }; then echo epp_disabled; fi",
+        "target": "if ! { pgrep BDLDaemon >/dev/null || pgrep RTProtectionDaemon >/dev/null || sentinelctl version 2>/dev/null | grep -q \"Agent version\"; }; then echo epp_disabled; fi",
         "education": []
       },
       "remediation": {
@@ -1567,7 +1567,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "system",
-        "target": "security authorizationdb read system.preferences > /tmp/system.preferences.plist; /usr/libexec/PlistBuddy -c 'Set :shared false' /tmp/system.preferences.plist; security authorizationdb write system.preferences < /tmp/system.preferences.plist",
+        "target": "security authorizationdb read system.preferences > /tmp/system.preferences.plist; /usr/libexec/PlistBuddy -c \"Set :shared false\" /tmp/system.preferences.plist; security authorizationdb write system.preferences < /tmp/system.preferences.plist",
         "education": [
           {
             "locale": "EN",
@@ -1587,7 +1587,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "system",
-        "target": "security authorizationdb read system.preferences > /tmp/system.preferences.plist; /usr/libexec/PlistBuddy -c 'Set :shared true' /tmp/system.preferences.plist; security authorizationdb write system.preferences < /tmp/system.preferences.plist",
+        "target": "security authorizationdb read system.preferences > /tmp/system.preferences.plist; /usr/libexec/PlistBuddy -c \"Set :shared true\" /tmp/system.preferences.plist; security authorizationdb write system.preferences < /tmp/system.preferences.plist",
         "education": [
           {
             "locale": "EN",
