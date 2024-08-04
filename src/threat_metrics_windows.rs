@@ -284,12 +284,12 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "education": [
           {
             "locale": "EN",
-            "class": "link",
+            "class": "youtube",
             "target": "https://www.youtube.com/watch?v=lY0Iz0NpAoU"
           },
           {
             "locale": "FR",
-            "class": "link",
+            "class": "youtube",
             "target": "https://www.youtube.com/watch?v=Cj4UUMxm6D8"
           }
         ]
@@ -507,7 +507,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
           {
             "locale": "EN",
             "class": "link",
-            "target": "https://en.wikipedia.org/wiki/Have_I_Been_Pwned"
+            "target": "https://haveibeenpwned.com/"
           },
           {
             "locale": "FR",
@@ -561,12 +561,12 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
           {
             "locale": "EN",
             "class": "html",
-            "target": "<p>Scan your network to identify all connected devices and assess potential threats.</p><h4>Steps to verify a critical device</h4><ul><li>Navigate to the 'Network' tab.</li><li>Devices of critical importance are marked with yellow for medium criticality and red for high criticality.</li><li>Select a critical device.</li><li>Assess each port's criticality by reading the associated CVEs and analyzing potential issues with AI.</li><li>If a port is determined to be safe, mark it as verified.</li></ul><p>Once all devices are deemed safe, this threat will be marked as inactive.</p>"
+            "target": "<p>Scan your network to identify all connected devices and assess potential threats by following these steps:</p><ul><li>Navigate to the 'Network' tab.</li><li>Devices of critical importance are marked with yellow for medium criticality and red for high criticality.</li><li>Select a critical device.</li><li>Assess each port's criticality by reading the associated CVEs and analyzing potential issues with AI.</li><li>If a port is determined to be safe, mark it as verified.</li></ul><p>Once all devices are deemed safe, this threat will be marked as inactive.</p>"
           },
           {
             "locale": "FR",
             "class": "html",
-            "target": "<p>Scannez votre réseau pour identifier tous les appareils connectés et évaluer les menaces potentielles.</p><h4>Étapes pour vérifier un appareil critique</h4><ul><li>Allez dans l'onglet 'Réseau'.</li><li>Les appareils de grande importance sont marqués en jaune pour une criticité moyenne et en rouge pour une criticité élevée.</li><li>Sélectionnez un appareil critique.</li><li>Évaluez la criticité de chaque port en lisant les CVE associés et en analysant les problèmes potentiels avec l'IA.</li><li>Si un port est déterminé comme sûr, marquez-le comme vérifié.</li></ul><p>Une fois que tous les appareils sont considérés comme sûrs, cette menace sera marquée comme inactive.</p>"
+            "target": "<p>Scannez votre réseau pour identifier tous les appareils connectés et évaluer les menaces potentielles en suivant ces étapes:</p><ul><li>Allez dans l'onglet 'Réseau'.</li><li>Les appareils de grande importance sont marqués en jaune pour une criticité moyenne et en rouge pour une criticité élevée.</li><li>Sélectionnez un appareil critique.</li><li>Évaluez la criticité de chaque port en lisant les CVE associés et en analysant les problèmes potentiels avec l'IA.</li><li>Si un port est déterminé comme sûr, marquez-le comme vérifié.</li></ul><p>Une fois que tous les appareils sont considérés comme sûrs, cette menace sera marquée comme inactive.</p>"
           }
         ]
       },
@@ -574,19 +574,19 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "system": "Windows",
         "minversion": 10,
         "maxversion": 0,
-        "class": "",
+        "class": "internal",
         "elevation": "",
-        "target": "",
+        "target": "network_manager",
         "education": [
           {
             "locale": "EN",
-            "class": "link",
-            "target": "https://en.wikipedia.org/wiki/Port_scanner"
+            "class": "html",
+            "target": "<p>Scan your network to identify all connected devices and assess potential threats by following these steps:</p><ul><li>Navigate to the 'Network' tab.</li><li>Devices of critical importance are marked with yellow for medium criticality and red for high criticality.</li><li>Select a critical device.</li><li>Assess each port's criticality by reading the associated CVEs and analyzing potential issues with AI.</li><li>If a port is determined to be safe, mark it as verified.</li></ul><p>Once all devices are deemed safe, this threat will be marked as inactive.</p>"
           },
           {
             "locale": "FR",
-            "class": "link",
-            "target": "https://fr.wikipedia.org/wiki/Balayage_de_ports"
+            "class": "html",
+            "target": "<p>Scannez votre réseau pour identifier tous les appareils connectés et évaluer les menaces potentielles en suivant ces étapes:</p><ul><li>Allez dans l'onglet 'Réseau'.</li><li>Les appareils de grande importance sont marqués en jaune pour une criticité moyenne et en rouge pour une criticité élevée.</li><li>Sélectionnez un appareil critique.</li><li>Évaluez la criticité de chaque port en lisant les CVE associés et en analysant les problèmes potentiels avec l'IA.</li><li>Si un port est déterminé comme sûr, marquez-le comme vérifié.</li></ul><p>Une fois que tous les appareils sont considérés comme sûrs, cette menace sera marquée comme inactive.</p>"
           }
         ]
       }
@@ -1301,12 +1301,12 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
           {
             "locale": "EN",
             "class": "html",
-            "target": "Setting PowerShell's execution policy to Default helps prevent the execution of malicious scripts by requiring that all scripts and configuration files downloaded from the Internet are signed by a trusted publisher. This setting is a balance between security and functionality, allowing locally created scripts to run while protecting against untrusted scripts. Apply the provided CLI command to adjust your PowerShell execution policy."
+            "target": "Setting PowerShell's execution policy to Default helps prevent the execution of malicious scripts by requiring that all scripts and configuration files downloaded from the Internet are signed by a trusted publisher. This setting is a balance between security and functionality, allowing locally created scripts to run while protecting against untrusted scripts. Apply the provided CLI command to adjust your PowerShell execution policy. Following the automatic changes, a system restart is required."
           },
           {
             "locale": "FR",
             "class": "html",
-            "target": "Définir la politique d'exécution de PowerShell sur Default aide à prévenir l'exécution de scripts malveillants en exigeant que tous les scripts et fichiers de configuration téléchargés depuis Internet soient signés par un éditeur de confiance. Ce paramètre est un équilibre entre sécurité et fonctionnalité, permettant l'exécution de scripts créés localement tout en protégeant contre les scripts non fiables. Appliquez la commande CLI fournie pour ajuster votre politique d'exécution PowerShell."
+            "target": "Définir la politique d'exécution de PowerShell sur Default aide à prévenir l'exécution de scripts malveillants en exigeant que tous les scripts et fichiers de configuration téléchargés depuis Internet soient signés par un éditeur de confiance. Ce paramètre est un équilibre entre sécurité et fonctionnalité, permettant l'exécution de scripts créés localement tout en protégeant contre les scripts non fiables. Appliquez la commande CLI fournie pour ajuster votre politique d'exécution PowerShell. Après les modifications automatiques, un redémarrage du système est requis."
           }
         ]
       },
@@ -1321,12 +1321,12 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
           {
             "locale": "EN",
             "class": "html",
-            "target": "Reverting PowerShell's execution policy to Unrestricted removes the requirement for scripts to be signed, significantly increasing the risk of executing malicious scripts. Only proceed with this action if there is a compelling need and you have adequate security measures to mitigate potential risks. Be sure to apply strict controls and monitoring to detect and respond to malicious activities."
+            "target": "Reverting PowerShell's execution policy to Unrestricted removes the requirement for scripts to be signed, significantly increasing the risk of executing malicious scripts. Only proceed with this action if there is a compelling need and you have adequate security measures to mitigate potential risks. Be sure to apply strict controls and monitoring to detect and respond to malicious activities. Following the automatic changes, a system restart is required."
           },
           {
             "locale": "FR",
             "class": "html",
-            "target": "Revenir à la politique d'exécution de PowerShell sur Non restreint supprime l'exigence pour les scripts d'être signés, augmentant considérablement le risque d'exécuter des scripts malveillants. Ne procédez à cette action que s'il y a un besoin impérieux et que vous disposez de mesures de sécurité adéquates pour atténuer les risques potentiels. Assurez-vous d'appliquer des contrôles stricts et une surveillance pour détecter et répondre aux activités malveillantes."
+            "target": "Revenir à la politique d'exécution de PowerShell sur Non restreint supprime l'exigence pour les scripts d'être signés, augmentant considérablement le risque d'exécuter des scripts malveillants. Ne procédez à cette action que s'il y a un besoin impérieux et que vous disposez de mesures de sécurité adéquates pour atténuer les risques potentiels. Assurez-vous d'appliquer des contrôles stricts et une surveillance pour détecter et répondre aux activités malveillantes. Après les modifications automatiques, un redémarrage du système est requis."
           }
         ]
       }
@@ -1445,12 +1445,12 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
           {
             "locale": "EN",
             "class": "html",
-            "target": "Following the automatic changes, a system restart is required to activate the remediation."
+            "target": "Following the automatic changes, a system restart is required."
           },
           {
             "locale": "FR",
             "class": "html",
-            "target": "Après les modifications automatiques, un redémarrage du système est requis pour activer la remédiation."
+            "target": "Après les modifications automatiques, un redémarrage du système est requis."
           }
         ]
       },
@@ -1465,12 +1465,12 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
           {
             "locale": "EN",
             "class": "html",
-            "target": "Following the automatic changes, a system restart is required to activate the rollback."
+            "target": "Following the automatic changes, a system restart is required."
           },
           {
             "locale": "FR",
             "class": "html",
-            "target": "Après les modifications automatiques, un redémarrage du système est requis pour activer le retour en arrière."
+            "target": "Après les modifications automatiques, un redémarrage du système est requis."
           }
         ]
       }
@@ -1527,10 +1527,21 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "system": "Windows",
         "minversion": 10,
         "maxversion": 0,
-        "class": "",
+        "class": "link",
         "elevation": "",
-        "target": "",
-        "education": []
+        "target": "ms-settings:signinoptions",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "html",
+            "target": "To enable sign-in options, go to Settings > Accounts > Sign-in options. Follow the guide to set up a password, PIN, or Windows Hello. <a href='https://support.microsoft.com/en-us/windows/windows-sign-in-options-and-account-protection-7b34d4cf-794f-f6bd-ddcc-e73cdf1a6fbf'>Learn more</a>"
+          },
+          {
+            "locale": "FR",
+            "class": "html",
+            "target": "Pour activer les options de connexion, allez dans Paramètres > Comptes > Options de connexion. Suivez le guide pour configurer un mot de passe, un code PIN ou Windows Hello. <a href='https://support.microsoft.com/fr-fr/windows/options-de-connexion-de-windows-10-et-protection-des-comptes-7b34d4cf-794f-f6bd-ddcc-e73cdf1a6fbf'>En savoir plus</a>"
+          }
+        ]
       }
     },
     {
@@ -1585,10 +1596,21 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "system": "Windows",
         "minversion": 10,
         "maxversion": 0,
-        "class": "",
-        "elevation": "",
-        "target": "",
-        "education": []
+        "class": "link",
+        "elevation": "user",
+        "target": "ms-settings:signinoptions",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "html",
+            "target": "To enable Windows Hello, go to <a href='ms-settings:signinoptions'>Settings > Accounts > Sign-in options</a>. Please note that your device needs to support Windows Hello. If it does not, you might need to upgrade your hardware or check for available updates from your device manufacturer. For more information, visit the <a href='https://support.microsoft.com/en-us/windows/configure-windows-hello-dae28983-8242-bb2a-d3d1-87c9d265a5f0'>support page</a>."
+          },
+          {
+            "locale": "FR",
+            "class": "html",
+            "target": "Pour activer Windows Hello, allez dans <a href='ms-settings:signinoptions'>Paramètres > Comptes > Options de connexion</a>. Veuillez noter que votre appareil doit prendre en charge Windows Hello. Si ce n'est pas le cas, vous devrez peut-être mettre à niveau votre matériel ou vérifier les mises à jour disponibles auprès du fabricant de votre appareil. Pour plus d'informations, visitez la <a href='https://support.microsoft.com/fr-fr/windows/configurer-windows-hello-dae28983-8242-bb2a-d3d1-87c9d265a5f0'>page de support</a>."
+          }
+        ]
       }
     },
     {
