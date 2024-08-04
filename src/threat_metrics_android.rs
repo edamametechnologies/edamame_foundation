@@ -45,13 +45,13 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
         "education": [
           {
             "locale": "EN",
-            "class": "link",
-            "target": "https://en.wikipedia.org/wiki/Mobile_device_management"
+            "class": "youtube",
+            "target": "https://www.youtube.com/watch?v=5Btm7jvBO2s"
           },
           {
             "locale": "FR",
-            "class": "link",
-            "target": "https://fr.wikipedia.org/wiki/Mobile_device_management"
+            "class": "youtube",
+            "target": "https://www.youtube.com/watch?v=5ii7kcEVmmo"
           }
         ]
       },
@@ -65,13 +65,13 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
         "education": [
           {
             "locale": "EN",
-            "class": "link",
-            "target": "https://en.wikipedia.org/wiki/Mobile_device_management"
+            "class": "youtube",
+            "target": "https://www.youtube.com/watch?v=5Btm7jvBO2s"
           },
           {
             "locale": "FR",
-            "class": "link",
-            "target": "https://fr.wikipedia.org/wiki/Mobile_device_management"
+            "class": "youtube",
+            "target": "https://www.youtube.com/watch?v=5ii7kcEVmmo"
           }
         ]
       }
@@ -198,7 +198,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
           },
           {
             "locale": "FR",
-            "class": "link",
+            "class": "youtube",
             "target": "https://www.youtube.com/watch?v=-lRlQdBxmmM"
           }
         ]
@@ -218,7 +218,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
           },
           {
             "locale": "FR",
-            "class": "link",
+            "class": "youtube",
             "target": "https://www.youtube.com/watch?v=-lRlQdBxmmM"
           }
         ]
@@ -288,7 +288,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
           {
             "locale": "EN",
             "class": "link",
-            "target": "https://en.wikipedia.org/wiki/Have_I_Been_Pwned"
+            "target": "https://haveibeenpwned.com/"
           },
           {
             "locale": "FR",
@@ -342,12 +342,12 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
           {
             "locale": "EN",
             "class": "html",
-            "target": "<p>Scan your network to identify all connected devices and assess potential threats.</p><h4>Steps to verify a critical device</h4><ul><li>Navigate to the 'Network' tab.</li><li>Devices of critical importance are marked with yellow for medium criticality and red for high criticality.</li><li>Select a critical device.</li><li>Assess each port's criticality by reading the associated CVEs and analyzing potential issues with AI.</li><li>If a port is determined to be safe, mark it as verified.</li></ul><p>Once all devices are deemed safe, this threat will be marked as inactive.</p>"
+            "target": "<p>Scan your network to identify all connected devices and assess potential threats by following these steps:</p><ul><li>Navigate to the 'Network' tab.</li><li>Devices of critical importance are marked with yellow for medium criticality and red for high criticality.</li><li>Select a critical device.</li><li>Assess each port's criticality by reading the associated CVEs and analyzing potential issues with AI.</li><li>If a port is determined to be safe, mark it as verified.</li></ul><p>Once all devices are deemed safe, this threat will be marked as inactive.</p>"
           },
           {
             "locale": "FR",
             "class": "html",
-            "target": "<p>Scannez votre réseau pour identifier tous les appareils connectés et évaluer les menaces potentielles.</p><h4>Étapes pour vérifier un appareil critique</h4><ul><li>Allez dans l'onglet 'Réseau'.</li><li>Les appareils de grande importance sont marqués en jaune pour une criticité moyenne et en rouge pour une criticité élevée.</li><li>Sélectionnez un appareil critique.</li><li>Évaluez la criticité de chaque port en lisant les CVE associés et en analysant les problèmes potentiels avec l'IA.</li><li>Si un port est déterminé comme sûr, marquez-le comme vérifié.</li></ul><p>Une fois que tous les appareils sont considérés comme sûrs, cette menace sera marquée comme inactive.</p>"
+            "target": "<p>Scannez votre réseau pour identifier tous les appareils connectés et évaluer les menaces potentielles en suivant ces étapes:</p><ul><li>Allez dans l'onglet 'Réseau'.</li><li>Les appareils de grande importance sont marqués en jaune pour une criticité moyenne et en rouge pour une criticité élevée.</li><li>Sélectionnez un appareil critique.</li><li>Évaluez la criticité de chaque port en lisant les CVE associés et en analysant les problèmes potentiels avec l'IA.</li><li>Si un port est déterminé comme sûr, marquez-le comme vérifié.</li></ul><p>Une fois que tous les appareils sont considérés comme sûrs, cette menace sera marquée comme inactive.</p>"
           }
         ]
       },
@@ -355,19 +355,19 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
         "system": "Android",
         "minversion": 11,
         "maxversion": 0,
-        "class": "",
+        "class": "internal",
         "elevation": "",
-        "target": "",
+        "target": "network_manager",
         "education": [
           {
             "locale": "EN",
-            "class": "link",
-            "target": "https://en.wikipedia.org/wiki/Port_scanner"
+            "class": "html",
+            "target": "<p>Scan your network to identify all connected devices and assess potential threats by following these steps:</p><ul><li>Navigate to the 'Network' tab.</li><li>Devices of critical importance are marked with yellow for medium criticality and red for high criticality.</li><li>Select a critical device.</li><li>Assess each port's criticality by reading the associated CVEs and analyzing potential issues with AI.</li><li>If a port is determined to be safe, mark it as verified.</li></ul><p>Once all devices are deemed safe, this threat will be marked as inactive.</p>"
           },
           {
             "locale": "FR",
-            "class": "link",
-            "target": "https://fr.wikipedia.org/wiki/Balayage_de_ports"
+            "class": "html",
+            "target": "<p>Scannez votre réseau pour identifier tous les appareils connectés et évaluer les menaces potentielles en suivant ces étapes:</p><ul><li>Allez dans l'onglet 'Réseau'.</li><li>Les appareils de grande importance sont marqués en jaune pour une criticité moyenne et en rouge pour une criticité élevée.</li><li>Sélectionnez un appareil critique.</li><li>Évaluez la criticité de chaque port en lisant les CVE associés et en analysant les problèmes potentiels avec l'IA.</li><li>Si un port est déterminé comme sûr, marquez-le comme vérifié.</li></ul><p>Une fois que tous les appareils sont considérés comme sûrs, cette menace sera marquée comme inactive.</p>"
           }
         ]
       }
