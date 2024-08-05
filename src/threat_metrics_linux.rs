@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_LINUX: &str = r#"{
   "name": "threat model Linux",
   "extends": "none",
-  "date": "July 28th 2024",
-  "signature": "9a51c6aa1151a21e23f82a46ab12feef75e5bf02011065d7d1265086af0b245b",
+  "date": "August 05th 2024",
+  "signature": "b5d1933465a4a4bb8a17695401f12d7a8209fa138857f5c8450840c229b813c4",
   "metrics": [
     {
       "name": "edamame helper disabled",
@@ -16,7 +16,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         {
           "locale": "EN",
           "title": "EDAMAME helper inactive",
-          "summary": "EDAMAME's Helper software is not running or requires an update. It's required for maximum Security Score analysis."
+          "summary": "EDAMAME's Helper software is not running or requires an update. It's required for complete Security Score analysis and remediation."
         },
         {
           "locale": "FR",
