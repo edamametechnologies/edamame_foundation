@@ -2,7 +2,7 @@
 pub static THREAT_METRICS_LINUX: &str = r#"{
   "name": "threat model Linux",
   "extends": "none",
-  "date": "August 05th 2024",
+  "date": "August 5th 2024",
   "signature": "b5d1933465a4a4bb8a17695401f12d7a8209fa138857f5c8450840c229b813c4",
   "metrics": [
     {

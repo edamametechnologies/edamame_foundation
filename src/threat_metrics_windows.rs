@@ -2,7 +2,7 @@
 pub static THREAT_METRICS_WINDOWS: &str = r#"{
   "name": "threat model Windows",
   "extends": "none",
-  "date": "August 05th 2024",
+  "date": "August 5th 2024",
   "signature": "fc9eaa2b2102b8d9c277c4b68d13cc90654970585f2dd05b72966b71d187008d",
   "metrics": [
     {
