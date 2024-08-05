@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_IOS: &str = r#"{
   "name": "threat model iOS",
   "extends": "none",
-  "date": "July 21th 2024",
-  "signature": "6d7b026dcd134261ae2e6395d42811a70f7cf86e7f3afd96ff4f4205254187cb",
+  "date": "August 05th 2024",
+  "signature": "b0b161d5f03d1d13c24e4129e6a5a74f63ab9fb9421ccf2852bd7e404da85bd5",
   "metrics": [
     {
       "name": "MDM profiles",
@@ -92,7 +92,7 @@ pub static THREAT_METRICS_IOS: &str = r#"{
         {
           "locale": "EN",
           "title": "Screen lock disabled",
-          "summary": "Your device doesn't have a screensaver enabled with a password. It leaves it open for phsyical access by anyone. This is very dangerous!"
+          "summary": "Your device doesn't have a screensaver enabled with a password. It leaves it open for physical access by anyone. This is very dangerous!"
         },
         {
           "locale": "FR",

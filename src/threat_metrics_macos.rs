@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_MACOS: &str = r#"{
   "name": "threat model macOS",
   "extends": "none",
-  "date": "July 28th 2024",
-  "signature": "30e5f205e5482de9a6f6c50155c4de8aef2b1d0e8d349e02b3426c817072f4de",
+  "date": "August 05th 2024",
+  "signature": "26430bd40c252773549e792aa629c987582168d53457d13e8953874906d1ba1f",
   "metrics": [
     {
       "name": "edamame helper disabled",
@@ -16,7 +16,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         {
           "locale": "EN",
           "title": "EDAMAME helper inactive",
-          "summary": "EDAMAME's Helper software is not running or requires an update. It's required for maximum Security Score analysis."
+          "summary": "EDAMAME's Helper software is not running or requires an update. It's required for complete Security Score analysis and remediation."
         },
         {
           "locale": "FR",

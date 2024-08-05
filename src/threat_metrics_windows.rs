@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_WINDOWS: &str = r#"{
   "name": "threat model Windows",
   "extends": "none",
-  "date": "July 26th 2024",
-  "signature": "4d25df3119454c9c14b56f2d74de93f67d43e209064a96633ec3b9b43de948fc",
+  "date": "August 05th 2024",
+  "signature": "fc9eaa2b2102b8d9c277c4b68d13cc90654970585f2dd05b72966b71d187008d",
   "metrics": [
     {
       "name": "edamame helper disabled",
@@ -16,7 +16,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         {
           "locale": "EN",
           "title": "EDAMAME helper inactive",
-          "summary": "EDAMAME's Helper software is not running or requires an update. It's required for maximum Security Score analysis."
+          "summary": "EDAMAME's Helper software is not running or requires an update. It's required for complete Security Score analysis and remediation."
         },
         {
           "locale": "FR",
