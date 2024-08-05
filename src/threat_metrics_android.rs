@@ -2,7 +2,7 @@
 pub static THREAT_METRICS_ANDROID: &str = r#"{
   "name": "threat model Android",
   "extends": "none",
-  "date": "August 05th 2024",
+  "date": "August 5th 2024",
   "signature": "6865fe7b0ba0c451c6b1ee698c14f3c19e067aba5408b8d5e45c94bec72cc8a7",
   "metrics": [
     {

@@ -2,7 +2,7 @@
 pub static THREAT_METRICS_MACOS: &str = r#"{
   "name": "threat model macOS",
   "extends": "none",
-  "date": "August 05th 2024",
+  "date": "August 5th 2024",
   "signature": "26430bd40c252773549e792aa629c987582168d53457d13e8953874906d1ba1f",
   "metrics": [
     {
