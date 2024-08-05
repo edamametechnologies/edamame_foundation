@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_LINUX: &str = r#"{
   "name": "threat model Linux",
   "extends": "none",
-  "date": "August 5th 2024",
-  "signature": "b5d1933465a4a4bb8a17695401f12d7a8209fa138857f5c8450840c229b813c4",
+  "date": "Aug 05th 2024",
+  "signature": "5ddabf20d1c86ab0c4da92beb4a7cd3f0b83013cff1cc4f2182e77e0fd95c423",
   "metrics": [
     {
       "name": "edamame helper disabled",
