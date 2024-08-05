@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_ANDROID: &str = r#"{
   "name": "threat model Android",
   "extends": "none",
-  "date": "July 21th 2024",
-  "signature": "ebd85a0e121f5a1c6a60b5688b77bebaa0f9aac7931ef0c14db3cf048ace2a91",
+  "date": "August 05th 2024",
+  "signature": "6865fe7b0ba0c451c6b1ee698c14f3c19e067aba5408b8d5e45c94bec72cc8a7",
   "metrics": [
     {
       "name": "MDM profiles",
@@ -457,7 +457,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
         {
           "locale": "EN",
           "title": "Your OS is not up to date",
-          "summary": "Your operating system is not up to date, please proceed to upgrade to get the latest security patches."
+          "summary": "Your operating system is not up to date, please upgrade it to get the latest security patches."
         },
         {
           "locale": "FR",
