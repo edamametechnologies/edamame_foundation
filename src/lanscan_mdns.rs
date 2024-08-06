@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use lazy_static::lazy_static;
 use regex::Regex;
 use sorted_vec::SortedVec;
@@ -9,11 +10,9 @@ use tokio::sync::Mutex;
 use tokio::task;
 use tokio::time::Duration;
 use tracing::{info, trace, warn};
-
 // Our own fork with minor adjustements
-use wez_mdns::{Host, QueryParameters};
-
 use crate::runtime::async_spawn;
+use wez_mdns::{Host, QueryParameters};
 
 lazy_static! {
     static ref MDNS_STOP: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
@@ -31,6 +30,7 @@ pub struct mDNSInfo {
     pub services: SortedVec<String>,
     pub hostname: String,
     pub instances: SortedVec<String>,
+    pub last_detected: DateTime<Utc>,
 }
 
 pub async fn mdns_start() {
@@ -145,7 +145,12 @@ async fn process_host(host: Host, service_name: String) {
                 services: SortedVec::new(),
                 hostname: hostname.clone(),
                 instances: SortedVec::new(),
+                last_detected: Utc::now(),
             });
+
+            // Update the last detected time
+            mdns_info.last_detected = Utc::now();
+
             // Process the ip addresses
             for ip in ip_addresses {
                 // Get the IPv4 address
