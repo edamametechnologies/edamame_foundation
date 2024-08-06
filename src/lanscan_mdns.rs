@@ -30,7 +30,7 @@ pub struct mDNSInfo {
     pub services: SortedVec<String>,
     pub hostname: String,
     pub instances: SortedVec<String>,
-    pub last_detected: DateTime<Utc>,
+    pub last_seen: DateTime<Utc>,
 }
 
 pub async fn mdns_start() {
@@ -145,11 +145,11 @@ async fn process_host(host: Host, service_name: String) {
                 services: SortedVec::new(),
                 hostname: hostname.clone(),
                 instances: SortedVec::new(),
-                last_detected: Utc::now(),
+                last_seen: Utc::now(),
             });
 
             // Update the last detected time
-            mdns_info.last_detected = Utc::now();
+            mdns_info.last_seen = Utc::now();
 
             // Process the ip addresses
             for ip in ip_addresses {
