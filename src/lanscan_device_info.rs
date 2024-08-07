@@ -31,6 +31,7 @@ pub struct DeviceInfo {
     // Sorted Vec would be better but had trouble with the bridge once...
     pub dismissed_ports: Vec<u16>,
     pub last_seen: DateTime<Utc>,
+    pub last_modified: DateTime<Utc>,
     pub active: bool,
     pub added: bool,
     pub activated: bool,
@@ -49,16 +50,12 @@ impl DeviceInfo {
             mac_address: "".to_string(),
             mac_addresses: Vec::new(),
             hostname: "".to_string(),
-            custom_name: "".to_string(),
             mdns_services: Vec::new(),
             os_name: "".to_string(),
             os_version: "".to_string(),
             device_vendor: "".to_string(),
             vulnerabilities: Vec::new(),
             open_ports: Vec::new(),
-            dismissed_ports: Vec::new(),
-            // Initialize the last detected time to UNIX_EPOCH
-            last_seen: DateTime::from_timestamp(0, 0).unwrap(),
             active: false,
             added: false,
             activated: false,
@@ -67,6 +64,13 @@ impl DeviceInfo {
             non_std_ports: false,
             criticality: "Unknown".to_string(),
             device_type: "Unknown".to_string(),
+            // Initialize the last time to UNIX_EPOCH
+            last_seen: DateTime::from_timestamp(0, 0).unwrap(),
+            // Below are user properties
+            dismissed_ports: Vec::new(),
+            custom_name: "".to_string(),
+            // Initialize the last time to UNIX_EPOCH
+            last_modified: DateTime::from_timestamp(0, 0).unwrap(),
         }
     }
 
@@ -199,10 +203,6 @@ impl DeviceInfo {
             device.hostname.clone_from(&new_device.hostname);
         }
 
-        if !new_device.custom_name.is_empty() {
-            device.custom_name.clone_from(&new_device.custom_name);
-        }
-
         if !new_device.os_name.is_empty() {
             device.os_name.clone_from(&new_device.os_name);
         }
@@ -263,11 +263,6 @@ impl DeviceInfo {
 
         device.mdns_services = mdns_services_cleaned;
 
-        // Update the last detected time and highest criticality
-        if device.last_seen < new_device.last_seen {
-            device.last_seen = new_device.last_seen;
-        }
-
         // Update the flags
         // Or
         device.active = device.active || new_device.active;
@@ -291,6 +286,18 @@ impl DeviceInfo {
         // Always update device criticality
         if new_device.criticality != "Unknown" {
             device.criticality.clone_from(&new_device.criticality);
+        }
+
+        // Update the last seen time
+        if device.last_seen < new_device.last_seen {
+            device.last_seen = new_device.last_seen;
+        }
+
+        // Merge user properties based on the last modified date
+        if device.last_modified < new_device.last_modified {
+            device.custom_name.clone_from(&new_device.custom_name);
+            device.dismissed_ports = new_device.dismissed_ports.clone();
+            device.last_modified = new_device.last_modified;
         }
     }
 }
