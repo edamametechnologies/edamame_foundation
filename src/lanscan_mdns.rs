@@ -145,7 +145,8 @@ async fn process_host(host: Host, service_name: String) {
                 services: SortedVec::new(),
                 hostname: hostname.clone(),
                 instances: SortedVec::new(),
-                last_seen: Utc::now(),
+                // Initialize the last time to UNIX_EPOCH
+                last_seen: DateTime::from_timestamp(0, 0).unwrap(),
             });
 
             // Update the last detected time
