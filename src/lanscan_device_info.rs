@@ -130,8 +130,48 @@ impl DeviceInfo {
         )
     }
 
+    // Check if devices in the device list shall be merged
+    fn dedup_vec(devices: &mut Vec<DeviceInfo>) {
+        let mut i = 0;
+        while i < devices.len() {
+            let mut j = i + 1;
+            while j < devices.len() {
+                let (left, right) = devices.split_at_mut(j); // Split the vector at j
+                let device1 = &mut left[i]; // Mutable reference to device1 from left side
+                let device2 = &right[0]; // Immutable reference to device2 from right side
+                let is_duplicate = (!device1.hostname.is_empty()
+                    && !device2.hostname.is_empty()
+                    && device1.hostname == device2.hostname)
+                    || (!device1.ip_address.is_empty()
+                        && !device2.ip_address.is_empty()
+                        && device1.ip_address == device2.ip_address)
+                    || (!device1.ip_addresses.is_empty()
+                        && !device2.ip_addresses.is_empty()
+                        && device1
+                            .ip_addresses
+                            .iter()
+                            .any(|ip| device2.ip_addresses.contains(ip)));
+
+                if is_duplicate {
+                    // Merge device2 into device1
+                    DeviceInfo::merge(device1, device2);
+                    // Remove device2 from the list
+                    devices.remove(j);
+                } else {
+                    j += 1;
+                }
+            }
+            i += 1;
+        }
+    }
+
     // Combine the devices based on the hostname or IP address
     pub fn merge_vec(devices: &mut Vec<DeviceInfo>, new_devices: &Vec<DeviceInfo>) {
+        // Always deduplicate the devices before merging
+        DeviceInfo::dedup_vec(devices);
+        let mut new_devices = new_devices.clone();
+        DeviceInfo::dedup_vec(&mut new_devices);
+
         for new_device in new_devices {
             let mut found = false;
 
