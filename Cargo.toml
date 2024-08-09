@@ -18,6 +18,7 @@ crate-type = ["staticlib", "cdylib", "lib"]
 
 [dependencies]
 edamame_backend = { git = "https://github.com/edamametechnologies/edamame_backend", version = "0.3.3" }
+#edamame_backend = { path = "../edamame_backend" }
 
 # Sentry
 sentry = "0.34.0"

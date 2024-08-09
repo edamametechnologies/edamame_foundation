@@ -4,9 +4,6 @@ use chrono::{DateTime, Utc};
 use edamame_backend::lanscan_device_info_backend::*;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use tracing::trace;
-
-pub static DEVICE_ACTIVITY_TIMEOUT: i64 = 900;
 
 // We should really use HashSets instead of Vec, but we don't in order to make it more usable with FFI
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -175,17 +172,6 @@ impl DeviceInfo {
         for new_device in new_devices {
             let mut found = false;
 
-            // If the new device information is not recent, skip it
-            if new_device.last_seen
-                < Utc::now() - chrono::Duration::seconds(DEVICE_ACTIVITY_TIMEOUT)
-            {
-                trace!(
-                    "Skipping device {} as it is not recent",
-                    new_device.ip_address
-                );
-                continue;
-            }
-
             for device in devices.iter_mut() {
                 // If the hostname matches => device has been seen before and possibly has a different IP address
                 // or if the IP address matches => device has been seen before and possibly has a different hostname
@@ -204,7 +190,7 @@ impl DeviceInfo {
                             .any(|ip| device.ip_addresses.contains(ip)))
                 {
                     // Merge the devices
-                    DeviceInfo::merge(device, new_device);
+                    DeviceInfo::merge(device, &new_device);
                     found = true;
                     break;
                 }
