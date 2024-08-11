@@ -14,7 +14,6 @@ pub struct DeviceInfo {
     pub mac_address: String,
     pub mac_addresses: Vec<String>,
     pub hostname: String,
-    pub custom_name: String,
     pub mdns_services: Vec<String>,
     // Non-PII
     pub os_name: String,
@@ -24,11 +23,7 @@ pub struct DeviceInfo {
     pub vulnerabilities: Vec<VulnerabilityInfo>,
     // Sorted Vec would be better but had trouble with the bridge once...
     pub open_ports: Vec<PortInfo>,
-    // Device state
-    // Sorted Vec would be better but had trouble with the bridge once...
-    pub dismissed_ports: Vec<u16>,
-    pub last_seen: DateTime<Utc>,
-    pub last_modified: DateTime<Utc>,
+    // Below is the device state
     pub active: bool,
     pub added: bool,
     pub activated: bool,
@@ -37,6 +32,13 @@ pub struct DeviceInfo {
     pub non_std_ports: bool,
     pub criticality: String,
     pub device_type: String,
+    pub last_seen: DateTime<Utc>,
+    // Below are user properties
+    // Sorted Vec would be better but had trouble with the bridge once...
+    pub dismissed_ports: Vec<u16>,
+    pub custom_name: String,
+    pub deleted: bool,
+    pub last_modified: DateTime<Utc>,
 }
 
 impl DeviceInfo {
@@ -53,6 +55,7 @@ impl DeviceInfo {
             device_vendor: "".to_string(),
             vulnerabilities: Vec::new(),
             open_ports: Vec::new(),
+            // Below is the device state
             active: false,
             added: false,
             activated: false,
@@ -66,6 +69,8 @@ impl DeviceInfo {
             // Below are user properties
             dismissed_ports: Vec::new(),
             custom_name: "".to_string(),
+            // Not deleted by default
+            deleted: false,
             // Initialize the last time to UNIX_EPOCH
             last_modified: DateTime::from_timestamp(0, 0).unwrap(),
         }
@@ -351,6 +356,12 @@ impl DeviceInfo {
             device.custom_name.clone_from(&new_device.custom_name);
             device.dismissed_ports = new_device.dismissed_ports.clone();
             device.last_modified = new_device.last_modified;
+            device.deleted = new_device.deleted;
+        }
+
+        // Undelete the device if last_seen is more recent than last_modified
+        if device.deleted && device.last_seen > device.last_modified {
+            device.deleted = false;
         }
     }
 }
