@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_ANDROID: &str = r#"{
   "name": "threat model Android",
   "extends": "none",
-  "date": "Aug 05th 2024",
-  "signature": "a922bb127e61afd3317a49604016ce096c0121cdd40de0a440b131dad166250c",
+  "date": "August 09th 2024",
+  "signature": "f5ca00f65b6d16684e3740f7cef29eb25e2b0d3ff83e84b91ddc8422c7eaf720",
   "metrics": [
     {
       "name": "MDM profiles",
@@ -18,12 +18,12 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
         {
           "locale": "EN",
           "title": "MDM profiles installed",
-          "summary": "You have one or more Mobile Device Management (MDM) profiles installed on your computer. This means that your device is or can be remotely administered by a 3rd party. If this is your personal device, this is a grave threat and the profiles should be removed."
+          "summary": "You have one or more Mobile Device Management (MDM) profiles installed on your device. This means that your device is or can be remotely administered by a 3rd party. If this is your personal device, this is a grave threat and the profiles should be removed."
         },
         {
           "locale": "FR",
           "title": "Profils MDM installés",
-          "summary": "Un ou plusieurs profils de gestion des appareils mobiles (MDM) sont installés sur votre ordinateur. Cela signifie que votre appareil est, ou peut être, administré à distance par un tiers. S'il s'agit de votre appareil personnel, il s'agit d'une grave menace et les profils doivent être supprimés."
+          "summary": "Un ou plusieurs profils de gestion des appareils mobiles (MDM) sont installés sur votre appareil. Cela signifie que votre appareil est, ou peut être, administré à distance par un tiers. S'il s'agit de votre appareil personnel, il s'agit d'une grave menace et les profils doivent être supprimés."
         }
       ],
       "implementation": {

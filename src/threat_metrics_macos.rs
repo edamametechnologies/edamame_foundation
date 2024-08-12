@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_MACOS: &str = r#"{
   "name": "threat model macOS",
   "extends": "none",
-  "date": "Aug 05th 2024",
-  "signature": "f6abe9808f33fe60fa21d3e33b669625038fd1512dee625e156cbf23de61172e",
+  "date": "August 09th 2024",
+  "signature": "ce55925e3b67b838407df4a55e81c5fa38effc9d9d07c3b636f4b084d4fd4d4f",
   "metrics": [
     {
       "name": "edamame helper disabled",
@@ -161,12 +161,12 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         {
           "locale": "EN",
           "title": "MDM profiles installed",
-          "summary": "You have one or more Mobile Device Management (MDM) profiles installed on your computer. This means that your computer is or can be remotely administered by a 3rd party. If this is your personal computer, this is a grave threat and the profiles should be removed."
+          "summary": "You have one or more Mobile Device Management (MDM) profiles installed on your device. This means that your device is or can be remotely administered by a 3rd party. If this is your personal computer, this is a grave threat and the profiles should be removed."
         },
         {
           "locale": "FR",
           "title": "Profils MDM installés",
-          "summary": "Un ou plusieurs profils de gestion des appareils mobiles (MDM) sont installés sur votre ordinateur. Cela signifie que votre ordinateur est, ou peut être, administré à distance par un tiers. S'il s'agit de votre ordinateur personnel, il s'agit d'une grave menace et les profils doivent être supprimés."
+          "summary": "Un ou plusieurs profils de gestion des appareils mobiles (MDM) sont installés sur votre appareil. Cela signifie que votre appareil est, ou peut être, administré à distance par un tiers. S'il s'agit de votre ordinateur personnel, il s'agit d'une grave menace et les profils doivent être supprimés."
         }
       ],
       "implementation": {
