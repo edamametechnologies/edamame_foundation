@@ -12,14 +12,13 @@ use std::{
     sync::{Arc, Mutex},
 };
 use tracing::Level;
+#[cfg(target_os = "android")]
+use tracing_android;
 use tracing_appender::non_blocking::NonBlocking;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::fmt;
 use tracing_subscriber::prelude::*;
-
-#[cfg(target_os = "android")]
-use tracing_android;
 
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 use tracing_oslog::OsLogger;
@@ -310,6 +309,9 @@ pub fn init_logger(
         if cfg!(target_os = "macos") || cfg!(target_os = "ios") {
             #[cfg(any(target_os = "ios", target_os = "macos"))]
             {
+                // Add Tokio Console Layer
+                //let console_layer = console_subscriber::spawn();
+
                 if !matches!(executable_type, "helper") && !matches!(executable_type, "posture") {
                     // OsLogger if not an helper or a posture
                     let os_logger = OsLogger::new("com.edamametech.edamame", "");
@@ -321,9 +323,11 @@ pub fn init_logger(
                         // Must be here when using sentry
                         .with(fmt::layer().with_writer(stdout_writer.0))
                         .with(os_logger)
+                        // Use console layer for edamame_cli or edamame_app
+                        //.with(console_layer)
                         .try_init()
                     {
-                        Ok(_) => println!("Apple logger initialized with Sentry"),
+                        Ok(_) => println!("Apple logger initialized with Sentry and Console"),
                         Err(e) => println!("Logger initialization failed: {}", e),
                     }
                 } else {
