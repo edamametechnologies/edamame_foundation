@@ -30,9 +30,7 @@ pub struct Score {
 impl Score {
     pub fn new(platform: &str) -> Score {
         // Will read it later
-        let history = OrderHistory {
-            history: Vec::new(),
-        };
+        let history = OrderHistory { history: None };
         Score {
             network: 0,
             system_integrity: 0,
