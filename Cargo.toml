@@ -111,6 +111,11 @@ network-interface = "2.0.0"
 [target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
 arp-toolkit = "0.3.2"
 
+# macOS - system-configuration-sys is including a symbol that is rejected by the App Store
+[patch.crates-io]
+system-configuration = { git = "https://github.com/edamametechnologies/system-configuration-rs" }
+system-configuration-sys = { git = "https://github.com/edamametechnologies/system-configuration-rs" }
+
 # Android
 [target.'cfg(target_os = "android")'.dependencies]
 tracing-android = "0.2.0"
