@@ -37,10 +37,10 @@ serde = { version = "1.0.207", features = ["derive"] }
 serde_json = "1.0.125"
 serde_with = "3.9.0"
 uuid = { version = "1.10.0", features = [
-    "v4",                
-    "v5",                
-    "fast-rng",          
-    "macro-diagnostics", 
+    "v4",
+    "v5",
+    "fast-rng",
+    "macro-diagnostics",
 ]}
 
 # Logging
@@ -64,6 +64,7 @@ async-trait = "0.1.81"
 parking_lot = "0.12.3"
 futures-util = "0.3.30"
 tokio = { version = "1.39.2", features = ["full", "tracing"] }
+dashmap = "6.0.1"
 # For tokio debugging
 #console-subscriber = "0.4.0"
 
@@ -113,8 +114,10 @@ arp-toolkit = "0.3.2"
 
 # macOS - system-configuration-sys is including a symbol that is rejected by the App Store
 [patch.crates-io]
-system-configuration = { git = "https://github.com/edamametechnologies/system-configuration-rs" }
-system-configuration-sys = { git = "https://github.com/edamametechnologies/system-configuration-rs" }
+system-configuration-legacy = { version = "0.5.0", git = "https://github.com/edamametechnologies/system-configuration-rs", branch = "legacy-patched", package = "system-configuration" }
+system-configuration-sys-legacy = { version = "0.5.0", git = "https://github.com/edamametechnologies/system-configuration-rs", branch = "legacy-patched", package = "system-configuration-sys" }
+system-configuration = { version = "0.6.0", git = "https://github.com/edamametechnologies/system-configuration-rs", branch = "main" }
+system-configuration-sys = { version = "0.6.0", git = "https://github.com/edamametechnologies/system-configuration-rs", branch = "main" }
 
 # Android
 [target.'cfg(target_os = "android")'.dependencies]

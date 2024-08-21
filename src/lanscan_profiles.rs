@@ -1,13 +1,13 @@
 use crate::lanscan_port_info::*;
 use crate::lanscan_profiles_db::*;
 use crate::update::*;
-use once_cell::sync::Lazy;
+use dashmap::DashMap;
+use lazy_static::lazy_static;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::error::Error;
 use std::time::Duration;
-use tokio::sync::Mutex;
 use tracing::{error, info, trace, warn};
 
 const PROFILES_REPO: &str = "https://raw.githubusercontent.com/edamametechnologies/threatmodels";
@@ -47,24 +47,28 @@ struct DeviceTypeListJSON {
 }
 
 struct DeviceTypeList {
-    profiles: Vec<DeviceTypeRule>,
+    profiles: DashMap<String, DeviceTypeRule>,
 }
 
 impl DeviceTypeList {
     fn new_from_json(device_info: &DeviceTypeListJSON) -> Self {
         info!("Loading device profiles from JSON");
 
-        DeviceTypeList {
-            profiles: device_info.profiles.clone(),
+        let profiles = DashMap::new();
+        for profile in &device_info.profiles {
+            profiles.insert(profile.device_type.clone(), profile.clone());
         }
+
+        DeviceTypeList { profiles }
     }
 }
 
-static PROFILES: Lazy<Mutex<DeviceTypeList>> = Lazy::new(|| {
-    let profiles_list: DeviceTypeListJSON = serde_json::from_str(DEVICE_PROFILES).unwrap();
-    let profiles = DeviceTypeList::new_from_json(&profiles_list);
-    Mutex::new(profiles)
-});
+lazy_static! {
+    static ref PROFILES: DeviceTypeList = {
+        let profiles_list: DeviceTypeListJSON = serde_json::from_str(DEVICE_PROFILES).unwrap();
+        DeviceTypeList::new_from_json(&profiles_list)
+    };
+}
 
 pub async fn device_type(
     open_ports: &Vec<PortInfo>,
@@ -80,8 +84,6 @@ pub async fn device_type(
         hostname
     );
 
-    let device_types = PROFILES.lock().await;
-
     // To lower case as used in the profiles
     let oui_vendor_lower = oui_vendor.to_lowercase();
     let hostname_lower = hostname.to_lowercase();
@@ -95,10 +97,8 @@ pub async fn device_type(
         .map(|info| info.banner.to_lowercase())
         .collect();
 
-    for profile in device_types.profiles.iter() {
-        for condition in &profile.conditions {
-            // Only check if
-
+    for profile in PROFILES.profiles.iter() {
+        for condition in &profile.value().conditions {
             if match_condition(
                 condition,
                 &open_ports_set,
@@ -107,8 +107,8 @@ pub async fn device_type(
                 &hostname_lower,
                 &banners_lower,
             ) {
-                trace!("Match for device type {:?}", profile.device_type);
-                return profile.device_type.to_string();
+                trace!("Match for device type {:?}", profile.value().device_type);
+                return profile.value().device_type.clone();
             }
         }
     }
@@ -123,6 +123,7 @@ pub async fn device_type(
 
     "Unknown".to_string()
 }
+
 fn match_condition(
     condition: &Condition,
     open_ports_set: &HashSet<u16>,
@@ -283,8 +284,17 @@ pub async fn update(branch: &str) -> Result<UpdateStatus, Box<dyn Error>> {
                         return Err(err.into());
                     }
                 };
-                let mut locked_vulns = PROFILES.lock().await;
-                *locked_vulns = DeviceTypeList::new_from_json(&json);
+
+                // Clear existing profiles
+                PROFILES.profiles.clear();
+
+                // Insert new profiles
+                for profile in json.profiles {
+                    PROFILES
+                        .profiles
+                        .insert(profile.device_type.clone(), profile);
+                }
+
                 // Success
                 status = UpdateStatus::Updated;
             } else {
