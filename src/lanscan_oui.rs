@@ -1,5 +1,5 @@
 use crate::lanscan_oui_db::*;
-use once_cell::sync::Lazy;
+use lazy_static::lazy_static;
 use oui::OuiDatabase;
 use tokio::sync::Mutex;
 use tracing::{error, trace, warn};
@@ -7,10 +7,12 @@ use tracing::{error, trace, warn};
 // TODO load from the cloud regularly and store locally
 // const OUI_DB_URL: &str = "https://www.wireshark.org/download/automated/data/manuf";
 
-static OUI: Lazy<Mutex<OuiDatabase>> = Lazy::new(|| {
-    let oui = OuiDatabase::new_from_str(OUI_DB).unwrap();
-    Mutex::new(oui)
-});
+lazy_static! {
+    static ref OUI: Mutex<OuiDatabase> = {
+        let oui = OuiDatabase::new_from_str(OUI_DB).unwrap();
+        Mutex::new(oui)
+    };
+}
 
 pub async fn get_mac_address_vendor(mac_address: &str) -> String {
     trace!("Locking OUI - start");
