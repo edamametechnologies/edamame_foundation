@@ -2857,8 +2857,7 @@ dependencies = [
 [[package]]
 name = "system-configuration"
 version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "658bc6ee10a9b4fcf576e9b0819d95ec16f4d2c02d39fd83ac1c8789785c4a42"
+source = "git+https://github.com/edamametechnologies/system-configuration-rs#4286fed18deca691036f046f66847df5f32b1953"
 dependencies = [
  "bitflags 2.6.0",
  "core-foundation",
@@ -2868,8 +2867,7 @@ dependencies = [
 [[package]]
 name = "system-configuration-sys"
 version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8e1d1b10ced5ca923a1fcb8d03e96b8d3268065d724548c0211415ff6ac6bac4"
+source = "git+https://github.com/edamametechnologies/system-configuration-rs#4286fed18deca691036f046f66847df5f32b1953"
 dependencies = [
  "core-foundation-sys",
  "libc",
