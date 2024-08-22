@@ -80,18 +80,18 @@ lazy_static! {
     };
 }
 
-pub async fn get_ports() -> Vec<u16> {
+pub fn get_ports() -> Vec<u16> {
     trace!("Accessing VULNS - start");
     let ports = VULNS.port_vulns.iter().map(|entry| *entry.key()).collect();
     trace!("Accessing VULNS - end");
     ports
 }
 
-pub async fn get_deep_ports() -> Vec<u16> {
+pub fn get_deep_ports() -> Vec<u16> {
     (0..65535).collect()
 }
 
-pub async fn get_description_from_port(port: u16) -> String {
+pub fn get_description_from_port(port: u16) -> String {
     trace!("Accessing VULNS - start");
     let description = VULNS
         .port_vulns
@@ -101,21 +101,21 @@ pub async fn get_description_from_port(port: u16) -> String {
     description
 }
 
-pub async fn get_http_ports() -> Vec<u16> {
+pub fn get_http_ports() -> Vec<u16> {
     trace!("Accessing VULNS - start");
     let http_ports = VULNS.http_ports.iter().map(|entry| *entry.key()).collect();
     trace!("Accessing VULNS - end");
     http_ports
 }
 
-pub async fn get_https_ports() -> Vec<u16> {
+pub fn get_https_ports() -> Vec<u16> {
     trace!("Accessing VULNS - start");
     let https_ports = VULNS.https_ports.iter().map(|entry| *entry.key()).collect();
     trace!("Accessing VULNS - end");
     https_ports
 }
 
-pub async fn get_vulns_of_port(port: u16) -> Vec<VulnerabilityInfo> {
+pub fn get_vulns_of_port(port: u16) -> Vec<VulnerabilityInfo> {
     trace!("Accessing VULNS - start");
     let vulnerabilities = VULNS
         .port_vulns
@@ -125,12 +125,12 @@ pub async fn get_vulns_of_port(port: u16) -> Vec<VulnerabilityInfo> {
     vulnerabilities
 }
 
-pub async fn get_vulns_names_of_port(port: u16) -> Vec<String> {
-    let vulns = get_vulns_of_port(port).await;
+pub fn get_vulns_names_of_port(port: u16) -> Vec<String> {
+    let vulns = get_vulns_of_port(port);
     vulns.iter().map(|vuln| vuln.name.clone()).collect()
 }
 
-pub async fn get_device_criticality(port_info_list: &[PortInfo]) -> String {
+pub fn get_device_criticality(port_info_list: &[PortInfo]) -> String {
     let count_sum = port_info_list.iter().fold(0, |acc, port_info| {
         if let Some(known_port_info) = VULNS.port_vulns.get(&port_info.port) {
             acc + known_port_info.count

@@ -66,18 +66,18 @@ lazy_static! {
     };
 }
 
-pub async fn get_vendors() -> Vec<String> {
+pub fn get_vendors() -> Vec<String> {
     trace!("Accessing VULNS - start");
     let vulns = &*VULNS;
     trace!("Accessing VULNS - end");
     vulns.iter().map(|entry| entry.key().clone()).collect()
 }
 
-pub async fn get_deep_vendors() -> Vec<u16> {
+pub fn get_deep_vendors() -> Vec<u16> {
     (0..65535).collect()
 }
 
-pub async fn get_description_from_vendor(vendor: &str) -> String {
+pub fn get_description_from_vendor(vendor: &str) -> String {
     trace!("Accessing VULNS - start");
     let vulns = &*VULNS;
     trace!("Accessing VULNS - end");
@@ -86,7 +86,7 @@ pub async fn get_description_from_vendor(vendor: &str) -> String {
         .map_or("".to_string(), |vendor_info| vendor_info.vendor.clone())
 }
 
-pub async fn get_vulns_of_vendor(vendor: &str) -> Vec<VulnerabilityInfo> {
+pub fn get_vulns_of_vendor(vendor: &str) -> Vec<VulnerabilityInfo> {
     trace!("Accessing VULNS - start");
     let vulns = &*VULNS;
     trace!("Accessing VULNS - end");
@@ -105,8 +105,8 @@ pub async fn get_vulns_of_vendor(vendor: &str) -> Vec<VulnerabilityInfo> {
     vec![]
 }
 
-pub async fn get_vulns_names_of_vendor(vendor: &str) -> Vec<String> {
-    let vulns = get_vulns_of_vendor(vendor).await;
+pub fn get_vulns_names_of_vendor(vendor: &str) -> Vec<String> {
+    let vulns = get_vulns_of_vendor(vendor);
     vulns.iter().map(|vuln| vuln.name.clone()).collect()
 }
 
