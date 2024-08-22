@@ -1,7 +1,10 @@
 use crate::lanscan_port_info::*;
-use crate::lanscan_vulnerability_info::*;
+use crate::lanscan_port_vulns::*;
+use crate::lanscan_vendor_vulns::*;
 use chrono::{DateTime, Utc};
 use edamame_backend::lanscan_device_info_backend::*;
+use edamame_backend::lanscan_port_info_backend::*;
+use edamame_backend::lanscan_vulnerability_info_backend::VulnerabilityInfoBackend;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
@@ -19,8 +22,6 @@ pub struct DeviceInfo {
     pub os_name: String,
     pub os_version: String,
     pub device_vendor: String,
-    // Vendor related vulnerabilities
-    pub vulnerabilities: Vec<VulnerabilityInfo>,
     // Sorted Vec would be better but had trouble with the bridge once...
     pub open_ports: Vec<PortInfo>,
     // Below is the device state
@@ -53,7 +54,6 @@ impl DeviceInfo {
             os_name: "".to_string(),
             os_version: "".to_string(),
             device_vendor: "".to_string(),
-            vulnerabilities: Vec::new(),
             open_ports: Vec::new(),
             // Below is the device state
             active: false,
@@ -77,37 +77,43 @@ impl DeviceInfo {
     }
 
     // Used before any query to AI assistance
-    pub fn sanitized_backend_device_info(device: &DeviceInfo) -> DeviceInfoBackend {
-        let mut device_backend = DeviceInfoBackend {
-            mdns_services: device.mdns_services.clone(),
-            device_vendor: device.device_vendor.clone(),
-            // Convert the vectors using into
-            vulnerabilities: device
-                .vulnerabilities
+    pub async fn sanitized_backend_device_info(device: &DeviceInfo) -> DeviceInfoBackend {
+        // Include the vulnerabilities
+        let vulnerabilities: Vec<VulnerabilityInfoBackend> =
+            get_vulns_of_vendor(&device.device_vendor)
+                .await
                 .iter()
-                .map(|v| v.clone().into())
-                .collect(),
-            open_ports: device
-                .open_ports
-                .clone()
+                .map(|vuln| vuln.clone().into())
+                .collect();
+        let mut open_ports: Vec<PortInfoBackend> = Vec::new();
+        for port in device.open_ports.iter() {
+            let mut port_info: PortInfoBackend = port.clone().into();
+            port_info.vulnerabilities = get_vulns_of_port(port.port)
+                .await
                 .iter()
-                .map(|p| p.clone().into())
-                .collect(),
-        };
+                .map(|vuln| vuln.clone().into())
+                .collect();
+            open_ports.push(port_info);
+        }
 
         // mDNS instances can be prefixed by the device's serial, mac, ip address.
         // We keep only the part from _xxx._yyy.local onwards
         let re = Regex::new(r".*?(_.*?\.local)").unwrap();
 
-        let mut mdns_services_sanitized = Vec::new();
-        for mdns_service in device_backend.mdns_services.iter() {
+        let mut mdns_services = Vec::new();
+        for mdns_service in device.mdns_services.iter() {
             // Replace the matched pattern with the first captured group, which is _xxx._yyy.local
             let sanitized = re.replace(mdns_service, "$1").to_string();
-            mdns_services_sanitized.push(sanitized);
+            mdns_services.push(sanitized);
         }
-        device_backend.mdns_services = mdns_services_sanitized;
+        let mut device_backend = DeviceInfoBackend {
+            mdns_services,
+            device_vendor: device.device_vendor.clone(),
+            vulnerabilities,
+            open_ports,
+        };
 
-        // Sort the entries to make sure they are always in the same order
+        // Sort the entries to make sure they are always in the same order to have prompt consistency
         device_backend.mdns_services.sort();
         // The sanitization can create duplicates
         device_backend.mdns_services.dedup();
@@ -115,14 +121,10 @@ impl DeviceInfo {
             .open_ports
             .sort_by(|a, b| a.port.cmp(&b.port));
         device_backend
-            .vulnerabilities
-            .sort_by(|a, b| a.name.cmp(&b.name));
-
-        device_backend
     }
 
-    pub fn sanitized_backend_device_key(&self) -> String {
-        let sanitized_device = DeviceInfo::sanitized_backend_device_info(self);
+    pub async fn sanitized_backend_device_key(&self) -> String {
+        let sanitized_device = DeviceInfo::sanitized_backend_device_info(self).await;
         format!(
             "{}{}{}{}",
             sanitized_device.device_vendor,
@@ -707,7 +709,6 @@ mod tests {
             service: "http".to_string(),
             banner: "Apache".to_string(),
             protocol: "tcp".to_string(),
-            vulnerabilities: Vec::new(),
         }];
         device1.last_seen = Utc::now() - Duration::seconds(1800); // 30 minutes ago
 
@@ -719,7 +720,6 @@ mod tests {
             service: "ssh".to_string(),
             banner: "OpenSSH".to_string(),
             protocol: "tcp".to_string(),
-            vulnerabilities: Vec::new(),
         }];
         device2.last_seen = Utc::now() - Duration::seconds(600); // 10 minutes ago
 
@@ -746,14 +746,12 @@ mod tests {
                 service: "http".to_string(),
                 banner: "Apache".to_string(),
                 protocol: "tcp".to_string(),
-                vulnerabilities: Vec::new(),
             },
             PortInfo {
                 port: 443,
                 service: "https".to_string(),
                 banner: "Apache".to_string(),
                 protocol: "tcp".to_string(),
-                vulnerabilities: Vec::new(),
             },
         ];
         device1.last_seen = Utc::now() - Duration::seconds(1800); // 30 minutes ago
@@ -767,14 +765,12 @@ mod tests {
                 service: "http".to_string(),
                 banner: "Nginx".to_string(),
                 protocol: "tcp".to_string(),
-                vulnerabilities: Vec::new(),
             }, // same port, different banner
             PortInfo {
                 port: 22,
                 service: "ssh".to_string(),
                 banner: "OpenSSH".to_string(),
                 protocol: "tcp".to_string(),
-                vulnerabilities: Vec::new(),
             },
         ];
         device2.last_seen = Utc::now() - Duration::seconds(600); // 10 minutes ago

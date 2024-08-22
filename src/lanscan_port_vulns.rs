@@ -125,6 +125,11 @@ pub async fn get_vulns_of_port(port: u16) -> Vec<VulnerabilityInfo> {
     vulnerabilities
 }
 
+pub async fn get_vulns_names_of_port(port: u16) -> Vec<String> {
+    let vulns = get_vulns_of_port(port).await;
+    vulns.iter().map(|vuln| vuln.name.clone()).collect()
+}
+
 pub async fn get_device_criticality(port_info_list: &[PortInfo]) -> String {
     let count_sum = port_info_list.iter().fold(0, |acc, port_info| {
         if let Some(known_port_info) = VULNS.port_vulns.get(&port_info.port) {
