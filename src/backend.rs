@@ -87,10 +87,10 @@ pub trait Backend {
         is_service: bool,
     ) -> Result<String>;
 
-    async fn send_user_feedback(&self, feedback_info_backend: FeedbackInfoBackend) -> Result<()>;
+    async fn send_user_feedback(&self, feedback_info_backend: &FeedbackInfoBackend) -> Result<()>;
 
     async fn send_dislike_device_type_info(
         &self,
-        dislike_device_info_backend: DislikeDeviceInfoBackend,
+        dislike_device_info_backend: &DislikeDeviceInfoBackend,
     ) -> Result<()>;
 }
