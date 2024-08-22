@@ -1,4 +1,5 @@
 use anyhow::{Error, Result};
+use edamame_backend::feedback_info_backend::FeedbackInfoBackend;
 use edamame_backend::lanscan_device_info_backend::*;
 use edamame_backend::lanscan_dislike_device_info_backend::DislikeDeviceInfoBackend;
 use edamame_backend::pwned_breach_backend::BreachDetailBackend;
@@ -85,6 +86,8 @@ pub trait Backend {
         description: &str,
         is_service: bool,
     ) -> Result<String>;
+
+    async fn send_user_feedback(&self, feedback_info_backend: FeedbackInfoBackend) -> Result<()>;
 
     async fn send_dislike_device_type_info(
         &self,
