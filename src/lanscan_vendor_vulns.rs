@@ -105,6 +105,11 @@ pub async fn get_vulns_of_vendor(vendor: &str) -> Vec<VulnerabilityInfo> {
     vec![]
 }
 
+pub async fn get_vulns_names_of_vendor(vendor: &str) -> Vec<String> {
+    let vulns = get_vulns_of_vendor(vendor).await;
+    vulns.iter().map(|vuln| vuln.name.clone()).collect()
+}
+
 pub async fn update(branch: &str) -> Result<UpdateStatus, Box<dyn Error>> {
     info!("Starting vendor vulns update from backend");
 
