@@ -114,10 +114,8 @@ arp-toolkit = "0.3.2"
 
 # macOS - system-configuration-sys is including a symbol that is rejected by the App Store
 [patch.crates-io]
-system-configuration-legacy = { version = "0.5.0", git = "https://github.com/edamametechnologies/system-configuration-rs", branch = "legacy-patched", package = "system-configuration" }
-system-configuration-sys-legacy = { version = "0.5.0", git = "https://github.com/edamametechnologies/system-configuration-rs", branch = "legacy-patched", package = "system-configuration-sys" }
-system-configuration = { version = "0.6.0", git = "https://github.com/edamametechnologies/system-configuration-rs", branch = "main" }
-system-configuration-sys = { version = "0.6.0", git = "https://github.com/edamametechnologies/system-configuration-rs", branch = "main" }
+system-configuration = { git = "https://github.com/edamametechnologies/system-configuration-rs", branch = "main" }
+system-configuration-sys = { git = "https://github.com/edamametechnologies/system-configuration-rs", branch = "main" }
 
 # Android
 [target.'cfg(target_os = "android")'.dependencies]
