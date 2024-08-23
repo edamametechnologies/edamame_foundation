@@ -296,15 +296,20 @@ pub fn init_logger(
     if !url.is_empty() {
         let filter_strings: Vec<String> =
             sentry_error_filter.iter().map(|&s| s.to_string()).collect();
-        let sentry_layer = sentry_tracing::layer().event_filter(move |md| match md.level() {
-            &Level::ERROR => {
-                if filter_strings.iter().any(|s| md.target().contains(s)) {
+        let sentry_layer = sentry_tracing::layer().event_filter(move |md| {
+            if let &Level::ERROR = md.level() {
+                if filter_strings
+                    .iter()
+                    .any(|s| md.target().contains(s) || md.name().contains(s))
+                {
+                    println!("Filtering out error for Sentry: {:?}", md);
                     EventFilter::Ignore
                 } else {
                     EventFilter::Event
                 }
+            } else {
+                EventFilter::Ignore
             }
-            _ => EventFilter::Ignore,
         });
         if cfg!(target_os = "macos") || cfg!(target_os = "ios") {
             #[cfg(any(target_os = "ios", target_os = "macos"))]
