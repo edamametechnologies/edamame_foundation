@@ -33,6 +33,7 @@ pub struct DeviceInfo {
     pub non_std_ports: bool,
     pub criticality: String,
     pub device_type: String,
+    pub first_seen: DateTime<Utc>,
     pub last_seen: DateTime<Utc>,
     // Below are user properties
     // Sorted Vec would be better but had trouble with the bridge once...
@@ -64,7 +65,8 @@ impl DeviceInfo {
             non_std_ports: false,
             criticality: "Unknown".to_string(),
             device_type: "Unknown".to_string(),
-            // Initialize the last time to UNIX_EPOCH
+            // Initialize the times to UNIX_EPOCH
+            first_seen: DateTime::from_timestamp(0, 0).unwrap(),
             last_seen: DateTime::from_timestamp(0, 0).unwrap(),
             // Below are user properties
             dismissed_ports: Vec::new(),
@@ -346,7 +348,14 @@ impl DeviceInfo {
             }
         }
 
-        // Update the last seen time
+        // Update the first seen time, beware of the UNIX_EPOCH
+        if new_device.first_seen < device.first_seen
+            && new_device.first_seen != DateTime::from_timestamp(0, 0).unwrap()
+        {
+            device.first_seen = new_device.first_seen;
+        }
+
+        // Update the last seen time (no need to check for UNIX_EPOCH)
         if new_device.last_seen > device.last_seen {
             device.last_seen = new_device.last_seen;
         }
