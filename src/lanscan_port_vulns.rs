@@ -117,11 +117,13 @@ pub fn get_https_ports() -> Vec<u16> {
 
 pub fn get_vulns_of_port(port: u16) -> Vec<VulnerabilityInfo> {
     trace!("Accessing VULNS - start");
-    let vulnerabilities = VULNS
+    let mut vulnerabilities = VULNS
         .port_vulns
         .get(&port)
         .map_or(Vec::new(), |port_info| port_info.vulnerabilities.clone());
     trace!("Accessing VULNS - end");
+    // Sort by reverse order of name (therefore date)
+    vulnerabilities.sort_by(|a, b| b.name.cmp(&a.name));
     vulnerabilities
 }
 

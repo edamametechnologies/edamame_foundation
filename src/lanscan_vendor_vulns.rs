@@ -94,7 +94,10 @@ pub fn get_vulns_of_vendor(vendor: &str) -> Vec<VulnerabilityInfo> {
     let mut vendor_name = vendor.to_string();
     while !vendor_name.is_empty() {
         if let Some(vendor_info) = vulns.get(&vendor_name) {
-            return vendor_info.vulnerabilities.clone();
+            let mut vulnerabilities = vendor_info.vulnerabilities.clone();
+            // Sort by reverse order of name (therefore date)
+            vulnerabilities.sort_by(|a, b| b.name.cmp(&a.name));
+            return vulnerabilities;
         }
         if let Some(pos) = vendor_name.rfind(' ') {
             vendor_name.truncate(pos);
