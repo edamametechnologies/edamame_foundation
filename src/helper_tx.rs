@@ -156,8 +156,8 @@ async fn helper_run(
 
     let channel = Channel::from_static(target).tls_config(tls)?;
 
-    // Timeout the connection after 60 seconds, this needs to be high enough as we are querying the helper in //
-    let connection = timeout(Duration::from_secs(60), channel.connect()).await??;
+    // Timeout the connection after 120 seconds, this needs to be high enough as we are querying the helper in //
+    let connection = timeout(Duration::from_secs(120), channel.connect()).await??;
 
     let mut client = EdamameHelperClient::new(connection);
 
