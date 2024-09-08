@@ -4,11 +4,11 @@ use tracing::trace;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use libarp::{client::ArpClient, interfaces::Interface};
 // Rather just use PS...
+use anyhow::{anyhow, Result};
 #[cfg(target_os = "windows")]
 use powershell_script::PsScriptBuilder;
 #[cfg(target_os = "windows")]
 use regex::Regex;
-use anyhow::{anyhow, Result};
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::time::Duration;
 
