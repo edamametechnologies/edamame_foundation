@@ -7,3 +7,4 @@
 /macos/target/
 /Cargo.toml.static
 /Cargo.toml.dynamic
+.DS_Store

@@ -1,20 +1,14 @@
 use std::net::IpAddr;
 use tracing::trace;
-
 // Not on Windows as it depends on Packet.lib / Packet.dll that we don't want to ship with the binary
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use libarp::{client::ArpClient, interfaces::Interface};
-
 // Rather just use PS...
 #[cfg(target_os = "windows")]
 use powershell_script::PsScriptBuilder;
 #[cfg(target_os = "windows")]
 use regex::Regex;
-#[cfg(target_os = "windows")]
-use tracing::error;
-
 use anyhow::{anyhow, Result};
-
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::time::Duration;
 
@@ -42,11 +36,6 @@ pub async fn get_mac_address_from_ip(interface_name: &str, ip_addr: &IpAddr) -> 
                 output.stderr().as_deref().unwrap_or("").to_string(),
             ),
             Err(e) => {
-                error!(
-                    "Powershell execution error with calling {:?} : {:?}",
-                    cmd,
-                    e.to_string()
-                );
                 return Err(anyhow!("Error querying ARP table: {}", e.to_string()));
             }
         };
