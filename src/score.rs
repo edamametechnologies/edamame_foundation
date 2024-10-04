@@ -1,7 +1,8 @@
+use crate::cloud_model::*;
 use crate::history::*;
 use crate::order::MetricOrderResult;
 use crate::threat::*;
-use crate::update::UpdateStatus;
+use crate::threat_factory::*;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -28,7 +29,7 @@ pub struct Score {
 }
 
 impl Score {
-    pub fn new(platform: &str) -> Score {
+    pub fn new() -> Score {
         // Will read it later
         let history = OrderHistory { history: None };
         Score {
@@ -40,7 +41,7 @@ impl Score {
             overall: 0,
             stars: 0.0,
             compliance: HashMap::new(),
-            metrics: ThreatMetrics::new(platform),
+            metrics: ThreatMetrics::new(),
             history,
             last_compute: None,
         }
@@ -48,6 +49,11 @@ impl Score {
 
     pub async fn compute_score(&mut self) {
         trace!("Starting score calculation");
+
+        // Initialize the metrics if not already initialized
+        if self.metrics.metrics.is_empty() {
+            self.metrics = get_threat_metrics().await;
+        }
 
         let mut dim = HashMap::new();
         dim.insert("network", (0, 0));
@@ -200,7 +206,7 @@ pub trait ScoreTrait {
     async fn get_history(&self) -> Result<OrderHistory>;
     async fn remediate(&self, name: &str) -> Result<MetricOrderResult>;
     async fn rollback(&self, name: &str) -> Result<MetricOrderResult>;
-    async fn update_threats(&mut self, platform: &str, branch: &str) -> Result<UpdateStatus>;
+    async fn update_threats(&mut self, branch: &str) -> Result<UpdateStatus>;
     async fn threat_active(&self, name: &str) -> Result<bool>;
     async fn get_threats_url(&self, platform: &str, branch: &str) -> String;
 }

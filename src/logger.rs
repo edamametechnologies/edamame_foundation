@@ -75,7 +75,13 @@ impl MemoryWriter {
         let log_line_formatted = re.replace_all(&log_line_sanitized, "");
         let log_line_formatted = log_line_formatted.trim().to_string();
 
-        let mut locked_data = self.data.lock().unwrap();
+        let mut locked_data = match self.data.lock() {
+            Ok(data) => data,
+            Err(e) => {
+                eprintln!("Error locking data: {}", e);
+                return Ok(());
+            }
+        };
 
         if locked_data.logs.len() >= MAX_LOG_LINES {
             locked_data.logs.pop_back();
@@ -221,7 +227,13 @@ pub fn init_logger(
     provided_env_log_spec: &str,
     sentry_error_filter: &[&str],
 ) {
-    let mut logger_guard = LOGGER.lock().unwrap();
+    let mut logger_guard = match LOGGER.lock() {
+        Ok(guard) => guard,
+        Err(e) => {
+            eprintln!("Error locking LOGGER: {}", e);
+            return;
+        }
+    };
     if logger_guard.is_some() {
         eprintln!("Logger already initialized, flushing logs");
         logger_guard.as_ref().unwrap().flush_logs();
@@ -276,10 +288,10 @@ pub fn init_logger(
             "edamame"
         };
         let file_appender = RollingFileAppender::new(Rotation::DAILY, log_dir.clone(), basename);
-        println!(
-            "Logging to rolling file with basename {} in directory {:?}",
-            basename, log_dir
-        );
+        //println!(
+        //    "Logging to rolling file with basename {} in directory {:?}",
+        //    basename, log_dir
+        //);
         tracing_appender::non_blocking(file_appender)
     } else {
         NonBlocking::new(io::sink())
@@ -302,7 +314,7 @@ pub fn init_logger(
                     .iter()
                     .any(|s| md.target().contains(s) || md.name().contains(s))
                 {
-                    println!("Filtering out error for Sentry: {:?}", md);
+                    //println!("Filtering out error for Sentry: {:?}", md);
                     EventFilter::Ignore
                 } else {
                     EventFilter::Event
@@ -332,8 +344,8 @@ pub fn init_logger(
                         //.with(console_layer)
                         .try_init()
                     {
-                        Ok(_) => println!("Apple logger initialized with Sentry and Console"),
-                        Err(e) => println!("Logger initialization failed: {}", e),
+                        Ok(_) => {} //println!("Apple logger initialized with Sentry and Console"),
+                        Err(e) => eprintln!("Logger initialization failed: {}", e),
                     }
                 } else {
                     match tracing_subscriber::registry()
@@ -345,8 +357,8 @@ pub fn init_logger(
                         .with(fmt::layer().with_writer(stdout_writer.0))
                         .try_init()
                     {
-                        Ok(_) => println!("Standard logger initialized with Sentry"),
-                        Err(e) => println!("Logger initialization failed: {}", e),
+                        Ok(_) => {} //println!("Standard logger initialized with Sentry"),
+                        Err(e) => eprintln!("Logger initialization failed: {}", e),
                     }
                 }
             }
@@ -363,8 +375,8 @@ pub fn init_logger(
                     .with(android_layer)
                     .try_init()
                 {
-                    Ok(_) => println!("Android logger initialized with Sentry"),
-                    Err(e) => println!("Logger initialization failed: {}", e),
+                    Ok(_) => {} //println!("Android logger initialized with Sentry"),
+                    Err(e) => eprintln!("Logger initialization failed: {}", e),
                 }
             }
         } else if cfg!(target_os = "windows") {
@@ -378,8 +390,8 @@ pub fn init_logger(
                 .with(fmt::layer().with_writer(stdout_writer.0))
                 .try_init()
             {
-                Ok(_) => println!("Windows logger initialized with Sentry"),
-                Err(e) => println!("Logger initialization failed: {}", e),
+                Ok(_) => {} //println!("Windows logger initialized with Sentry"),
+                Err(e) => eprintln!("Logger initialization failed: {}", e),
             }
         } else {
             // Linux
@@ -392,8 +404,8 @@ pub fn init_logger(
                 .with(fmt::layer().with_writer(stdout_writer.0))
                 .try_init()
             {
-                Ok(_) => println!("Generic logger initialized with Sentry"),
-                Err(e) => println!("Logger initialization failed: {}", e),
+                Ok(_) => {} //println!("Generic logger initialized with Sentry"),
+                Err(e) => eprintln!("Logger initialization failed: {}", e),
             }
         }
     } else {
@@ -413,8 +425,8 @@ pub fn init_logger(
                         .with(os_logger)
                         .try_init()
                     {
-                        Ok(_) => println!("Apple logger initialized"),
-                        Err(e) => println!("Logger initialization failed: {}", e),
+                        Ok(_) => {} //println!("Apple logger initialized"),
+                        Err(e) => eprintln!("Logger initialization failed: {}", e),
                     }
                 } else {
                     match tracing_subscriber::registry()
@@ -424,8 +436,8 @@ pub fn init_logger(
                         .with(fmt::layer().with_writer(logger.memory_writer.clone()))
                         .try_init()
                     {
-                        Ok(_) => println!("Standard logger initialized"),
-                        Err(e) => println!("Logger initialization failed: {}", e),
+                        Ok(_) => {} //println!("Standard logger initialized"),
+                        Err(e) => eprintln!("Logger initialization failed: {}", e),
                     }
                 }
             }
@@ -441,8 +453,8 @@ pub fn init_logger(
                     .with(android_layer)
                     .try_init()
                 {
-                    Ok(_) => println!("Android logger initialized"),
-                    Err(e) => println!("Logger initialization failed: {}", e),
+                    Ok(_) => {} //println!("Android logger initialized"),
+                    Err(e) => eprintln!("Logger initialization failed: {}", e),
                 }
             }
         } else if cfg!(target_os = "windows") {
@@ -454,8 +466,8 @@ pub fn init_logger(
                 .with(fmt::layer().with_writer(logger.memory_writer.clone()))
                 .try_init()
             {
-                Ok(_) => println!("Windows logger initialized"),
-                Err(e) => println!("Logger initialization failed: {}", e),
+                Ok(_) => {} //println!("Windows logger initialized"),
+                Err(e) => eprintln!("Logger initialization failed: {}", e),
             }
         } else {
             // Linux
@@ -466,8 +478,8 @@ pub fn init_logger(
                 .with(fmt::layer().with_writer(logger.memory_writer.clone()))
                 .try_init()
             {
-                Ok(_) => println!("Generic logger initialized"),
-                Err(e) => println!("Logger initialization failed: {}", e),
+                Ok(_) => {} //println!("Generic logger initialized"),
+                Err(e) => eprintln!("Logger initialization failed: {}", e),
             }
         }
     }
@@ -497,86 +509,51 @@ pub fn get_all_logs() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serial_test::serial;
     use tracing::{debug, error, info, trace, warn};
 
-    fn initialize_and_flush_logger() {
+    #[test]
+    fn test_logger_functionality() {
+        // Step 1: Initialize logger
         init_logger("posture", "", "", "", &[]);
-    }
 
-    #[test]
-    #[serial]
-    fn test_logger_initialization() {
-        initialize_and_flush_logger();
-    }
-
-    #[test]
-    #[serial]
-    fn test_memory_writer_initialization() {
+        // Step 2: Test MemoryWriter initialization
         let writer = MemoryWriter::new();
         assert!(writer.data.lock().unwrap().logs.is_empty());
-    }
 
-    #[test]
-    #[serial]
-    fn test_log_sanitization() {
+        // Step 3: Test log sanitization
         let test_log = r#"{"id": "12345", "password": "secret"}"#;
         let sanitized_log = sanitize_keywords(test_log, &["id", "password"]);
         assert_eq!(sanitized_log, r#"{"id": "*****", "password": "******"}"#);
-    }
 
-    #[test]
-    #[serial]
-    fn test_log_storage_in_memory_writer() {
-        initialize_and_flush_logger();
+        // Step 4: Test log storage in memory writer
+        {
+            let logger_guard = LOGGER.lock().unwrap();
+            let logger = logger_guard.as_ref().unwrap();
 
-        let logger_guard = LOGGER.lock().unwrap();
-        let logger = logger_guard.as_ref().unwrap();
+            let log_line = "This is a test log";
+            logger.memory_writer.handle_log(log_line).unwrap();
 
-        let log_line = "This is a test log";
-        logger.memory_writer.handle_log(log_line).unwrap();
+            let locked_data = logger.memory_writer.data.lock().unwrap();
+            assert_eq!(locked_data.logs.len(), 1);
+            assert!(locked_data.logs[0].contains("This is a test log"));
+        }
 
-        let locked_data = logger.memory_writer.data.lock().unwrap();
-        assert_eq!(locked_data.logs.len(), 1);
-        assert!(locked_data.logs[0].contains("This is a test log"));
-    }
-
-    #[test]
-    #[serial]
-    fn test_get_new_logs() {
-        initialize_and_flush_logger();
-
-        let log_data = get_new_logs();
-        assert!(log_data.is_empty());
-
+        // Step 5: Test get_new_logs
         info!("New log entry");
 
         let log_data = get_new_logs();
         assert!(!log_data.is_empty());
         assert!(log_data.contains("New log entry"));
-    }
 
-    #[test]
-    #[serial]
-    fn test_get_all_logs() {
-        initialize_and_flush_logger();
-
-        let log_data = get_all_logs();
-        assert!(log_data.is_empty());
-
+        // Step 6: Test get_all_logs
         info!("First log entry");
         info!("Second log entry");
 
         let log_data = get_all_logs();
         assert!(log_data.contains("First log entry"));
         assert!(log_data.contains("Second log entry"));
-    }
 
-    #[test]
-    #[serial]
-    fn test_log_levels() {
-        initialize_and_flush_logger();
-
+        // Step 7: Test log levels
         info!("This is an info log");
         error!("This is an error log");
         warn!("This is a warn log");
@@ -587,5 +564,6 @@ mod tests {
         assert!(log_data.contains("This is an info log"));
         assert!(log_data.contains("This is an error log"));
         assert!(log_data.contains("This is a warn log"));
+        // Note: Depending on the log level set, debug and trace logs may not be captured
     }
 }

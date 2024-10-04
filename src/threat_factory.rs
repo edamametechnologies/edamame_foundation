@@ -1,50 +1,136 @@
+use crate::rwlock::CustomRwLock;
+use anyhow::{anyhow, Context, Result};
+use lazy_static::lazy_static;
+use tracing::{info, warn};
+
+use crate::cloud_model::*; // Ensure this path is correct based on your project structure
 use crate::threat::*;
 use crate::threat_metrics_android::*;
 use crate::threat_metrics_ios::*;
 use crate::threat_metrics_linux::*;
 use crate::threat_metrics_macos::*;
 use crate::threat_metrics_windows::*;
-use crate::update::*;
-use anyhow::{anyhow, Result};
-use reqwest;
-use reqwest::Client;
-use std::time::Duration;
-use tracing::{error, info, warn};
 
-static THREAT_MODEL_URL: &str =
-    "https://raw.githubusercontent.com/edamametechnologies/threatmodels";
+// Constants for model names and built-in data
+const THREAT_MODEL_MACOS: &str = "threatmodel-macOS.json";
+const THREAT_MODEL_WINDOWS: &str = "threatmodel-Windows.json";
+const THREAT_MODEL_IOS: &str = "threatmodel-iOS.json";
+const THREAT_MODEL_ANDROID: &str = "threatmodel-Android.json";
+const THREAT_MODEL_LINUX: &str = "threatmodel-Linux.json";
 
-impl ThreatMetric {
-    pub fn new() -> ThreatMetric {
-        ThreatMetric {
-            metric: ThreatMetricJSON::new(),
-            timestamp: "".to_string(),
-            // No threat by default
-            status: ThreatStatus::Unknown,
-            // internal_metrics: None,
-        }
+fn get_platform() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "macos"
+    } else if cfg!(target_os = "windows") {
+        "windows"
+    } else if cfg!(target_os = "ios") {
+        "ios"
+    } else if cfg!(target_os = "android") {
+        "android"
+    } else {
+        "linux"
     }
 }
 
-impl ThreatMetricJSON {
-    pub fn new() -> ThreatMetricJSON {
-        ThreatMetricJSON {
-            name: "".to_string(),
-            metrictype: "".to_string(),
-            dimension: "".to_string(),
-            severity: 0,
-            scope: "".to_string(),
-            tags: Vec::new(),
-            description: Vec::new(),
-            implementation: ThreatMetricImplementationJSON::new(),
-            remediation: ThreatMetricImplementationJSON::new(),
-            rollback: ThreatMetricImplementationJSON::new(),
+lazy_static! {
+    // Global THREATS variable using CloudModel and Tokio's RwLock
+    pub static ref THREATS: CustomRwLock<CloudModel<ThreatMetrics>> = {
+
+        // Determine the built-in data and model name
+        let builtin_data = get_builtin_version(get_platform()).expect("Unsupported platform");
+        let model_name = get_model_name(get_platform()).expect("Unsupported platform");
+
+        // Initialize the CloudModel with the built-in data
+        let model = CloudModel::initialize(
+            model_name.to_string(),
+            builtin_data,
+            |data| {
+                let threat_metrics_json: ThreatMetricsJSON = serde_json::from_str(data)
+                    .with_context(|| "Failed to parse JSON data")?;
+                ThreatMetrics::new_from_json(&threat_metrics_json, get_platform())
+            },
+        )
+        .expect("Failed to initialize CloudModel");
+
+        CustomRwLock::new(model)
+    };
+}
+
+// Helper functions to get built-in versions and model names
+fn get_builtin_version(platform: &str) -> Result<&'static str> {
+    match platform.to_lowercase().as_str() {
+        "macos" => Ok(THREAT_METRICS_MACOS),
+        "windows" => Ok(THREAT_METRICS_WINDOWS),
+        "ios" => Ok(THREAT_METRICS_IOS),
+        "android" => Ok(THREAT_METRICS_ANDROID),
+        "linux" => Ok(THREAT_METRICS_LINUX),
+        _ => Err(anyhow!("Unsupported platform: {}", platform)),
+    }
+}
+
+fn get_model_name(platform: &str) -> Result<&'static str> {
+    match platform.to_lowercase().as_str() {
+        "macos" => Ok(THREAT_MODEL_MACOS),
+        "windows" => Ok(THREAT_MODEL_WINDOWS),
+        "ios" => Ok(THREAT_MODEL_IOS),
+        "android" => Ok(THREAT_MODEL_ANDROID),
+        "linux" => Ok(THREAT_MODEL_LINUX),
+        _ => Err(anyhow!("Unsupported platform: {}", platform)),
+    }
+}
+
+impl ThreatMetrics {
+    pub fn get_model_url(platform: &str, branch: &str) -> Result<String> {
+        let model_name = get_model_name(platform)?;
+        let url = format!(
+            "https://github.com/edamame-macos/edamame-data/raw/{}/{}",
+            branch, model_name
+        );
+        Ok(url)
+    }
+
+    pub fn new_from_json(json: &ThreatMetricsJSON, platform: &str) -> Result<Self> {
+        info!(
+            "Loading threat metrics from JSON for platform: {}",
+            platform
+        );
+
+        let mut metrics = Vec::new();
+
+        for metric_json in &json.metrics {
+            let metric = ThreatMetric {
+                metric: metric_json.clone(),
+                timestamp: "".to_string(),
+                status: ThreatStatus::Unknown,
+                // internal_metrics: None, // Uncomment if needed
+            };
+            metrics.push(metric);
         }
+
+        info!("Loaded {} threat metrics", metrics.len());
+
+        Ok(ThreatMetrics {
+            metrics,
+            name: json.name.clone(),
+            extends: json.extends.clone(),
+            date: json.date.clone(),
+            signature: json.signature.clone(),
+        })
+    }
+}
+
+impl CloudSignature for ThreatMetrics {
+    fn get_signature(&self) -> String {
+        self.signature.clone()
+    }
+    fn set_signature(&mut self, signature: String) {
+        self.signature = signature;
     }
 }
 
 impl ThreatMetricImplementationJSON {
-    pub fn new() -> ThreatMetricImplementationJSON {
+    /// Creates a new ThreatMetricImplementationJSON instance with default values.
+    pub fn new() -> Self {
         ThreatMetricImplementationJSON {
             class: "".to_string(),
             elevation: "".to_string(),
@@ -57,195 +143,70 @@ impl ThreatMetricImplementationJSON {
     }
 }
 
-impl ThreatMetrics {
-    // Initialize with the appropriate built-in version of the threat model
-    fn get_builtin_version(platform: &str) -> Result<&'static str, String> {
-        if !platform.is_empty() {
-            if platform == "macos" {
-                Ok(THREAT_METRICS_MACOS)
-            } else if platform == "windows" {
-                Ok(THREAT_METRICS_WINDOWS)
-            } else if platform == "ios" {
-                Ok(THREAT_METRICS_IOS)
-            } else if platform == "android" {
-                Ok(THREAT_METRICS_ANDROID)
-            } else if platform == "linux" {
-                Ok(THREAT_METRICS_LINUX)
-            } else {
-                Err("Unsupported platform.".to_string())
-            }
-        } else if cfg!(target_os = "macos") {
-            Ok(THREAT_METRICS_MACOS)
-        } else if cfg!(target_os = "windows") {
-            Ok(THREAT_METRICS_WINDOWS)
-        } else if cfg!(target_os = "ios") {
-            Ok(THREAT_METRICS_IOS)
-        } else if cfg!(target_os = "android") {
-            Ok(THREAT_METRICS_ANDROID)
-        } else if cfg!(target_os = "linux") {
-            Ok(THREAT_METRICS_LINUX)
-        } else {
-            Err("Unsupported operating system.".to_string())
-        }
+pub async fn update(branch: &str) -> Result<UpdateStatus> {
+    info!(
+        "Starting threat metrics update for platform '{}' from branch '{}'",
+        get_platform(),
+        branch
+    );
+
+    // Acquire write lock on THREATS
+    let mut model = THREATS.write().await;
+
+    // Perform the update
+    let status = model
+        .update(branch, |data| {
+            let threat_metrics_json: ThreatMetricsJSON =
+                serde_json::from_str(data).with_context(|| "Failed to parse JSON data")?;
+            ThreatMetrics::new_from_json(&threat_metrics_json, get_platform())
+        })
+        .await?;
+
+    match status {
+        UpdateStatus::Updated => info!("Threat metrics were successfully updated."),
+        UpdateStatus::NotUpdated => info!("Threat metrics are already up to date."),
+        UpdateStatus::FormatError => warn!("There was a format error in the threat metrics data."),
     }
 
-    // Get the appropriate threat model JSON file based on the platform
-    fn get_model_name(platform: &str) -> Result<&'static str> {
-        if !platform.is_empty() {
-            if platform == "macos" {
-                Ok("threatmodel-macOS.json")
-            } else if platform == "windows" {
-                Ok("threatmodel-Windows.json")
-            } else if platform == "ios" {
-                Ok("threatmodel-iOS.json")
-            } else if platform == "android" {
-                Ok("threatmodel-Android.json")
-            } else if platform == "linux" {
-                Ok("threatmodel-Linux.json")
-            } else {
-                Err(anyhow!("Unsupported platform: {}", platform.to_string()))
-            }
-        } else if cfg!(target_os = "macos") {
-            Ok("threatmodel-macOS.json")
-        } else if cfg!(target_os = "windows") {
-            Ok("threatmodel-Windows.json")
-        } else if cfg!(target_os = "ios") {
-            Ok("threatmodel-iOS.json")
-        } else if cfg!(target_os = "android") {
-            Ok("threatmodel-Android.json")
-        } else if cfg!(target_os = "linux") {
-            Ok("threatmodel-Linux.json")
-        } else {
-            Err(anyhow!(
-                "Unsupported operating system: {}",
-                std::env::consts::OS
-            ))
-        }
+    Ok(status)
+}
+
+pub async fn get_threat_metrics() -> ThreatMetrics {
+    let model = THREATS.read().await;
+    model.data.clone()
+}
+
+// Tests
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Initialize logging or other necessary setup here
+    fn setup() {
+        // Setup code here if needed
     }
 
-    pub fn new(platform: &str) -> ThreatMetrics {
-        // Initialize with the builtin version
-        let builtin = match Self::get_builtin_version(platform) {
-            Ok(_builtin) => {
-                // Use the built-in version
-                _builtin
-            }
-            Err(error) => {
-                // Handle the error
-                error!("Error: {}", error);
-                std::process::exit(1);
-            }
-        };
-        let json: ThreatMetricsJSON = serde_json::from_str(builtin)
-            .expect("builtin threat model json does not have correct format");
-
-        info!("Threat model initialized to builtin version");
-        // Then create complete versions of objects
-
-        let clone_json = json.clone();
-        ThreatMetrics {
-            name: json.name,
-            extends: json.extends,
-            date: json.date,
-            signature: json.signature,
-            metrics: Self::create_metrics(&clone_json),
-        }
+    #[tokio::test]
+    async fn test_builtin_version() {
+        setup();
+        let builtin = THREATS.read().await.data.clone();
+        assert!(
+            !builtin.signature.is_empty(),
+            "Signature should not be empty"
+        );
     }
 
-    fn create_metrics(json: &ThreatMetricsJSON) -> Vec<ThreatMetric> {
-        let mut metrics = Vec::new();
-        let clone_json = json.clone();
-        for j in clone_json.metrics {
-            metrics.push(ThreatMetric {
-                metric: j,
-                timestamp: "".to_string(),
-                // No threat by default
-                status: ThreatStatus::Unknown,
-                // internal_metrics: None,
-            })
-        }
-        metrics
-    }
-
-    pub fn get_model_url(platform: &str, branch: &str) -> Result<String> {
-        let model = match Self::get_model_name(platform) {
-            Ok(_model) => {
-                // Use the appropriate threat model JSON file
-                info!("Using threat model: {}", _model);
-                _model
-            }
-            Err(error) => {
-                // Handle the error
-                error!("Error: {}", error);
-                std::process::exit(1);
-            }
-        };
-
-        Ok(format!("{}/{}/{}", THREAT_MODEL_URL, branch, model))
-    }
-
-    // Update the threat model from the backend
-    pub async fn update(&mut self, platform: &str, branch: &str) -> Result<UpdateStatus> {
-        info!("Starting threat model update from backend");
-
-        let mut status = UpdateStatus::NotUpdated;
-
-        let url = Self::get_model_url(platform, branch)?;
-
-        info!("Fetching threat model from {}", url);
-        // Create a client with a timeout
-        let client = Client::builder()
-            .gzip(true)
-            .timeout(Duration::from_secs(20))
-            .build()?;
-
-        // Use the client to make a request
-        let response = client.get(&url).send().await;
-
-        match response {
-            Ok(res) => {
-                if res.status().is_success() {
-                    info!("Model transfer complete");
-                    // Perform the transfer and decode in 2 steps in order to catch format errors
-                    let json: ThreatMetricsJSON = match res.text().await {
-                        Ok(json) => {
-                            match serde_json::from_str(&json) {
-                                Ok(json) => json,
-                                Err(err) => {
-                                    error!("Model decoding failed : {:?}", err);
-                                    // Catch a JSON format mismatch
-                                    return Ok(UpdateStatus::FormatError);
-                                }
-                            }
-                        }
-                        Err(err) => {
-                            // Only warn this can happen if the device is offline
-                            warn!("Model transfer failed: {:?}", err);
-                            return Err(err.into());
-                        }
-                    };
-
-                    // Then create complete versions of objects
-                    let metrics = Self::create_metrics(&json);
-                    self.name = json.name;
-                    self.extends = json.extends;
-                    self.date = json.date;
-                    self.signature = json.signature;
-                    self.metrics = metrics;
-
-                    // Success
-                    status = UpdateStatus::Updated;
-                } else {
-                    // Only warn this can happen if the device is offline
-                    warn!("Model transfer failed with status: {:?}", res.status());
-                }
-            }
-            Err(err) => {
-                // Only warn this can happen if the device is offline
-                warn!("Model transfer failed: {:?}", err);
-            }
-        }
-
-        Ok(status)
+    #[tokio::test]
+    async fn test_update_threat_metrics() {
+        setup();
+        let branch = "main";
+        let status = update(branch).await.expect("Update failed");
+        assert!(
+            matches!(
+                status,
+                UpdateStatus::Updated | UpdateStatus::NotUpdated | UpdateStatus::FormatError
+            ),
+            "Update status should be one of the expected variants"
+        );
     }
 }

@@ -78,6 +78,23 @@ pub struct ThreatMetricJSON {
     pub rollback: ThreatMetricImplementationJSON,
 }
 
+impl ThreatMetricJSON {
+    pub fn new() -> ThreatMetricJSON {
+        ThreatMetricJSON {
+            name: "".to_string(),
+            metrictype: "".to_string(),
+            dimension: "".to_string(),
+            severity: 0,
+            scope: "".to_string(),
+            tags: Vec::new(),
+            description: Vec::new(),
+            implementation: ThreatMetricImplementationJSON::new(),
+            remediation: ThreatMetricImplementationJSON::new(),
+            rollback: ThreatMetricImplementationJSON::new(),
+        }
+    }
+}
+
 impl Into<ThreatMetricJSONBackend> for ThreatMetricJSON {
     fn into(self) -> ThreatMetricJSONBackend {
         ThreatMetricJSONBackend {
@@ -102,6 +119,18 @@ pub struct ThreatMetricsJSON {
     pub date: String,
     pub signature: String,
     pub metrics: Vec<ThreatMetricJSON>,
+}
+
+impl ThreatMetricsJSON {
+    pub fn new() -> ThreatMetricsJSON {
+        ThreatMetricsJSON {
+            name: "".to_string(),
+            extends: "".to_string(),
+            date: "".to_string(),
+            signature: "".to_string(),
+            metrics: Vec::new(),
+        }
+    }
 }
 
 impl Into<ThreatMetricsJSONBackend> for ThreatMetricsJSON {
@@ -131,6 +160,16 @@ pub struct ThreatMetric {
     pub status: ThreatStatus,
 }
 
+impl ThreatMetric {
+    pub fn new() -> ThreatMetric {
+        ThreatMetric {
+            metric: ThreatMetricJSON::new(),
+            timestamp: "".to_string(),
+            status: ThreatStatus::Unknown,
+        }
+    }
+}
+
 impl Into<ThreatStatusBackend> for ThreatStatus {
     fn into(self) -> ThreatStatusBackend {
         match self {
@@ -154,11 +193,22 @@ impl Into<ThreatMetricBackend> for ThreatMetric {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, PartialOrd)]
 pub struct ThreatMetrics {
     pub metrics: Vec<ThreatMetric>,
-    // Copied field from the JSON threat model
     pub name: String,
     pub extends: String,
     pub date: String,
     pub signature: String,
+}
+
+impl ThreatMetrics {
+    pub fn new() -> ThreatMetrics {
+        ThreatMetrics {
+            metrics: Vec::new(),
+            name: "".to_string(),
+            extends: "".to_string(),
+            date: "".to_string(),
+            signature: "".to_string(),
+        }
+    }
 }
 
 impl Into<ThreatMetricsBackend> for ThreatMetrics {

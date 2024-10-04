@@ -1,30 +1,29 @@
+use crate::cloud_model::*;
 use crate::lanscan_port_info::*;
 use crate::lanscan_profiles_db::*;
-use crate::update::*;
+use crate::rwlock::CustomRwLock;
+use anyhow::{Context, Result};
 use dashmap::DashMap;
 use lazy_static::lazy_static;
-use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::error::Error;
-use std::time::Duration;
-use tracing::{error, info, trace, warn};
+use tracing::{info, trace, warn};
 
-const PROFILES_REPO: &str = "https://raw.githubusercontent.com/edamametechnologies/threatmodels";
+// Constants for repository and file names
 const PROFILES_NAME: &str = "lanscan-profiles-db.json";
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
-struct Attributes {
+pub struct Attributes {
     open_ports: Option<Vec<u16>>,
     mdns_services: Option<Vec<String>>,
     vendors: Option<Vec<String>>,
     hostnames: Option<Vec<String>>,
     banners: Option<Vec<String>>,
-    negate: Option<bool>, // New field to indicate negation
+    negate: Option<bool>, // Field to indicate negation
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
-enum Condition {
+pub enum Condition {
     Leaf(Attributes),
     Node {
         #[serde(rename = "type")]
@@ -34,39 +33,59 @@ enum Condition {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
-struct DeviceTypeRule {
+pub struct DeviceTypeRule {
     device_type: String,
     conditions: Vec<Condition>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-struct DeviceTypeListJSON {
+pub struct DeviceTypeListJSON {
     date: String,
     signature: String,
     profiles: Vec<DeviceTypeRule>,
 }
 
-struct DeviceTypeList {
-    profiles: DashMap<String, DeviceTypeRule>,
+impl CloudSignature for DeviceTypeList {
+    fn get_signature(&self) -> String {
+        self.signature.clone()
+    }
+    fn set_signature(&mut self, signature: String) {
+        self.signature = signature;
+    }
+}
+
+pub struct DeviceTypeList {
+    pub date: String,
+    pub signature: String,
+    pub profiles: DashMap<String, DeviceTypeRule>,
 }
 
 impl DeviceTypeList {
-    fn new_from_json(device_info: &DeviceTypeListJSON) -> Self {
+    pub fn new_from_json(device_info: DeviceTypeListJSON) -> Self {
         info!("Loading device profiles from JSON");
 
         let profiles = DashMap::new();
-        for profile in &device_info.profiles {
-            profiles.insert(profile.device_type.clone(), profile.clone());
+        for profile in device_info.profiles {
+            profiles.insert(profile.device_type.clone(), profile);
         }
 
-        DeviceTypeList { profiles }
+        DeviceTypeList {
+            date: device_info.date,
+            signature: device_info.signature,
+            profiles,
+        }
     }
 }
 
 lazy_static! {
-    static ref PROFILES: DeviceTypeList = {
-        let profiles_list: DeviceTypeListJSON = serde_json::from_str(DEVICE_PROFILES).unwrap();
-        DeviceTypeList::new_from_json(&profiles_list)
+    pub static ref PROFILES: CustomRwLock<CloudModel<DeviceTypeList>> = {
+        let model = CloudModel::initialize(PROFILES_NAME.to_string(), DEVICE_PROFILES, |data| {
+            let profiles_list: DeviceTypeListJSON =
+                serde_json::from_str(data).with_context(|| "Failed to parse JSON data")?;
+            Ok(DeviceTypeList::new_from_json(profiles_list))
+        })
+        .expect("Failed to initialize CloudModel");
+        CustomRwLock::new(model)
     };
 }
 
@@ -84,7 +103,7 @@ pub async fn device_type(
         hostname
     );
 
-    // To lower case as used in the profiles
+    // Convert inputs to lowercase for case-insensitive comparison
     let oui_vendor_lower = oui_vendor.to_lowercase();
     let hostname_lower = hostname.to_lowercase();
     let mdns_services_lower: Vec<String> = mdns_services
@@ -97,7 +116,10 @@ pub async fn device_type(
         .map(|info| info.banner.to_lowercase())
         .collect();
 
-    for profile in PROFILES.profiles.iter() {
+    // Acquire read lock on PROFILES
+    let profiles_lock = PROFILES.read().await;
+
+    for profile in profiles_lock.data.profiles.iter() {
         for condition in &profile.value().conditions {
             if match_condition(
                 condition,
@@ -147,15 +169,11 @@ fn match_condition(
 
             let mdns_match = match &attributes.mdns_services {
                 Some(services) if !services.is_empty() => {
-                    let match_result =
-                        services
+                    let match_result = services.iter().any(|service| {
+                        mdns_services
                             .iter()
-                            .filter(|service| !service.is_empty())
-                            .any(|service| {
-                                mdns_services
-                                    .iter()
-                                    .any(|mdns_service| mdns_service.contains(service))
-                            });
+                            .any(|mdns_service| mdns_service.contains(service))
+                    });
                     if match_result {
                         trace!("MDNS match: {:?} against {:?}", services, mdns_services);
                     }
@@ -166,10 +184,7 @@ fn match_condition(
 
             let vendor_match = match &attributes.vendors {
                 Some(vendors) if !vendors.is_empty() => {
-                    let match_result = vendors
-                        .iter()
-                        .filter(|vendor| !vendor.is_empty())
-                        .any(|vendor| oui_vendor.contains(vendor));
+                    let match_result = vendors.iter().any(|vendor| oui_vendor.contains(vendor));
                     if match_result {
                         trace!("Vendor match: {:?} against {:?}", vendors, oui_vendor);
                     }
@@ -180,10 +195,7 @@ fn match_condition(
 
             let hostname_match = match &attributes.hostnames {
                 Some(hostnames) if !hostnames.is_empty() => {
-                    let match_result = hostnames
-                        .iter()
-                        .filter(|host| !host.is_empty())
-                        .any(|host| hostname.contains(host));
+                    let match_result = hostnames.iter().any(|host| hostname.contains(host));
                     if match_result {
                         trace!("Hostname match: {:?} against {:?}", hostnames, hostname);
                     }
@@ -194,9 +206,9 @@ fn match_condition(
 
             let banner_match = match &attributes.banners {
                 Some(banners_attr) if !banners_attr.is_empty() => {
-                    let match_result = banners_attr.iter().filter(|banner| !banner.is_empty()).any(
-                        |banner_attr| banners.iter().any(|banner| banner.contains(banner_attr)),
-                    );
+                    let match_result = banners_attr.iter().any(|banner_attr| {
+                        banners.iter().any(|banner| banner.contains(banner_attr))
+                    });
                     if match_result {
                         trace!("Banner match: {:?} against {:?}", banners_attr, banners);
                     }
@@ -206,9 +218,6 @@ fn match_condition(
             };
 
             let result = port_match && mdns_match && vendor_match && hostname_match && banner_match;
-            if !result {
-                trace!("No match for {:?}", attributes);
-            }
 
             if attributes.negate.unwrap_or(false) {
                 !result
@@ -245,67 +254,129 @@ fn match_condition(
     }
 }
 
-pub async fn update(branch: &str) -> Result<UpdateStatus, Box<dyn Error>> {
+pub async fn update(branch: &str) -> Result<UpdateStatus> {
     info!("Starting profiles update from backend");
 
-    let mut status = UpdateStatus::NotUpdated;
-
-    let url = format!("{}/{}/{}", PROFILES_REPO, branch, PROFILES_NAME);
-
-    info!("Fetching port vulns from {}", url);
-
-    // Create a client with a long timeout as the file can be large
-    let client = Client::builder()
-        .gzip(true)
-        .timeout(Duration::from_secs(120))
-        .build()?;
-
-    // Use the client to make a request
-    let response = client.get(&url).send().await;
-    match response {
-        Ok(res) => {
-            if res.status().is_success() {
-                info!("Model transfer complete");
-                // Perform the transfer and decode in 2 steps in order to catch format errors
-                let json: DeviceTypeListJSON = match res.text().await {
-                    Ok(json) => {
-                        match serde_json::from_str(&json) {
-                            Ok(json) => json,
-                            Err(err) => {
-                                error!("Model decoding failed : {:?}", err);
-                                // Catch a JSON format mismatch
-                                return Ok(UpdateStatus::FormatError);
-                            }
-                        }
-                    }
-                    Err(err) => {
-                        // Only warn this can happen if the device is offline
-                        warn!("Model transfer failed: {:?}", err);
-                        return Err(err.into());
-                    }
-                };
-
-                // Clear existing profiles
-                PROFILES.profiles.clear();
-
-                // Insert new profiles
-                for profile in json.profiles {
-                    PROFILES
-                        .profiles
-                        .insert(profile.device_type.clone(), profile);
-                }
-
-                // Success
-                status = UpdateStatus::Updated;
-            } else {
-                // Only warn this can happen if the device is offline
-                warn!("Model transfer failed with status: {:?}", res.status());
-            }
-        }
-        Err(err) => {
-            // Only warn this can happen if the device is offline
-            warn!("Model transfer failed: {:?}", err);
-        }
-    }
+    let mut profiles_lock = PROFILES.write().await;
+    let status = profiles_lock
+        .update(branch, |data| {
+            let profiles_list: DeviceTypeListJSON =
+                serde_json::from_str(data).with_context(|| "Failed to parse JSON data")?;
+            Ok(DeviceTypeList::new_from_json(profiles_list))
+        })
+        .await?;
     Ok(status)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_match_condition() {
+        let condition = Condition::Leaf(Attributes {
+            open_ports: Some(vec![80, 443]),
+            mdns_services: Some(vec!["http".to_string(), "https".to_string()]),
+            vendors: Some(vec!["Cisco".to_string(), "Arista".to_string()]),
+            hostnames: Some(vec!["router".to_string(), "switch".to_string()]),
+            banners: Some(vec!["Cisco IOS".to_string(), "Arista EOS".to_string()]),
+            negate: Some(false),
+        });
+
+        let open_ports_set = HashSet::from([80, 443]);
+        let mdns_services = vec!["http".to_string(), "https".to_string()];
+        let oui_vendor = "Cisco";
+        let hostname = "router";
+        let banners = vec!["Cisco IOS".to_string(), "Arista EOS".to_string()];
+
+        assert!(match_condition(
+            &condition,
+            &open_ports_set,
+            &mdns_services,
+            &oui_vendor,
+            &hostname,
+            &banners
+        ));
+    }
+
+    #[test]
+    fn test_match_condition_negate() {
+        let condition = Condition::Leaf(Attributes {
+            open_ports: Some(vec![80, 443]),
+            mdns_services: Some(vec!["http".to_string(), "https".to_string()]),
+            vendors: Some(vec!["Cisco".to_string(), "Arista".to_string()]),
+            hostnames: Some(vec!["router".to_string(), "switch".to_string()]),
+            banners: Some(vec!["Cisco IOS".to_string(), "Arista EOS".to_string()]),
+            negate: Some(true),
+        });
+
+        let open_ports_set = HashSet::from([80, 443]);
+        let mdns_services = vec!["http".to_string(), "https".to_string()];
+        let oui_vendor = "Cisco";
+        let hostname = "router";
+        let banners = vec!["Cisco IOS".to_string(), "Arista EOS".to_string()];
+
+        assert!(!match_condition(
+            &condition,
+            &open_ports_set,
+            &mdns_services,
+            &oui_vendor,
+            &hostname,
+            &banners
+        ));
+    }
+
+    #[test]
+    fn test_match_condition_no_open_ports() {
+        let condition = Condition::Leaf(Attributes {
+            open_ports: None,
+            mdns_services: Some(vec!["http".to_string(), "https".to_string()]),
+            vendors: Some(vec!["Cisco".to_string(), "Arista".to_string()]),
+            hostnames: Some(vec!["router".to_string(), "switch".to_string()]),
+            banners: Some(vec!["Cisco IOS".to_string(), "Arista EOS".to_string()]),
+            negate: Some(false),
+        });
+
+        let open_ports_set = HashSet::new();
+        let mdns_services = vec!["http".to_string(), "https".to_string()];
+        let oui_vendor = "Cisco";
+        let hostname = "router";
+        let banners = vec!["Cisco IOS".to_string(), "Arista EOS".to_string()];
+
+        assert!(match_condition(
+            &condition,
+            &open_ports_set,
+            &mdns_services,
+            &oui_vendor,
+            &hostname,
+            &banners
+        ));
+    }
+
+    #[test]
+    fn test_match_condition_no_mdns_services() {
+        let condition = Condition::Leaf(Attributes {
+            open_ports: Some(vec![80, 443]),
+            mdns_services: None,
+            vendors: Some(vec!["Cisco".to_string(), "Arista".to_string()]),
+            hostnames: Some(vec!["router".to_string(), "switch".to_string()]),
+            banners: Some(vec!["Cisco IOS".to_string(), "Arista EOS".to_string()]),
+            negate: Some(false),
+        });
+
+        let open_ports_set = HashSet::from([80, 443]);
+        let mdns_services = vec![];
+        let oui_vendor = "Cisco";
+        let hostname = "router";
+        let banners = vec!["Cisco IOS".to_string(), "Arista EOS".to_string()];
+
+        assert!(match_condition(
+            &condition,
+            &open_ports_set,
+            &mdns_services,
+            &oui_vendor,
+            &hostname,
+            &banners
+        ));
+    }
 }
