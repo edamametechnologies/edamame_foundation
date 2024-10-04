@@ -146,6 +146,8 @@ jobs:
 
       - name: Run tests
         run: |
+          # Get the changed files
+          git fetch origin ${{ github.event.before }}
           git diff --name-only ${{ github.event.before }} ${{ github.sha }} > changed_files.txt
           if grep -qvFf <(echo "${{ steps.set-ignored-paths.outputs.IGNORED_PATHS }}") changed_files.txt; then
             if [ "${{ matrix.platform }}" = "android" ]; then
