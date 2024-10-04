@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_IOS: &str = r#"{
   "name": "threat model iOS",
   "extends": "none",
-  "date": "September 29th 2024",
-  "signature": "29f1aa4f2ab30dd12a61de3df1c8b2064147c28e1abf72e4cd27215fca6d140c",
+  "date": "October 04th 2024",
+  "signature": "b32f4533ce0486ea66bb4b3412169c8922bac937625f0e58e73b6ab66ae72bd4",
   "metrics": [
     {
       "name": "MDM profiles",

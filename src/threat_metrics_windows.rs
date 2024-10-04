@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_WINDOWS: &str = r#"{
   "name": "threat model Windows",
   "extends": "none",
-  "date": "September 29th 2024",
-  "signature": "4c72705df9e98f8ea3ccca7fbf6c61172e6d8f96ae50756273aec6b9304f0bb7",
+  "date": "October 04th 2024",
+  "signature": "be5f83930f5448d9dc20d3cadeb91cddc32a5ceda8f5c4c3eff9cecd320ec0d1",
   "metrics": [
     {
       "name": "edamame helper disabled",
