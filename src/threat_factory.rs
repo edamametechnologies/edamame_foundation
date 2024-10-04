@@ -143,19 +143,19 @@ impl ThreatMetricImplementationJSON {
     }
 }
 
-pub async fn update(branch: &str) -> Result<UpdateStatus> {
+pub async fn update(branch: &str, force: bool) -> Result<UpdateStatus> {
     info!(
         "Starting threat metrics update for platform '{}' from branch '{}'",
         get_platform(),
         branch
     );
 
-    // Acquire write lock on THREATS
-    let mut model = THREATS.write().await;
+    // Acquire lock on THREATS
+    let model = THREATS.read().await;
 
     // Perform the update
     let status = model
-        .update(branch, |data| {
+        .update(branch, force, |data| {
             let threat_metrics_json: ThreatMetricsJSON =
                 serde_json::from_str(data).with_context(|| "Failed to parse JSON data")?;
             ThreatMetrics::new_from_json(&threat_metrics_json, get_platform())
@@ -172,8 +172,7 @@ pub async fn update(branch: &str) -> Result<UpdateStatus> {
 }
 
 pub async fn get_threat_metrics() -> ThreatMetrics {
-    let model = THREATS.read().await;
-    model.data.clone()
+    THREATS.read().await.data.read().await.clone()
 }
 
 // Tests
@@ -189,9 +188,9 @@ mod tests {
     #[tokio::test]
     async fn test_builtin_version() {
         setup();
-        let builtin = THREATS.read().await.data.clone();
+        let builtin = THREATS.read().await.clone();
         assert!(
-            !builtin.signature.is_empty(),
+            !builtin.get_signature().await.is_empty(),
             "Signature should not be empty"
         );
     }
@@ -200,12 +199,23 @@ mod tests {
     async fn test_update_threat_metrics() {
         setup();
         let branch = "main";
-        let status = update(branch).await.expect("Update failed");
+        let status = update(branch, false).await.expect("Update failed");
         assert!(
-            matches!(
-                status,
-                UpdateStatus::Updated | UpdateStatus::NotUpdated | UpdateStatus::FormatError
-            ),
+            matches!(status, UpdateStatus::Updated | UpdateStatus::NotUpdated),
+            "Update status should be one of the expected variants"
+        );
+    }
+
+    // Forced update
+    #[tokio::test]
+    async fn test_forced_update_threat_metrics() {
+        setup();
+        let branch = "main";
+
+        // Run the update
+        let status = update(branch, true).await.expect("Update failed");
+        assert!(
+            matches!(status, UpdateStatus::Updated | UpdateStatus::NotUpdated),
             "Update status should be one of the expected variants"
         );
     }
