@@ -83,6 +83,7 @@ impl DeviceInfo {
         // Include the vulnerabilities
         let vulnerabilities: Vec<VulnerabilityInfoBackend> =
             get_vulns_of_vendor(&device.device_vendor)
+                .await
                 .iter()
                 .map(|vuln| vuln.clone().into())
                 .collect();
@@ -90,6 +91,7 @@ impl DeviceInfo {
         for port in device.open_ports.iter() {
             let mut port_info: PortInfoBackend = port.clone().into();
             port_info.vulnerabilities = get_vulns_of_port(port.port)
+                .await
                 .iter()
                 .map(|vuln| vuln.clone().into())
                 .collect();

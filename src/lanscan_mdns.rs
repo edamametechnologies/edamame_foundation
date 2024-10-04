@@ -9,7 +9,7 @@ use std::{net::IpAddr, sync::Arc};
 use tokio::sync::Mutex;
 use tokio::task;
 use tokio::time::Duration;
-use tracing::{info, trace, warn};
+use tracing::{debug, info, trace, warn};
 // Our own fork with minor adjustements
 use crate::runtime::async_spawn;
 use wez_mdns::{Host, QueryParameters};
@@ -61,8 +61,36 @@ pub async fn mdns_get_by_ipv4(ipv4: &IpAddr) -> Option<mDNSInfo> {
     locked_devices.iter().find_map(|(_hostname, mdns_info)| {
         if let Some(ip_addr) = &mdns_info.ip_addr {
             if ip_addr == ipv4 {
-                info!("Found mDNS entry for {}: {:?}", ipv4, mdns_info);
+                trace!("Found mDNS entry for {}: {:?}", ipv4, mdns_info);
                 Some(mdns_info.clone())
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    })
+}
+
+pub async fn mdns_get_by_ipv6(ipv6: &IpAddr) -> Option<mDNSInfo> {
+    let locked_devices = DEVICES.lock().await;
+    locked_devices.iter().find_map(|(_hostname, mdns_info)| {
+        if mdns_info.ipv6_addr.contains(ipv6) {
+            trace!("Found mDNS entry for {}: {:?}", ipv6, mdns_info);
+            Some(mdns_info.clone())
+        } else {
+            None
+        }
+    })
+}
+
+pub async fn mdns_get_hostname_by_ip(ip: &IpAddr) -> Option<String> {
+    let locked_devices = DEVICES.lock().await;
+    locked_devices.iter().find_map(|(_hostname, mdns_info)| {
+        if mdns_info.ip_addr == Some(*ip) {
+            trace!("Found mDNS entry for {}: {:?}", ip, mdns_info);
+            if !mdns_info.hostname.is_empty() {
+                Some(mdns_info.hostname.clone())
             } else {
                 None
             }
@@ -174,13 +202,13 @@ async fn process_host(host: Host, service_name: String) {
             }
             // Process the service and instance names
             if !mdns_info.services.contains(&service_name) {
-                info!("Found service {} for host {}", service_name, hostname);
+                debug!("Found service {} for host {}", service_name, hostname);
                 mdns_info.services.push(service_name.clone());
             }
 
             // Filter out the instances limited to the host name
             if !mdns_info.instances.contains(&instance) && &instance != hostname {
-                info!("Found instance {} for host {}", instance, hostname);
+                debug!("Found instance {} for host {}", instance, hostname);
                 mdns_info.instances.push(host.name.clone());
             }
 

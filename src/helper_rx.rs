@@ -1,7 +1,12 @@
 use crate::helper_proto::*;
 use crate::helper_rx_utility::*;
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux"),
+    feature = "packetcapture"
+))]
+use crate::lanscan_capture::LANScanCapture;
 use crate::runner_cli::*;
-use crate::threat::*;
+use crate::threat_factory::*;
 use base64::engine::general_purpose;
 use base64::Engine;
 use edamame_proto::edamame_helper_server::{EdamameHelper, EdamameHelperServer};
@@ -23,8 +28,16 @@ use tonic::transport::{Certificate, Identity, Server, ServerTlsConfig};
 use tonic::{Code, Request, Response, Status};
 use tracing::{error, info, trace, warn};
 
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux"),
+    feature = "packetcapture"
+))]
 lazy_static! {
-    pub static ref THREATS: Arc<Mutex<ThreatMetrics>> = Arc::new(Mutex::new(ThreatMetrics::new("")));
+    pub static ref CAPTURE: Arc<Mutex<LANScanCapture>> =
+        Arc::new(Mutex::new(LANScanCapture::new()));
+}
+
+lazy_static! {
     // Branch name
     pub static ref BRANCH: Arc<Mutex<String>> = Arc::new(Mutex::new("".to_string()));
 }
@@ -239,11 +252,9 @@ pub async fn rpc_run(
             let username = arg2;
 
             // Lock the threats object
-            trace!("Locking THREATS - start");
-            let mut metrics = THREATS.lock().await;
-            trace!("Locking THREATS - end");
+            let metrics = THREATS.read().await;
             // Get a copy of the current signature
-            let current_signature = metrics.signature.clone();
+            let current_signature = metrics.get_signature();
             // Force update if signature mismatch
             if signature != current_signature {
                 info!(
@@ -252,11 +263,11 @@ pub async fn rpc_run(
                 );
                 // Perform update
                 let branch = BRANCH.lock().await.clone();
-                match metrics.update("", &branch).await {
+                match update(&branch).await {
                     Ok(_) => {
                         info!(
                             "Updated model from backend successfully - new signature is: {}",
-                            metrics.signature
+                            metrics.get_signature()
                         );
                     }
                     Err(e) => {
@@ -269,12 +280,13 @@ pub async fn rpc_run(
 
             let mut implementation = None;
             // Extract back the threat by name
-            for m in &metrics.metrics {
+            let metrics = get_threat_metrics().await;
+            for m in metrics.metrics {
                 if m.metric.name == threat {
                     match subordertype {
-                        "capture" => implementation = Some(&m.metric.implementation),
-                        "remediate" => implementation = Some(&m.metric.remediation),
-                        "rollback" => implementation = Some(&m.metric.rollback),
+                        "capture" => implementation = Some(m.metric.implementation.clone()),
+                        "remediate" => implementation = Some(m.metric.remediation.clone()),
+                        "rollback" => implementation = Some(m.metric.rollback.clone()),
                         _ => {
                             return order_error(
                                 &format!(
@@ -399,6 +411,95 @@ pub async fn rpc_run(
                 {
                     Ok("".to_string())
                 }
+            }
+            #[cfg(all(
+                any(target_os = "macos", target_os = "linux"),
+                feature = "packetcapture"
+            ))]
+            "start_capture" => {
+                let whitelist_name = arg1;
+                CAPTURE.lock().await.start(whitelist_name).await;
+                Ok("".to_string())
+            }
+            #[cfg(all(
+                any(target_os = "macos", target_os = "linux"),
+                feature = "packetcapture"
+            ))]
+            "stop_capture" => {
+                CAPTURE.lock().await.stop().await;
+                Ok("".to_string())
+            }
+            #[cfg(all(
+                any(target_os = "macos", target_os = "linux"),
+                feature = "packetcapture"
+            ))]
+            "get_connections" => {
+                let sessions = CAPTURE.lock().await.get_connections().await;
+                let json_sessions = match serde_json::to_string(&sessions) {
+                    Ok(json) => json,
+                    Err(e) => {
+                        error!("Error serializing connections to JSON: {}", e);
+                        return order_error(
+                            &format!("error serializing connections to JSON: {}", e),
+                            false,
+                        );
+                    }
+                };
+                Ok(json_sessions)
+            }
+            #[cfg(all(
+                any(target_os = "macos", target_os = "linux"),
+                feature = "packetcapture"
+            ))]
+            "get_active_connections" => {
+                let active_connections = CAPTURE.lock().await.get_active_connections().await;
+                let json_active_connections = match serde_json::to_string(&active_connections) {
+                    Ok(json) => json,
+                    Err(e) => {
+                        error!("Error serializing active connections to JSON: {}", e);
+                        return order_error(
+                            &format!("error serializing active connections to JSON: {}", e),
+                            false,
+                        );
+                    }
+                };
+                Ok(json_active_connections)
+            }
+            #[cfg(all(
+                any(target_os = "macos", target_os = "linux"),
+                feature = "packetcapture"
+            ))]
+            "get_whitelist_conformance" => {
+                let conformance = CAPTURE.lock().await.get_whitelist_conformance().await;
+                let json_conformance = match serde_json::to_string(&conformance) {
+                    Ok(json) => json,
+                    Err(e) => {
+                        error!("Error serializing whitelist conformance to JSON: {}", e);
+                        return order_error(
+                            &format!("error serializing whitelist conformance to JSON: {}", e),
+                            false,
+                        );
+                    }
+                };
+                Ok(json_conformance)
+            }
+            #[cfg(all(
+                any(target_os = "macos", target_os = "linux"),
+                feature = "packetcapture"
+            ))]
+            "get_whitelist_exceptions" => {
+                let exceptions = CAPTURE.lock().await.get_whitelist_exceptions().await;
+                let json_exceptions = match serde_json::to_string(&exceptions) {
+                    Ok(json) => json,
+                    Err(e) => {
+                        error!("Error serializing whitelist exceptions to JSON: {}", e);
+                        return order_error(
+                            &format!("error serializing whitelist exceptions to JSON: {}", e),
+                            false,
+                        );
+                    }
+                };
+                Ok(json_exceptions)
             }
             _ => order_error(
                 &format!("unknown or unimplemented utilityorder {}", subordertype),

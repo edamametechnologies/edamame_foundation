@@ -1,0 +1,168 @@
+name: Cross-platform Tests
+
+on:
+  pull_request:
+    branches: ["*"]
+  workflow_dispatch:
+  push:
+    branches:
+      - 'dev'
+      - 'main'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  EDAMAME_APP_SENTRY: ${{ secrets.EDAMAME_APP_SENTRY }}
+  PWNED_API_KEY: ${{ secrets.PWNED_API_KEY }}
+  EDAMAME_TARGET: ${{ secrets.EDAMAME_TARGET }}
+  EDAMAME_CA_PEM: ${{ secrets.EDAMAME_CA_PEM }}
+  EDAMAME_CLIENT_PEM: ${{ secrets.EDAMAME_CLIENT_PEM }}
+  EDAMAME_CLIENT_KEY: ${{ secrets.EDAMAME_CLIENT_KEY }}
+  LAMBDA_SIGNATURE: ${{ secrets.LAMBDA_SIGNATURE }}
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            protobuf_install: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+          - os: macos-latest
+            protobuf_install: brew install protobuf
+          - os: windows-latest
+            protobuf_install: choco install protoc
+          - os: macos-latest
+            platform: ios
+            protobuf_install: brew install protobuf
+          - os: ubuntu-latest
+            platform: android
+            protobuf_install: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - name: Setup EDAMAME Posture
+        uses: edamametechnologies/edamame_posture_action@v0
+        with:
+          edamame_user: ${{ vars.EDAMAME_POSTURE_USER }}
+          edamame_domain: ${{ vars.EDAMAME_POSTURE_DOMAIN }}
+          edamame_pin: ${{ secrets.EDAMAME_POSTURE_PIN }}
+          edamame_id: ${{ github.run_id }}
+          auto_remediate: true
+          network_scan: true
+          checkout: true
+
+      - name: Set ignored paths
+        id: set-ignored-paths
+        run: |
+          if [ "${{ matrix.os }}" = "ubuntu-latest" ] && [ "${{ matrix.platform }}" != "android" ]; then
+            echo "IGNORED_PATHS<<EOF" >> $GITHUB_OUTPUT
+            echo "windows/**" >> $GITHUB_OUTPUT
+            echo "macos/**" >> $GITHUB_OUTPUT
+            echo "ios/**" >> $GITHUB_OUTPUT
+            echo "android/**" >> $GITHUB_OUTPUT
+            echo "src/*windows*.rs" >> $GITHUB_OUTPUT
+            echo "src/*macos*.rs" >> $GITHUB_OUTPUT
+            echo "src/*ios*.rs" >> $GITHUB_OUTPUT
+            echo "src/*android*.rs" >> $GITHUB_OUTPUT
+            echo ".github/workflows/*windows*.yml" >> $GITHUB_OUTPUT
+            echo ".github/workflows/*macos*.yml" >> $GITHUB_OUTPUT
+            echo ".github/workflows/*ios*.yml" >> $GITHUB_OUTPUT
+            echo ".github/workflows/*android*.yml" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          elif [ "${{ matrix.os }}" = "macos-latest" ] && [ "${{ matrix.platform }}" != "ios" ]; then
+            echo "IGNORED_PATHS<<EOF" >> $GITHUB_OUTPUT
+            echo "windows/**" >> $GITHUB_OUTPUT
+            echo "linux/**" >> $GITHUB_OUTPUT
+            echo "snap/**" >> $GITHUB_OUTPUT
+            echo "android/**" >> $GITHUB_OUTPUT
+            echo "ios/**" >> $GITHUB_OUTPUT
+            echo "src/*windows*.rs" >> $GITHUB_OUTPUT
+            echo "src/*linux*.rs" >> $GITHUB_OUTPUT
+            echo "src/*android*.rs" >> $GITHUB_OUTPUT
+            echo "src/*ios*.rs" >> $GITHUB_OUTPUT
+            echo ".github/workflows/*windows*.yml" >> $GITHUB_OUTPUT
+            echo ".github/workflows/*linux*.yml" >> $GITHUB_OUTPUT
+            echo ".github/workflows/*android*.yml" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          elif [ "${{ matrix.os }}" = "windows-latest" ]; then
+            echo "IGNORED_PATHS<<EOF" >> $GITHUB_OUTPUT
+            echo "linux/**" >> $GITHUB_OUTPUT
+            echo "snap/**" >> $GITHUB_OUTPUT
+            echo "macos/**" >> $GITHUB_OUTPUT
+            echo "ios/**" >> $GITHUB_OUTPUT
+            echo "android/**" >> $GITHUB_OUTPUT
+            echo "src/*linux*.rs" >> $GITHUB_OUTPUT
+            echo "src/*macos*.rs" >> $GITHUB_OUTPUT
+            echo "src/*ios*.rs" >> $GITHUB_OUTPUT
+            echo "src/*android*.rs" >> $GITHUB_OUTPUT
+            echo ".github/workflows/*linux*.yml" >> $GITHUB_OUTPUT
+            echo ".github/workflows/*macos*.yml" >> $GITHUB_OUTPUT
+            echo ".github/workflows/*ios*.yml" >> $GITHUB_OUTPUT
+            echo ".github/workflows/*android*.yml" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          elif [ "${{ matrix.platform }}" = "ios" ]; then
+            echo "IGNORED_PATHS<<EOF" >> $GITHUB_OUTPUT
+            echo "windows/**" >> $GITHUB_OUTPUT
+            echo "linux/**" >> $GITHUB_OUTPUT
+            echo "snap/**" >> $GITHUB_OUTPUT
+            echo "android/**" >> $GITHUB_OUTPUT
+            echo "src/*windows*.rs" >> $GITHUB_OUTPUT
+            echo "src/*linux*.rs" >> $GITHUB_OUTPUT
+            echo "src/*android*.rs" >> $GITHUB_OUTPUT
+            echo ".github/workflows/*windows*.yml" >> $GITHUB_OUTPUT
+            echo ".github/workflows/*linux*.yml" >> $GITHUB_OUTPUT
+            echo ".github/workflows/*android*.yml" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          elif [ "${{ matrix.platform }}" = "android" ]; then
+            echo "IGNORED_PATHS<<EOF" >> $GITHUB_OUTPUT
+            echo "windows/**" >> $GITHUB_OUTPUT
+            echo "macos/**" >> $GITHUB_OUTPUT
+            echo "ios/**" >> $GITHUB_OUTPUT
+            echo "src/*windows*.rs" >> $GITHUB_OUTPUT
+            echo "src/*macos*.rs" >> $GITHUB_OUTPUT
+            echo "src/*ios*.rs" >> $GITHUB_OUTPUT
+            echo ".github/workflows/*windows*.yml" >> $GITHUB_OUTPUT
+            echo ".github/workflows/*macos*.yml" >> $GITHUB_OUTPUT
+            echo ".github/workflows/*ios*.yml" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          fi
+        shell: bash
+
+      - name: Install protobuf
+        run: ${{ matrix.protobuf_install }}
+
+      - name: Setup Android SDK
+        if: matrix.platform == 'android'
+        uses: android-actions/setup-android@v2
+
+      - name: Setup Xcode
+        if: matrix.platform == 'ios'
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Run tests
+        run: |
+          git diff --name-only ${{ github.event.before }} ${{ github.sha }} > changed_files.txt
+          if grep -qvFf <(echo "${{ steps.set-ignored-paths.outputs.IGNORED_PATHS }}") changed_files.txt; then
+            if [ "${{ matrix.platform }}" = "android" ]; then
+              # Run Android-specific tests
+              echo "Running Android tests"
+              # Add your Android test command here, e.g.:
+              # ./gradlew test
+            elif [ "${{ matrix.platform }}" = "ios" ]; then
+              # Run iOS-specific tests
+              echo "Running iOS tests"
+              # Add your iOS test command here, e.g.:
+              # xcodebuild test -scheme YourScheme -destination 'platform=iOS Simulator,name=iPhone 12'
+            else
+              # Run default tests for other platforms
+              make test
+            fi
+          else
+            echo "No relevant changes. Skipping tests."
+          fi
+        shell: bash

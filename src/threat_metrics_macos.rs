@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_MACOS: &str = r#"{
   "name": "threat model macOS",
   "extends": "none",
-  "date": "August 09th 2024",
-  "signature": "ce55925e3b67b838407df4a55e81c5fa38effc9d9d07c3b636f4b084d4fd4d4f",
+  "date": "September 25th 2024",
+  "signature": "d27c5a73c2834fb862b3c2f1205f281471d0f049ac58db78a0071c5d7bfc963d",
   "metrics": [
     {
       "name": "edamame helper disabled",
@@ -103,7 +103,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "minversion": 12,
         "maxversion": 0,
         "class": "cli",
-        "elevation": "admin",
+        "elevation": "system",
         "target": "/usr/libexec/ApplicationFirewall/socketfilterfw --getstealthmode | grep disabled",
         "education": []
       },
@@ -133,7 +133,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "system",
-        "target": "/usr/libexec/ApplicationFirewall/socketfilterfw --setstealthmode off && defaults write /Library/Preferences/com.apple.alf globalstate -int 0; sleep 1; defaults write /Library/Preferences/com.apple.alf globalstate -int 1",
+        "target": "/usr/libexec/ApplicationFirewall/socketfilterfw --setstealthmode off",
         "education": [
           {
             "locale": "EN",
@@ -445,8 +445,8 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "minversion": 12,
         "maxversion": 0,
         "class": "cli",
-        "elevation": "globalpreferences",
-        "target": "defaults read /Library/Preferences/com.apple.alf globalstate | grep 0",
+        "elevation": "system",
+        "target": "/usr/libexec/ApplicationFirewall/socketfilterfw --getglobalstate | grep disabled",
         "education": []
       },
       "remediation": {
@@ -455,7 +455,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "system",
-        "target": "defaults write /Library/Preferences/com.apple.alf globalstate -int 2",
+        "target": "/usr/libexec/ApplicationFirewall/socketfilterfw --setglobalstate on",
         "education": [
           {
             "locale": "EN",
@@ -475,7 +475,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "system",
-        "target": "defaults write /Library/Preferences/com.apple.alf globalstate -int 0 && launchctl unload /System/Library/LaunchDaemons/com.apple.alf.agent.plist && launchctl load /System/Library/LaunchDaemons/com.apple.alf.agent.plist&& killall socketfilterfw || true",
+        "target": "/usr/libexec/ApplicationFirewall/socketfilterfw --setglobalstate off",
         "education": [
           {
             "locale": "EN",

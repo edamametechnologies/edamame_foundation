@@ -1,20 +1,19 @@
 [package]
 name = "edamame_foundation"
-version = "0.3.4"
+version = "0.3.5"
 edition = "2021"
 
 [lints.rust]
 async_fn_in_trait = "allow"
 
 [features]
-default = ["helper"]
-helper = ["tonic", "prost", "tonic-build", "run_script", "powershell_script"] # Include helper related dependencies by default
-nohelper = [] # When this feature is enabled, `helper` dependencies are excluded
+default = []
+packetcapture = [ "pcap", "pnet_packet", "hickory-resolver", "dns-parser", "sysinfo", "netstat2" ]
 
 [lib]
 # Dynamic lib version is not used on apple platforms as it's painful, but we must use it on Windows, Linux and Android
 # We must keep lib if we want to build targets with cargo
-crate-type = ["staticlib", "cdylib", "lib"]
+crate-type = [ "staticlib", "cdylib", "lib" ]
 
 [dependencies]
 edamame_backend = { git = "https://github.com/edamametechnologies/edamame_backend", version = "0.3.3" }
@@ -50,18 +49,19 @@ tracing-appender = "0.2.3"
 humantime = "2.1.0"
 
 # gRPC server/client, marked as optional
-tonic = { version = "0.12.1", features = ["tls"], optional = true }
-prost = { version = "0.13.1", optional = true }
+tonic = { version = "0.12.1", features = ["tls"] }
+prost = "0.13.1"
 
 base64 = "0.22.1"
 
 # CLI support
-run_script = { version = "0.10.1", optional = true }
-powershell_script = { version = "1.1.0", optional = true }
+run_script = "0.11.0"
+powershell_script = "1.1.0"
 
 # Async
 async-trait = "0.1.81"
 parking_lot = "0.12.3"
+futures = "0.3.30"
 futures-util = "0.3.30"
 tokio = { version = "1.39.2", features = ["full", "tracing"] }
 dashmap = "6.0.1"
@@ -111,6 +111,19 @@ network-interface = "2.0.0"
 # Libpnet is a dependency that is not working on iOS/Android and depends on WinPcap on windows (that we don't want to ship with the binary)
 [target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
 arp-toolkit = "0.3.2"
+# Capture on macOS, Linux (Windows not enabled pending license for ngpcap)
+# pcap requires libpcap-devel on Linux, and Npcap on Windows
+pcap = { version = "2.2.0" , optional = true }
+pnet_packet = { version = "0.35.0", optional = true }
+hickory-resolver = { version = "0.24.1", optional = true }
+dns-parser = { version = "0.8.0", optional = true }
+# System information
+sysinfo = { version = "0.31.4", optional = true }
+netstat2 = { version = "0.9.1", optional = true }
+
+# Windows
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.58.0", features = [ "Data_Xml_Dom", "Win32_Foundation", "Win32_Security", "Win32_System_Threading", "Win32_System_SystemServices", "Win32_UI_WindowsAndMessaging" ] }
 
 # macOS - system-configuration-sys is including a symbol that is rejected by the App Store
 [patch.crates-io]
@@ -123,7 +136,7 @@ tracing-android = "0.2.0"
 
 # iOS or macOS
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
-tracing-oslog = "0.1.2"
+tracing-oslog = "0.2.0"
 
 [dev-dependencies]
 serial_test = "3.1.1"
@@ -132,5 +145,5 @@ serial_test = "3.1.1"
 
 # Conditional compilation for build dependencies
 # protobuf->Rust compiler
-tonic-build = { version = "0.12.1", optional = true }
+tonic-build = "0.12.1"
 
