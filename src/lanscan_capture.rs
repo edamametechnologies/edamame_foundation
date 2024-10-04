@@ -521,24 +521,30 @@ impl LANScanCapture {
     }
 
     // Get connections as a vector of ConnectionInfo
-    pub async fn get_connections(&self) -> Vec<ConnectionInfo> {
+    pub async fn get_connections(&self, local_traffic: bool) -> Vec<ConnectionInfo> {
         let mut connections_vec = Vec::new();
         for key in self.connections.iter() {
             if let Some(entry) = self.connections.get(&key.connection) {
                 connections_vec.push(entry.clone());
             }
         }
+        if local_traffic {
+            connections_vec = Self::filter_local_traffic(&connections_vec);
+        }
         connections_vec
     }
 
     // Active connections as a vector of ConnectionInfo
-    pub async fn get_active_connections(&self) -> Vec<ConnectionInfo> {
+    pub async fn get_active_connections(&self, local_traffic: bool) -> Vec<ConnectionInfo> {
         // Get the connections from the DashMap that match the keys in the active_connections Vec
         let mut active_connections_vec = Vec::new();
         for key in self.active_connections.read().await.iter() {
             if let Some(entry) = self.connections.get(key) {
                 active_connections_vec.push(entry.clone());
             }
+        }
+        if local_traffic {
+            active_connections_vec = Self::filter_local_traffic(&active_connections_vec);
         }
         active_connections_vec
     }
