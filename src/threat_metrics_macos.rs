@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_MACOS: &str = r#"{
   "name": "threat model macOS",
   "extends": "none",
-  "date": "September 25th 2024",
-  "signature": "d27c5a73c2834fb862b3c2f1205f281471d0f049ac58db78a0071c5d7bfc963d",
+  "date": "September 29th 2024",
+  "signature": "e82a7ea4507d6ce9dba176adfb9eeec35bb81f65d7bb6c5ba6bc90fe7329f55f",
   "metrics": [
     {
       "name": "edamame helper disabled",
