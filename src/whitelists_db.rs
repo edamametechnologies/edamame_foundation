@@ -1,6 +1,6 @@
 // Built in default whitelists db
 pub static WHITELISTS: &str = r#"{
-  "date": "September 29th 2024",
+  "date": "October 04th 2024",
   "whitelists": [
     {
       "name": "base_whitelist",
@@ -299,5 +299,5 @@ pub static WHITELISTS: &str = r#"{
       "endpoints": []
     }
   ],
-  "signature": "2843ee213ad28eb4f4b8213055418cd3531d967c502513ee66826022f5d8533f"
+  "signature": "99ada0f91fb2df3694cb8feba3cbe31ccafa76ce2dba78b00f01986bda02cf14"
 }"#;
