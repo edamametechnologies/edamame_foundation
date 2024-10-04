@@ -177,11 +177,15 @@ pub async fn is_destination_in_whitelist(
     let mut visited = HashSet::new();
     visited.insert(whitelist_name.to_string());
 
-    // Acquire read lock on LISTS asynchronously
+    // Acquire lock on LISTS
     let model = LISTS.read().await;
     let lists = &model.data;
 
-    let endpoints = match lists.get_all_endpoints(whitelist_name, &mut visited) {
+    let endpoints = match lists
+        .read()
+        .await
+        .get_all_endpoints(whitelist_name, &mut visited)
+    {
         Ok(endpoints) => endpoints,
         Err(err) => {
             warn!("Error retrieving endpoints: {:?}", err);
@@ -213,12 +217,12 @@ fn port_matches(port: u16, whitelist_port: Option<u16>) -> bool {
 pub async fn update_whitelists(branch: &str) -> Result<UpdateStatus> {
     info!("Starting whitelists update from backend");
 
-    // Acquire write lock on LISTS
-    let mut model = LISTS.write().await;
+    // Acquire lock on LISTS
+    let model = LISTS.read().await;
 
     // Perform the update
     let status = model
-        .update(branch, |data| {
+        .update(branch, false, |data| {
             let whitelist_info_json: WhitelistsJSON =
                 serde_json::from_str(data).with_context(|| "Failed to parse JSON data")?;
             Ok(Whitelists::new_from_json(whitelist_info_json))

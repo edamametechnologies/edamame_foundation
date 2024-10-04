@@ -76,6 +76,8 @@ pub async fn get_vendors() -> Vec<String> {
     let vulns_lock = VULNS.read().await;
     let vendors = vulns_lock
         .data
+        .read()
+        .await
         .vendor_vulns
         .iter()
         .map(|entry| entry.key().clone())
@@ -89,6 +91,8 @@ pub async fn get_description_from_vendor(vendor: &str) -> String {
     let vulns_lock = VULNS.read().await;
     let description = vulns_lock
         .data
+        .read()
+        .await
         .vendor_vulns
         .get(vendor)
         .map_or_else(|| "".to_string(), |v| v.vendor.clone());
@@ -99,7 +103,7 @@ pub async fn get_description_from_vendor(vendor: &str) -> String {
 pub async fn get_vulns_of_vendor(vendor: &str) -> Vec<VulnerabilityInfo> {
     trace!("Accessing VULNS - start");
     let vulns_lock = VULNS.read().await;
-    let vendor_vulns = &vulns_lock.data.vendor_vulns;
+    let vendor_vulns = &vulns_lock.data.read().await.vendor_vulns;
     trace!("Accessing VULNS - end");
 
     let mut vendor_name = vendor.to_string();
@@ -124,12 +128,12 @@ pub async fn get_vulns_names_of_vendor(vendor: &str) -> Vec<String> {
     vulns.iter().map(|vuln| vuln.name.clone()).collect()
 }
 
-pub async fn update(branch: &str) -> Result<UpdateStatus> {
+pub async fn update(branch: &str, force: bool) -> Result<UpdateStatus> {
     info!("Starting vendor vulns update from backend");
 
-    let mut vulns_lock = VULNS.write().await;
+    let vulns_lock = VULNS.read().await;
     let status = vulns_lock
-        .update(branch, |data| {
+        .update(branch, force, |data| {
             let vuln_info_json: VulnerabilityVendorInfoListJSON = serde_json::from_str(data)?;
             Ok(VulnerabilityInfoList::new_from_json(&vuln_info_json))
         })

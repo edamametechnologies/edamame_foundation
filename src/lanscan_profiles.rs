@@ -119,7 +119,7 @@ pub async fn device_type(
     // Acquire read lock on PROFILES
     let profiles_lock = PROFILES.read().await;
 
-    for profile in profiles_lock.data.profiles.iter() {
+    for profile in profiles_lock.data.read().await.profiles.iter() {
         for condition in &profile.value().conditions {
             if match_condition(
                 condition,
@@ -254,12 +254,12 @@ fn match_condition(
     }
 }
 
-pub async fn update(branch: &str) -> Result<UpdateStatus> {
+pub async fn update(branch: &str, force: bool) -> Result<UpdateStatus> {
     info!("Starting profiles update from backend");
 
-    let mut profiles_lock = PROFILES.write().await;
+    let profiles_lock = PROFILES.read().await;
     let status = profiles_lock
-        .update(branch, |data| {
+        .update(branch, force, |data| {
             let profiles_list: DeviceTypeListJSON =
                 serde_json::from_str(data).with_context(|| "Failed to parse JSON data")?;
             Ok(DeviceTypeList::new_from_json(profiles_list))

@@ -254,7 +254,7 @@ pub async fn rpc_run(
             // Lock the threats object
             let metrics = THREATS.read().await;
             // Get a copy of the current signature
-            let current_signature = metrics.get_signature();
+            let current_signature = metrics.get_signature().await;
             // Force update if signature mismatch
             if signature != current_signature {
                 info!(
@@ -263,11 +263,11 @@ pub async fn rpc_run(
                 );
                 // Perform update
                 let branch = BRANCH.lock().await.clone();
-                match update(&branch).await {
+                match update(&branch, false).await {
                     Ok(_) => {
                         info!(
                             "Updated model from backend successfully - new signature is: {}",
-                            metrics.get_signature()
+                            metrics.get_signature().await
                         );
                     }
                     Err(e) => {

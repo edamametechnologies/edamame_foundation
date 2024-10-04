@@ -96,6 +96,8 @@ pub async fn get_ports() -> Vec<u16> {
     let vulns_lock = VULNS.read().await;
     let ports = vulns_lock
         .data
+        .read()
+        .await
         .port_vulns
         .iter()
         .map(|entry| *entry.key())
@@ -113,6 +115,8 @@ pub async fn get_description_from_port(port: u16) -> String {
     let vulns_lock = VULNS.read().await;
     let description = vulns_lock
         .data
+        .read()
+        .await
         .port_vulns
         .get(&port)
         .map_or_else(|| "".to_string(), |port_info| port_info.description.clone());
@@ -125,6 +129,8 @@ pub async fn get_http_ports() -> Vec<u16> {
     let vulns_lock = VULNS.read().await;
     let http_ports = vulns_lock
         .data
+        .read()
+        .await
         .http_ports
         .iter()
         .map(|entry| *entry.key())
@@ -138,6 +144,8 @@ pub async fn get_https_ports() -> Vec<u16> {
     let vulns_lock = VULNS.read().await;
     let https_ports = vulns_lock
         .data
+        .read()
+        .await
         .https_ports
         .iter()
         .map(|entry| *entry.key())
@@ -151,6 +159,8 @@ pub async fn get_vulns_of_port(port: u16) -> Vec<VulnerabilityInfo> {
     let vulns_lock = VULNS.read().await;
     let mut vulnerabilities = vulns_lock
         .data
+        .read()
+        .await
         .port_vulns
         .get(&port)
         .map_or_else(Vec::new, |port_info| port_info.vulnerabilities.clone());
@@ -165,10 +175,15 @@ pub async fn get_vulns_names_of_port(port: u16) -> Vec<String> {
 }
 
 pub async fn get_device_criticality(port_info_list: &[PortInfo]) -> String {
+    // Acquire the necessary locks before the closure
     let vulns_lock = VULNS.read().await;
+    let data_lock = vulns_lock.data.read().await;
+
+    // Use the data inside the closure without any await
     let count_sum = port_info_list.iter().fold(0, |acc, port_info| {
-        if let Some(known_port_info) = vulns_lock.data.port_vulns.get(&port_info.port) {
-            acc + known_port_info.count
+        let known_port_info = data_lock.port_vulns.get(&port_info.port);
+        if let Some(info) = known_port_info {
+            acc + info.count
         } else {
             acc
         }
@@ -183,12 +198,12 @@ pub async fn get_device_criticality(port_info_list: &[PortInfo]) -> String {
     }
 }
 
-pub async fn update(branch: &str) -> Result<UpdateStatus> {
+pub async fn update(branch: &str, force: bool) -> Result<UpdateStatus> {
     info!("Starting port vulns update from backend");
 
-    let mut vulns_lock = VULNS.write().await;
+    let vulns_lock = VULNS.read().await;
     let status = vulns_lock
-        .update(branch, |data| {
+        .update(branch, force, |data| {
             let vuln_info_json: VulnerabilityPortInfoListJSON =
                 serde_json::from_str(data).with_context(|| "Failed to parse JSON data")?;
             Ok(VulnerabilityPortInfoList::new_from_json(vuln_info_json))
