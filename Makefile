@@ -18,4 +18,4 @@ clean:
 	rm -rf ./target/
 
 test:
-	cargo test
+	cargo test --features packetcapture

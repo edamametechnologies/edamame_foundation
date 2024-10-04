@@ -434,8 +434,19 @@ pub async fn rpc_run(
                 feature = "packetcapture"
             ))]
             "get_connections" => {
-                let sessions = CAPTURE.lock().await.get_connections().await;
-                let json_sessions = match serde_json::to_string(&sessions) {
+                let local_traffic = match arg1 {
+                    "local" => true,
+                    "remote" => false,
+                    _ => {
+                        error!("Invalid argument for get_connections: {}", arg1);
+                        return order_error(
+                            &format!("invalid argument for get_connections: {}", arg1),
+                            false,
+                        );
+                    }
+                };
+                let connections = CAPTURE.lock().await.get_connections(local_traffic).await;
+                let json_connections = match serde_json::to_string(&connections) {
                     Ok(json) => json,
                     Err(e) => {
                         error!("Error serializing connections to JSON: {}", e);
@@ -445,14 +456,29 @@ pub async fn rpc_run(
                         );
                     }
                 };
-                Ok(json_sessions)
+                Ok(json_connections)
             }
             #[cfg(all(
                 any(target_os = "macos", target_os = "linux"),
                 feature = "packetcapture"
             ))]
             "get_active_connections" => {
-                let active_connections = CAPTURE.lock().await.get_active_connections().await;
+                let local_traffic = match arg1 {
+                    "true" => true,
+                    "false" => false,
+                    _ => {
+                        error!("Invalid argument for get_connections: {}", arg1);
+                        return order_error(
+                            &format!("invalid argument for get_connections: {}", arg1),
+                            false,
+                        );
+                    }
+                };
+                let active_connections = CAPTURE
+                    .lock()
+                    .await
+                    .get_active_connections(local_traffic)
+                    .await;
                 let json_active_connections = match serde_json::to_string(&active_connections) {
                     Ok(json) => json,
                     Err(e) => {
