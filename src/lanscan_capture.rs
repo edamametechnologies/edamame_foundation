@@ -728,6 +728,7 @@ impl LANScanCapture {
                 None => connection.dst_ip.to_string(),
             };
 
+            let dst_service = connection_info.dst_service.clone();
             let log_entry = format!(
                 "[{}] {} {} - {}:{} -> {}:{} ({}, {} bytes sent, {} bytes received, duration: {}, whitelisted: {})",
                 start_time,
@@ -736,7 +737,11 @@ impl LANScanCapture {
                 src_name,
                 connection.src_port,
                 dst_name,
-                connection.dst_port,
+                if dst_service.is_some() {
+                    format!("{} ({})", dst_service.unwrap(), connection.dst_port)
+                } else {
+                    connection.dst_port.to_string()
+                },
                 connection.protocol,
                 stats.outbound_bytes,
                 stats.inbound_bytes,
