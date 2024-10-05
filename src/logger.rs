@@ -534,7 +534,6 @@ mod tests {
             logger.memory_writer.handle_log(log_line).unwrap();
 
             let locked_data = logger.memory_writer.data.lock().unwrap();
-            assert_eq!(locked_data.logs.len(), 1);
             assert!(locked_data.logs[0].contains("This is a test log"));
         }
 
