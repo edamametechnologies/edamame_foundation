@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use dashmap::DashMap;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
-use tracing::{info, trace};
+use tracing::info;
 
 const VENDOR_VULNS_NAME: &str = "lanscan-vendor-vulns-db.json";
 
@@ -72,7 +72,6 @@ lazy_static! {
 }
 
 pub async fn get_vendors() -> Vec<String> {
-    trace!("Accessing VULNS - start");
     let vulns_lock = VULNS.read().await;
     let vendors = vulns_lock
         .data
@@ -82,12 +81,10 @@ pub async fn get_vendors() -> Vec<String> {
         .iter()
         .map(|entry| entry.key().clone())
         .collect::<Vec<_>>();
-    trace!("Accessing VULNS - end");
     vendors
 }
 
 pub async fn get_description_from_vendor(vendor: &str) -> String {
-    trace!("Accessing VULNS - start");
     let vulns_lock = VULNS.read().await;
     let description = vulns_lock
         .data
@@ -96,15 +93,12 @@ pub async fn get_description_from_vendor(vendor: &str) -> String {
         .vendor_vulns
         .get(vendor)
         .map_or_else(|| "".to_string(), |v| v.vendor.clone());
-    trace!("Accessing VULNS - end");
     description
 }
 
 pub async fn get_vulns_of_vendor(vendor: &str) -> Vec<VulnerabilityInfo> {
-    trace!("Accessing VULNS - start");
     let vulns_lock = VULNS.read().await;
     let vendor_vulns = &vulns_lock.data.read().await.vendor_vulns;
-    trace!("Accessing VULNS - end");
 
     let mut vendor_name = vendor.to_string();
     while !vendor_name.is_empty() {

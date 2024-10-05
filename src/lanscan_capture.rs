@@ -2,6 +2,7 @@ use crate::lanscan_asn::*;
 use crate::lanscan_connections::*;
 use crate::lanscan_l7::LANScanL7;
 use crate::lanscan_mdns::*;
+use crate::lanscan_port_vulns::get_name_from_port;
 use crate::lanscan_resolver::LANScanResolver;
 use crate::runtime::async_spawn;
 use crate::rwlock::CustomRwLock;
@@ -840,7 +841,7 @@ impl LANScanCapture {
                 }
             }
         } else {
-            // New connection
+            // Neither key nor reverse key found, new connection
             let uid = Uuid::new_v4().to_string();
             let mut stats = ConnectionStats {
                 start_time: Utc::now(),
@@ -857,10 +858,30 @@ impl LANScanCapture {
                 missed_bytes: 0,
                 uid,
             };
-            // Assume first packet is from originator to responder
+            // This is the first packet, we need to determine the direction of the connection
+            // Check if the source port is a known service port and the destination port is not a known service port
+            let key = if !get_name_from_port(parsed_packet.connection.src_port)
+                .await
+                .is_empty()
+                && get_name_from_port(parsed_packet.connection.dst_port)
+                    .await
+                    .is_empty()
+            {
+                // The key is reverse_key
+                reverse_key
+            } else {
+                // We assume the packet is from the originator to the responder
+                // The key is key
+                key
+            };
+
+            // Update connection stats
+            stats.last_activity = Utc::now();
+            // Packet from originator to responder
             stats.outbound_bytes += parsed_packet.packet_length as u64;
             stats.orig_pkts += 1;
             stats.orig_ip_bytes += parsed_packet.ip_packet_length as u64;
+
             // Update history
             if let Some(flags) = parsed_packet.flags {
                 let c = Self::map_tcp_flags(flags, parsed_packet.packet_length, true);
@@ -873,6 +894,9 @@ impl LANScanCapture {
             let src_asn = get_asn(key.src_ip).await;
             let dst_asn = get_asn(key.dst_ip).await;
 
+            // Get the service from the destination port
+            let final_dst_service = get_name_from_port(key.dst_port).await;
+
             connections.insert(
                 key.clone(),
                 ConnectionInfo {
@@ -880,6 +904,11 @@ impl LANScanCapture {
                     stats,
                     src_domain: None,
                     dst_domain: None,
+                    dst_service: if final_dst_service.is_empty() {
+                        None
+                    } else {
+                        Some(final_dst_service)
+                    },
                     l7: None,
                     src_asn,
                     dst_asn,
@@ -1191,6 +1220,7 @@ mod tests {
             },
             src_domain: None,
             dst_domain: None,
+            dst_service: None,
             l7: None,
             src_asn: None,
             dst_asn: None,

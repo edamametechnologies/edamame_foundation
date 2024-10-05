@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use dashmap::DashMap;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
-use tracing::{info, trace};
+use tracing::info;
 
 const PORT_VULNS_NAME: &str = "lanscan-port-vulns-db.json";
 
@@ -92,7 +92,6 @@ lazy_static! {
 }
 
 pub async fn get_ports() -> Vec<u16> {
-    trace!("Accessing VULNS - start");
     let vulns_lock = VULNS.read().await;
     let ports = vulns_lock
         .data
@@ -102,7 +101,6 @@ pub async fn get_ports() -> Vec<u16> {
         .iter()
         .map(|entry| *entry.key())
         .collect();
-    trace!("Accessing VULNS - end");
     ports
 }
 
@@ -111,7 +109,6 @@ pub fn get_deep_ports() -> Vec<u16> {
 }
 
 pub async fn get_description_from_port(port: u16) -> String {
-    trace!("Accessing VULNS - start");
     let vulns_lock = VULNS.read().await;
     let description = vulns_lock
         .data
@@ -120,12 +117,22 @@ pub async fn get_description_from_port(port: u16) -> String {
         .port_vulns
         .get(&port)
         .map_or_else(|| "".to_string(), |port_info| port_info.description.clone());
-    trace!("Accessing VULNS - end");
     description
 }
 
+pub async fn get_name_from_port(port: u16) -> String {
+    let vulns_lock = VULNS.read().await;
+    let name = vulns_lock
+        .data
+        .read()
+        .await
+        .port_vulns
+        .get(&port)
+        .map_or_else(|| "".to_string(), |port_info| port_info.name.clone());
+    name
+}
+
 pub async fn get_http_ports() -> Vec<u16> {
-    trace!("Accessing VULNS - start");
     let vulns_lock = VULNS.read().await;
     let http_ports = vulns_lock
         .data
@@ -135,12 +142,10 @@ pub async fn get_http_ports() -> Vec<u16> {
         .iter()
         .map(|entry| *entry.key())
         .collect();
-    trace!("Accessing VULNS - end");
     http_ports
 }
 
 pub async fn get_https_ports() -> Vec<u16> {
-    trace!("Accessing VULNS - start");
     let vulns_lock = VULNS.read().await;
     let https_ports = vulns_lock
         .data
@@ -150,12 +155,10 @@ pub async fn get_https_ports() -> Vec<u16> {
         .iter()
         .map(|entry| *entry.key())
         .collect();
-    trace!("Accessing VULNS - end");
     https_ports
 }
 
 pub async fn get_vulns_of_port(port: u16) -> Vec<VulnerabilityInfo> {
-    trace!("Accessing VULNS - start");
     let vulns_lock = VULNS.read().await;
     let mut vulnerabilities = vulns_lock
         .data
@@ -164,7 +167,6 @@ pub async fn get_vulns_of_port(port: u16) -> Vec<VulnerabilityInfo> {
         .port_vulns
         .get(&port)
         .map_or_else(Vec::new, |port_info| port_info.vulnerabilities.clone());
-    trace!("Accessing VULNS - end");
     vulnerabilities.sort_by(|a, b| b.name.cmp(&a.name));
     vulnerabilities
 }

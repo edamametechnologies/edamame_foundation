@@ -31,6 +31,7 @@ pub struct ConnectionInfo {
     pub stats: ConnectionStats,
     pub src_domain: Option<String>,
     pub dst_domain: Option<String>,
+    pub dst_service: Option<String>,
     pub l7: Option<ConnectionL7>,
     pub src_asn: Option<Record>,
     pub dst_asn: Option<Record>,
