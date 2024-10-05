@@ -456,6 +456,7 @@ pub async fn rpc_run(
                         );
                     }
                 };
+                info!("Returning {} connections", connections.len());
                 Ok(json_connections)
             }
             #[cfg(all(
@@ -489,6 +490,7 @@ pub async fn rpc_run(
                         );
                     }
                 };
+                info!("Returning {} active connections", active_connections.len());
                 Ok(json_active_connections)
             }
             #[cfg(all(
@@ -507,6 +509,7 @@ pub async fn rpc_run(
                         );
                     }
                 };
+                info!("Returning whitelist conformance: {}", conformance);
                 Ok(json_conformance)
             }
             #[cfg(all(
@@ -525,6 +528,7 @@ pub async fn rpc_run(
                         );
                     }
                 };
+                info!("Returning {} whitelist exceptions", exceptions.len());
                 Ok(json_exceptions)
             }
             _ => order_error(
