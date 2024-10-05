@@ -45,7 +45,6 @@ pub async fn get_ipv6_asn(ipv6: &Ipv6Addr) -> Option<Record> {
     }
 }
 
-
 pub async fn get_asn(ip: IpAddr) -> Option<Record> {
     match ip {
         IpAddr::V4(ipv4) => get_ipv4_asn(&ipv4).await,

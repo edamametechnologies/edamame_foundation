@@ -1,3 +1,4 @@
+use crate::lanscan_asn::*;
 use crate::lanscan_connections::*;
 use crate::lanscan_l7::LANScanL7;
 use crate::lanscan_mdns::*;
@@ -23,7 +24,6 @@ use tokio::task::JoinHandle;
 use tokio::time::{sleep, Duration};
 use tracing::{error, info, trace};
 use uuid::Uuid;
-use lanscan_asn::*;
 
 static CONNECTION_ACTIVITY_TIMEOUT: Duration = Duration::from_secs(600);
 // 24 hours
@@ -683,18 +683,18 @@ impl LANScanCapture {
             connections.clone()
         };
 
-        for connection in connections.iter() {
-            let src_domain = connection.src_domain.clone();
-            let dst_domain = connection.dst_domain.clone();
+        for connection_info in connections.iter() {
+            let src_domain = connection_info.src_domain.clone();
+            let dst_domain = connection_info.dst_domain.clone();
 
-            let (username, process_name) = match connection.l7.clone() {
+            let (username, process_name) = match connection_info.l7.clone() {
                 Some(l7) => (l7.username, l7.process_name),
                 None => ("-".to_string(), "-".to_string()),
             };
 
-            let stats = connection.stats.clone();
-            let is_whitelisted = connection.is_whitelisted.clone();
-            let connection = connection.connection.clone();
+            let stats = connection_info.stats.clone();
+            let is_whitelisted = connection_info.is_whitelisted.clone();
+            let connection = connection_info.connection.clone();
             let start_time = stats.start_time.to_rfc3339();
             let duration = match stats.end_time {
                 Some(end_time) => {
@@ -704,11 +704,13 @@ impl LANScanCapture {
                 None => "ongoing".to_string(),
             };
 
-            // Replace IP addresses with resolved names when available and not "Resolving" or "Unknown"
+            // Replace IP addresses with resolved names when available and not "Resolving" or "Unknown", replace with the ASN information if no domain is available
             let src_name = match src_domain {
                 Some(name) => match name.as_str() {
-                    "Resolving" => connection.src_ip.to_string(),
-                    "Unknown" => connection.src_ip.to_string(),
+                    "Resolving" | "Unknown" => match connection_info.src_asn.clone() {
+                        Some(asn) => format!("{} {} ({})", asn.owner, asn.country, asn.as_number),
+                        None => connection.src_ip.to_string(),
+                    },
                     _ => name.clone(),
                 },
                 None => connection.src_ip.to_string(),
@@ -716,8 +718,10 @@ impl LANScanCapture {
 
             let dst_name = match dst_domain {
                 Some(name) => match name.as_str() {
-                    "Resolving" => connection.dst_ip.to_string(),
-                    "Unknown" => connection.dst_ip.to_string(),
+                    "Resolving" | "Unknown" => match connection_info.dst_asn.clone() {
+                        Some(asn) => format!("{} {} ({})", asn.owner, asn.country, asn.as_number),
+                        None => connection.dst_ip.to_string(),
+                    },
                     _ => name.clone(),
                 },
                 None => connection.dst_ip.to_string(),
@@ -1188,7 +1192,8 @@ mod tests {
             src_domain: None,
             dst_domain: None,
             l7: None,
-            asn: None,
+            src_asn: None,
+            dst_asn: None,
             is_whitelisted: WhitelistState::Unknown,
         };
 
