@@ -871,6 +871,7 @@ impl LANScanCapture {
                     src_domain: None,
                     dst_domain: None,
                     l7: None,
+                    asn: None,
                     // Whitelisted by default
                     is_whitelisted: WhitelistState::Unknown,
                 },
@@ -1180,6 +1181,7 @@ mod tests {
             src_domain: None,
             dst_domain: None,
             l7: None,
+            asn: None,
             is_whitelisted: WhitelistState::Unknown,
         };
 
