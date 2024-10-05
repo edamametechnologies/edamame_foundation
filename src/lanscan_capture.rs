@@ -23,6 +23,7 @@ use tokio::task::JoinHandle;
 use tokio::time::{sleep, Duration};
 use tracing::{error, info, trace};
 use uuid::Uuid;
+use lanscan_asn::*;
 
 static CONNECTION_ACTIVITY_TIMEOUT: Duration = Duration::from_secs(600);
 // 24 hours
@@ -863,6 +864,11 @@ impl LANScanCapture {
             }
             let key_clone = key.clone();
             trace!("New connection: {:?}", key_clone);
+
+            // Query the ASN database
+            let src_asn = get_asn(key.src_ip).await;
+            let dst_asn = get_asn(key.dst_ip).await;
+
             connections.insert(
                 key.clone(),
                 ConnectionInfo {
@@ -871,7 +877,8 @@ impl LANScanCapture {
                     src_domain: None,
                     dst_domain: None,
                     l7: None,
-                    asn: None,
+                    src_asn,
+                    dst_asn,
                     // Whitelisted by default
                     is_whitelisted: WhitelistState::Unknown,
                 },
