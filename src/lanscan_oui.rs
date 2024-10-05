@@ -3,7 +3,7 @@ use crate::rwlock::CustomRwLock;
 use lazy_static::lazy_static;
 use oui::OuiDatabase;
 use std::sync::Arc;
-use tracing::{error, trace, warn};
+use tracing::{error, warn};
 
 // TODO load from the cloud regularly and store locally
 // const OUI_DB_URL: &str = "https://www.wireshark.org/download/automated/data/manuf";
@@ -16,9 +16,7 @@ lazy_static! {
 }
 
 pub async fn get_mac_address_vendor(mac_address: &str) -> String {
-    trace!("Locking OUI - start");
     let oui = OUI.read().await;
-    trace!("Locking OUI - end");
 
     match oui.query_by_str(mac_address) {
         Ok(Some(res)) => {
