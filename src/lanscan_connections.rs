@@ -1,3 +1,4 @@
+use crate::asn_db::Record;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
@@ -31,6 +32,7 @@ pub struct ConnectionInfo {
     pub src_domain: Option<String>,
     pub dst_domain: Option<String>,
     pub l7: Option<ConnectionL7>,
+    pub asn: Option<Record>,
     pub is_whitelisted: WhitelistState,
 }
 

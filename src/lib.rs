@@ -1,4 +1,5 @@
 pub mod admin;
+pub mod asn_db;
 pub mod backend;
 pub mod cloud_model;
 pub mod health;
@@ -9,6 +10,9 @@ pub mod helper_state;
 pub mod helper_tx;
 pub mod history;
 pub mod lanscan_arp;
+pub mod lanscan_asn;
+pub mod lanscan_asn_v4_db;
+pub mod lanscan_asn_v6_db;
 #[cfg(all(
     any(target_os = "macos", target_os = "linux"),
     feature = "packetcapture"

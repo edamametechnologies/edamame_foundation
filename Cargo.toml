@@ -95,6 +95,7 @@ thiserror = "1.0.63"
 eui48 = { version = "1.1.0", features = ["disp_hexstring", "serde"] }
 oui = "0.8.1"
 ipnet = "2.9.0"
+csv = "1.0.10"
 
 # SSL related deps for iOS/Android (rustls doesn't work on iOS/Android due to missing certs but native-tls does)
 [target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
