@@ -5,6 +5,8 @@ use crate::helper_rx_utility::*;
     feature = "packetcapture"
 ))]
 use crate::lanscan_capture::LANScanCapture;
+use crate::lanscan_interface::*;
+use crate::lanscan_mdns::mdns_flush;
 #[cfg(all(
     any(target_os = "macos", target_os = "linux"),
     feature = "packetcapture"
@@ -15,6 +17,7 @@ use crate::threat_factory::*;
 use anyhow::{anyhow, Error, Result};
 use base64::engine::general_purpose;
 use base64::Engine;
+use chrono::Utc;
 use edamame_proto::edamame_helper_server::{EdamameHelper, EdamameHelperServer};
 use edamame_proto::{HelperRequest, HelperResponse};
 use lazy_static::lazy_static;
@@ -45,6 +48,12 @@ lazy_static! {
 lazy_static! {
     // Branch name
     pub static ref BRANCH: Arc<Mutex<String>> = Arc::new(Mutex::new("".to_string()));
+    // Current default interface
+    pub static ref INTERFACE_NAME: Arc<Mutex<String>> = Arc::new(Mutex::new("".to_string()));
+    pub static ref INTERFACE_IP: Arc<Mutex<String>> = Arc::new(Mutex::new("".to_string()));
+    pub static ref INTERFACE_PREFIX: Arc<Mutex<u8>> = Arc::new(Mutex::new(0));
+    // Last interface check timestamp
+    pub static ref INTERFACE_CHECK_TIME: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
 }
 
 // Version
@@ -212,6 +221,61 @@ impl ServerControl {
     }
 }
 
+// Detect and check interface changes
+pub async fn check_interface_changes() -> bool {
+    // Detect the interface name and ip if not done for 10 seconds, detect changes
+    if chrono::Utc::now().timestamp() - *INTERFACE_CHECK_TIME.lock().await as i64 > 10 {
+        let (interface_ip, interface_prefix, interface_name) = match get_default_interface() {
+            Some((ip, prefix, name)) => (ip, prefix, name),
+            None => {
+                warn!("No valid interface found");
+                return false;
+            }
+        };
+
+        let mut interface_changed = false;
+
+        // Check if the interface name has changed
+        let interface_name_old = INTERFACE_NAME.lock().await.clone();
+        if interface_name_old != interface_name {
+            info!(
+                "Interface name has changed from {} to {}",
+                interface_name_old, interface_name
+            );
+            interface_changed = true;
+            *INTERFACE_NAME.lock().await = interface_name.to_string();
+        }
+
+        // Check if the interface ip has changed
+        let interface_ip_old = INTERFACE_IP.lock().await.clone();
+        if interface_ip_old != interface_ip {
+            info!(
+                "Interface ip has changed from {} to {}",
+                interface_ip_old, interface_ip
+            );
+            interface_changed = true;
+            *INTERFACE_IP.lock().await = interface_ip.to_string();
+        }
+
+        // Check if the interface subnet has changed
+        let interface_subnet_old = INTERFACE_PREFIX.lock().await.clone();
+        if interface_subnet_old != interface_prefix {
+            info!(
+                "Interface subnet has changed from {} to {}",
+                interface_subnet_old, interface_prefix
+            );
+            interface_changed = true;
+            *INTERFACE_PREFIX.lock().await = interface_prefix;
+        }
+
+        // Update the interface check time
+        *INTERFACE_CHECK_TIME.lock().await = Utc::now().timestamp() as u64;
+
+        return interface_changed;
+    }
+    false
+}
+
 // Receiving end of the order - the RPC server error handling requires Send + Sync...
 pub async fn rpc_run(
     ordertype: &str,
@@ -372,6 +436,9 @@ pub async fn rpc_run(
                 run_cli("defaults read MobileMeAccounts Accounts | grep AccountID | grep -o \"\\\".*\\\"\" | sed \"s/\\\"//g\" | tr -d \"\\n\"", username, true).await
             }
             "mdns_resolve" => {
+                if check_interface_changes().await {
+                    mdns_flush().await;
+                }
                 let json_addresses = arg1;
                 match mdns_resolve(json_addresses).await {
                     Ok(output) => Ok(output),
@@ -429,7 +496,14 @@ pub async fn rpc_run(
                 feature = "packetcapture"
             ))]
             "start_capture" => {
-                CAPTURE.lock().await.start().await;
+                // Check if already capturing
+                if CAPTURE.lock().await.is_capturing().await {
+                    return order_error("capture already started", false);
+                }
+                // Get latest interface
+                let _ = check_interface_changes().await;
+                let interface = INTERFACE_NAME.lock().await.clone();
+                CAPTURE.lock().await.start(&interface).await;
                 Ok("".to_string())
             }
             #[cfg(all(
@@ -509,6 +583,13 @@ pub async fn rpc_run(
                 feature = "packetcapture"
             ))]
             "get_sessions" => {
+                if check_interface_changes().await && CAPTURE.lock().await.is_capturing().await {
+                    CAPTURE.lock().await.stop().await;
+                    // Get the new interface
+                    let interface = INTERFACE_NAME.lock().await.clone();
+                    info!("Interface has changed, restarting capture on {}", interface);
+                    CAPTURE.lock().await.start(&interface).await;
+                }
                 let sessions = CAPTURE.lock().await.get_sessions().await;
                 let json_sessions = match serde_json::to_string(&sessions) {
                     Ok(json) => json,
@@ -528,6 +609,13 @@ pub async fn rpc_run(
                 feature = "packetcapture"
             ))]
             "get_current_sessions" => {
+                if check_interface_changes().await && CAPTURE.lock().await.is_capturing().await {
+                    CAPTURE.lock().await.stop().await;
+                    // Get the new interface
+                    let interface = INTERFACE_NAME.lock().await.clone();
+                    info!("Interface has changed, restarting capture on {}", interface);
+                    CAPTURE.lock().await.start(&interface).await;
+                }
                 let active_sessions = CAPTURE.lock().await.get_current_sessions().await;
                 let json_active_sessions = match serde_json::to_string(&active_sessions) {
                     Ok(json) => json,

@@ -36,18 +36,6 @@ pub async fn arp_resolve(addresses: &str) -> Result<String, Box<dyn Error>> {
 }
 
 pub async fn mdns_resolve(addresses: &str) -> Result<String, Box<dyn Error>> {
-    // Check if the interfaces have changed
-    let mut interfaces = INTERFACES.lock().await;
-    let interfaces_new = get_valid_network_interfaces();
-    if *interfaces != interfaces_new {
-        info!(
-            "Interfaces have changed (was {:?}, now {:?}), flushing mDNS cache",
-            *interfaces, interfaces_new
-        );
-        mdns_flush().await;
-        *interfaces = interfaces_new;
-    }
-
     let mut mdns_results: Vec<(String, String, String, Vec<String>)> = Vec::new();
     for address in serde_json::from_str::<Vec<String>>(addresses)? {
         match address.parse() {

@@ -77,3 +77,29 @@ pub fn get_valid_network_interfaces() -> Vec<(String, u8, String)> {
         Vec::new()
     }
 }
+
+// Get the default interface
+pub fn get_default_interface() -> Option<(String, u8, String)> {
+    match get_valid_network_interfaces().get(0) {
+        Some(iface) => Some(iface.clone()),
+        None => None,
+    }
+}
+
+// Tests
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_valid_network_interfaces() {
+        let interfaces = get_valid_network_interfaces();
+        assert!(!interfaces.is_empty());
+    }
+
+    #[test]
+    fn test_get_default_interface() {
+        let interface = get_default_interface();
+        assert!(interface.is_some());
+    }
+}

@@ -57,6 +57,7 @@ struct DnsPacketData {
 }
 
 pub struct LANScanCapture {
+    interface: Arc<CustomRwLock<String>>,
     capture_task_handle: Option<TaskHandle>,
     sessions: Arc<DashMap<Session, SessionInfo>>,
     current_sessions: Arc<CustomRwLock<Vec<Session>>>,
@@ -83,6 +84,7 @@ impl LANScanCapture {
     pub fn new() -> Self {
         debug!("Creating new LANScanCapture");
         Self {
+            interface: Arc::new(CustomRwLock::new("".to_string())),
             capture_task_handle: None,
             sessions: Arc::new(DashMap::new()),
             current_sessions: Arc::new(CustomRwLock::new(Vec::new())),
@@ -130,7 +132,7 @@ impl LANScanCapture {
         *self.filter.write().await = filter;
     }
 
-    pub async fn start(&mut self) {
+    pub async fn start(&mut self, interface: &str) {
         debug!("Starting LANScanCapture");
 
         // If the capture task is already running, return
@@ -141,6 +143,9 @@ impl LANScanCapture {
 
         // Start mDNS task
         mdns_start().await;
+
+        // Set the interface
+        *self.interface.write().await = interface.to_string();
 
         // Start tasks
         // First start the capture task to populate the sessions map
@@ -382,6 +387,7 @@ impl LANScanCapture {
     }
 
     async fn start_capture_task(&mut self) {
+        let interface = self.interface.read().await.clone();
         let sessions = self.sessions.clone();
         let current_sessions = self.current_sessions.clone();
         let dns_resolutions = self.dns_resolutions.clone();
@@ -389,21 +395,25 @@ impl LANScanCapture {
         let filter = self.filter.clone();
         let stop_flag_clone = stop_flag.clone();
         let handle = async_spawn(async move {
-            // Get the default Device
-            let device = match pcap::Device::lookup() {
-                Ok(device) => match device {
-                    Some(device) => device,
-                    None => {
-                        error!("No device available");
-                        return;
-                    }
-                },
+            let device_list = match pcap::Device::list() {
+                Ok(device_list) => device_list,
                 Err(e) => {
-                    error!("Device lookup failed: {}", e);
+                    error!("Failed to get device list: {}", e);
                     return;
                 }
             };
-            info!("Starting packet capture on device {}", device.name);
+
+            info!("Found capture devices: {:?}", device_list);
+
+            let device = match device_list.iter().find(|device| device.name == interface) {
+                Some(device) => device,
+                None => {
+                    error!("Device not found: {}", interface);
+                    return;
+                }
+            };
+
+            info!("Starting packet capture on device {:?}", device);
 
             // Extract a vector of IP addresses from the device addresses
             let self_ips = device
@@ -413,7 +423,7 @@ impl LANScanCapture {
                 .collect();
 
             // Create a new pcap capture
-            let cap = match Capture::from_device(device) {
+            let cap = match Capture::from_device(interface.as_str()) {
                 Ok(cap) => cap,
                 Err(e) => {
                     error!("Failed to open capture on device: {}", e);
@@ -607,7 +617,9 @@ impl LANScanCapture {
                 whitelist_conformance.store(true, Ordering::Relaxed);
             }
         } else {
-            error!("Invalid whitelist name: {}", whitelist_name);
+            if whitelist_name != "" {
+                error!("Invalid whitelist name: {}", whitelist_name);
+            }
         }
     }
 
