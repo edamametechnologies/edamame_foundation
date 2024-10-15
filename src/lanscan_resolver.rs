@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::task::JoinHandle;
 use tokio::time::{sleep, Duration};
-use tracing::{debug, error, info, trace};
+use tracing::{debug, error, info, trace, warn};
 
 #[derive(Debug, Clone)]
 pub struct LANScanResolver {
@@ -90,12 +90,16 @@ impl LANScanResolver {
     }
 
     pub async fn start(&mut self) {
+        if self.resolver_handle.read().await.is_some() {
+            warn!("L7 resolver task is already running");
+            return;
+        }
+
         // Spawn resolver task
         if let Some(resolver) = Self::create_resolver() {
             let resolver_queue = self.resolver_queue.clone();
             let reverse_dns = self.reverse_dns.clone();
-            let resolver_stop_flag = Arc::new(AtomicBool::new(false));
-            let resolver_stop_flag_clone = resolver_stop_flag.clone();
+            let resolver_stop_flag = self.resolver_stop_flag.clone();
             let resolver_clone = resolver.clone();
             let resolver_handle = async_spawn(async move {
                 info!("Starting resolver task");
@@ -103,12 +107,8 @@ impl LANScanResolver {
                 while !resolver_stop_flag.load(Ordering::Relaxed)
                     || !resolver_queue.read().await.is_empty()
                 {
-                    let mut to_resolve = Vec::new();
-                    {
-                        let mut queue = resolver_queue.write().await;
-                        to_resolve.extend(queue.drain(..));
-                    }
-
+                    // Get the IPs to resolve from the queue
+                    let to_resolve: Vec<IpAddr> = resolver_queue.write().await.drain(..).collect();
                     let to_resolve_len = to_resolve.len();
                     if to_resolve_len > 0 {
                         trace!("Resolving {} IPs", to_resolve_len);
@@ -126,15 +126,14 @@ impl LANScanResolver {
                         info!("Resolved {} IPs", to_resolve_len);
                     }
 
-                    // Sleep for 100ms
-                    sleep(Duration::from_millis(100)).await;
+                    // Sleep for 5 seconds
+                    sleep(Duration::from_secs(5)).await;
                 }
 
                 info!("Resolver task completed");
             });
             *self.resolver.write().await = Some(resolver_clone);
-            self.resolver_handle = Arc::new(CustomRwLock::new(Some(resolver_handle)));
-            self.resolver_stop_flag = resolver_stop_flag_clone;
+            *self.resolver_handle.write().await = Some(resolver_handle);
         }
     }
 
@@ -153,8 +152,7 @@ impl LANScanResolver {
         }
 
         // Add the IP to the resolver queue
-        let mut resolver_queue = self.resolver_queue.write().await;
-        resolver_queue.push_back(ip_addr.clone());
+        self.resolver_queue.write().await.push_back(ip_addr.clone());
         debug!("Added IP to resolver queue: {}", ip_addr);
         // Mark the IP as resolving
         self.reverse_dns
@@ -169,8 +167,7 @@ impl LANScanResolver {
                 _ => Some(domain),
             },
             None => {
-                // If not, perform a reverse DNS lookup
-                self.add_ip_to_resolver(ip_addr).await;
+                // Just return None if we don't have it cached, the caller can add it to the resolver queue if they want
                 None
             }
         }

@@ -15,12 +15,6 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  EDAMAME_APP_SENTRY: ${{ secrets.EDAMAME_APP_SENTRY }}
-  PWNED_API_KEY: ${{ secrets.PWNED_API_KEY }}
-  EDAMAME_TARGET: ${{ secrets.EDAMAME_TARGET }}
-  EDAMAME_CA_PEM: ${{ secrets.EDAMAME_CA_PEM }}
-  EDAMAME_CLIENT_PEM: ${{ secrets.EDAMAME_CLIENT_PEM }}
-  EDAMAME_CLIENT_KEY: ${{ secrets.EDAMAME_CLIENT_KEY }}
   LAMBDA_SIGNATURE: ${{ secrets.LAMBDA_SIGNATURE }}
 
 jobs:

@@ -1,5 +1,5 @@
+use anyhow::{anyhow, Result};
 use base64::{engine::general_purpose, Engine as _};
-use std::error::Error;
 use std::str;
 use std::time::Duration;
 use tokio::time::timeout;
@@ -33,7 +33,7 @@ pub async fn helper_run_utility(
     client_pem: &str,
     client_key: &str,
     target: &'static str,
-) -> Result<String, Box<dyn Error>> {
+) -> Result<String> {
     // No signature for utility orders
     match helper_run(
         "utilityorder",
@@ -76,7 +76,7 @@ pub async fn helper_run_metric(
     client_pem: &str,
     client_key: &str,
     target: &'static str,
-) -> Result<String, Box<dyn Error>> {
+) -> Result<String> {
     // Convert to string using the Display trait
     match helper_run(
         "metricorder",
@@ -120,7 +120,7 @@ async fn helper_run(
     client_pem: &str,
     client_key: &str,
     target: &'static str,
-) -> Result<String, Box<dyn Error>> {
+) -> Result<String> {
     // Connect to server
     trace!("Connecting to helper server");
     let server_root_ca_cert_base64 = ca_pem.to_string();
@@ -159,7 +159,10 @@ async fn helper_run(
     // Timeout the connection after 120 seconds, this needs to be high enough as we are querying the helper in //
     let connection = timeout(Duration::from_secs(120), channel.connect()).await??;
 
-    let mut client = EdamameHelperClient::new(connection);
+    let mut client = EdamameHelperClient::new(connection)
+        // For session data, the messages can be large, so we need to increase the limits
+        .max_decoding_message_size(100 * 1024 * 1024)
+        .max_encoding_message_size(100 * 1024 * 1024);
 
     trace!("Sending request to helper server");
     let request = tonic::Request::new(HelperRequest {
@@ -171,7 +174,10 @@ async fn helper_run(
         version: CARGO_PKG_VERSION.to_string(),
     });
 
-    let response = client.execute(request).await?;
+    let response = match client.execute(request).await {
+        Ok(response) => response,
+        Err(e) => return Err(anyhow!("Error sending request to helper: {:?}", e)),
+    };
     let output = response.into_inner().output;
     trace!("Helper response: {:?}", output);
     Ok(output)

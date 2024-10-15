@@ -5,8 +5,14 @@ use crate::helper_rx_utility::*;
     feature = "packetcapture"
 ))]
 use crate::lanscan_capture::LANScanCapture;
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux"),
+    feature = "packetcapture"
+))]
+use crate::lanscan_sessions::SessionFilter;
 use crate::runner_cli::*;
 use crate::threat_factory::*;
+use anyhow::{anyhow, Error, Result};
 use base64::engine::general_purpose;
 use base64::Engine;
 use edamame_proto::edamame_helper_server::{EdamameHelper, EdamameHelperServer};
@@ -14,7 +20,6 @@ use edamame_proto::{HelperRequest, HelperResponse};
 use lazy_static::lazy_static;
 #[cfg(target_os = "macos")]
 use libc::EACCES;
-use std::error::Error;
 #[cfg(target_os = "macos")]
 use std::fs::File;
 #[cfg(target_os = "macos")]
@@ -26,7 +31,7 @@ use tokio::sync::oneshot;
 use tokio::sync::Mutex;
 use tonic::transport::{Certificate, Identity, Server, ServerTlsConfig};
 use tonic::{Code, Request, Response, Status};
-use tracing::{error, info, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 
 #[cfg(all(
     any(target_os = "macos", target_os = "linux"),
@@ -68,6 +73,7 @@ impl EdamameHelper for Helper {
         let signature = req_order.signature;
         let version = req_order.version;
 
+        debug!("Executing order {} / {}", ordertype, subordertype);
         rpc_run_safe(
             &ordertype,
             &subordertype,
@@ -117,7 +123,7 @@ impl ServerControl {
         client_ca_cert: &str,
         server: &str,
         branch: &str,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<()> {
         // Store branch name
         {
             let mut branch_lock = BRANCH.lock().await;
@@ -167,10 +173,16 @@ impl ServerControl {
             sock, CARGO_PKG_VERSION
         );
 
-        let server_future = Server::builder()
-            .tls_config(tls)?
-            .add_service(EdamameHelperServer::new(edamame_server))
-            .serve(sock);
+        // Check TLS configuration
+        let server_future = match Server::builder().tls_config(tls) {
+            Ok(mut builder) => builder
+                .add_service(EdamameHelperServer::new(edamame_server))
+                .serve(sock),
+            Err(e) => {
+                error!("TLS configuration error: {}", e);
+                return Err(anyhow!(e));
+            }
+        };
 
         tokio::select! {
             result = server_future => {
@@ -181,7 +193,7 @@ impl ServerControl {
                     }
                     Err(e) => {
                         error!("EDAMAME Helper server error: {}", e);
-                        Err(Box::new(e))
+                        Err(anyhow!(e))
                     }
                 }
             }
@@ -192,7 +204,7 @@ impl ServerControl {
         }
     }
 
-    pub async fn stop_server(&mut self) -> Result<(), Box<dyn Error>> {
+    pub async fn stop_server(&mut self) -> Result<()> {
         if let Some(stop) = self.stop.take() {
             let _ = stop.send(());
         }
@@ -208,23 +220,23 @@ pub async fn rpc_run(
     arg2: &str,
     signature: &str,
     version: &str,
-) -> Result<String, Box<dyn Error>> {
+) -> Result<String> {
     // Force update if any of the key mandatory fields are empty - this would indicate a protocol error
     if version.is_empty() || ordertype.is_empty() {
         return order_error("order received with empty version of ordertype", true);
     }
 
-    // Check the version - allow xx.yy.zz = xx.yy.ww
+    // Check the version (major.minor)
     let major_version = version.split('.').take(2).collect::<Vec<&str>>().join(".");
     let major_cargo_version = CARGO_PKG_VERSION
         .split('.')
         .take(2)
         .collect::<Vec<&str>>()
         .join(".");
-    if major_version != major_cargo_version {
+    if major_version > major_cargo_version {
         return order_error(
             &format!(
-                "order received with foundation major version mismatch - received {} != {}",
+                "order received with foundation major version mismatch - received {} > {}",
                 major_version, major_cargo_version
             ),
             true,
@@ -417,8 +429,7 @@ pub async fn rpc_run(
                 feature = "packetcapture"
             ))]
             "start_capture" => {
-                let whitelist_name = arg1;
-                CAPTURE.lock().await.start(whitelist_name).await;
+                CAPTURE.lock().await.start().await;
                 Ok("".to_string())
             }
             #[cfg(all(
@@ -433,84 +444,118 @@ pub async fn rpc_run(
                 any(target_os = "macos", target_os = "linux"),
                 feature = "packetcapture"
             ))]
-            "get_connections" => {
-                let local_traffic = match arg1 {
-                    "local" => true,
-                    "remote" => false,
-                    _ => {
-                        error!("Invalid argument for get_connections: {}", arg1);
-                        return order_error(
-                            &format!("invalid argument for get_connections: {}", arg1),
-                            false,
-                        );
-                    }
-                };
-                let connections = CAPTURE.lock().await.get_connections(local_traffic).await;
-                let json_connections = match serde_json::to_string(&connections) {
-                    Ok(json) => json,
-                    Err(e) => {
-                        error!("Error serializing connections to JSON: {}", e);
-                        return order_error(
-                            &format!("error serializing connections to JSON: {}", e),
-                            false,
-                        );
-                    }
-                };
-                info!("Returning {} connections", connections.len());
-                Ok(json_connections)
+            "is_capturing" => {
+                let is_capturing = CAPTURE.lock().await.is_capturing().await;
+                let result = is_capturing.to_string();
+                info!("Returning is_capturing: {}", result);
+                Ok(result)
             }
             #[cfg(all(
                 any(target_os = "macos", target_os = "linux"),
                 feature = "packetcapture"
             ))]
-            "get_active_connections" => {
-                let local_traffic = match arg1 {
-                    "true" => true,
-                    "false" => false,
-                    _ => {
-                        error!("Invalid argument for get_connections: {}", arg1);
+            "set_whitelist" => {
+                let whitelist_name = arg1;
+                CAPTURE.lock().await.set_whitelist(whitelist_name).await;
+                Ok("".to_string())
+            }
+            #[cfg(all(
+                any(target_os = "macos", target_os = "linux"),
+                feature = "packetcapture"
+            ))]
+            "get_whitelist" => {
+                let whitelist = CAPTURE.lock().await.get_whitelist().await;
+                info!("Returning whitelist: {}", whitelist);
+                Ok(whitelist)
+            }
+            #[cfg(all(
+                any(target_os = "macos", target_os = "linux"),
+                feature = "packetcapture"
+            ))]
+            "set_filter" => {
+                match serde_json::from_str::<SessionFilter>(arg1) {
+                    Ok(filter) => CAPTURE.lock().await.set_filter(filter).await,
+                    Err(e) => {
+                        error!("Invalid argument for set_filter {} : {}", arg1, e);
                         return order_error(
-                            &format!("invalid argument for get_connections: {}", arg1),
+                            &format!("invalid argument for set_filter: {}", arg1),
                             false,
                         );
                     }
                 };
-                let active_connections = CAPTURE
-                    .lock()
-                    .await
-                    .get_active_connections(local_traffic)
-                    .await;
-                let json_active_connections = match serde_json::to_string(&active_connections) {
+                Ok("".to_string())
+            }
+            #[cfg(all(
+                any(target_os = "macos", target_os = "linux"),
+                feature = "packetcapture"
+            ))]
+            "get_filter" => {
+                let filter = CAPTURE.lock().await.get_filter().await;
+                let json_filter = match serde_json::to_string(&filter) {
                     Ok(json) => json,
                     Err(e) => {
-                        error!("Error serializing active connections to JSON: {}", e);
+                        error!("Error serializing filter to JSON: {}", e);
                         return order_error(
-                            &format!("error serializing active connections to JSON: {}", e),
+                            &format!("error serializing filter to JSON: {}", e),
                             false,
                         );
                     }
                 };
-                info!("Returning {} active connections", active_connections.len());
-                Ok(json_active_connections)
+                info!("Returning filter: {}", json_filter);
+                Ok(json_filter)
+            }
+            #[cfg(all(
+                any(target_os = "macos", target_os = "linux"),
+                feature = "packetcapture"
+            ))]
+            "get_sessions" => {
+                let sessions = CAPTURE.lock().await.get_sessions().await;
+                let json_sessions = match serde_json::to_string(&sessions) {
+                    Ok(json) => json,
+                    Err(e) => {
+                        error!("Error serializing sessions to JSON: {}", e);
+                        return order_error(
+                            &format!("error serializing sessions to JSON: {}", e),
+                            false,
+                        );
+                    }
+                };
+                info!("Returning {} sessions", sessions.len());
+                Ok(json_sessions)
+            }
+            #[cfg(all(
+                any(target_os = "macos", target_os = "linux"),
+                feature = "packetcapture"
+            ))]
+            "get_current_sessions" => {
+                let active_sessions = CAPTURE.lock().await.get_current_sessions().await;
+                let json_active_sessions = match serde_json::to_string(&active_sessions) {
+                    Ok(json) => json,
+                    Err(e) => {
+                        error!("Error serializing current sessions to JSON: {}", e);
+                        return order_error(
+                            &format!("error serializing current sessions to JSON: {}", e),
+                            false,
+                        );
+                    }
+                };
+                info!("Returning {} current sessions", active_sessions.len());
+                Ok(json_active_sessions)
             }
             #[cfg(all(
                 any(target_os = "macos", target_os = "linux"),
                 feature = "packetcapture"
             ))]
             "get_whitelist_conformance" => {
-                let conformance = CAPTURE.lock().await.get_whitelist_conformance().await;
-                let json_conformance = match serde_json::to_string(&conformance) {
-                    Ok(json) => json,
-                    Err(e) => {
-                        error!("Error serializing whitelist conformance to JSON: {}", e);
-                        return order_error(
-                            &format!("error serializing whitelist conformance to JSON: {}", e),
-                            false,
-                        );
-                    }
-                };
-                info!("Returning whitelist conformance: {}", conformance);
-                Ok(json_conformance)
+                let conformance = CAPTURE
+                    .lock()
+                    .await
+                    .get_whitelist_conformance()
+                    .await
+                    .to_string();
+                let result = conformance.to_string();
+                info!("Returning whitelist conformance: {}", result);
+                Ok(result)
             }
             #[cfg(all(
                 any(target_os = "macos", target_os = "linux"),
@@ -543,15 +588,14 @@ pub async fn rpc_run(
     }
 }
 
-fn order_error(comment: &str, fatal: bool) -> Result<String, Box<dyn Error>> {
+fn order_error(comment: &str, fatal: bool) -> Result<String> {
     let msg = if fatal {
         format!("Fatal order error : {}", comment)
     } else {
         format!("Order error : {}", comment)
     };
-
     error!("{}", msg);
-    Err(From::from(msg))
+    Err(Error::msg(msg))
 }
 
 #[cfg(test)]

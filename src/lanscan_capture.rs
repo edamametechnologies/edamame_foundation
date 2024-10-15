@@ -1,16 +1,17 @@
 use crate::lanscan_asn::*;
-use crate::lanscan_connections::*;
 use crate::lanscan_l7::LANScanL7;
 use crate::lanscan_mdns::*;
 use crate::lanscan_port_vulns::get_name_from_port;
 use crate::lanscan_resolver::LANScanResolver;
+use crate::lanscan_sessions::*;
 use crate::runtime::async_spawn;
 use crate::rwlock::CustomRwLock;
-use crate::whitelists::is_destination_in_whitelist;
-use chrono::{DateTime, TimeDelta, Utc};
+use crate::whitelists::*;
+use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use dashmap::DashMap;
 use dns_parser::Packet as DnsPacket;
-use pcap::Capture;
+use futures::StreamExt;
+use pcap::{Capture, Packet, PacketCodec};
 use pnet_packet::ethernet::{EtherTypes, EthernetPacket};
 use pnet_packet::ip::IpNextHeaderProtocols;
 use pnet_packet::ipv4::Ipv4Packet;
@@ -21,25 +22,30 @@ use pnet_packet::Packet as PnetPacket;
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use tokio::select;
 use tokio::task::JoinHandle;
-use tokio::time::{sleep, Duration};
-use tracing::{error, info, trace};
+use tokio::time::{interval, sleep, Duration};
+use tracing::{debug, error, info, trace, warn};
 use uuid::Uuid;
 
-static CONNECTION_ACTIVITY_TIMEOUT: Duration = Duration::from_secs(600);
-// 24 hours
-static CONNECTION_RETENTION_TIMEOUT: Duration = Duration::from_secs(60 * 60 * 24);
-static WHITELIST_EXCEPTION_TIMEOUT: TimeDelta = TimeDelta::seconds(600);
+// A session is considered active if it has had activity in the last 60 seconds
+static CONNECTION_ACTIVITY_TIMEOUT: ChronoDuration = ChronoDuration::seconds(60);
+// A session is considered current if it has been active in the last 300 seconds
+static CONNECTION_CURRENT_TIMEOUT: ChronoDuration = ChronoDuration::seconds(300);
+// Current whitelist exceptions
+static WHITELIST_EXCEPTION_TIMEOUT: ChronoDuration = CONNECTION_CURRENT_TIMEOUT;
+// Keep 2 hours of history
+static CONNECTION_RETENTION_TIMEOUT: ChronoDuration = ChronoDuration::seconds(60 * 60 * 2);
 
 #[derive(Debug)]
 enum ParsedPacket {
-    ConnectionPacket(ConnectionPacketData),
+    SessionPacket(SessionPacketData),
     DnsPacket(DnsPacketData),
 }
 
 #[derive(Debug)]
-struct ConnectionPacketData {
-    connection: Connection,
+struct SessionPacketData {
+    session: Session,
     packet_length: usize,
     ip_packet_length: usize,
     flags: Option<u8>,
@@ -52,24 +58,20 @@ struct DnsPacketData {
 
 pub struct LANScanCapture {
     capture_task_handle: Option<TaskHandle>,
-    connections: Arc<DashMap<Connection, ConnectionInfo>>,
-    // Store the keys of active connections
-    active_connections: Arc<CustomRwLock<Vec<Connection>>>,
-    active_connections_handle: Option<TaskHandle>,
-    // Resolver
+    sessions: Arc<DashMap<Session, SessionInfo>>,
+    current_sessions: Arc<CustomRwLock<Vec<Session>>>,
+    current_sessions_handle: Option<TaskHandle>,
     resolver: Arc<Option<LANScanResolver>>,
     resolver_handle: Option<TaskHandle>,
-    // L7
     l7: Arc<Option<LANScanL7>>,
     l7_handle: Option<TaskHandle>,
-    // Captured DNS resolutions
     dns_resolutions: Arc<DashMap<IpAddr, String>>,
     whitelist_check_handle: Option<TaskHandle>,
-    whitelist_name: String,
+    whitelist_name: Arc<CustomRwLock<String>>,
     whitelist_conformance: Arc<AtomicBool>,
     last_whitelist_exception_time: Arc<CustomRwLock<DateTime<Utc>>>,
-    // Store the keys of whitelist exceptions
-    whitelist_exceptions: Arc<CustomRwLock<Vec<Connection>>>,
+    whitelist_exceptions: Arc<CustomRwLock<Vec<Session>>>,
+    filter: Arc<CustomRwLock<SessionFilter>>,
 }
 
 struct TaskHandle {
@@ -79,743 +81,803 @@ struct TaskHandle {
 
 impl LANScanCapture {
     pub fn new() -> Self {
+        debug!("Creating new LANScanCapture");
         Self {
             capture_task_handle: None,
-            connections: Arc::new(DashMap::new()),
-            active_connections: Arc::new(CustomRwLock::new(Vec::new())),
-            active_connections_handle: None,
+            sessions: Arc::new(DashMap::new()),
+            current_sessions: Arc::new(CustomRwLock::new(Vec::new())),
+            current_sessions_handle: None,
             resolver: Arc::new(None),
             resolver_handle: None,
             l7: Arc::new(None),
             l7_handle: None,
             dns_resolutions: Arc::new(DashMap::new()),
             whitelist_check_handle: None,
-            whitelist_name: "".to_string(),
+            whitelist_name: Arc::new(CustomRwLock::new("".to_string())),
             whitelist_conformance: Arc::new(AtomicBool::new(true)),
-            last_whitelist_exception_time: Arc::new(CustomRwLock::new(Utc::now())),
+            last_whitelist_exception_time: Arc::new(CustomRwLock::new(DateTime::<Utc>::from(
+                std::time::UNIX_EPOCH,
+            ))),
             whitelist_exceptions: Arc::new(CustomRwLock::new(Vec::new())),
+            filter: Arc::new(CustomRwLock::new(SessionFilter::GlobalOnly)),
+        }
+    }
+
+    pub async fn set_whitelist(&mut self, whitelist_name: &str) {
+        // Check if the whitelist is valid
+        if !is_valid_whitelist(whitelist_name).await {
+            error!("Invalid whitelist name: {}", whitelist_name);
+            return;
+        }
+        // Check if the whitelist is different
+        if self.whitelist_name.read().await.eq(whitelist_name) {
+            return;
+        }
+        // Set the new whitelist name
+        *self.whitelist_name.write().await = whitelist_name.to_string();
+        // Reset the conformance flag
+        self.whitelist_conformance.store(true, Ordering::Relaxed);
+        // Clear the exceptions
+        self.whitelist_exceptions.write().await.clear();
+        // Update the whitelist state of each session
+        let sessions = self.sessions.clone();
+        for mut session in sessions.iter_mut() {
+            session.is_whitelisted = WhitelistState::Unknown;
+        }
+    }
+
+    pub async fn set_filter(&mut self, filter: SessionFilter) {
+        *self.filter.write().await = filter;
+    }
+
+    pub async fn start(&mut self) {
+        debug!("Starting LANScanCapture");
+
+        // If the capture task is already running, return
+        if self.capture_task_handle.is_some() {
+            warn!("Capture task already running");
+            return;
+        }
+
+        // Start mDNS task
+        mdns_start().await;
+
+        // Start tasks
+        // First start the capture task to populate the sessions map
+        self.start_capture_task().await;
+        // Then start DNS/L7 resolution tasks
+        self.start_resolver_task().await;
+        self.start_l7_task().await;
+        // Then start current sessions task
+        self.start_current_sessions_task().await;
+        // Finally start whitelist check task
+        self.start_whitelist_check_task().await;
+    }
+
+    pub async fn stop(&mut self) {
+        debug!("Stopping LANScanCapture");
+
+        if self.capture_task_handle.is_none() {
+            warn!("Capture task not running");
+            return;
+        }
+
+        // First stop the capture task
+        self.stop_capture_task().await;
+        // Then stop the other tasks, they will populate their latest data
+        self.stop_l7_task().await;
+        self.stop_resolver_task().await;
+        // Then stop the current sessions task
+        self.stop_current_sessions_task().await;
+        // Finally stop the whitelist check task
+        self.stop_whitelist_check_task().await;
+
+        // Don't stop the mDNS task as it's shared with other modules
+    }
+
+    pub async fn is_capturing(&self) -> bool {
+        self.capture_task_handle.is_some()
+    }
+
+    pub async fn get_whitelist(&self) -> String {
+        self.whitelist_name.read().await.clone()
+    }
+
+    pub async fn get_filter(&self) -> SessionFilter {
+        self.filter.read().await.clone()
+    }
+
+    async fn start_current_sessions_task(&mut self) {
+        let current_sessions = self.current_sessions.clone();
+        let sessions = self.sessions.clone();
+        let stop_flag = Arc::new(AtomicBool::new(false));
+
+        let stop_flag_clone = stop_flag.clone();
+        let handle = async_spawn(async move {
+            loop {
+                trace!("Sessions status update started");
+                Self::update_sessions_status(&sessions, &current_sessions).await;
+                info!(
+                    "Sessions status update completed - {} current sessions, {} total sessions",
+                    current_sessions.read().await.len(),
+                    sessions.len()
+                );
+                if stop_flag.load(Ordering::Relaxed) {
+                    break;
+                }
+                sleep(Duration::from_secs(5)).await;
+            }
+            info!("Active sessions task terminated");
+        });
+
+        self.current_sessions_handle = Some(TaskHandle {
+            handle,
+            stop_flag: stop_flag_clone,
+        });
+    }
+
+    async fn stop_current_sessions_task(&mut self) {
+        if let Some(task_handle) = self.current_sessions_handle.take() {
+            task_handle.stop_flag.store(true, Ordering::Relaxed);
+            let _ = task_handle.handle.await;
+        } else {
+            error!("Active sessions task not running");
+        }
+    }
+
+    async fn start_resolver_task(&mut self) {
+        // Create a new resolver if it doesn't exist
+        if self.resolver.is_none() {
+            self.resolver = Arc::new(Some(LANScanResolver::new()));
+        }
+
+        // Start the resolver if it exists
+        if let Some(resolver) = Arc::get_mut(&mut self.resolver).and_then(|r| r.as_mut()) {
+            resolver.start().await;
+        }
+
+        let resolver: Arc<Option<LANScanResolver>> = self.resolver.clone();
+        let stop_flag = Arc::new(AtomicBool::new(false));
+        let dns_resolutions = self.dns_resolutions.clone();
+        let sessions = self.sessions.clone();
+        let current_sessions = self.current_sessions.clone();
+
+        let stop_flag_clone = stop_flag.clone();
+        let handle = async_spawn(async move {
+            loop {
+                trace!("Domain name population started");
+                Self::populate_domain_names(
+                    &sessions,
+                    &resolver,
+                    &dns_resolutions,
+                    &current_sessions,
+                )
+                .await;
+                info!("Domain name population completed");
+                if stop_flag.load(Ordering::Relaxed) {
+                    break;
+                }
+                sleep(Duration::from_secs(5)).await;
+            }
+            info!("Resolver task terminated");
+        });
+
+        self.resolver_handle = Some(TaskHandle {
+            handle,
+            stop_flag: stop_flag_clone,
+        });
+    }
+
+    async fn stop_resolver_task(&mut self) {
+        if let Some(task_handle) = self.resolver_handle.take() {
+            task_handle.stop_flag.store(true, Ordering::Relaxed);
+            let _ = task_handle.handle.await;
+        } else {
+            error!("Resolver task not running");
+        }
+
+        // Stop the resolver if it exists
+        if let Some(resolver) = Arc::get_mut(&mut self.resolver).and_then(|r| r.as_mut()) {
+            resolver.stop().await;
+        }
+    }
+
+    async fn start_l7_task(&mut self) {
+        // Create L7 resolver if it doesn't exist
+        if self.l7.is_none() {
+            self.l7 = Arc::new(Some(LANScanL7::new()));
+        }
+
+        // Start the L7 resolver if it exists
+        if let Some(l7) = Arc::get_mut(&mut self.l7).and_then(|l| l.as_mut()) {
+            l7.start().await;
+        }
+
+        let l7 = self.l7.clone();
+        let stop_flag = Arc::new(AtomicBool::new(false));
+        let sessions = self.sessions.clone();
+        let current_sessions = self.current_sessions.clone();
+
+        let stop_flag_clone = stop_flag.clone();
+        let handle = async_spawn(async move {
+            loop {
+                trace!("L7 update started");
+                Self::populate_l7(&sessions, &l7, &current_sessions).await;
+                info!("L7 update completed");
+                if stop_flag.load(Ordering::Relaxed) {
+                    break;
+                }
+                sleep(Duration::from_secs(5)).await;
+            }
+            info!("L7 task terminated");
+        });
+
+        self.l7_handle = Some(TaskHandle {
+            handle,
+            stop_flag: stop_flag_clone,
+        });
+    }
+
+    async fn stop_l7_task(&mut self) {
+        if let Some(task_handle) = self.l7_handle.take() {
+            task_handle.stop_flag.store(true, Ordering::Relaxed);
+            let _ = task_handle.handle.await;
+        } else {
+            error!("L7 task not running");
+        }
+
+        // Stop the L7 resolver if it exists
+        if let Some(l7) = Arc::get_mut(&mut self.l7).and_then(|l| l.as_mut()) {
+            l7.stop().await;
+        }
+    }
+
+    async fn start_whitelist_check_task(&mut self) {
+        let whitelist_name = self.whitelist_name.clone();
+        let whitelist_exceptions = self.whitelist_exceptions.clone();
+        let whitelist_conformance = self.whitelist_conformance.clone();
+        let last_whitelist_exception_time = self.last_whitelist_exception_time.clone();
+        let sessions = self.sessions.clone();
+        let current_sessions = self.current_sessions.clone();
+        let stop_flag = Arc::new(AtomicBool::new(false));
+
+        let stop_flag_clone = stop_flag.clone();
+        let handle = async_spawn(async move {
+            loop {
+                trace!("Whitelist check started");
+                let whitelist_name = whitelist_name.read().await.clone();
+                if !whitelist_name.is_empty() {
+                    Self::check_whitelisted_destinations(
+                        &whitelist_name,
+                        &whitelist_conformance,
+                        &whitelist_exceptions,
+                        &sessions,
+                        &current_sessions,
+                        &last_whitelist_exception_time,
+                    )
+                    .await;
+                    info!("Whitelist check completed");
+                }
+                if stop_flag.load(Ordering::Relaxed) {
+                    break;
+                }
+                sleep(Duration::from_secs(5)).await;
+            }
+            info!("Whitelist check task terminated");
+        });
+
+        self.whitelist_check_handle = Some(TaskHandle {
+            handle,
+            stop_flag: stop_flag_clone,
+        });
+    }
+
+    async fn stop_whitelist_check_task(&mut self) {
+        if let Some(task_handle) = self.whitelist_check_handle.take() {
+            task_handle.stop_flag.store(true, Ordering::Relaxed);
+            let _ = task_handle.handle.await;
+        } else {
+            error!("Whitelist check task not running");
+        }
+    }
+
+    async fn start_capture_task(&mut self) {
+        let sessions = self.sessions.clone();
+        let current_sessions = self.current_sessions.clone();
+        let dns_resolutions = self.dns_resolutions.clone();
+        let stop_flag = Arc::new(AtomicBool::new(false));
+        let filter = self.filter.clone();
+        let stop_flag_clone = stop_flag.clone();
+        let handle = async_spawn(async move {
+            // Get the default Device
+            let device = match pcap::Device::lookup() {
+                Ok(device) => match device {
+                    Some(device) => device,
+                    None => {
+                        error!("No device available");
+                        return;
+                    }
+                },
+                Err(e) => {
+                    error!("Device lookup failed: {}", e);
+                    return;
+                }
+            };
+            info!("Starting packet capture on device {}", device.name);
+
+            // Extract a vector of IP addresses from the device addresses
+            let self_ips = device
+                .addresses
+                .iter()
+                .filter_map(|addr| Some(addr.addr))
+                .collect();
+
+            // Create a new pcap capture
+            let cap = match Capture::from_device(device) {
+                Ok(cap) => cap,
+                Err(e) => {
+                    error!("Failed to open capture on device: {}", e);
+                    return;
+                }
+            };
+
+            // Open the capture
+            let mut cap = match cap.promisc(false).timeout(1000).open() {
+                Ok(cap) => cap,
+                Err(e) => {
+                    error!("Failed to open pcap capture: {}", e);
+                    return;
+                }
+            };
+
+            // Required for async
+            cap = match cap.setnonblock() {
+                Ok(cap) => cap,
+                Err(e) => {
+                    error!("Failed to set non blocking: {}", e);
+                    return;
+                }
+            };
+
+            pub struct OwnedCodec;
+            pub struct PacketOwned {
+                pub data: Box<[u8]>,
+            }
+
+            impl PacketCodec for OwnedCodec {
+                type Item = PacketOwned;
+
+                fn decode(&mut self, pkt: Packet) -> Self::Item {
+                    PacketOwned {
+                        data: pkt.data.into(),
+                    }
+                }
+            }
+
+            // Create a new packet stream
+            let mut packet_stream = match cap.stream(OwnedCodec) {
+                Ok(stream) => stream,
+                Err(e) => {
+                    error!("Failed to create packet stream: {}", e);
+                    return;
+                }
+            };
+
+            let mut interval = interval(Duration::from_millis(100));
+
+            loop {
+                select! {
+                    _ = interval.tick() => {
+                        if stop_flag.load(Ordering::Relaxed) {
+                            break;
+                        }
+                    }
+                    Some(packet_owned) = packet_stream.next() => {
+                        match packet_owned {
+                            Ok(packet_owned) => match Self::parse_packet_pcap(&packet_owned.data) {
+                                Some(ParsedPacket::SessionPacket(cp)) => {
+                                    Self::process_parsed_packet(
+                                        cp,
+                                        &sessions,
+                                        &current_sessions,
+                                        &self_ips,
+                                        &filter,
+                                    )
+                                    .await;
+                                }
+                                Some(ParsedPacket::DnsPacket(dp)) => {
+                                    Self::process_dns_packet(dp, &dns_resolutions);
+                                }
+                                None => {
+                                    trace!("error parsing packet");
+                                }
+                            }
+                            Err(e) => {
+                                warn!("error capturing packet: {}", e);
+                            }
+                        }
+                    }
+                }
+            }
+            info!("Capture task terminated");
+        });
+
+        self.capture_task_handle = Some(TaskHandle {
+            handle,
+            stop_flag: stop_flag_clone,
+        });
+    }
+
+    async fn stop_capture_task(&mut self) {
+        if let Some(task_handle) = self.capture_task_handle.take() {
+            task_handle.stop_flag.store(true, Ordering::Relaxed);
+            let _ = task_handle.handle.await;
+        } else {
+            error!("Capture task not running");
         }
     }
 
     async fn check_whitelisted_destinations(
         whitelist_name: &str,
         whitelist_conformance: &AtomicBool,
-        whitelist_exceptions: &Arc<CustomRwLock<Vec<Connection>>>,
-        connections: &DashMap<Connection, ConnectionInfo>,
-        active_connections: &Arc<CustomRwLock<Vec<Connection>>>,
+        whitelist_exceptions: &Arc<CustomRwLock<Vec<Session>>>,
+        sessions: &DashMap<Session, SessionInfo>,
+        current_sessions: &Arc<CustomRwLock<Vec<Session>>>,
         last_whitelist_exception_time: &Arc<CustomRwLock<DateTime<Utc>>>,
     ) {
         let mut updated_exceptions = Vec::new();
-        // Clone the active_connections to avoid holding the lock for too long
-        let active_connections_clone = active_connections.read().await.clone();
-        for key in active_connections_clone.iter() {
-            if let Some(connection) = connections.get(key) {
+        // Clone the current_sessions to avoid holding the lock for too long
+        let current_sessions_clone = current_sessions.read().await.clone();
+
+        if is_valid_whitelist(whitelist_name).await {
+            for key in current_sessions_clone.iter() {
+                // Clone necessary data to avoid holding the lock
+                let session_info = if let Some(session) = sessions.get(key) {
+                    session.clone()
+                } else {
+                    error!("Session not found in sessions map");
+                    continue;
+                };
+
                 // If resolution is not complete, add to exceptions
-                if let Some(dst_domain) = connection.dst_domain.clone() {
+                if let Some(dst_domain) = session_info.dst_domain.clone() {
                     if dst_domain == "Unknown".to_string() {
-                        let destination = connection.connection.dst_ip.to_string();
+                        let destination = session_info.session.dst_ip.to_string();
                         // Handle IP addresses that failed to resolve
                         if !is_destination_in_whitelist(
                             &destination,
-                            connection.connection.dst_port,
+                            session_info.session.dst_port,
                             whitelist_name,
                         )
                         .await
                         {
-                            trace!("Connection {:?} failed whitelist check", key);
-                            updated_exceptions.push(connection.connection.clone());
+                            trace!("Session {:?} failed whitelist check", key);
+                            updated_exceptions.push(session_info.session.clone());
                             *last_whitelist_exception_time.write().await = Utc::now();
                         }
                     } else {
                         if !is_destination_in_whitelist(
                             &dst_domain,
-                            connection.connection.dst_port,
+                            session_info.session.dst_port,
                             whitelist_name,
                         )
                         .await
                         {
-                            trace!("Connection {:?} failed whitelist check", key);
-                            updated_exceptions.push(connection.connection.clone());
+                            trace!("Session {:?} failed whitelist check", key);
+                            updated_exceptions.push(session_info.session.clone());
                             *last_whitelist_exception_time.write().await = Utc::now();
                         }
                     }
                 }
-            } else {
-                error!("Connection not found in connections map");
             }
-        }
-        // If one connection is not whitelisted, set the whitelist conformance to false
-        if !updated_exceptions.is_empty() {
-            whitelist_conformance.store(false, Ordering::Relaxed);
-        }
-        // Set the is_whitelisted flag for each connection
-        for exception in updated_exceptions.iter() {
-            if let Some(mut connection) = connections.get_mut(&exception) {
-                connection.value_mut().is_whitelisted = WhitelistState::NonConforming;
-            } else {
-                error!("Connection not found in connections map");
+            // If one session is not whitelisted, set the whitelist conformance to false
+            if !updated_exceptions.is_empty() {
+                whitelist_conformance.store(false, Ordering::Relaxed);
             }
-        }
-        // Merge the updated exceptions with the existing ones
-        whitelist_exceptions
-            .write()
-            .await
-            .extend(updated_exceptions);
-        // Deduplicate the exceptions
-        whitelist_exceptions
-            .write()
-            .await
-            .sort_by_key(|k| k.clone());
-        whitelist_exceptions
-            .write()
-            .await
-            .dedup_by_key(|k| k.clone());
+            // Set the is_whitelisted flag for each session
+            for exception in updated_exceptions.iter() {
+                if let Some(mut session) = sessions.get_mut(exception) {
+                    session.value_mut().is_whitelisted = WhitelistState::NonConforming;
+                } else {
+                    error!("Session not found in sessions map");
+                }
+            }
 
-        info!(
-            "Total whitelist exceptions: {}",
-            whitelist_exceptions.read().await.len()
-        );
-        // Clear the whitelist_conformance if it's been more than 600 seconds
-        if Utc::now() - *last_whitelist_exception_time.read().await > WHITELIST_EXCEPTION_TIMEOUT {
+            // Merge the updated exceptions with the existing ones
+            let mut new_exceptions = whitelist_exceptions.read().await.clone();
+            new_exceptions.extend(updated_exceptions);
+
+            // Deduplicate the exceptions
+            new_exceptions.sort_by_key(|k| k.clone());
+            new_exceptions.dedup_by_key(|k| k.clone());
+            *whitelist_exceptions.write().await = new_exceptions;
+
             info!(
-                "Clearing whitelist conformance after no activity for {} seconds",
-                WHITELIST_EXCEPTION_TIMEOUT.num_seconds()
+                "Total whitelist exceptions: {}",
+                whitelist_exceptions.read().await.len()
             );
-            whitelist_conformance.store(true, Ordering::Relaxed);
+            // Clear the whitelist_conformance if it's been more than 600 seconds
+            if Utc::now()
+                > *last_whitelist_exception_time.read().await + WHITELIST_EXCEPTION_TIMEOUT
+            {
+                info!(
+                    "Clearing whitelist conformance after no activity for {} seconds",
+                    WHITELIST_EXCEPTION_TIMEOUT.num_seconds()
+                );
+                whitelist_conformance.store(true, Ordering::Relaxed);
+            }
+        } else {
+            error!("Invalid whitelist name: {}", whitelist_name);
         }
     }
 
-    // Only for active connections
+    // Only for current sessions
     async fn populate_domain_names(
-        connections: &DashMap<Connection, ConnectionInfo>,
+        sessions: &DashMap<Session, SessionInfo>,
         resolver: &Arc<Option<LANScanResolver>>,
         dns_resolutions: &Arc<DashMap<IpAddr, String>>,
-        active_connections: &Arc<CustomRwLock<Vec<Connection>>>,
+        current_sessions: &Arc<CustomRwLock<Vec<Session>>>,
     ) {
-        let active_connections_clone = active_connections.read().await.clone();
+        let current_sessions_clone = current_sessions.read().await.clone();
 
-        for key in active_connections_clone.iter() {
-            // Get a mutable reference to the connection info
-            if let Some(mut connection_info) = connections.get_mut(key) {
-                trace!(
-                    "Populating domain names for connection: {:?}",
-                    connection_info
-                );
-
-                // Check DNS resolution for source IP
-                if let Some(domain) = dns_resolutions.get(&connection_info.connection.src_ip) {
-                    trace!("Using DNS resolution for src_ip: {:?}", domain);
-                    connection_info.src_domain = Some(domain.clone());
-                } else {
-                    // If not in dns_resolutions, use the resolver (only for eligible IPs)
-                    if Self::is_eligible_ip(&connection_info.connection.src_ip) {
-                        if let Some(resolver) = resolver.as_ref() {
-                            let domain = resolver
-                                .get_resolved_ip(&connection_info.connection.src_ip)
-                                .await;
-                            if let Some(domain) = domain {
-                                trace!(
-                                    "Using resolver for src_ip: {:?}",
-                                    connection_info.connection.src_ip
-                                );
-                                connection_info.src_domain = Some(domain);
-                            } else {
-                                resolver
-                                    .add_ip_to_resolver(&connection_info.connection.src_ip)
-                                    .await;
-                            }
-                        }
-                    } else {
-                        // Use mDNS for local IPs
-                        if let Some(src_domain) =
-                            mdns_get_hostname_by_ip(&connection_info.connection.src_ip).await
-                        {
-                            trace!("Using mDNS for src_ip: {:?}", src_domain);
-                            connection_info.src_domain = Some(src_domain);
-                        }
-                    }
-                }
-
-                // Check DNS resolution for destination IP
-                if let Some(domain) = dns_resolutions.get(&connection_info.connection.dst_ip) {
-                    trace!("Using DNS resolution for dst_ip: {:?}", domain);
-                    connection_info.dst_domain = Some(domain.clone());
-                } else {
-                    if Self::is_eligible_ip(&connection_info.connection.dst_ip) {
-                        if let Some(resolver) = resolver.as_ref() {
-                            let domain = resolver
-                                .get_resolved_ip(&connection_info.connection.dst_ip)
-                                .await;
-                            if let Some(domain) = domain {
-                                trace!(
-                                    "Using resolver for dst_ip: {:?}",
-                                    connection_info.connection.dst_ip
-                                );
-                                connection_info.dst_domain = Some(domain);
-                            } else {
-                                resolver
-                                    .add_ip_to_resolver(&connection_info.connection.dst_ip)
-                                    .await;
-                            }
-                        }
-                    } else {
-                        if let Some(dst_domain) =
-                            mdns_get_hostname_by_ip(&connection_info.connection.dst_ip).await
-                        {
-                            trace!("Using mDNS for dst_ip: {:?}", dst_domain);
-                            connection_info.dst_domain = Some(dst_domain);
-                        }
-                    }
-                }
+        for key in current_sessions_clone.iter() {
+            // Clone necessary data to avoid holding lock across await
+            let session_info = if let Some(session_info) = sessions.get(key) {
+                session_info.clone()
             } else {
-                error!("Connection was not found for key: {:?}", key);
+                error!("Session was not found for key: {:?}", key);
+                continue;
+            };
+
+            // Prepare to collect updates
+            let mut new_src_domain = session_info.src_domain.clone();
+            let mut new_dst_domain = session_info.dst_domain.clone();
+
+            // Check DNS resolution for source IP
+            if let Some(domain) = dns_resolutions.get(&session_info.session.src_ip) {
+                trace!("Using DNS resolution for src_ip: {:?}", domain);
+                new_src_domain = Some(domain.clone());
+            } else {
+                // If not in dns_resolutions, use the resolver (only for eligible IPs)
+                if !is_local_ip(&session_info.session.src_ip) {
+                    if let Some(resolver) = resolver.as_ref() {
+                        let domain = resolver.get_resolved_ip(&session_info.session.src_ip).await;
+                        if let Some(domain) = domain {
+                            trace!(
+                                "Using resolver for src_ip: {:?}",
+                                session_info.session.src_ip
+                            );
+                            new_src_domain = Some(domain);
+                        } else {
+                            resolver
+                                .add_ip_to_resolver(&session_info.session.src_ip)
+                                .await;
+                        }
+                    }
+                } else {
+                    // Use mDNS for local IPs
+                    if let Some(src_domain) =
+                        mdns_get_hostname_by_ip(&session_info.session.src_ip).await
+                    {
+                        trace!("Using mDNS for src_ip: {:?}", src_domain);
+                        new_src_domain = Some(src_domain);
+                    }
+                }
+            }
+
+            // Check DNS resolution for destination IP
+            if let Some(domain) = dns_resolutions.get(&session_info.session.dst_ip) {
+                trace!("Using DNS resolution for dst_ip: {:?}", domain);
+                new_dst_domain = Some(domain.clone());
+            } else {
+                if !is_local_ip(&session_info.session.dst_ip) {
+                    if let Some(resolver) = resolver.as_ref() {
+                        let domain = resolver.get_resolved_ip(&session_info.session.dst_ip).await;
+                        if let Some(domain) = domain {
+                            trace!(
+                                "Using resolver for dst_ip: {:?}",
+                                session_info.session.dst_ip
+                            );
+                            new_dst_domain = Some(domain);
+                        } else {
+                            resolver
+                                .add_ip_to_resolver(&session_info.session.dst_ip)
+                                .await;
+                        }
+                    }
+                } else {
+                    // Use mDNS for local IPs
+                    if let Some(dst_domain) =
+                        mdns_get_hostname_by_ip(&session_info.session.dst_ip).await
+                    {
+                        trace!("Using mDNS for dst_ip: {:?}", dst_domain);
+                        new_dst_domain = Some(dst_domain);
+                    }
+                }
+            }
+
+            // Update the session info after await points
+            if let Some(mut session_info_mut) = sessions.get_mut(key) {
+                session_info_mut.src_domain = new_src_domain;
+                session_info_mut.dst_domain = new_dst_domain;
             }
         }
     }
 
-    //Populate L7
+    // Populate L7
     async fn populate_l7(
-        connections: &DashMap<Connection, ConnectionInfo>,
+        sessions: &DashMap<Session, SessionInfo>,
         l7: &Arc<Option<LANScanL7>>,
-        active_connections: &Arc<CustomRwLock<Vec<Connection>>>,
+        current_sessions: &Arc<CustomRwLock<Vec<Session>>>,
     ) {
         if let Some(l7) = l7.as_ref() {
-            let active_connections_clone = active_connections.read().await.clone();
-            for key in active_connections_clone.iter() {
-                if let Some(mut connection_info) = connections.get_mut(key) {
-                    // Always attempt to get the resolved L7 data
-                    if let Some(l7_resolution) =
-                        l7.get_resolved_l7(&connection_info.connection).await
-                    {
-                        if let Some(l7_data) = l7_resolution.l7 {
-                            connection_info.l7 = Some(l7_data.clone());
-                            trace!("Updated L7 data for connection {:?}: {:?}", key, l7_data);
-                        }
-                    }
+            let current_sessions_clone = current_sessions.read().await.clone();
+            for key in current_sessions_clone.iter() {
+                // Clone necessary data
+                let session_info = if let Some(session_info) = sessions.get(key) {
+                    session_info.clone()
                 } else {
-                    error!("Connection was not found for key: {:?}", key);
-                }
-            }
-        }
-    }
-    async fn update_active_connections(
-        connections: &DashMap<Connection, ConnectionInfo>,
-        active_connections: &Arc<CustomRwLock<Vec<Connection>>>,
-    ) {
-        let mut updated_active_connections = Vec::new();
-        // Clone the active_connections to avoid holding the lock for too long
-        let active_connections_clone = active_connections.read().await.clone();
-        for key in active_connections_clone.iter() {
-            if let Some(connection) = connections.get(key) {
-                if connection.stats.last_activity > Utc::now() - CONNECTION_ACTIVITY_TIMEOUT {
-                    updated_active_connections.push(connection.connection.clone());
-                }
-            }
-        }
-        *active_connections.write().await = updated_active_connections;
+                    error!("Session was not found for key: {:?}", key);
+                    continue;
+                };
 
-        // Remove connections that are older than the retention timeout within the whole connections
-        let retention_timeout = Utc::now() - CONNECTION_RETENTION_TIMEOUT;
-        for key in connections.iter() {
-            if key.stats.last_activity < retention_timeout {
-                connections.remove(&key.connection);
-            }
-        }
-    }
+                // Always attempt to get the resolved L7 data
+                let l7_resolution = l7.get_resolved_l7(&session_info.session).await;
 
-    pub async fn start(&mut self, whitelist_name: &str) {
-        // Start mDNS task
-        mdns_start().await;
-
-        // Active connections handle
-        let active_connections = self.active_connections.clone();
-        let active_connections_stop_flag = Arc::new(AtomicBool::new(false));
-        let active_connections_stop_flag_clone = active_connections_stop_flag.clone();
-        let connections = self.connections.clone();
-        let active_connections_handle = async_spawn(async move {
-            while !active_connections_stop_flag.load(Ordering::Relaxed) {
-                trace!("Active connections update started");
-                Self::update_active_connections(&connections, &active_connections).await;
-                info!(
-                    "Active connections update completed - {} connections",
-                    active_connections.read().await.len()
-                );
-                sleep(Duration::from_secs(5)).await;
-            }
-            info!("Stopped active connections task");
-        });
-        self.active_connections_handle = Some(TaskHandle {
-            handle: active_connections_handle,
-            stop_flag: active_connections_stop_flag_clone,
-        });
-
-        // Create a new resolver if it doesn't exist
-        if self.resolver.is_none() {
-            self.resolver = Arc::new(Some(LANScanResolver::new()));
-        }
-        // Start the resolver if it exists
-        if let Some(resolver) = Arc::get_mut(&mut self.resolver).and_then(|r| r.as_mut()) {
-            resolver.start().await;
-        }
-        let resolver: Arc<Option<LANScanResolver>> = self.resolver.clone();
-        let resolver_stop_flag = Arc::new(AtomicBool::new(false));
-        let resolver_stop_flag_clone = resolver_stop_flag.clone();
-        let dns_resolutions = self.dns_resolutions.clone();
-        let connections = self.connections.clone();
-        let active_connections = self.active_connections.clone();
-        let resolver_handle = async_spawn(async move {
-            while !resolver_stop_flag.load(Ordering::Relaxed) {
-                trace!("Domain name population started");
-                Self::populate_domain_names(
-                    &connections,
-                    &resolver,
-                    &dns_resolutions,
-                    &active_connections,
-                )
-                .await;
-                info!("Domain name population completed");
-                sleep(Duration::from_secs(5)).await;
-            }
-            info!("Stopped resolver task");
-        });
-        self.resolver_handle = Some(TaskHandle {
-            handle: resolver_handle,
-            stop_flag: resolver_stop_flag_clone,
-        });
-
-        // Create L7 resolver if it doesn't exist
-        if self.l7.is_none() {
-            self.l7 = Arc::new(Some(LANScanL7::new()));
-        }
-        // Start the L7 resolver if it exists
-        if let Some(l7) = Arc::get_mut(&mut self.l7).and_then(|l| l.as_mut()) {
-            l7.start().await;
-        }
-        let l7 = self.l7.clone();
-        let l7_stop_flag = Arc::new(AtomicBool::new(false));
-        let l7_stop_flag_clone = l7_stop_flag.clone();
-        let connections = self.connections.clone();
-        let active_connections = self.active_connections.clone();
-        let l7_handle = async_spawn(async move {
-            while !l7_stop_flag.load(Ordering::Relaxed) {
-                trace!("L7 update started");
-                Self::populate_l7(&connections, &l7, &active_connections).await;
-                info!("L7 update completed");
-                sleep(Duration::from_secs(5)).await;
-            }
-            info!("Stopped L7 task");
-        });
-        self.l7_handle = Some(TaskHandle {
-            handle: l7_handle,
-            stop_flag: l7_stop_flag_clone,
-        });
-
-        // Whitelist check handle
-        if !whitelist_name.is_empty() {
-            let whitelist_name = whitelist_name.to_string();
-            self.whitelist_name = whitelist_name.to_string();
-            let whitelist_exceptions = self.whitelist_exceptions.clone();
-            let whitelist_conformance = self.whitelist_conformance.clone();
-            let whitelist_check_stop_flag = Arc::new(AtomicBool::new(false));
-            let whitelist_check_stop_flag_clone: Arc<AtomicBool> =
-                whitelist_check_stop_flag.clone();
-            let last_whitelist_exception_time = self.last_whitelist_exception_time.clone();
-            let connections = self.connections.clone();
-            let active_connections = self.active_connections.clone();
-            let whitelist_check_handle = async_spawn(async move {
-                while !whitelist_check_stop_flag.load(Ordering::Relaxed) {
-                    trace!("Whitelist check started");
-                    Self::check_whitelisted_destinations(
-                        &whitelist_name,
-                        &whitelist_conformance,
-                        &whitelist_exceptions,
-                        &connections,
-                        &active_connections,
-                        &last_whitelist_exception_time,
-                    )
-                    .await;
-                    info!("Whitelist check completed");
-                    sleep(Duration::from_secs(5)).await;
-                }
-                info!("Stopped whitelist check task");
-            });
-            self.whitelist_check_handle = Some(TaskHandle {
-                handle: whitelist_check_handle,
-                stop_flag: whitelist_check_stop_flag_clone,
-            });
-        }
-
-        // Capture handle
-        let connections = self.connections.clone();
-        let active_connections = self.active_connections.clone();
-        let capture_stop_flag = Arc::new(AtomicBool::new(false));
-        let capture_stop_flag_clone = capture_stop_flag.clone();
-        let dns_resolutions = self.dns_resolutions.clone();
-        // Spawn packet capture task
-        let capture_task_handle = {
-            async_spawn(async move {
-                // get the default Device
-                let device = pcap::Device::lookup()
-                    .expect("device lookup failed")
-                    .expect("no device available");
-
-                info!("Starting packet capture on device {}", device.name);
-
-                let mut cap = Capture::from_device(device)
-                    .expect("Failed to open capture on default device")
-                    .promisc(false)
-                    .timeout(1000) // Set read timeout in milliseconds
-                    .open()
-                    .expect("Failed to open pcap capture");
-
-                while !capture_stop_flag.load(Ordering::Relaxed) {
-                    match cap.next_packet() {
-                        Ok(packet) => {
-                            if let Some(parsed_packet) = Self::parse_packet_pcap(packet.data) {
-                                match parsed_packet {
-                                    ParsedPacket::ConnectionPacket(cp) => {
-                                        Self::process_parsed_packet(
-                                            cp,
-                                            &connections,
-                                            &active_connections,
-                                        )
-                                        .await;
-                                    }
-                                    ParsedPacket::DnsPacket(dp) => {
-                                        Self::process_dns_packet(dp, &dns_resolutions);
-                                    }
-                                }
-                            }
-                        }
-                        Err(pcap::Error::TimeoutExpired) => {
-                            // Read timeout occurred, check stop_flag
-                            continue;
-                        }
-                        Err(e) => {
-                            error!("Failed to read packet: {}", e);
-                            break;
+                // Update the session info after await
+                if let Some(mut session_info_mut) = sessions.get_mut(key) {
+                    if let Some(l7_resolution) = l7_resolution {
+                        if let Some(l7_data) = l7_resolution.l7 {
+                            session_info_mut.l7 = Some(l7_data.clone());
+                            trace!("Updated L7 data for session {:?}: {:?}", key, l7_data);
                         }
                     }
                 }
-            })
-        };
-
-        self.capture_task_handle = Some(TaskHandle {
-            handle: capture_task_handle,
-            stop_flag: capture_stop_flag_clone,
-        });
-    }
-
-    pub async fn stop(&mut self) {
-        if let Some(capture_task_handle) = self.capture_task_handle.take() {
-            capture_task_handle.stop_flag.store(true, Ordering::Relaxed);
-            let _ = capture_task_handle.handle.await;
-            info!("Stopped packet capture on all interfaces");
-        }
-
-        if let Some(whitelist_check_handle) = self.whitelist_check_handle.take() {
-            whitelist_check_handle
-                .stop_flag
-                .store(true, Ordering::Relaxed);
-            let _ = whitelist_check_handle.handle.await;
-            info!("Stopped whitelist check task");
-        }
-    }
-
-    // Get connections as a vector of ConnectionInfo
-    pub async fn get_connections(&self, local_traffic: bool) -> Vec<ConnectionInfo> {
-        let mut connections_vec = Vec::new();
-        for key in self.connections.iter() {
-            if let Some(entry) = self.connections.get(&key.connection) {
-                connections_vec.push(entry.clone());
             }
         }
-        if local_traffic {
-            connections_vec = Self::filter_local_traffic(&connections_vec);
-        }
-        connections_vec
     }
 
-    // Active connections as a vector of ConnectionInfo
-    pub async fn get_active_connections(&self, local_traffic: bool) -> Vec<ConnectionInfo> {
-        // Get the connections from the DashMap that match the keys in the active_connections Vec
-        let mut active_connections_vec = Vec::new();
-        for key in self.active_connections.read().await.iter() {
-            if let Some(entry) = self.connections.get(key) {
-                active_connections_vec.push(entry.clone());
+    async fn update_sessions_status(
+        sessions: &DashMap<Session, SessionInfo>,
+        current_sessions: &Arc<CustomRwLock<Vec<Session>>>,
+    ) {
+        let mut updated_current_sessions = Vec::new();
+        let mut sessions_to_remove = Vec::new();
+
+        // Iterate over mutable references to session entries
+        for mut entry in sessions.iter_mut() {
+            let key = entry.key().clone();
+            let session_info = entry.value_mut();
+
+            // Previous status
+            let previous_status = session_info.status.clone();
+
+            // New status
+            let active =
+                Utc::now() < session_info.stats.last_activity + CONNECTION_ACTIVITY_TIMEOUT;
+            let added = Utc::now() < session_info.stats.start_time + CONNECTION_ACTIVITY_TIMEOUT;
+            // Added <> activated
+            let activated = !added && !previous_status.active && active;
+            let deactivated = previous_status.active && !active;
+
+            // Create new status with updated previous bytes
+            let new_status = SessionStatus {
+                active,
+                added,
+                activated,
+                deactivated,
+            };
+
+            // Update the session info directly
+            session_info.status = new_status;
+
+            // Only include sessions that are within the current time frame
+            if Utc::now() < session_info.stats.last_activity + CONNECTION_CURRENT_TIMEOUT {
+                updated_current_sessions.push(session_info.session.clone());
+            }
+
+            // Flag sessions that are older than the retention timeout
+            if Utc::now() > session_info.stats.last_activity + CONNECTION_RETENTION_TIMEOUT {
+                sessions_to_remove.push(key.clone());
             }
         }
-        if local_traffic {
-            active_connections_vec = Self::filter_local_traffic(&active_connections_vec);
+
+        // Update the current sessions
+        {
+            let mut current_sessions_guard = current_sessions.write().await;
+            let _old_value =
+                std::mem::replace(&mut *current_sessions_guard, updated_current_sessions);
         }
-        active_connections_vec
+
+        // Purge the sessions that are older than the retention timeout
+        for key in sessions_to_remove.iter() {
+            sessions.remove(key);
+        }
+    }
+
+    // Get historical sessions as a vector of SessionInfo
+    // TODO: specify a time range
+    pub async fn get_sessions(&self) -> Vec<SessionInfo> {
+        let mut sessions_vec = Vec::new();
+        let filter = self.filter.read().await;
+        for entry in self.sessions.iter() {
+            // Apply filter
+            if *filter == SessionFilter::All {
+                sessions_vec.push(entry.clone());
+            } else if *filter == SessionFilter::LocalOnly {
+                if entry.is_local_src && entry.is_local_dst {
+                    sessions_vec.push(entry.clone());
+                }
+            } else if *filter == SessionFilter::GlobalOnly {
+                if !entry.is_local_src || !entry.is_local_dst {
+                    sessions_vec.push(entry.clone());
+                }
+            }
+        }
+        sessions_vec
+    }
+
+    // Active sessions as a vector of SessionInfo
+    pub async fn get_current_sessions(&self) -> Vec<SessionInfo> {
+        // Get the sessions from the DashMap that match the keys in the current_sessions Vec
+        let filter = self.filter.read().await;
+        let mut current_sessions_vec = Vec::new();
+        for key in self.current_sessions.read().await.iter() {
+            if let Some(entry) = self.sessions.get(key) {
+                // Apply filter
+                if *filter == SessionFilter::All {
+                    current_sessions_vec.push(entry.clone());
+                } else if *filter == SessionFilter::LocalOnly {
+                    if entry.is_local_src && entry.is_local_dst {
+                        current_sessions_vec.push(entry.clone());
+                    }
+                } else if *filter == SessionFilter::GlobalOnly {
+                    if !entry.is_local_src || !entry.is_local_dst {
+                        current_sessions_vec.push(entry.clone());
+                    }
+                }
+            }
+        }
+        current_sessions_vec
     }
 
     pub async fn get_whitelist_conformance(&self) -> bool {
         self.whitelist_conformance.load(Ordering::Relaxed)
     }
 
-    pub async fn get_whitelist_exceptions(&self) -> Vec<ConnectionInfo> {
+    pub async fn get_whitelist_exceptions(&self) -> Vec<SessionInfo> {
         let mut exceptions = Vec::new();
         for key in self.whitelist_exceptions.read().await.iter() {
-            if let Some(entry) = self.connections.get(key) {
+            if let Some(entry) = self.sessions.get(key) {
                 exceptions.push(entry.clone());
             }
         }
         exceptions
     }
 
-    fn filter_local_traffic(connections: &Vec<ConnectionInfo>) -> Vec<ConnectionInfo> {
-        connections
-            .iter()
-            .filter(|c| {
-                Self::is_eligible_ip(&c.connection.src_ip)
-                    || Self::is_eligible_ip(&c.connection.dst_ip)
-            })
-            .cloned()
-            .collect()
-    }
-
-    pub fn format_connections_zeek(
-        connections: &Vec<ConnectionInfo>,
-        local_traffic: bool,
-    ) -> Vec<String> {
-        let mut zeek_logs = Vec::new();
-
-        let connections = if !local_traffic {
-            Self::filter_local_traffic(connections)
-        } else {
-            connections.clone()
-        };
-
-        // Add a header to the Zeek log
-        let header = format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-            "ts",
-            "uid",
-            "id.orig_h",
-            "id.orig_p",
-            "id.resp_h",
-            "id.resp_p",
-            "proto",
-            "service",
-            "duration",
-            "orig_bytes",
-            "resp_bytes",
-            "conn_state",
-            "local_orig",
-            "local_resp",
-            "missed_bytes",
-            "history",
-            "orig_pkts",
-            "orig_ip_bytes",
-            "resp_pkts",
-            "resp_ip_bytes",
-            "tunnel_parents"
-        );
-        zeek_logs.push(header);
-
-        for connection in connections {
-            let start_time = connection.stats.start_time.timestamp() as f64
-                + (connection.stats.start_time.timestamp_subsec_micros() as f64 / 1_000_000.0);
-            let duration = match connection.stats.end_time {
-                Some(end_time) => format!(
-                    "{:.6}",
-                    (end_time - connection.stats.start_time)
-                        .num_microseconds()
-                        .unwrap_or(0) as f64
-                        / 1_000_000.0
-                ),
-                None => "-".to_string(),
-            };
-            let orig_bytes = connection.stats.outbound_bytes.to_string();
-            let resp_bytes = connection.stats.inbound_bytes.to_string();
-            let proto = match connection.connection.protocol {
-                Protocol::TCP => "tcp",
-                Protocol::UDP => "udp",
-            };
-            let conn_state = connection
-                .stats
-                .conn_state
-                .clone()
-                .unwrap_or("-".to_string());
-
-            let zeek_entry = format!(
-                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-                start_time,
-                connection.stats.uid,
-                connection.connection.src_ip,
-                connection.connection.src_port,
-                connection.connection.dst_ip,
-                connection.connection.dst_port,
-                proto,
-                "-", // Service detection not implemented
-                duration,
-                orig_bytes,
-                resp_bytes,
-                conn_state,
-                "-", // Local origination not determined
-                "-", // Local response not determined
-                connection.stats.missed_bytes,
-                connection.stats.history,
-                connection.stats.orig_pkts,
-                connection.stats.orig_ip_bytes,
-                connection.stats.resp_pkts,
-                connection.stats.resp_ip_bytes,
-                "-" // Tunnel parents not implemented
-            );
-
-            zeek_logs.push(zeek_entry);
-        }
-
-        zeek_logs
-    }
-
-    // Get connections as a vector of String in a readable log format
-    pub fn format_connections_log(
-        connections: &Vec<ConnectionInfo>,
-        local_traffic: bool,
-    ) -> Vec<String> {
-        let mut log_entries = Vec::new();
-
-        let connections = if !local_traffic {
-            Self::filter_local_traffic(connections)
-        } else {
-            connections.clone()
-        };
-
-        for connection_info in connections.iter() {
-            let src_domain = connection_info.src_domain.clone();
-            let dst_domain = connection_info.dst_domain.clone();
-
-            let (username, process_name) = match connection_info.l7.clone() {
-                Some(l7) => (l7.username, l7.process_name),
-                None => ("-".to_string(), "-".to_string()),
-            };
-
-            let stats = connection_info.stats.clone();
-            let is_whitelisted = connection_info.is_whitelisted.clone();
-            let connection = connection_info.connection.clone();
-            let start_time = stats.start_time.to_rfc3339();
-            let duration = match stats.end_time {
-                Some(end_time) => {
-                    let duration = end_time - stats.start_time;
-                    format!("{}s", duration.num_seconds())
-                }
-                None => "ongoing".to_string(),
-            };
-
-            // Replace IP addresses with resolved names when available and not "Resolving" or "Unknown", replace with the ASN information if no domain is available
-            let src_name = match src_domain {
-                Some(name) => match name.as_str() {
-                    "Resolving" | "Unknown" => match connection_info.src_asn.clone() {
-                        Some(asn) => format!("{} {} ({})", asn.owner, asn.country, asn.as_number),
-                        None => connection.src_ip.to_string(),
-                    },
-                    _ => name.clone(),
-                },
-                None => connection.src_ip.to_string(),
-            };
-
-            let dst_name = match dst_domain {
-                Some(name) => match name.as_str() {
-                    "Resolving" | "Unknown" => match connection_info.dst_asn.clone() {
-                        Some(asn) => format!("{} {} ({})", asn.owner, asn.country, asn.as_number),
-                        None => connection.dst_ip.to_string(),
-                    },
-                    _ => name.clone(),
-                },
-                None => connection.dst_ip.to_string(),
-            };
-
-            let dst_service = connection_info.dst_service.clone();
-            let log_entry = format!(
-                "[{}] {} {} - {}:{} -> {}:{} ({}, {} bytes sent, {} bytes received, duration: {}, whitelisted: {})",
-                start_time,
-                username,
-                process_name,
-                src_name,
-                connection.src_port,
-                dst_name,
-                if dst_service.is_some() {
-                    format!("{} ({})", dst_service.unwrap(), connection.dst_port)
-                } else {
-                    connection.dst_port.to_string()
-                },
-                connection.protocol,
-                stats.outbound_bytes,
-                stats.inbound_bytes,
-                duration,
-                is_whitelisted
-            );
-
-            log_entries.push(log_entry);
-        }
-
-        log_entries
-    }
-
-    fn is_link_local_ipv6(ip: &IpAddr) -> bool {
-        match ip {
-            IpAddr::V6(ipv6) => ipv6.to_string().starts_with("fe80"),
-            _ => false,
-        }
-    }
-
-    fn is_private_ipv6(ip: &IpAddr) -> bool {
-        match ip {
-            // fc00::/7
-            IpAddr::V6(ipv6) => {
-                ipv6.to_string().starts_with("fc00") || ipv6.to_string().starts_with("fd00")
-            }
-            _ => false,
-        }
-    }
-
-    fn is_eligible_ip(ip: &IpAddr) -> bool {
-        let not_eligible = match ip {
-            IpAddr::V4(ipv4) => {
-                ipv4.is_private()
-                    || ipv4.is_link_local()
-                    || ipv4.is_loopback()
-                    || ipv4.is_multicast()
-                    || ipv4.is_unspecified()
-                    || ipv4.is_broadcast()
-            }
-            IpAddr::V6(ipv6) => {
-                ipv6.is_loopback()
-                    || ipv6.is_multicast()
-                    || ipv6.is_unspecified()
-                    || Self::is_link_local_ipv6(ip)
-                    || Self::is_private_ipv6(ip)
-            }
-        };
-        if not_eligible {
-            trace!("IP address {:?} is not eligible", ip);
-        } else {
-            trace!("IP address {:?} is eligible", ip);
-        }
-        !not_eligible
-    }
-
     async fn process_parsed_packet(
-        parsed_packet: ConnectionPacketData,
-        connections: &Arc<DashMap<Connection, ConnectionInfo>>,
-        active_connections: &Arc<CustomRwLock<Vec<Connection>>>,
+        parsed_packet: SessionPacketData,
+        sessions: &Arc<DashMap<Session, SessionInfo>>,
+        current_sessions: &Arc<CustomRwLock<Vec<Session>>>,
+        self_ips: &Vec<IpAddr>,
+        filter: &Arc<CustomRwLock<SessionFilter>>,
     ) {
-        let key = parsed_packet.connection.clone();
-        let reverse_key = Connection {
-            protocol: parsed_packet.connection.protocol.clone(),
-            src_ip: parsed_packet.connection.dst_ip,
-            src_port: parsed_packet.connection.dst_port,
-            dst_ip: parsed_packet.connection.src_ip,
-            dst_port: parsed_packet.connection.src_port,
+        // Set the time to now, we could use the time provided by pcap too but we don't want to bother converting to UTC
+        let now = Utc::now();
+
+        let key = parsed_packet.session.clone();
+        let reverse_key = Session {
+            protocol: parsed_packet.session.protocol.clone(),
+            src_ip: parsed_packet.session.dst_ip,
+            src_port: parsed_packet.session.dst_port,
+            dst_ip: parsed_packet.session.src_ip,
+            dst_port: parsed_packet.session.src_port,
         };
 
-        // Update connection stats
-        if let Some(mut info) = connections.get_mut(&key) {
-            let stats: &mut ConnectionStats = &mut info.stats;
-            stats.last_activity = Utc::now();
+        // Update session stats
+        if let Some(mut info) = sessions.get_mut(&key) {
+            let stats: &mut SessionStats = &mut info.stats;
+            stats.last_activity = now.clone();
             // Packet from originator to responder
             stats.outbound_bytes += parsed_packet.packet_length as u64;
             stats.orig_pkts += 1;
@@ -825,14 +887,14 @@ impl LANScanCapture {
                 let c = Self::map_tcp_flags(flags, parsed_packet.packet_length, true);
                 stats.history.push(c);
                 if (flags & (TcpFlags::FIN | TcpFlags::RST)) != 0 && stats.end_time.is_none() {
-                    stats.end_time = Some(Utc::now());
+                    stats.end_time = Some(now.clone());
                     stats.conn_state = Some(Self::determine_conn_state(&stats.history));
                 }
             }
-        } else if let Some(mut info) = connections.get_mut(&reverse_key) {
+        } else if let Some(mut info) = sessions.get_mut(&reverse_key) {
             // Packet from responder to originator
-            let stats: &mut ConnectionStats = &mut info.stats;
-            stats.last_activity = Utc::now();
+            let stats: &mut SessionStats = &mut info.stats;
+            stats.last_activity = now.clone();
             stats.inbound_bytes += parsed_packet.packet_length as u64;
             stats.resp_pkts += 1;
             stats.resp_ip_bytes += parsed_packet.ip_packet_length as u64;
@@ -846,9 +908,9 @@ impl LANScanCapture {
                 }
             }
         } else {
-            // Neither key nor reverse key found, new connection
+            // Neither key nor reverse key found, new session
             let uid = Uuid::new_v4().to_string();
-            let mut stats = ConnectionStats {
+            let mut stats = SessionStats {
                 start_time: Utc::now(),
                 end_time: None,
                 last_activity: Utc::now(),
@@ -863,12 +925,33 @@ impl LANScanCapture {
                 missed_bytes: 0,
                 uid,
             };
-            // This is the first packet, we need to determine the direction of the connection
+
+            // Check if the session is local
+            let is_local_src = is_local_ip(&parsed_packet.session.src_ip);
+            let is_local_dst = is_local_ip(&parsed_packet.session.dst_ip);
+
+            // Apply filter here for performance reasons. This means that we won't keep the history of filtered sessions.
+            let filter = filter.read().await.clone();
+            if filter == SessionFilter::LocalOnly {
+                if !is_local_src || !is_local_dst {
+                    return;
+                }
+            } else if filter == SessionFilter::GlobalOnly {
+                if is_local_src || is_local_dst {
+                    return;
+                }
+            }
+
+            // Check if the session is self by comparing to the pcap interface IP
+            let is_self_src = self_ips.contains(&parsed_packet.session.src_ip);
+            let is_self_dst = self_ips.contains(&parsed_packet.session.dst_ip);
+
+            // This is the first packet, we need to determine the direction of the session
             // Check if the source port is a known service port and the destination port is not a known service port
-            let key = if !get_name_from_port(parsed_packet.connection.src_port)
+            let key = if !get_name_from_port(parsed_packet.session.src_port)
                 .await
                 .is_empty()
-                && get_name_from_port(parsed_packet.connection.dst_port)
+                && get_name_from_port(parsed_packet.session.dst_port)
                     .await
                     .is_empty()
             {
@@ -880,7 +963,7 @@ impl LANScanCapture {
                 key
             };
 
-            // Update connection stats
+            // Update session stats
             stats.last_activity = Utc::now();
             // Packet from originator to responder
             stats.outbound_bytes += parsed_packet.packet_length as u64;
@@ -893,20 +976,41 @@ impl LANScanCapture {
                 stats.history.push(c);
             }
             let key_clone = key.clone();
-            trace!("New connection: {:?}", key_clone);
+            trace!("New session: {:?}", key_clone);
 
-            // Query the ASN database
-            let src_asn = get_asn(key.src_ip).await;
-            let dst_asn = get_asn(key.dst_ip).await;
+            // Query the ASN database for non-local addresses
+            let src_asn = if !is_local_ip(&key.src_ip) {
+                get_asn(key.src_ip).await
+            } else {
+                None
+            };
+            let dst_asn = if !is_local_ip(&key.dst_ip) {
+                get_asn(key.dst_ip).await
+            } else {
+                None
+            };
 
             // Get the service from the destination port
             let final_dst_service = get_name_from_port(key.dst_port).await;
 
-            connections.insert(
+            // Set initial status
+            let status = SessionStatus {
+                active: true,
+                added: true,
+                activated: false,
+                deactivated: false,
+            };
+
+            sessions.insert(
                 key.clone(),
-                ConnectionInfo {
-                    connection: key,
+                SessionInfo {
+                    session: key,
                     stats,
+                    status,
+                    is_local_src,
+                    is_local_dst,
+                    is_self_src,
+                    is_self_dst,
                     src_domain: None,
                     dst_domain: None,
                     dst_service: if final_dst_service.is_empty() {
@@ -921,8 +1025,8 @@ impl LANScanCapture {
                     is_whitelisted: WhitelistState::Unknown,
                 },
             );
-            // Add to active connections
-            active_connections.write().await.push(key_clone);
+            // Add to current sessions
+            current_sessions.write().await.push(key_clone);
         }
     }
 
@@ -1058,7 +1162,7 @@ impl LANScanCapture {
                             return Some(ParsedPacket::DnsPacket(DnsPacketData { dns_payload }));
                         }
 
-                        let connection = Connection {
+                        let session = Session {
                             protocol: Protocol::TCP,
                             src_ip,
                             src_port,
@@ -1066,8 +1170,8 @@ impl LANScanCapture {
                             dst_port,
                         };
 
-                        Some(ParsedPacket::ConnectionPacket(ConnectionPacketData {
-                            connection,
+                        Some(ParsedPacket::SessionPacket(SessionPacketData {
+                            session,
                             packet_length,
                             ip_packet_length,
                             flags: Some(flags),
@@ -1088,7 +1192,7 @@ impl LANScanCapture {
                             return Some(ParsedPacket::DnsPacket(DnsPacketData { dns_payload }));
                         }
 
-                        let connection = Connection {
+                        let session = Session {
                             protocol: Protocol::UDP,
                             src_ip,
                             src_port,
@@ -1096,8 +1200,8 @@ impl LANScanCapture {
                             dst_port,
                         };
 
-                        Some(ParsedPacket::ConnectionPacket(ConnectionPacketData {
-                            connection,
+                        Some(ParsedPacket::SessionPacket(SessionPacketData {
+                            session,
                             packet_length,
                             ip_packet_length,
                             flags: None,
@@ -1127,7 +1231,7 @@ impl LANScanCapture {
                             return Some(ParsedPacket::DnsPacket(DnsPacketData { dns_payload }));
                         }
 
-                        let connection = Connection {
+                        let session = Session {
                             protocol: Protocol::TCP,
                             src_ip,
                             src_port,
@@ -1135,8 +1239,8 @@ impl LANScanCapture {
                             dst_port,
                         };
 
-                        Some(ParsedPacket::ConnectionPacket(ConnectionPacketData {
-                            connection,
+                        Some(ParsedPacket::SessionPacket(SessionPacketData {
+                            session,
                             packet_length,
                             ip_packet_length,
                             flags: Some(flags),
@@ -1157,7 +1261,7 @@ impl LANScanCapture {
                             return Some(ParsedPacket::DnsPacket(DnsPacketData { dns_payload }));
                         }
 
-                        let connection = Connection {
+                        let session = Session {
                             protocol: Protocol::UDP,
                             src_ip,
                             src_port,
@@ -1165,8 +1269,8 @@ impl LANScanCapture {
                             dst_port,
                         };
 
-                        Some(ParsedPacket::ConnectionPacket(ConnectionPacketData {
-                            connection,
+                        Some(ParsedPacket::SessionPacket(SessionPacketData {
+                            session,
                             packet_length,
                             ip_packet_length,
                             flags: None,
@@ -1183,46 +1287,105 @@ impl LANScanCapture {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::admin::get_admin_status;
     use std::net::{IpAddr, Ipv4Addr};
-    use tokio::time::{timeout, Duration};
 
     #[tokio::test]
-    async fn test_capture() {
+    async fn test_session_management() {
         let mut capture = LANScanCapture::new();
-        capture.start("cicd").await;
+        capture.set_whitelist("cicd").await;
+        capture.set_filter(SessionFilter::All).await; // Include all sessions in the filter
 
-        // Verify handles are running
-        assert!(capture.resolver_handle.is_some());
-        assert!(capture.whitelist_check_handle.is_some());
-        assert!(capture.active_connections_handle.is_some());
+        // Do not call capture.start().await
 
-        // Insert a fake connection
-        let connection = Connection {
-            protocol: Protocol::TCP,
-            src_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
-            src_port: 8000,
-            dst_ip: IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)),
-            dst_port: 53,
+        // Create a synthetic session packet data
+        let session_packet = SessionPacketData {
+            session: Session {
+                protocol: Protocol::TCP,
+                src_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
+                src_port: 12345,
+                dst_ip: IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)),
+                dst_port: 80,
+            },
+            packet_length: 100,
+            ip_packet_length: 120,
+            flags: Some(TcpFlags::SYN),
         };
 
-        let connection_info = ConnectionInfo {
-            connection: connection.clone(),
-            stats: ConnectionStats {
-                start_time: Utc::now(),
-                end_time: None,
-                last_activity: Utc::now(),
-                inbound_bytes: 0,
-                outbound_bytes: 0,
-                orig_pkts: 0,
-                resp_pkts: 0,
-                orig_ip_bytes: 0,
-                resp_ip_bytes: 0,
-                history: String::new(),
-                conn_state: None,
-                missed_bytes: 0,
-                uid: Uuid::new_v4().to_string(),
+        // Get self IPs (empty for testing)
+        let self_ips = vec![];
+
+        // Process the synthetic packet
+        LANScanCapture::process_parsed_packet(
+            session_packet,
+            &capture.sessions,
+            &capture.current_sessions,
+            &self_ips,
+            &capture.filter,
+        )
+        .await;
+
+        // Check that the session has been added
+        let sessions = capture.get_sessions().await;
+        let sessions = sessions.iter().collect::<Vec<_>>();
+        assert_eq!(sessions.len(), 1);
+
+        let session_info = sessions[0].clone();
+        let session = session_info.session.clone();
+        let stats = session_info.stats.clone();
+
+        // Check session details
+        assert_eq!(session.src_ip, IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)));
+        assert_eq!(session.dst_ip, IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)));
+        assert_eq!(stats.outbound_bytes, 100);
+        assert_eq!(stats.orig_pkts, 1);
+        assert_eq!(stats.history, "S");
+    }
+
+    #[tokio::test]
+    async fn test_populate_domain_names() {
+        let mut capture = LANScanCapture::new();
+        capture.set_whitelist("cicd").await;
+
+        // Do not call capture.start().await
+
+        // Create a synthetic session and add it to sessions
+        let session = Session {
+            protocol: Protocol::TCP,
+            src_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
+            src_port: 12345,
+            dst_ip: IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)),
+            dst_port: 80,
+        };
+
+        let stats = SessionStats {
+            start_time: Utc::now(),
+            end_time: None,
+            last_activity: Utc::now(),
+            inbound_bytes: 0,
+            outbound_bytes: 0,
+            orig_pkts: 0,
+            resp_pkts: 0,
+            orig_ip_bytes: 0,
+            resp_ip_bytes: 0,
+            history: String::new(),
+            conn_state: None,
+            missed_bytes: 0,
+            uid: Uuid::new_v4().to_string(),
+        };
+
+        let session_info = SessionInfo {
+            session: session.clone(),
+            stats,
+            status: SessionStatus {
+                active: false,
+                added: true,
+                activated: false,
+                deactivated: false,
             },
+            is_local_src: false,
+            is_local_dst: false,
+            is_self_src: false,
+            is_self_dst: false,
             src_domain: None,
             dst_domain: None,
             dst_service: None,
@@ -1232,55 +1395,219 @@ mod tests {
             is_whitelisted: WhitelistState::Unknown,
         };
 
-        capture
-            .connections
-            .insert(connection.clone(), connection_info);
-        capture
-            .active_connections
-            .write()
-            .await
-            .push(connection.clone());
+        capture.sessions.insert(session.clone(), session_info);
+        capture.current_sessions.write().await.push(session.clone());
 
-        // Disable this test for now as we have issues with tokio accross tests
-        if get_admin_status() && false {
-            // Wait for resolution with a timeout
-            let resolution_result = timeout(Duration::from_secs(30), async {
-                loop {
-                    if let Some(conn_info) = capture.connections.get(&connection) {
-                        if conn_info.dst_domain.is_some() {
-                            return conn_info.dst_domain.clone();
-                        }
-                    }
-                    sleep(Duration::from_millis(5000)).await;
-                }
-            })
-            .await;
+        // Insert a DNS resolution into dns_resolutions
+        capture.dns_resolutions.insert(
+            IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)),
+            "dns.google".to_string(),
+        );
 
-            match resolution_result {
-                Ok(Some(domain)) => {
-                    assert_eq!(domain, "dns.google");
-                }
-                Ok(None) => panic!("Unexpected None result"),
-                Err(_) => panic!("Timeout waiting for resolution"),
-            }
+        // Call populate_domain_names
+        LANScanCapture::populate_domain_names(
+            &capture.sessions,
+            &capture.resolver,
+            &capture.dns_resolutions,
+            &capture.current_sessions,
+        )
+        .await;
 
-            // Check active connections
-            let active_connections = capture.active_connections.read().await;
-            assert!(active_connections.contains(&connection));
+        // Check that dst_domain is set
+        if let Some(entry) = capture.sessions.get(&session) {
+            assert_eq!(entry.dst_domain, Some("dns.google".to_string()));
+        } else {
+            panic!("Session not found");
+        };
+    }
 
-            // Check whitelist exceptions
-            let whitelist_exceptions = capture.whitelist_exceptions.read().await;
-            assert!(whitelist_exceptions.contains(&connection));
+    #[tokio::test]
+    async fn test_update_sessions_status_added() {
+        let mut capture = LANScanCapture::new();
+        capture.set_filter(SessionFilter::All).await; // Include all sessions in the filter
 
-            // Check whitelist conformance
-            assert!(!capture.whitelist_conformance.load(Ordering::Relaxed));
+        // Create a synthetic session and add it to sessions
+        let session = Session {
+            protocol: Protocol::TCP,
+            src_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
+            src_port: 12345,
+            dst_ip: IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)),
+            dst_port: 80,
+        };
 
-            // Check if connections are captured
-            let connections = capture.active_connections.read().await;
-            assert!(connections.len() > 1);
+        let now = Utc::now();
+
+        let stats = SessionStats {
+            start_time: now - ChronoDuration::seconds(10),
+            end_time: None,
+            last_activity: now - ChronoDuration::seconds(10),
+            // History of bytes
+            inbound_bytes: 5000,
+            outbound_bytes: 5000,
+            orig_pkts: 50,
+            resp_pkts: 50,
+            orig_ip_bytes: 0,
+            resp_ip_bytes: 0,
+            history: String::new(),
+            conn_state: None,
+            missed_bytes: 0,
+            uid: Uuid::new_v4().to_string(),
+        };
+
+        let session_info = SessionInfo {
+            session: session.clone(),
+            stats,
+            status: SessionStatus {
+                active: false,
+                added: false,
+                activated: false,
+                deactivated: false,
+            },
+            is_local_src: false,
+            is_local_dst: false,
+            is_self_src: false,
+            is_self_dst: false,
+            src_domain: None,
+            dst_domain: None,
+            dst_service: None,
+            l7: None,
+            src_asn: None,
+            dst_asn: None,
+            is_whitelisted: WhitelistState::Unknown,
+        };
+
+        capture.sessions.insert(session.clone(), session_info);
+
+        // Simulate activity by updating last_activity and bytes transferred
+        if let Some(mut entry) = capture.sessions.get_mut(&session) {
+            entry.stats.last_activity = now;
+            entry.stats.outbound_bytes += 5000; // Added 5000 bytes outbound
+            entry.stats.inbound_bytes += 10000; // Added 10000 bytes inbound
         }
 
-        // Stop the capture
-        capture.stop().await;
+        LANScanCapture::update_sessions_status(&capture.sessions, &capture.current_sessions).await;
+
+        // Check current sessions
+        let current_sessions = capture.get_current_sessions().await;
+
+        assert_eq!(current_sessions.len(), 1);
+        assert_eq!(current_sessions[0].session, session);
+        assert!(current_sessions[0].status.active);
+        assert!(current_sessions[0].status.added);
+        assert!(!current_sessions[0].status.activated);
+    }
+
+    #[tokio::test]
+    async fn test_update_sessions_status_activated() {
+        let mut capture = LANScanCapture::new();
+        capture.set_filter(SessionFilter::All).await; // Include all sessions in the filter
+
+        // Create a synthetic session and add it to sessions
+        let session = Session {
+            protocol: Protocol::TCP,
+            src_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
+            src_port: 12345,
+            dst_ip: IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)),
+            dst_port: 80,
+        };
+
+        let now = Utc::now();
+
+        let stats = SessionStats {
+            // Old start time
+            start_time: now - ChronoDuration::seconds(3600),
+            end_time: None,
+            last_activity: now - ChronoDuration::seconds(3600),
+            inbound_bytes: 5000,
+            outbound_bytes: 5000,
+            orig_pkts: 50,
+            resp_pkts: 50,
+            orig_ip_bytes: 0,
+            resp_ip_bytes: 0,
+            history: String::new(),
+            conn_state: None,
+            missed_bytes: 0,
+            uid: Uuid::new_v4().to_string(),
+        };
+
+        let session_info = SessionInfo {
+            session: session.clone(),
+            stats,
+            status: SessionStatus {
+                active: false,
+                added: false,
+                activated: false,
+                deactivated: false,
+            },
+            is_local_src: false,
+            is_local_dst: false,
+            is_self_src: false,
+            is_self_dst: false,
+            src_domain: None,
+            dst_domain: None,
+            dst_service: None,
+            l7: None,
+            src_asn: None,
+            dst_asn: None,
+            is_whitelisted: WhitelistState::Unknown,
+        };
+
+        capture.sessions.insert(session.clone(), session_info);
+
+        // Simulate activity
+        if let Some(mut entry) = capture.sessions.get_mut(&session) {
+            entry.stats.last_activity = now + ChronoDuration::seconds(10);
+            entry.stats.outbound_bytes += 5000; // Added 5000 bytes outbound
+            entry.stats.inbound_bytes += 10000; // Added 10000 bytes inbound
+        }
+
+        LANScanCapture::update_sessions_status(&capture.sessions, &capture.current_sessions).await;
+
+        // Check current sessions
+        let current_sessions = capture.get_current_sessions().await;
+
+        assert_eq!(current_sessions.len(), 1);
+        assert_eq!(current_sessions[0].session, session);
+        assert!(current_sessions[0].status.active);
+        assert!(!current_sessions[0].status.added);
+        assert!(current_sessions[0].status.activated);
+    }
+
+    #[tokio::test]
+    async fn test_process_dns_packet() {
+        let dns_payload = vec![
+            // A minimal DNS response packet in bytes
+            0x00, 0x00, // Transaction ID
+            0x81, 0x80, // Flags
+            0x00, 0x01, // Questions
+            0x00, 0x01, // Answer RRs
+            0x00, 0x00, // Authority RRs
+            0x00, 0x00, // Additional RRs
+            // Queries
+            0x03, b'w', b'w', b'w', 0x06, b'g', b'o', b'o', b'g', b'l', b'e', 0x03, b'c', b'o',
+            b'm', 0x00, // Name: www.google.com
+            0x00, 0x01, // Type: A
+            0x00, 0x01, // Class: IN
+            // Answers
+            0xc0, 0x0c, // Name: pointer to offset 12 (www.google.com)
+            0x00, 0x01, // Type: A
+            0x00, 0x01, // Class: IN
+            0x00, 0x00, 0x00, 0x3c, // TTL: 60
+            0x00, 0x04, // Data length: 4
+            0x08, 0x08, 0x08, 0x08, // Address: 8.8.8.8
+        ];
+
+        let dns_packet_data = DnsPacketData { dns_payload };
+
+        let dns_resolutions = Arc::new(DashMap::new());
+
+        LANScanCapture::process_dns_packet(dns_packet_data, &dns_resolutions);
+
+        // Check that the DNS resolution was stored
+        if let Some(domain) = dns_resolutions.get(&IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8))) {
+            assert_eq!(domain.as_str(), "www.google.com");
+        } else {
+            panic!("DNS resolution not found");
+        };
     }
 }

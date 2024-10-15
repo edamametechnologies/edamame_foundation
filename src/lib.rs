@@ -18,7 +18,6 @@ pub mod lanscan_asn_v6_db;
     feature = "packetcapture"
 ))]
 pub mod lanscan_capture;
-pub mod lanscan_connections;
 pub mod lanscan_device_info;
 pub mod lanscan_interface;
 #[cfg(all(
@@ -39,6 +38,7 @@ pub mod lanscan_profiles_db;
     feature = "packetcapture"
 ))]
 pub mod lanscan_resolver;
+pub mod lanscan_sessions;
 pub mod lanscan_vendor_vulns;
 pub mod lanscan_vendor_vulns_db;
 pub mod lanscan_vulnerability_info;

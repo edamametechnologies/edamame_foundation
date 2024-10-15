@@ -128,23 +128,32 @@ impl Whitelists {
         whitelist_name: &str,
         visited: &mut HashSet<String>,
     ) -> Result<Vec<WhitelistEndpoint>> {
-        let mut endpoints = Vec::new();
+        // Get the whitelist info and handle the case where it's not found
+        let info = self
+            .whitelists
+            .get(whitelist_name)
+            .ok_or_else(|| anyhow!("Whitelist not found: {}", whitelist_name))?;
 
-        if let Some(info) = self.whitelists.get(whitelist_name) {
-            endpoints.extend(info.endpoints.clone());
+        // Clone the necessary data
+        let endpoints = info.endpoints.clone();
+        let inherits = info.inherits.clone();
 
-            if let Some(inherits) = &info.inherits {
-                for parent in inherits {
-                    if !visited.contains(parent) {
-                        visited.insert(parent.clone());
-                        endpoints.extend(self.get_all_endpoints(parent, visited)?);
-                    }
+        // Drop the Ref to release the lock on the DashMap
+        drop(info);
+
+        // Initialize the list of all endpoints with the current ones
+        let mut all_endpoints = endpoints;
+
+        if let Some(inherits) = inherits {
+            for parent in inherits {
+                if !visited.contains(&parent) {
+                    visited.insert(parent.clone());
+                    // Recursively get endpoints from inherited whitelists
+                    all_endpoints.extend(self.get_all_endpoints(&parent, visited)?);
                 }
             }
-            Ok(endpoints)
-        } else {
-            Err(anyhow!("Whitelist not found: {}", whitelist_name))
         }
+        Ok(all_endpoints)
     }
 }
 
@@ -161,8 +170,18 @@ lazy_static! {
     };
 }
 
+pub async fn is_valid_whitelist(whitelist_name: &str) -> bool {
+    LISTS
+        .read()
+        .await
+        .data
+        .read()
+        .await
+        .whitelists
+        .contains_key(whitelist_name)
+}
+
 /// Checks if a given destination and port are in the specified whitelist.
-/// This function remains asynchronous due to the use of Tokio's RwLock.
 pub async fn is_destination_in_whitelist(
     destination: &str,
     port: u16,
@@ -188,8 +207,9 @@ pub async fn is_destination_in_whitelist(
     {
         Ok(endpoints) => endpoints,
         Err(err) => {
-            warn!("Error retrieving endpoints: {:?}", err);
-            return false;
+            warn!("Error retrieving endpoints: {}", err);
+            // Whitelist not found, return true
+            return true;
         }
     };
     endpoints.iter().any(|endpoint| {
@@ -315,8 +335,8 @@ mod tests {
     #[tokio::test]
     async fn test_whitelist_not_found() {
         setup();
-        // Test that querying a non-existent whitelist returns false
-        assert!(!is_destination_in_whitelist("example.com", 80, "non_existent_whitelist").await);
+        // Test that querying a non-existent whitelist returns true
+        assert!(is_destination_in_whitelist("example.com", 80, "non_existent_whitelist").await);
     }
 
     #[tokio::test]
