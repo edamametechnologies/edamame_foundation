@@ -1,13 +1,12 @@
 use crate::runtime::async_spawn_blocking;
-use run_script::ScriptOptions;
-use std::error::Error;
-use tracing::{debug, error};
-
+use anyhow::{anyhow, Error, Result};
 use powershell_script::PsScriptBuilder;
+use run_script::ScriptOptions;
+use tracing::{debug, error};
 
 // The personate parameter forces the execution into the context of username
 // We could use an empty username to indicate there is no need to personate but we keep it as is for now in case we find other use cases for the username
-pub async fn run_cli(cmd: &str, username: &str, personate: bool) -> Result<String, Box<dyn Error>> {
+pub async fn run_cli(cmd: &str, username: &str, personate: bool) -> Result<String> {
     // Verify platform support
     check_platform_support()?;
 
@@ -40,13 +39,12 @@ pub async fn run_cli(cmd: &str, username: &str, personate: bool) -> Result<Strin
         (code, stdout, stderr)
     });
 
-    let (code, stdout, stderr) = handle.await.map_err(|e| Box::new(e) as Box<dyn Error>)?;
+    let (code, stdout, stderr) = handle.await.map_err(|e| Error::new(e))?;
 
     // Remove newlines from stdout
     let stdout = stdout.replace('\n', "").replace('\r', "");
-
     if execution_failed(code, &stderr) {
-        Err(From::from(stderr.clone()))
+        Err(anyhow!(stderr.clone()))
     } else {
         Ok(stdout)
     }
@@ -57,7 +55,7 @@ fn execution_failed(code: i32, stderr: &str) -> bool {
     code != 0 && !stderr.is_empty()
 }
 
-fn check_platform_support() -> Result<(), Box<dyn Error>> {
+fn check_platform_support() -> Result<()> {
     if cfg!(target_os = "ios") || cfg!(target_os = "android") {
         let os_name = if cfg!(target_os = "ios") {
             "iOS"
@@ -65,7 +63,7 @@ fn check_platform_support() -> Result<(), Box<dyn Error>> {
             "android"
         };
         error!("{} is not supported", os_name);
-        return Err(From::from(format!("{} is not supported", os_name)));
+        return Err(anyhow!("{} is not supported", os_name));
     }
     Ok(())
 }
@@ -75,7 +73,7 @@ fn execute_windows_ps(
     code: &mut i32,
     stdout: &mut String,
     stderr: &mut String,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<()> {
     let ps = PsScriptBuilder::new()
         .no_profile(true)
         .non_interactive(true)
@@ -97,10 +95,9 @@ fn execute_windows_ps(
         Err(e) => {
             error!(
                 "Powershell execution error with calling {:?} : {:?}",
-                cmd,
-                e.to_string()
+                cmd, e
             );
-            Err(From::from(e.to_string()))
+            Err(anyhow!("Powershell execution error: {}", e))
         }
     }
 }
@@ -112,7 +109,7 @@ fn execute_unix_command(
     code: &mut i32,
     stdout: &mut String,
     stderr: &mut String,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<()> {
     let options = ScriptOptions::new();
     let args = vec![];
 
