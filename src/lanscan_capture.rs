@@ -177,6 +177,18 @@ impl LANScanCapture {
         // Finally stop the whitelist check task
         self.stop_whitelist_check_task().await;
 
+        // Clear state
+        self.sessions.clear();
+        self.dns_resolutions.clear();
+        self.current_sessions.write().await.clear();
+        self.whitelist_exceptions.write().await.clear();
+        *self.whitelist_name.write().await = "".to_string();
+        self.whitelist_conformance.store(true, Ordering::Relaxed);
+        *self.last_whitelist_exception_time.write().await =
+            DateTime::<Utc>::from(std::time::UNIX_EPOCH);
+        *self.filter.write().await = SessionFilter::GlobalOnly;
+        *self.interface.write().await = "".to_string();
+
         // Don't stop the mDNS task as it's shared with other modules
     }
 
