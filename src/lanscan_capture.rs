@@ -58,7 +58,7 @@ struct DnsPacketData {
 
 pub struct LANScanCapture {
     interface: Arc<CustomRwLock<String>>,
-    capture_task_handle: Option<TaskHandle>,
+    capture_task_handles: Arc<DashMap<String, TaskHandle>>,
     sessions: Arc<DashMap<Session, SessionInfo>>,
     current_sessions: Arc<CustomRwLock<Vec<Session>>>,
     current_sessions_handle: Option<TaskHandle>,
@@ -85,7 +85,7 @@ impl LANScanCapture {
         debug!("Creating new LANScanCapture");
         Self {
             interface: Arc::new(CustomRwLock::new("".to_string())),
-            capture_task_handle: None,
+            capture_task_handles: Arc::new(DashMap::new()),
             sessions: Arc::new(DashMap::new()),
             current_sessions: Arc::new(CustomRwLock::new(Vec::new())),
             current_sessions_handle: None,
@@ -136,7 +136,7 @@ impl LANScanCapture {
         debug!("Starting LANScanCapture");
 
         // If the capture task is already running, return
-        if self.capture_task_handle.is_some() {
+        if !self.capture_task_handles.is_empty() {
             warn!("Capture task already running");
             return;
         }
@@ -162,13 +162,13 @@ impl LANScanCapture {
     pub async fn stop(&mut self) {
         debug!("Stopping LANScanCapture");
 
-        if self.capture_task_handle.is_none() {
+        if self.capture_task_handles.is_empty() {
             warn!("Capture task not running");
             return;
         }
 
         // First stop the capture task
-        self.stop_capture_task().await;
+        self.stop_capture_tasks().await;
         // Then stop the other tasks, they will populate their latest data
         self.stop_l7_task().await;
         self.stop_resolver_task().await;
@@ -183,7 +183,7 @@ impl LANScanCapture {
     }
 
     pub async fn is_capturing(&self) -> bool {
-        self.capture_task_handle.is_some()
+        !self.capture_task_handles.is_empty()
     }
 
     pub async fn get_whitelist(&self) -> String {
@@ -389,144 +389,183 @@ impl LANScanCapture {
     }
 
     async fn start_capture_task(&mut self) {
-        let interface = self.interface.read().await.clone();
-        let sessions = self.sessions.clone();
-        let current_sessions = self.current_sessions.clone();
-        let dns_resolutions = self.dns_resolutions.clone();
-        let stop_flag = Arc::new(AtomicBool::new(false));
-        let filter = self.filter.clone();
-        let stop_flag_clone = stop_flag.clone();
-        let handle = async_spawn(async move {
-            let device_list = match pcap::Device::list() {
-                Ok(device_list) => device_list,
-                Err(e) => {
-                    error!("Failed to get device list: {}", e);
-                    return;
-                }
-            };
+        // Read and split the interfaces by comma, trimming whitespace
+        let interfaces_str = self.interface.read().await.clone();
+        let interfaces: Vec<String> = interfaces_str
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
 
-            info!("Found capture devices: {:?}", device_list);
+        if interfaces.is_empty() {
+            error!("No valid interfaces provided for capture.");
+            return;
+        }
 
-            let device = match device_list.iter().find(|device| device.name == interface) {
-                Some(device) => device,
-                None => {
-                    error!("Device not found: {}", interface);
-                    return;
-                }
-            };
+        for interface in interfaces {
+            // Clone shared resources for each capture task
+            let sessions = self.sessions.clone();
+            let current_sessions = self.current_sessions.clone();
+            let dns_resolutions = self.dns_resolutions.clone();
+            let filter = self.filter.clone();
 
-            info!("Starting packet capture on device {:?}", device);
+            // Create a new stop flag for this interface's capture task
+            let stop_flag = Arc::new(AtomicBool::new(false));
+            let stop_flag_clone = stop_flag.clone();
 
-            // Extract a vector of IP addresses from the device addresses
-            let self_ips = device
-                .addresses
-                .iter()
-                .filter_map(|addr| Some(addr.addr))
-                .collect();
+            // Clone the interface name for the async move block
+            let interface_clone = interface.clone();
 
-            // Create a new pcap capture
-            let cap = match Capture::from_device(interface.as_str()) {
-                Ok(cap) => cap,
-                Err(e) => {
-                    error!("Failed to open capture on device: {}", e);
-                    return;
-                }
-            };
-
-            // Open the capture
-            let mut cap = match cap.promisc(false).timeout(1000).open() {
-                Ok(cap) => cap,
-                Err(e) => {
-                    error!("Failed to open pcap capture: {}", e);
-                    return;
-                }
-            };
-
-            // Required for async
-            cap = match cap.setnonblock() {
-                Ok(cap) => cap,
-                Err(e) => {
-                    error!("Failed to set non blocking: {}", e);
-                    return;
-                }
-            };
-
-            pub struct OwnedCodec;
-            pub struct PacketOwned {
-                pub data: Box<[u8]>,
-            }
-
-            impl PacketCodec for OwnedCodec {
-                type Item = PacketOwned;
-
-                fn decode(&mut self, pkt: Packet) -> Self::Item {
-                    PacketOwned {
-                        data: pkt.data.into(),
+            // Spawn the capture task
+            let handle = async_spawn(async move {
+                let device_list = match pcap::Device::list() {
+                    Ok(list) => list,
+                    Err(e) => {
+                        error!("Failed to get device list for {}: {}", interface_clone, e);
+                        return;
                     }
-                }
-            }
+                };
 
-            // Create a new packet stream
-            let mut packet_stream = match cap.stream(OwnedCodec) {
-                Ok(stream) => stream,
-                Err(e) => {
-                    error!("Failed to create packet stream: {}", e);
-                    return;
-                }
-            };
+                info!(
+                    "Found capture devices for {}: {:?}",
+                    interface_clone, device_list
+                );
 
-            let mut interval = interval(Duration::from_millis(100));
-
-            loop {
-                select! {
-                    _ = interval.tick() => {
-                        if stop_flag.load(Ordering::Relaxed) {
-                            break;
-                        }
+                // Find the device matching the current interface
+                let device = match device_list.iter().find(|dev| dev.name == interface_clone) {
+                    Some(dev) => dev.clone(),
+                    None => {
+                        error!("Device not found: {}", interface_clone);
+                        return;
                     }
-                    Some(packet_owned) = packet_stream.next() => {
-                        match packet_owned {
-                            Ok(packet_owned) => match Self::parse_packet_pcap(&packet_owned.data) {
-                                Some(ParsedPacket::SessionPacket(cp)) => {
-                                    Self::process_parsed_packet(
-                                        cp,
-                                        &sessions,
-                                        &current_sessions,
-                                        &self_ips,
-                                        &filter,
-                                    )
-                                    .await;
-                                }
-                                Some(ParsedPacket::DnsPacket(dp)) => {
-                                    Self::process_dns_packet(dp, &dns_resolutions);
-                                }
-                                None => {
-                                    trace!("error parsing packet");
-                                }
-                            }
-                            Err(e) => {
-                                warn!("error capturing packet: {}", e);
-                            }
+                };
+
+                info!("Starting packet capture on device {:?}", device);
+
+                // Extract a vector of IP addresses from the device addresses
+                let self_ips: Vec<_> = device
+                    .addresses
+                    .iter()
+                    .filter_map(|addr| Some(addr.addr))
+                    .collect();
+
+                // Create a new pcap capture
+                let cap = match Capture::from_device(interface_clone.as_str()) {
+                    Ok(cap) => cap,
+                    Err(e) => {
+                        error!("Failed to open capture on device: {}", e);
+                        return;
+                    }
+                };
+
+                // Open the capture
+                let mut cap = match cap.promisc(false).timeout(1000).open() {
+                    Ok(cap) => cap,
+                    Err(e) => {
+                        error!("Failed to open pcap capture: {}", e);
+                        return;
+                    }
+                };
+
+                // Required for async
+                cap = match cap.setnonblock() {
+                    Ok(cap) => cap,
+                    Err(e) => {
+                        error!("Failed to set non blocking: {}", e);
+                        return;
+                    }
+                };
+
+                // Define codec and packet structures
+                pub struct OwnedCodec;
+                pub struct PacketOwned {
+                    pub data: Box<[u8]>,
+                }
+
+                impl PacketCodec for OwnedCodec {
+                    type Item = PacketOwned;
+
+                    fn decode(&mut self, pkt: Packet) -> Self::Item {
+                        PacketOwned {
+                            data: pkt.data.into(),
                         }
                     }
                 }
-            }
-            info!("Capture task terminated");
-        });
 
-        self.capture_task_handle = Some(TaskHandle {
-            handle,
-            stop_flag: stop_flag_clone,
-        });
+                // Create a new packet stream
+                let mut packet_stream = match cap.stream(OwnedCodec) {
+                    Ok(stream) => stream,
+                    Err(e) => {
+                        error!(
+                            "Failed to create packet stream on {}: {}",
+                            interface_clone, e
+                        );
+                        return;
+                    }
+                };
+
+                let mut interval = interval(Duration::from_millis(100));
+
+                loop {
+                    select! {
+                        _ = interval.tick() => {
+                            if stop_flag_clone.load(Ordering::Relaxed) {
+                                break;
+                            }
+                        }
+                        Some(packet_owned) = packet_stream.next() => {
+                            match packet_owned {
+                                Ok(packet_owned) => match LANScanCapture::parse_packet_pcap(&packet_owned.data) {
+                                    Some(ParsedPacket::SessionPacket(cp)) => {
+                                        LANScanCapture::process_parsed_packet(
+                                            cp,
+                                            &sessions,
+                                            &current_sessions,
+                                            &self_ips,
+                                            &filter,
+                                        )
+                                        .await;
+                                    }
+                                    Some(ParsedPacket::DnsPacket(dp)) => {
+                                        LANScanCapture::process_dns_packet(dp, &dns_resolutions);
+                                    }
+                                    None => {
+                                        trace!("Error parsing packet on {}", interface_clone);
+                                    }
+                                }
+                                Err(e) => {
+                                    warn!("Error capturing packet on {}: {}", interface_clone, e);
+                                }
+                            }
+                        }
+                    }
+                }
+                info!("Capture task for {} terminated", interface_clone);
+            });
+
+            // Store the task handle and its stop flag
+            self.capture_task_handles
+                .insert(interface.clone(), TaskHandle { handle, stop_flag });
+        }
     }
 
-    async fn stop_capture_task(&mut self) {
-        if let Some(task_handle) = self.capture_task_handle.take() {
-            task_handle.stop_flag.store(true, Ordering::Relaxed);
-            let _ = task_handle.handle.await;
-        } else {
-            error!("Capture task not running");
+    async fn stop_capture_tasks(&mut self) {
+        // Collect all keys first to avoid holding references while modifying the DashMap
+        let keys: Vec<String> = self
+            .capture_task_handles
+            .iter()
+            .map(|entry| entry.key().clone())
+            .collect();
+
+        for key in keys {
+            // Remove the TaskHandle from the DashMap, taking ownership
+            if let Some((_, task_handle)) = self.capture_task_handles.remove(&key) {
+                task_handle.stop_flag.store(true, Ordering::Relaxed);
+                let _ = task_handle.handle.await;
+            }
         }
+
+        info!("All capture tasks have been stopped");
     }
 
     async fn check_whitelisted_destinations(
