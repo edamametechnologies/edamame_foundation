@@ -49,9 +49,9 @@ lazy_static! {
     // Branch name
     pub static ref BRANCH: Arc<Mutex<String>> = Arc::new(Mutex::new("".to_string()));
     // Current default interface
-    pub static ref INTERFACE_NAME: Arc<Mutex<String>> = Arc::new(Mutex::new("".to_string()));
-    pub static ref INTERFACE_IP: Arc<Mutex<String>> = Arc::new(Mutex::new("".to_string()));
-    pub static ref INTERFACE_PREFIX: Arc<Mutex<u8>> = Arc::new(Mutex::new(0));
+    pub static ref INTERFACES_NAMES: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    pub static ref INTERFACES_IPS: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    pub static ref INTERFACES_PREFIX: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
     // Last interface check timestamp
     pub static ref INTERFACE_CHECK_TIME: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
 }
@@ -222,56 +222,62 @@ impl ServerControl {
 }
 
 // Detect and check interface changes
-pub async fn check_interface_changes() -> bool {
+pub async fn check_interfaces_changes() -> bool {
     // Detect the interface name and ip if not done for 10 seconds, detect changes
     if chrono::Utc::now().timestamp() - *INTERFACE_CHECK_TIME.lock().await as i64 > 10 {
-        let (interface_ip, interface_prefix, interface_name) = match get_default_interface() {
-            Some((ip, prefix, name)) => (ip, prefix, name),
-            None => {
-                warn!("No valid interface found");
-                return false;
-            }
-        };
+        let interfaces = get_valid_network_interfaces();
+        let mut interfaces_changed = false;
 
-        let mut interface_changed = false;
+        // Make a vector of the interfaces ips
+        let interfaces_ips = interfaces
+            .iter()
+            .map(|i| i.0.clone())
+            .collect::<Vec<String>>();
+        // Make a vector of the interfaces prefixes
+        let interfaces_prefixes = interfaces.iter().map(|i| i.1).collect::<Vec<u8>>();
+        // Make a vector of the interfaces names
+        let interfaces_names = interfaces
+            .iter()
+            .map(|i| i.2.clone())
+            .collect::<Vec<String>>();
 
         // Check if the interface name has changed
-        let interface_name_old = INTERFACE_NAME.lock().await.clone();
-        if interface_name_old != interface_name {
+        let interfaces_names_old = INTERFACES_NAMES.lock().await.clone();
+        if interfaces_names_old != interfaces_names {
             info!(
-                "Interface name has changed from {} to {}",
-                interface_name_old, interface_name
+                "A name changed has been detected from {:?} to {:?}",
+                interfaces_names_old, interfaces_names
             );
-            interface_changed = true;
-            *INTERFACE_NAME.lock().await = interface_name.to_string();
+            interfaces_changed = true;
+            *INTERFACES_NAMES.lock().await = interfaces_names;
         }
 
         // Check if the interface ip has changed
-        let interface_ip_old = INTERFACE_IP.lock().await.clone();
-        if interface_ip_old != interface_ip {
+        let interfaces_ips_old = INTERFACES_IPS.lock().await.clone();
+        if interfaces_ips_old != interfaces_ips {
             info!(
-                "Interface ip has changed from {} to {}",
-                interface_ip_old, interface_ip
+                "An IP changed has been detected from {:?} to {:?}",
+                interfaces_ips_old, interfaces_ips
             );
-            interface_changed = true;
-            *INTERFACE_IP.lock().await = interface_ip.to_string();
+            interfaces_changed = true;
+            *INTERFACES_IPS.lock().await = interfaces_ips;
         }
 
         // Check if the interface subnet has changed
-        let interface_subnet_old = INTERFACE_PREFIX.lock().await.clone();
-        if interface_subnet_old != interface_prefix {
+        let interfaces_prefixes_old = INTERFACES_PREFIX.lock().await.clone();
+        if interfaces_prefixes_old != interfaces_prefixes {
             info!(
-                "Interface subnet has changed from {} to {}",
-                interface_subnet_old, interface_prefix
+                "A subnet changed has been detected from {:?} to {:?}",
+                interfaces_prefixes_old, interfaces_prefixes
             );
-            interface_changed = true;
-            *INTERFACE_PREFIX.lock().await = interface_prefix;
+            interfaces_changed = true;
+            *INTERFACES_PREFIX.lock().await = interfaces_prefixes;
         }
 
         // Update the interface check time
         *INTERFACE_CHECK_TIME.lock().await = Utc::now().timestamp() as u64;
 
-        return interface_changed;
+        return interfaces_changed;
     }
     false
 }
@@ -436,7 +442,7 @@ pub async fn rpc_run(
                 run_cli("defaults read MobileMeAccounts Accounts | grep AccountID | grep -o \"\\\".*\\\"\" | sed \"s/\\\"//g\" | tr -d \"\\n\"", username, true).await
             }
             "mdns_resolve" => {
-                if check_interface_changes().await {
+                if check_interfaces_changes().await {
                     mdns_flush().await;
                 }
                 let json_addresses = arg1;
@@ -500,10 +506,12 @@ pub async fn rpc_run(
                 if CAPTURE.lock().await.is_capturing().await {
                     return order_error("capture already started", false);
                 }
-                // Get latest interface
-                let _ = check_interface_changes().await;
-                let interface = INTERFACE_NAME.lock().await.clone();
-                CAPTURE.lock().await.start(&interface).await;
+                // Get latest interfaces
+                let _ = check_interfaces_changes().await;
+                let interfaces = INTERFACES_NAMES.lock().await.clone();
+                // Convert the vec into a comma separated string
+                let interfaces_string = interfaces.join(",");
+                CAPTURE.lock().await.start(&interfaces_string).await;
                 Ok("".to_string())
             }
             #[cfg(all(
@@ -583,12 +591,17 @@ pub async fn rpc_run(
                 feature = "packetcapture"
             ))]
             "get_sessions" => {
-                if check_interface_changes().await && CAPTURE.lock().await.is_capturing().await {
+                if check_interfaces_changes().await && CAPTURE.lock().await.is_capturing().await {
                     CAPTURE.lock().await.stop().await;
-                    // Get the new interface
-                    let interface = INTERFACE_NAME.lock().await.clone();
-                    info!("Interface has changed, restarting capture on {}", interface);
-                    CAPTURE.lock().await.start(&interface).await;
+                    // Get the new interfaces
+                    let interfaces = INTERFACES_NAMES.lock().await.clone();
+                    // Convert the vec into a comma separated string
+                    let interfaces_string = interfaces.join(",");
+                    info!(
+                        "Interfaces have changed, restarting capture on {:?}",
+                        interfaces_string
+                    );
+                    CAPTURE.lock().await.start(&interfaces_string).await;
                 }
                 let sessions = CAPTURE.lock().await.get_sessions().await;
                 let json_sessions = match serde_json::to_string(&sessions) {
@@ -609,12 +622,17 @@ pub async fn rpc_run(
                 feature = "packetcapture"
             ))]
             "get_current_sessions" => {
-                if check_interface_changes().await && CAPTURE.lock().await.is_capturing().await {
+                if check_interfaces_changes().await && CAPTURE.lock().await.is_capturing().await {
                     CAPTURE.lock().await.stop().await;
-                    // Get the new interface
-                    let interface = INTERFACE_NAME.lock().await.clone();
-                    info!("Interface has changed, restarting capture on {}", interface);
-                    CAPTURE.lock().await.start(&interface).await;
+                    // Get the new interfaces
+                    let interfaces = INTERFACES_NAMES.lock().await.clone();
+                    // Convert the vec into a comma separated string
+                    let interfaces_string = interfaces.join(",");
+                    info!(
+                        "Interfaces have changed, restarting capture on {:?}",
+                        interfaces_string
+                    );
+                    CAPTURE.lock().await.start(&interfaces_string).await;
                 }
                 let active_sessions = CAPTURE.lock().await.get_current_sessions().await;
                 let json_active_sessions = match serde_json::to_string(&active_sessions) {
