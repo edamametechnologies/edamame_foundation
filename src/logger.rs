@@ -2,6 +2,8 @@ use fmt::MakeWriter;
 use lazy_static::lazy_static;
 use regex::Regex;
 use sentry_tracing::EventFilter;
+use std::backtrace::Backtrace;
+use std::panic;
 use std::{
     collections::VecDeque,
     env::{current_exe, var},
@@ -227,6 +229,12 @@ pub fn init_logger(
     provided_env_log_spec: &str,
     sentry_error_filter: &[&str],
 ) {
+    // Force backtrace on panic
+    panic::set_hook(Box::new(|_| {
+        let backtrace = Backtrace::capture();
+        eprintln!("Panic occurred! Backtrace:\n{}", backtrace);
+    }));
+
     let mut logger_guard = match LOGGER.lock() {
         Ok(guard) => guard,
         Err(e) => {

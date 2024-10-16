@@ -40,7 +40,7 @@ pub fn get_valid_network_interfaces() -> Vec<(String, u8, String)> {
             "vEthernet",
         ];
 
-        let valid_interfaces: Vec<(String, u8, String)> = interfaces
+        let mut valid_interfaces: Vec<(String, u8, String)> = interfaces
             .into_iter()
             .filter(|iface| {
                 !excluded_prefixes
@@ -68,6 +68,9 @@ pub fn get_valid_network_interfaces() -> Vec<(String, u8, String)> {
                 })
             })
             .collect();
+
+        // Sort the interfaces by name
+        valid_interfaces.sort_by_key(|k| k.2.clone());
 
         info!("Valid interfaces: {:?}", valid_interfaces);
         valid_interfaces
