@@ -707,7 +707,11 @@ fn order_error(comment: &str, fatal: bool) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use edamame_proto::edamame_helper_client::EdamameHelperClient;
+    use edamame_proto::edamame_helper_server::{EdamameHelper, EdamameHelperServer};
     use std::str;
+    use tokio::time::{sleep, timeout, Duration};
+    use tonic::transport::Channel;
     use tonic::transport::{Certificate, ClientTlsConfig, Identity};
 
     #[test]
@@ -748,5 +752,132 @@ mod tests {
             .domain_name("localhost")
             .ca_certificate(ca_certificate)
             .identity(client_identity);
+    }
+
+    #[tokio::test]
+    async fn test_grpc_mtls_authentication() -> Result<()> {
+        #[derive(Debug, Default)]
+        pub struct MockHelper {}
+
+        #[tonic::async_trait]
+        impl EdamameHelper for MockHelper {
+            async fn execute(
+                &self,
+                request: Request<HelperRequest>,
+            ) -> std::result::Result<Response<HelperResponse>, Status> {
+                debug!("Received request: {:?}", request);
+                let req = request.into_inner();
+                if req.ordertype == "utilityorder" && req.subordertype == "helper_check" {
+                    Ok(Response::new(HelperResponse {
+                        output: env!("CARGO_PKG_VERSION").to_string(),
+                    }))
+                } else {
+                    Err(Status::unimplemented("Not implemented"))
+                }
+            }
+        }
+
+        // Get certificates and keys from environment variables
+        let server_pem = std::env::var("EDAMAME_SERVER_PEM").expect("EDAMAME_SERVER_PEM not set");
+        let server_key = std::env::var("EDAMAME_SERVER_KEY").expect("EDAMAME_SERVER_KEY not set");
+        let client_ca_cert =
+            std::env::var("EDAMAME_CLIENT_CA_PEM").expect("EDAMAME_CLIENT_CA_PEM not set");
+        let ca_pem = std::env::var("EDAMAME_CA_PEM").expect("EDAMAME_CA_PEM not set");
+        let client_pem = std::env::var("EDAMAME_CLIENT_PEM").expect("EDAMAME_CLIENT_PEM not set");
+        let client_key = std::env::var("EDAMAME_CLIENT_KEY").expect("EDAMAME_CLIENT_KEY not set");
+
+        // Decode Base64 to PEM
+        let server_cert = general_purpose::STANDARD.decode(server_pem)?;
+        let server_key = general_purpose::STANDARD.decode(server_key)?;
+        let client_ca_cert = general_purpose::STANDARD.decode(client_ca_cert)?;
+        let ca_cert = general_purpose::STANDARD.decode(ca_pem)?;
+        let client_cert = general_purpose::STANDARD.decode(client_pem)?;
+        let client_key = general_purpose::STANDARD.decode(client_key)?;
+
+        // Convert to strings
+        let server_cert = String::from_utf8(server_cert)?;
+        let server_key = String::from_utf8(server_key)?;
+        let client_ca_cert = String::from_utf8(client_ca_cert)?;
+        let ca_cert = String::from_utf8(ca_cert)?;
+        let client_cert = String::from_utf8(client_cert)?;
+        let client_key = String::from_utf8(client_key)?;
+
+        // Set up server
+        let server_identity = Identity::from_pem(&server_cert, &server_key);
+        let server_tls_config = ServerTlsConfig::new()
+            .identity(server_identity)
+            .client_ca_root(Certificate::from_pem(client_ca_cert));
+
+        let addr = "[::1]:50051".parse::<SocketAddr>()?;
+        let (tx, rx) = oneshot::channel();
+
+        let server_future = Server::builder()
+            .tls_config(server_tls_config)?
+            .add_service(EdamameHelperServer::new(MockHelper::default()))
+            .serve_with_shutdown(addr, async {
+                rx.await.ok();
+            });
+
+        // Start server in a separate task
+        tokio::spawn(async move {
+            info!("Starting server on {:?}", addr);
+            if let Err(e) = server_future.await {
+                error!("Server error: {:?}", e);
+            }
+        });
+
+        // Give the server a moment to start
+        sleep(Duration::from_secs(1)).await;
+
+        // Set up client
+        let client_identity = Identity::from_pem(&client_cert, &client_key);
+        let client_tls_config = ClientTlsConfig::new()
+            .domain_name("localhost")
+            .ca_certificate(Certificate::from_pem(ca_cert))
+            .identity(client_identity);
+
+        info!("Attempting to connect to server");
+        let channel = match timeout(
+            Duration::from_secs(5),
+            Channel::from_static("https://[::1]:50051")
+                .tls_config(client_tls_config)?
+                .connect(),
+        )
+        .await
+        {
+            Ok(Ok(channel)) => channel,
+            Ok(Err(e)) => return Err(anyhow!("Failed to connect to server: {:?}", e)),
+            Err(_) => return Err(anyhow!("Timeout while connecting to server")),
+        };
+
+        let mut client = EdamameHelperClient::new(channel);
+
+        // Make a request
+        let request = tonic::Request::new(HelperRequest {
+            ordertype: "utilityorder".to_string(),
+            subordertype: "helper_check".to_string(),
+            arg1: "".to_string(),
+            arg2: "".to_string(),
+            signature: "".to_string(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+        });
+
+        // Send the request and get the response
+        info!("Sending request to server");
+        let response = match timeout(Duration::from_secs(5), client.execute(request)).await {
+            Ok(Ok(response)) => response,
+            Ok(Err(e)) => return Err(anyhow!("Error executing request: {:?}", e)),
+            Err(_) => return Err(anyhow!("Timeout while executing request")),
+        };
+
+        // Check the response
+        let helper_version = response.into_inner().output;
+        assert_eq!(helper_version, env!("CARGO_PKG_VERSION"));
+
+        // Shutdown the server
+        info!("Shutting down server");
+        tx.send(()).unwrap();
+
+        Ok(())
     }
 }
