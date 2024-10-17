@@ -189,9 +189,9 @@ mod tests {
 
     #[test]
     fn test_certificate_decoding_and_creation() {
-        let ca_pem = std::env::var("EDAMAME_CA_PEM").unwrap_or("".to_string());
-        let client_pem = std::env::var("EDAMAME_CLIENT_PEM").unwrap_or("".to_string());
-        let client_key = std::env::var("EDAMAME_CLIENT_KEY").unwrap_or("".to_string());
+        let ca_pem = std::env::var("EDAMAME_CA_PEM").unwrap_or("".to_string()).trim_matches('"').to_string();
+        let client_pem = std::env::var("EDAMAME_CLIENT_PEM").unwrap_or("".to_string()).trim_matches('"').to_string();
+        let client_key = std::env::var("EDAMAME_CLIENT_KEY").unwrap_or("".to_string()).trim_matches('"').to_string();
 
         // Decode the CA certificate
         let server_root_ca_cert_base64 = ca_pem;
