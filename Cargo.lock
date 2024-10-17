@@ -1599,7 +1599,7 @@ checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 [[package]]
 name = "libc"
 version = "0.2.151"
-source = "git+https://github.com/rust-lang/libc#0a1eef9b89fa07a7655e50303caff13d59456f6c"
+source = "git+https://github.com/rust-lang/libc#98edf94afcac0a6f28655c5bbe7dc51a8c5bbe4e"
 
 [[package]]
 name = "libc"
