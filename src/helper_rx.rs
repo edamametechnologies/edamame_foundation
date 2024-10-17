@@ -716,9 +716,18 @@ mod tests {
 
     #[test]
     fn test_certificate_decoding_and_creation() {
-        let server_pem = std::env::var("EDAMAME_SERVER_PEM").unwrap_or("".to_string());
-        let server_key = std::env::var("EDAMAME_SERVER_KEY").unwrap_or("".to_string());
-        let client_ca_cert = std::env::var("EDAMAME_CLIENT_CA_PEM").unwrap_or("".to_string());
+        let server_pem = std::env::var("EDAMAME_SERVER_PEM")
+            .unwrap_or("".to_string())
+            .trim_matches('"')
+            .to_string();
+        let server_key = std::env::var("EDAMAME_SERVER_KEY")
+            .unwrap_or("".to_string())
+            .trim_matches('"')
+            .to_string();
+        let client_ca_cert = std::env::var("EDAMAME_CLIENT_CA_PEM")
+            .unwrap_or("".to_string())
+            .trim_matches('"')
+            .to_string();
 
         // Decode the server certificate
         let cert_base64 = server_pem.to_string();
@@ -778,13 +787,30 @@ mod tests {
         }
 
         // Get certificates and keys from environment variables
-        let server_pem = std::env::var("EDAMAME_SERVER_PEM").expect("EDAMAME_SERVER_PEM not set");
-        let server_key = std::env::var("EDAMAME_SERVER_KEY").expect("EDAMAME_SERVER_KEY not set");
-        let client_ca_cert =
-            std::env::var("EDAMAME_CLIENT_CA_PEM").expect("EDAMAME_CLIENT_CA_PEM not set");
-        let ca_pem = std::env::var("EDAMAME_CA_PEM").expect("EDAMAME_CA_PEM not set");
-        let client_pem = std::env::var("EDAMAME_CLIENT_PEM").expect("EDAMAME_CLIENT_PEM not set");
-        let client_key = std::env::var("EDAMAME_CLIENT_KEY").expect("EDAMAME_CLIENT_KEY not set");
+        let server_pem = std::env::var("EDAMAME_SERVER_PEM")
+            .expect("EDAMAME_SERVER_PEM not set")
+            .trim_matches('"')
+            .to_string();
+        let server_key = std::env::var("EDAMAME_SERVER_KEY")
+            .expect("EDAMAME_SERVER_KEY not set")
+            .trim_matches('"')
+            .to_string();
+        let client_ca_cert = std::env::var("EDAMAME_CLIENT_CA_PEM")
+            .expect("EDAMAME_CLIENT_CA_PEM not set")
+            .trim_matches('"')
+            .to_string();
+        let ca_pem = std::env::var("EDAMAME_CA_PEM")
+            .expect("EDAMAME_CA_PEM not set")
+            .trim_matches('"')
+            .to_string();
+        let client_pem = std::env::var("EDAMAME_CLIENT_PEM")
+            .expect("EDAMAME_CLIENT_PEM not set")
+            .trim_matches('"')
+            .to_string();
+        let client_key = std::env::var("EDAMAME_CLIENT_KEY")
+            .expect("EDAMAME_CLIENT_KEY not set")
+            .trim_matches('"')
+            .to_string();
 
         // Decode Base64 to PEM
         let server_cert = general_purpose::STANDARD.decode(server_pem)?;
