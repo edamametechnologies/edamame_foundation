@@ -1,18 +1,26 @@
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-use tracing::{info, trace};
-
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 use ipnet::ipv4_mask_to_prefix;
-
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+use netdev;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 use network_interface::{Addr, NetworkInterface, NetworkInterfaceConfig};
+use tracing::error;
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+use tracing::{info, trace};
 
 // Search for the interfaces - the ones that are up, not loopback or link layer and has an IPv4 address and sorted with the lowest index first (the default)
 // Returns (ip, prefix, name)
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub fn get_valid_network_interfaces() -> Vec<(String, u8, String)> {
     #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     {
-        let interfaces = NetworkInterface::show().unwrap();
+        let interfaces = match NetworkInterface::show() {
+            Ok(interfaces) => interfaces,
+            Err(e) => {
+                error!("Failed to get network interfaces: {}", e);
+                return Vec::new();
+            }
+        };
         trace!("Available interfaces: {:?}", interfaces);
 
         let excluded_prefixes = [
@@ -81,11 +89,17 @@ pub fn get_valid_network_interfaces() -> Vec<(String, u8, String)> {
     }
 }
 
-// Get the default interface
+// Get the default interface name
 pub fn get_default_interface() -> Option<(String, u8, String)> {
-    match get_valid_network_interfaces().get(0) {
-        Some(iface) => Some(iface.clone()),
-        None => None,
+    match netdev::get_default_interface() {
+        Ok(iface) => match iface.ipv4.first() {
+            Some(ip) => Some((ip.to_string(), ip.prefix_len(), iface.name)),
+            None => None,
+        },
+        Err(e) => {
+            error!("Failed to get default interface: {}", e);
+            None
+        }
     }
 }
 

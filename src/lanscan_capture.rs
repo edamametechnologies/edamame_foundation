@@ -1,4 +1,5 @@
 use crate::lanscan_asn::*;
+use crate::lanscan_interface::get_default_interface;
 use crate::lanscan_l7::LANScanL7;
 use crate::lanscan_mdns::*;
 use crate::lanscan_port_vulns::get_name_from_port;
@@ -391,7 +392,7 @@ impl LANScanCapture {
     async fn start_capture_task(&mut self) {
         // Read and split the interfaces by comma, trimming whitespace
         let interfaces_str = self.interface.read().await.clone();
-        let interfaces: Vec<String> = interfaces_str
+        let mut interfaces: Vec<String> = interfaces_str
             .split(',')
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
@@ -401,6 +402,19 @@ impl LANScanCapture {
             error!("No valid interfaces provided for capture.");
             return;
         }
+
+        // Get the default interface
+        match get_default_interface() {
+            Some((name, _, _)) => {
+                // If the default interface is not in the list, add it
+                if !interfaces.contains(&name) {
+                    interfaces.push(name);
+                }
+            }
+            None => {
+                error!("Failed to get default interface");
+            }
+        };
 
         for interface in interfaces {
             // Clone shared resources for each capture task
