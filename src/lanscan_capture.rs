@@ -1,5 +1,4 @@
 use crate::lanscan_asn::*;
-use crate::lanscan_interface::get_default_interface;
 use crate::lanscan_l7::LANScanL7;
 use crate::lanscan_mdns::*;
 use crate::lanscan_port_vulns::get_name_from_port;
@@ -12,7 +11,7 @@ use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use dashmap::DashMap;
 use dns_parser::Packet as DnsPacket;
 use futures::StreamExt;
-use pcap::{Capture, Packet, PacketCodec};
+use pcap::{Capture, Device, Packet, PacketCodec};
 use pnet_packet::ethernet::{EtherTypes, EthernetPacket};
 use pnet_packet::ip::IpNextHeaderProtocols;
 use pnet_packet::ipv4::Ipv4Packet;
@@ -399,23 +398,26 @@ impl LANScanCapture {
             .collect();
 
         if interfaces.is_empty() {
-            error!("No valid interfaces provided for capture.");
-            return;
-        }
+            info!("No valid interfaces provided for capture, using pcap interface discovery");
 
-        // Get the default interface
-        match get_default_interface() {
-            Some((_, _, name)) => {
-                // If the default interface is not in the list, add it
-                if !interfaces.contains(&name) {
-                    info!("Adding default interface: {}", name);
-                    interfaces.push(name);
+            return;
+        } else {
+            // Get the default device
+            let device = match Device::lookup() {
+                Ok(devices) => match devices.into_iter().next() {
+                    Some(device) => device,
+                    None => {
+                        error!("No device found in the list of interfaces");
+                        return;
+                    }
+                },
+                Err(e) => {
+                    error!("Failed to get device list: {}", e);
+                    return;
                 }
-            }
-            None => {
-                error!("Failed to get default interface");
-            }
-        };
+            };
+            interfaces.push(device.name);
+        }
 
         for interface in interfaces {
             // Clone shared resources for each capture task
