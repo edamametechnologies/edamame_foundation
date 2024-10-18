@@ -93,7 +93,7 @@ pub fn get_valid_network_interfaces() -> Vec<(String, u8, String)> {
 pub fn get_default_interface() -> Option<(String, u8, String)> {
     match netdev::get_default_interface() {
         Ok(iface) => match iface.ipv4.first() {
-            Some(ip) => Some((ip.to_string(), ip.prefix_len(), iface.name)),
+            Some(ip) => Some((ip.addr().to_string(), ip.prefix_len(), iface.name)),
             None => None,
         },
         Err(e) => {

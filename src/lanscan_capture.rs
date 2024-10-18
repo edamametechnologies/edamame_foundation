@@ -405,9 +405,10 @@ impl LANScanCapture {
 
         // Get the default interface
         match get_default_interface() {
-            Some((name, _, _)) => {
+            Some((_, _, name)) => {
                 // If the default interface is not in the list, add it
                 if !interfaces.contains(&name) {
+                    info!("Adding default interface: {}", name);
                     interfaces.push(name);
                 }
             }
