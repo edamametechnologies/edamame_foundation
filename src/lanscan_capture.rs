@@ -607,15 +607,21 @@ impl LANScanCapture {
                     continue;
                 };
 
-                // If resolution is not complete, add to exceptions
-                if let Some(dst_domain) = session_info.dst_domain.clone() {
+                if let Some(dst_domain) = session_info.dst_domain {
                     if dst_domain == "Unknown".to_string() {
+                        // The domain has not been resolved, use the IP address instead
                         let destination = session_info.session.dst_ip.to_string();
-                        // Handle IP addresses that failed to resolve
                         if !is_destination_in_whitelist(
-                            &destination,
+                            Some(&destination),
                             session_info.session.dst_port,
                             whitelist_name,
+                            session_info.dst_asn.as_ref().map(|asn| asn.as_number),
+                            session_info
+                                .dst_asn
+                                .as_ref()
+                                .map(|asn| asn.country.as_str()),
+                            session_info.dst_asn.as_ref().map(|asn| asn.owner.as_str()),
+                            session_info.l7.as_ref().map(|l7| l7.process_name.as_str()),
                         )
                         .await
                         {
@@ -624,10 +630,18 @@ impl LANScanCapture {
                             *last_whitelist_exception_time.write().await = Utc::now();
                         }
                     } else {
+                        // The domain has been resolved
                         if !is_destination_in_whitelist(
-                            &dst_domain,
+                            Some(&dst_domain),
                             session_info.session.dst_port,
                             whitelist_name,
+                            session_info.dst_asn.as_ref().map(|asn| asn.as_number),
+                            session_info
+                                .dst_asn
+                                .as_ref()
+                                .map(|asn| asn.country.as_str()),
+                            session_info.dst_asn.as_ref().map(|asn| asn.owner.as_str()),
+                            session_info.l7.as_ref().map(|l7| l7.process_name.as_str()),
                         )
                         .await
                         {
@@ -635,6 +649,27 @@ impl LANScanCapture {
                             updated_exceptions.push(session_info.session.clone());
                             *last_whitelist_exception_time.write().await = Utc::now();
                         }
+                    }
+                } else {
+                    // The domain has not been resolved yet, use the IP address instead
+                    let destination = session_info.session.dst_ip.to_string();
+                    if !is_destination_in_whitelist(
+                        Some(&destination),
+                        session_info.session.dst_port,
+                        whitelist_name,
+                        session_info.dst_asn.as_ref().map(|asn| asn.as_number),
+                        session_info
+                            .dst_asn
+                            .as_ref()
+                            .map(|asn| asn.country.as_str()),
+                        session_info.dst_asn.as_ref().map(|asn| asn.owner.as_str()),
+                        session_info.l7.as_ref().map(|l7| l7.process_name.as_str()),
+                    )
+                    .await
+                    {
+                        trace!("Session {:?} failed whitelist check", key);
+                        updated_exceptions.push(session_info.session.clone());
+                        *last_whitelist_exception_time.write().await = Utc::now();
                     }
                 }
             }
