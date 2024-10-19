@@ -45,6 +45,11 @@ where
         })
     }
 
+    // Overwrite with test data
+    pub async fn overwrite_with_test_data(&self, data: T) {
+        *self.data.write().await = data;
+    }
+
     pub fn get_sig_url(branch: &str, file_name: &str) -> String {
         // Remove the .json from the file name
         let file_name = file_name.replace(".json", "");
