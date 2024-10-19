@@ -859,10 +859,9 @@ impl LANScanCapture {
 
             // New status
             let active =
-                Utc::now() < session_info.stats.last_activity + CONNECTION_ACTIVITY_TIMEOUT;
-            let added = Utc::now() < session_info.stats.start_time + CONNECTION_ACTIVITY_TIMEOUT;
-            // Added <> activated
-            let activated = !added && !previous_status.active && active;
+                session_info.stats.last_activity > Utc::now() - CONNECTION_ACTIVITY_TIMEOUT;
+            let added = session_info.stats.start_time > Utc::now() - CONNECTION_ACTIVITY_TIMEOUT;
+            let activated = !previous_status.active && active;
             let deactivated = previous_status.active && !active;
 
             // Create new status with updated previous bytes
@@ -1582,6 +1581,7 @@ mod tests {
         };
 
         capture.sessions.insert(session.clone(), session_info);
+        capture.current_sessions.write().await.push(session.clone());
 
         // Simulate activity by updating last_activity and bytes transferred
         if let Some(mut entry) = capture.sessions.get_mut(&session) {
@@ -1594,12 +1594,13 @@ mod tests {
 
         // Check current sessions
         let current_sessions = capture.get_current_sessions().await;
+        capture.current_sessions.write().await.push(session.clone());
 
         assert_eq!(current_sessions.len(), 1);
         assert_eq!(current_sessions[0].session, session);
         assert!(current_sessions[0].status.active);
         assert!(current_sessions[0].status.added);
-        assert!(!current_sessions[0].status.activated);
+        assert!(current_sessions[0].status.activated);
     }
 
     #[tokio::test]
@@ -1658,10 +1659,23 @@ mod tests {
         };
 
         capture.sessions.insert(session.clone(), session_info);
+        capture.current_sessions.write().await.push(session.clone());
+
+        // Check the filter - removing this creates a race condition
+        assert_eq!(capture.filter.read().await.clone(), SessionFilter::All);
+        let current_sessions = capture.get_current_sessions().await;
+
+        LANScanCapture::update_sessions_status(&capture.sessions, &capture.current_sessions).await;
+
+        assert_eq!(current_sessions.len(), 1);
+        assert_eq!(current_sessions[0].session, session);
+        assert!(!current_sessions[0].status.active);
+        assert!(!current_sessions[0].status.added);
+        assert!(!current_sessions[0].status.activated);
 
         // Simulate activity
         if let Some(mut entry) = capture.sessions.get_mut(&session) {
-            entry.stats.last_activity = now + ChronoDuration::seconds(10);
+            entry.stats.last_activity = now;
             entry.stats.outbound_bytes += 5000; // Added 5000 bytes outbound
             entry.stats.inbound_bytes += 10000; // Added 10000 bytes inbound
         }
