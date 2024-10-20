@@ -860,7 +860,7 @@ impl LANScanCapture {
                 session_info.stats.last_activity > Utc::now() - CONNECTION_ACTIVITY_TIMEOUT;
             let added = session_info.stats.start_time > Utc::now() - CONNECTION_ACTIVITY_TIMEOUT;
             // If the session was not added and is now active, it was activated
-            let activated = !added && !previous_status.active && active;
+            let activated = !previous_status.active && active;
             // If the session was active and is no longer active, it was deactivated
             let deactivated = previous_status.active && !active;
 
@@ -905,16 +905,21 @@ impl LANScanCapture {
         let mut sessions_vec = Vec::new();
         let filter = self.filter.read().await;
         for entry in self.sessions.iter() {
+            let mut session_info = entry.clone();
+            // Remove the "Unkown" flag from the domain
+            if session_info.dst_domain == Some("Unknown".to_string()) {
+                session_info.dst_domain = None;
+            }
             // Apply filter
             if *filter == SessionFilter::All {
-                sessions_vec.push(entry.clone());
+                sessions_vec.push(session_info);
             } else if *filter == SessionFilter::LocalOnly {
                 if entry.is_local_src && entry.is_local_dst {
-                    sessions_vec.push(entry.clone());
+                    sessions_vec.push(session_info);
                 }
             } else if *filter == SessionFilter::GlobalOnly {
                 if !entry.is_local_src || !entry.is_local_dst {
-                    sessions_vec.push(entry.clone());
+                    sessions_vec.push(session_info);
                 }
             }
         }
@@ -928,16 +933,21 @@ impl LANScanCapture {
         let mut current_sessions_vec = Vec::new();
         for key in self.current_sessions.read().await.iter() {
             if let Some(entry) = self.sessions.get(key) {
+                let mut session_info = entry.clone();
+                // Remove the "Unknown" flag from the domain
+                if session_info.dst_domain == Some("Unknown".to_string()) {
+                    session_info.dst_domain = None;
+                }
                 // Apply filter
                 if *filter == SessionFilter::All {
-                    current_sessions_vec.push(entry.clone());
+                    current_sessions_vec.push(session_info);
                 } else if *filter == SessionFilter::LocalOnly {
-                    if entry.is_local_src && entry.is_local_dst {
-                        current_sessions_vec.push(entry.clone());
+                    if session_info.is_local_src && session_info.is_local_dst {
+                        current_sessions_vec.push(session_info);
                     }
                 } else if *filter == SessionFilter::GlobalOnly {
-                    if !entry.is_local_src || !entry.is_local_dst {
-                        current_sessions_vec.push(entry.clone());
+                    if !session_info.is_local_src || !session_info.is_local_dst {
+                        current_sessions_vec.push(session_info);
                     }
                 }
             }
