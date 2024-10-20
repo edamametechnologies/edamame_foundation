@@ -134,7 +134,7 @@ impl LANScanCapture {
     }
 
     pub async fn start(&mut self, interface: &str) {
-        debug!("Starting LANScanCapture");
+        info!("Starting LANScanCapture");
 
         // If the capture task is already running, return
         if !self.capture_task_handles.is_empty() {
@@ -161,7 +161,7 @@ impl LANScanCapture {
     }
 
     pub async fn stop(&mut self) {
-        debug!("Stopping LANScanCapture");
+        info!("Stopping LANScanCapture");
 
         if self.capture_task_handles.is_empty() {
             warn!("Capture task not running");
