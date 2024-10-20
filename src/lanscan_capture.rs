@@ -183,6 +183,13 @@ impl LANScanCapture {
         // Don't stop the mDNS task as it's shared with other modules
     }
 
+    pub async fn restart(&mut self) {
+        info!("Restarting LANScanCapture");
+        // Only restart the capture task
+        self.stop_capture_tasks().await;
+        self.start_capture_task().await;
+    }
+
     pub async fn is_capturing(&self) -> bool {
         !self.capture_task_handles.is_empty()
     }

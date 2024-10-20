@@ -526,6 +526,14 @@ pub async fn rpc_run(
                 any(target_os = "macos", target_os = "linux"),
                 feature = "packetcapture"
             ))]
+            "restart_capture" => {
+                CAPTURE.lock().await.restart().await;
+                Ok("".to_string())
+            }
+            #[cfg(all(
+                any(target_os = "macos", target_os = "linux"),
+                feature = "packetcapture"
+            ))]
             "is_capturing" => {
                 let is_capturing = CAPTURE.lock().await.is_capturing().await;
                 let result = is_capturing.to_string();
