@@ -400,8 +400,6 @@ impl LANScanCapture {
         if interfaces.is_empty() {
             info!("No valid interfaces provided for capture, using pcap interface discovery");
 
-            return;
-        } else {
             // Get the default device
             let device = match Device::lookup() {
                 Ok(devices) => match devices.into_iter().next() {
@@ -861,7 +859,9 @@ impl LANScanCapture {
             let active =
                 session_info.stats.last_activity > Utc::now() - CONNECTION_ACTIVITY_TIMEOUT;
             let added = session_info.stats.start_time > Utc::now() - CONNECTION_ACTIVITY_TIMEOUT;
-            let activated = !previous_status.active && active;
+            // If the session was not added and is now active, it was activated
+            let activated = !added && !previous_status.active && active;
+            // If the session was active and is no longer active, it was deactivated
             let deactivated = previous_status.active && !active;
 
             // Create new status with updated previous bytes
