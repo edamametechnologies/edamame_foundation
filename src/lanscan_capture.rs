@@ -1,4 +1,5 @@
 use crate::lanscan_asn::*;
+use crate::lanscan_interface::get_default_interface;
 use crate::lanscan_l7::LANScanL7;
 use crate::lanscan_mdns::*;
 use crate::lanscan_port_vulns::get_name_from_port;
@@ -107,7 +108,7 @@ impl LANScanCapture {
 
     pub async fn set_whitelist(&mut self, whitelist_name: &str) {
         // Check if the whitelist is valid
-        if !is_valid_whitelist(whitelist_name).await {
+        if !is_valid_whitelist(whitelist_name).await && !whitelist_name.is_empty() {
             error!("Invalid whitelist name: {}", whitelist_name);
             return;
         }
@@ -400,9 +401,13 @@ impl LANScanCapture {
         if interfaces.is_empty() {
             info!("No valid interfaces provided for capture, using pcap interface discovery");
             interfaces = vec!["pcap".to_string()];
+        } else {
+            info!("Provided capture interfaces: {:?}", interfaces);
         }
 
         for interface in interfaces {
+            info!("Initializing capture task for {}", interface);
+
             // Clone shared resources for each capture task
             let sessions = self.sessions.clone();
             let current_sessions = self.current_sessions.clone();
@@ -418,20 +423,17 @@ impl LANScanCapture {
 
             // Spawn the capture task
             let handle = async_spawn(async move {
+                let device_list = match pcap::Device::list() {
+                    Ok(list) => list,
+                    Err(e) => {
+                        error!("Failed to get device list for {}: {}", interface_clone, e);
+                        return;
+                    }
+                };
+
+                info!("Capture devices list: {:?}", device_list);
+
                 let (cap, device) = if interface_clone != "pcap" {
-                    let device_list = match pcap::Device::list() {
-                        Ok(list) => list,
-                        Err(e) => {
-                            error!("Failed to get device list for {}: {}", interface_clone, e);
-                            return;
-                        }
-                    };
-
-                    info!(
-                        "Found capture devices for {}: {:?}",
-                        interface_clone, device_list
-                    );
-
                     // Find the device matching the current interface
                     let device = match device_list.iter().find(|dev| dev.name == interface_clone) {
                         Some(dev) => dev.clone(),
@@ -451,8 +453,8 @@ impl LANScanCapture {
                         }
                     }
                 } else {
-                    // Use the internal device lookup, don't use the interface name as it's not reliable
-                    let device = match pcap::Device::lookup() {
+                    // In some cases, starting capture using the interface name doesn't work, so we use the internal device lookup
+                    let mut device = match pcap::Device::lookup() {
                         Ok(device) => match device {
                             Some(device) => device,
                             None => {
@@ -465,6 +467,24 @@ impl LANScanCapture {
                             return;
                         }
                     };
+
+                    // On modern macs, with WiFi, lookup returns the ap interface instead of the en interface
+                    // Check if the device name contains "ap"
+                    if device.name.contains("ap") {
+                        warn!("Device name contains 'ap', this is not supported for capture");
+                        // Detecting default interface name
+                        let default_interface = get_default_interface();
+                        if let Some((_, _, name)) = default_interface {
+                            info!("Default interface detected: {}", name);
+
+                            // Match the default interface name in the device list
+                            if let Some(device_in_list) =
+                                device_list.iter().find(|dev| dev.name == name)
+                            {
+                                device = device_in_list.clone();
+                            }
+                        }
+                    }
 
                     info!("Starting packet capture on device {:?}", device);
 
@@ -538,6 +558,7 @@ impl LANScanCapture {
                     select! {
                         _ = interval.tick() => {
                             if stop_flag_clone.load(Ordering::Relaxed) {
+                                info!("Stopping capture task for {}", interface_clone);
                                 break;
                             }
                         }
