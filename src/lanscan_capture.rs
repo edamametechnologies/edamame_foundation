@@ -541,7 +541,7 @@ impl LANScanCapture {
                 }
 
                 // Create a new packet stream
-                let mut packet_stream = match cap.stream(OwnedCodec) {
+                let packet_stream = match cap.stream(OwnedCodec) {
                     Ok(stream) => stream,
                     Err(e) => {
                         error!(
@@ -554,6 +554,13 @@ impl LANScanCapture {
 
                 let mut interval = interval(Duration::from_millis(100));
 
+                // Reference from Tokio's Documentation:
+                // Care must be taken to prevent the select! macro from repeating the same branch when using futures
+                // that can complete (i.e. return Ready) multiple times. The select! macro will not automatically fuse
+                // futures, so when using select! you should use the futures crate's FutureExt::fuse() method or
+                // the StreamExt::fuse() method to ensure that the future does not complete multiple times.
+                let mut packet_stream_fused = packet_stream.fuse();
+
                 loop {
                     select! {
                         _ = interval.tick() => {
@@ -562,9 +569,9 @@ impl LANScanCapture {
                                 break;
                             }
                         }
-                        Some(packet_owned) = packet_stream.next() => {
+                        packet_owned = packet_stream_fused.next() => {
                             match packet_owned {
-                                Ok(packet_owned) => match LANScanCapture::parse_packet_pcap(&packet_owned.data) {
+                                Some(Ok(packet_owned)) => match LANScanCapture::parse_packet_pcap(&packet_owned.data) {
                                     Some(ParsedPacket::SessionPacket(cp)) => {
                                         LANScanCapture::process_parsed_packet(
                                             cp,
@@ -582,8 +589,11 @@ impl LANScanCapture {
                                         trace!("Error parsing packet on {}", interface_clone);
                                     }
                                 }
-                                Err(e) => {
+                                Some(Err(e)) => {
                                     warn!("Error capturing packet on {}: {}", interface_clone, e);
+                                }
+                                None => {
+                                    warn!("Packet stream ended for {}", interface_clone);
                                 }
                             }
                         }
