@@ -11,7 +11,7 @@ use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use dashmap::DashMap;
 use dns_parser::Packet as DnsPacket;
 use futures::StreamExt;
-use pcap::{Capture, Device, Packet, PacketCodec};
+use pcap::{Capture, Packet, PacketCodec};
 use pnet_packet::ethernet::{EtherTypes, EthernetPacket};
 use pnet_packet::ip::IpNextHeaderProtocols;
 use pnet_packet::ipv4::Ipv4Packet;
@@ -399,22 +399,7 @@ impl LANScanCapture {
 
         if interfaces.is_empty() {
             info!("No valid interfaces provided for capture, using pcap interface discovery");
-
-            // Get the default device
-            let device = match Device::lookup() {
-                Ok(devices) => match devices.into_iter().next() {
-                    Some(device) => device,
-                    None => {
-                        error!("No device found in the list of interfaces");
-                        return;
-                    }
-                },
-                Err(e) => {
-                    error!("Failed to get device list: {}", e);
-                    return;
-                }
-            };
-            interfaces.push(device.name);
+            interfaces = vec!["pcap".to_string()];
         }
 
         for interface in interfaces {
@@ -433,29 +418,65 @@ impl LANScanCapture {
 
             // Spawn the capture task
             let handle = async_spawn(async move {
-                let device_list = match pcap::Device::list() {
-                    Ok(list) => list,
-                    Err(e) => {
-                        error!("Failed to get device list for {}: {}", interface_clone, e);
-                        return;
+                let (cap, device) = if interface_clone != "pcap" {
+                    let device_list = match pcap::Device::list() {
+                        Ok(list) => list,
+                        Err(e) => {
+                            error!("Failed to get device list for {}: {}", interface_clone, e);
+                            return;
+                        }
+                    };
+
+                    info!(
+                        "Found capture devices for {}: {:?}",
+                        interface_clone, device_list
+                    );
+
+                    // Find the device matching the current interface
+                    let device = match device_list.iter().find(|dev| dev.name == interface_clone) {
+                        Some(dev) => dev.clone(),
+                        None => {
+                            error!("Device not found: {}", interface_clone);
+                            return;
+                        }
+                    };
+
+                    info!("Starting packet capture on device {:?}", device);
+
+                    match Capture::from_device(interface_clone.as_str()) {
+                        Ok(cap) => (cap, device),
+                        Err(e) => {
+                            error!("Failed to create capture on device: {}", e);
+                            return;
+                        }
+                    }
+                } else {
+                    // Use the internal device lookup, don't use the interface name as it's not reliable
+                    let device = match pcap::Device::lookup() {
+                        Ok(device) => match device {
+                            Some(device) => device,
+                            None => {
+                                error!("No device available");
+                                return;
+                            }
+                        },
+                        Err(e) => {
+                            error!("Failed to lookup device: {}", e);
+                            return;
+                        }
+                    };
+
+                    info!("Starting packet capture on device {:?}", device);
+
+                    let device_clone = device.clone();
+                    match Capture::from_device(device) {
+                        Ok(cap) => (cap, device_clone),
+                        Err(e) => {
+                            error!("Failed to create capture on device: {}", e);
+                            return;
+                        }
                     }
                 };
-
-                info!(
-                    "Found capture devices for {}: {:?}",
-                    interface_clone, device_list
-                );
-
-                // Find the device matching the current interface
-                let device = match device_list.iter().find(|dev| dev.name == interface_clone) {
-                    Some(dev) => dev.clone(),
-                    None => {
-                        error!("Device not found: {}", interface_clone);
-                        return;
-                    }
-                };
-
-                info!("Starting packet capture on device {:?}", device);
 
                 // Extract a vector of IP addresses from the device addresses
                 let self_ips: Vec<_> = device
@@ -464,16 +485,8 @@ impl LANScanCapture {
                     .filter_map(|addr| Some(addr.addr))
                     .collect();
 
-                // Create a new pcap capture
-                let cap = match Capture::from_device(interface_clone.as_str()) {
-                    Ok(cap) => cap,
-                    Err(e) => {
-                        error!("Failed to open capture on device: {}", e);
-                        return;
-                    }
-                };
-
                 // Open the capture
+                // Type is changing from Inactive to Active, we need a let
                 let mut cap = match cap.promisc(false).timeout(1000).open() {
                     Ok(cap) => cap,
                     Err(e) => {
