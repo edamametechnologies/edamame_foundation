@@ -20,3 +20,4 @@ clean:
 test:
 	cargo test
 	cargo test --features packetcapture
+	cargo test --features packetcapture,asyncpacketcapture

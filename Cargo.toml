@@ -8,7 +8,7 @@ async_fn_in_trait = "allow"
 
 [features]
 default = []
-standalone = []
+asyncpacketcapture = []
 packetcapture = [ "pcap", "pnet_packet", "hickory-resolver", "dns-parser", "sysinfo", "netstat2" ]
 
 [lib]
