@@ -501,19 +501,7 @@ impl LANScanCapture {
                     }
                 };
 
-                // Required for async
-                cap = match cap.setnonblock() {
-                    Ok(cap) => cap,
-                    Err(e) => {
-                        error!("Failed to set non blocking: {}", e);
-                        return;
-                    }
-                };
-
-                #[cfg(not(all(
-                    any(target_os = "macos", target_os = "linux"),
-                    feature = "standalone"
-                )))]
+                #[cfg(all(any(target_os = "macos", target_os = "linux"), feature = "standalone"))]
                 {
                     while !stop_flag_clone.load(Ordering::Relaxed) {
                         match cap.next_packet() {
@@ -551,6 +539,15 @@ impl LANScanCapture {
                 // Use async when with helper, sync in standalone
                 #[cfg(all(any(target_os = "macos", target_os = "linux"), feature = "standalone"))]
                 {
+                    // Required for async
+                    cap = match cap.setnonblock() {
+                        Ok(cap) => cap,
+                        Err(e) => {
+                            error!("Failed to set non blocking: {}", e);
+                            return;
+                        }
+                    };
+
                     // Define codec and packet structures
                     pub struct OwnedCodec;
                     pub struct PacketOwned {
