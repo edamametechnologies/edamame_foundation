@@ -11,11 +11,20 @@ use crate::whitelists::*;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use dashmap::DashMap;
 use dns_parser::Packet as DnsPacket;
-#[cfg(not(all(any(target_os = "macos", target_os = "linux"), feature = "standalone")))]
+#[cfg(not(all(
+    any(target_os = "macos", target_os = "linux"),
+    feature = "asyncpacketcapture"
+)))]
 use futures::StreamExt;
-#[cfg(all(any(target_os = "macos", target_os = "linux"), feature = "standalone"))]
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux"),
+    feature = "asyncpacketcapture"
+))]
 use pcap::Capture;
-#[cfg(not(all(any(target_os = "macos", target_os = "linux"), feature = "standalone")))]
+#[cfg(not(all(
+    any(target_os = "macos", target_os = "linux"),
+    feature = "asyncpacketcapture"
+)))]
 use pcap::{Capture, Packet, PacketCodec};
 use pnet_packet::ethernet::{EtherTypes, EthernetPacket};
 use pnet_packet::ip::IpNextHeaderProtocols;
@@ -27,10 +36,16 @@ use pnet_packet::Packet as PnetPacket;
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-#[cfg(not(all(any(target_os = "macos", target_os = "linux"), feature = "standalone")))]
+#[cfg(not(all(
+    any(target_os = "macos", target_os = "linux"),
+    feature = "asyncpacketcapture"
+)))]
 use tokio::select;
 use tokio::task::JoinHandle;
-#[cfg(not(all(any(target_os = "macos", target_os = "linux"), feature = "standalone")))]
+#[cfg(not(all(
+    any(target_os = "macos", target_os = "linux"),
+    feature = "asyncpacketcapture"
+)))]
 use tokio::time::interval;
 use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info, trace, warn};
@@ -501,8 +516,13 @@ impl LANScanCapture {
                     }
                 };
 
-                #[cfg(all(any(target_os = "macos", target_os = "linux"), feature = "standalone"))]
+                #[cfg(all(
+                    any(target_os = "macos", target_os = "linux"),
+                    feature = "asyncpacketcapture"
+                ))]
                 {
+                    info!("Using sync capture for {}", interface_clone);
+
                     while !stop_flag_clone.load(Ordering::Relaxed) {
                         match cap.next_packet() {
                             Ok(packet) => {
@@ -534,14 +554,16 @@ impl LANScanCapture {
                             }
                         }
                     }
+                    info!("Stopping sync capture for {}", interface_clone);
                 }
 
-                // Use async when with helper, sync in standalone
                 #[cfg(not(all(
                     any(target_os = "macos", target_os = "linux"),
-                    feature = "standalone"
+                    feature = "asyncpacketcapture"
                 )))]
                 {
+                    info!("Using async capture for {}", interface_clone);
+
                     // Required for async
                     cap = match cap.setnonblock() {
                         Ok(cap) => cap,
@@ -584,7 +606,7 @@ impl LANScanCapture {
                         select! {
                             _ = interval.tick() => {
                                 if stop_flag_clone.load(Ordering::Relaxed) {
-                                    info!("Stopping capture task for {}", interface_clone);
+                                    info!("Stopping async capture task for {}", interface_clone);
                                     break;
                                 }
                             }
