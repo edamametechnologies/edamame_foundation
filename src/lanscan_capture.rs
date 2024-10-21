@@ -11,20 +11,20 @@ use crate::whitelists::*;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use dashmap::DashMap;
 use dns_parser::Packet as DnsPacket;
-#[cfg(not(all(
-    any(target_os = "macos", target_os = "linux"),
-    feature = "asyncpacketcapture"
-)))]
-use futures::StreamExt;
 #[cfg(all(
     any(target_os = "macos", target_os = "linux"),
     feature = "asyncpacketcapture"
 ))]
-use pcap::Capture;
+use futures::StreamExt;
 #[cfg(not(all(
     any(target_os = "macos", target_os = "linux"),
     feature = "asyncpacketcapture"
 )))]
+use pcap::Capture;
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux"),
+    feature = "asyncpacketcapture"
+))]
 use pcap::{Capture, Packet, PacketCodec};
 use pnet_packet::ethernet::{EtherTypes, EthernetPacket};
 use pnet_packet::ip::IpNextHeaderProtocols;
@@ -36,16 +36,16 @@ use pnet_packet::Packet as PnetPacket;
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-#[cfg(not(all(
+#[cfg(all(
     any(target_os = "macos", target_os = "linux"),
     feature = "asyncpacketcapture"
-)))]
+))]
 use tokio::select;
 use tokio::task::JoinHandle;
-#[cfg(not(all(
+#[cfg(all(
     any(target_os = "macos", target_os = "linux"),
     feature = "asyncpacketcapture"
-)))]
+))]
 use tokio::time::interval;
 use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info, trace, warn};
@@ -432,7 +432,7 @@ impl LANScanCapture {
             .filter(|s| !s.is_empty())
             .collect();
 
-        if interfaces.is_empty() {
+        let using_default_interface = if interfaces.is_empty() {
             info!("No valid interfaces provided for capture, using default interface discovery");
             interfaces = match get_default_interface() {
                 Some((_, _, name)) => vec![name],
@@ -443,9 +443,11 @@ impl LANScanCapture {
             };
 
             info!("Using default interfaces: {:?}", interfaces);
+            true
         } else {
             info!("Provided capture interfaces: {:?}", interfaces);
-        }
+            false
+        };
 
         for interface in interfaces {
             info!("Initializing capture task for {}", interface);
@@ -477,24 +479,67 @@ impl LANScanCapture {
 
                 // Find the device matching the current interface
                 // Match the default interface name in the device list
-                let device = if let Some(device_in_list) =
-                    device_list.iter().find(|dev| dev.name == interface_clone)
-                {
-                    device_in_list.clone()
+                let (device, mut cap) = if !using_default_interface {
+                    let device = if let Some(device_in_list) =
+                        device_list.iter().find(|dev| dev.name == interface_clone)
+                    {
+                        device_in_list.clone()
+                    } else {
+                        error!("No default interface detected");
+                        return;
+                    };
+
+                    let cap = match Capture::from_device(interface_clone.as_str()) {
+                        Ok(cap) => cap,
+                        Err(e) => {
+                            error!("Failed to create capture on device: {}", e);
+                            return;
+                        }
+                    };
+                    (device, cap)
                 } else {
-                    error!("No default interface detected");
-                    return;
+                    // Use the built-in pcap device lookup
+                    let device = match pcap::Device::lookup() {
+                        Ok(Some(device)) => {
+                            // Only for macOS
+                            if cfg!(target_os = "macos") && device.name.starts_with("ap") {
+                                info!(
+                                    "Interface from lookup is incorrect, using discovered default interface for capture: {}",
+                                    interface_clone
+                                );
+                                if let Some(device_in_list) =
+                                    device_list.iter().find(|dev| dev.name == interface_clone)
+                                {
+                                    device_in_list.clone()
+                                } else {
+                                    error!("No device found from lookup");
+                                    return;
+                                }
+                            } else {
+                                device
+                            }
+                        }
+                        Ok(None) => {
+                            error!("No device found from lookup");
+                            return;
+                        }
+                        Err(e) => {
+                            error!("Failed to lookup device: {}", e);
+                            return;
+                        }
+                    };
+
+                    let cap = match Capture::from_device(device.clone()) {
+                        Ok(cap) => cap,
+                        Err(e) => {
+                            error!("Failed to create capture on device: {}", e);
+                            return;
+                        }
+                    };
+                    (device, cap)
                 };
 
                 info!("Starting packet capture on device {:?}", device);
-
-                let mut cap = match Capture::from_device(interface_clone.as_str()) {
-                    Ok(cap) => cap,
-                    Err(e) => {
-                        error!("Failed to create capture on device: {}", e);
-                        return;
-                    }
-                };
 
                 // Extract a vector of IP addresses from the device addresses
                 let self_ips: Vec<_> = device
@@ -516,10 +561,10 @@ impl LANScanCapture {
                     }
                 };
 
-                #[cfg(all(
+                #[cfg(not(all(
                     any(target_os = "macos", target_os = "linux"),
                     feature = "asyncpacketcapture"
-                ))]
+                )))]
                 {
                     info!("Using sync capture for {}", interface_clone);
 
@@ -557,10 +602,10 @@ impl LANScanCapture {
                     info!("Stopping sync capture for {}", interface_clone);
                 }
 
-                #[cfg(not(all(
+                #[cfg(all(
                     any(target_os = "macos", target_os = "linux"),
                     feature = "asyncpacketcapture"
-                )))]
+                ))]
                 {
                     info!("Using async capture for {}", interface_clone);
 
