@@ -11,11 +11,11 @@ use crate::whitelists::*;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use dashmap::DashMap;
 use dns_parser::Packet as DnsPacket;
-#[cfg(all(any(target_os = "macos", target_os = "linux"), feature = "standalone"))]
-use futures::StreamExt;
 #[cfg(not(all(any(target_os = "macos", target_os = "linux"), feature = "standalone")))]
-use pcap::Capture;
+use futures::StreamExt;
 #[cfg(all(any(target_os = "macos", target_os = "linux"), feature = "standalone"))]
+use pcap::Capture;
+#[cfg(not(all(any(target_os = "macos", target_os = "linux"), feature = "standalone")))]
 use pcap::{Capture, Packet, PacketCodec};
 use pnet_packet::ethernet::{EtherTypes, EthernetPacket};
 use pnet_packet::ip::IpNextHeaderProtocols;
@@ -27,10 +27,10 @@ use pnet_packet::Packet as PnetPacket;
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-#[cfg(all(any(target_os = "macos", target_os = "linux"), feature = "standalone"))]
+#[cfg(not(all(any(target_os = "macos", target_os = "linux"), feature = "standalone")))]
 use tokio::select;
 use tokio::task::JoinHandle;
-#[cfg(all(any(target_os = "macos", target_os = "linux"), feature = "standalone"))]
+#[cfg(not(all(any(target_os = "macos", target_os = "linux"), feature = "standalone")))]
 use tokio::time::interval;
 use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info, trace, warn};
@@ -537,7 +537,10 @@ impl LANScanCapture {
                 }
 
                 // Use async when with helper, sync in standalone
-                #[cfg(all(any(target_os = "macos", target_os = "linux"), feature = "standalone"))]
+                #[cfg(not(all(
+                    any(target_os = "macos", target_os = "linux"),
+                    feature = "standalone"
+                )))]
                 {
                     // Required for async
                     cap = match cap.setnonblock() {
@@ -614,9 +617,9 @@ impl LANScanCapture {
                                 }
                             }
                         }
-                        info!("Capture task for {} terminated", interface_clone);
                     }
                 };
+                info!("Capture task for {} terminated", interface_clone);
             });
 
             // Store the task handle and its stop flag
