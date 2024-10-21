@@ -527,7 +527,17 @@ pub async fn rpc_run(
                 feature = "packetcapture"
             ))]
             "restart_capture" => {
-                CAPTURE.lock().await.restart().await;
+                // Check if already capturing
+                if !CAPTURE.lock().await.is_capturing().await {
+                    return order_error("capture not running", false);
+                }
+                // Only restart if interfaces have changed
+                if check_interfaces_changes().await {
+                    let interfaces = INTERFACES_NAMES.lock().await.clone();
+                    // Convert the vec into a comma separated string
+                    let interfaces_string = interfaces.join(",");
+                    CAPTURE.lock().await.restart(&interfaces_string).await;
+                }
                 Ok("".to_string())
             }
             #[cfg(all(
