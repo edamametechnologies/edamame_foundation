@@ -11,7 +11,11 @@ use crate::whitelists::*;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use dashmap::DashMap;
 use dns_parser::Packet as DnsPacket;
+#[cfg(all(any(target_os = "macos", target_os = "linux"), feature = "standalone"))]
 use futures::StreamExt;
+#[cfg(not(all(any(target_os = "macos", target_os = "linux"), feature = "standalone")))]
+use pcap::Capture;
+#[cfg(all(any(target_os = "macos", target_os = "linux"), feature = "standalone"))]
 use pcap::{Capture, Packet, PacketCodec};
 use pnet_packet::ethernet::{EtherTypes, EthernetPacket};
 use pnet_packet::ip::IpNextHeaderProtocols;
@@ -23,9 +27,12 @@ use pnet_packet::Packet as PnetPacket;
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+#[cfg(all(any(target_os = "macos", target_os = "linux"), feature = "standalone"))]
 use tokio::select;
 use tokio::task::JoinHandle;
-use tokio::time::{interval, sleep, Duration};
+#[cfg(all(any(target_os = "macos", target_os = "linux"), feature = "standalone"))]
+use tokio::time::interval;
+use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info, trace, warn};
 use uuid::Uuid;
 
@@ -183,7 +190,12 @@ impl LANScanCapture {
         // Don't stop the mDNS task as it's shared with other modules
     }
 
-    pub async fn restart(&mut self) {
+    pub async fn restart(&mut self, interface: &str) {
+        // Only restart if capturing and if the interface string has changed
+        if !self.is_capturing().await || !self.interface.read().await.eq(interface) {
+            return;
+        };
+
         info!("Restarting LANScanCapture");
         // Only restart the capture task
         self.stop_capture_tasks().await;
@@ -406,8 +418,16 @@ impl LANScanCapture {
             .collect();
 
         if interfaces.is_empty() {
-            info!("No valid interfaces provided for capture, using pcap interface discovery");
-            interfaces = vec!["pcap".to_string()];
+            info!("No valid interfaces provided for capture, using default interface discovery");
+            interfaces = match get_default_interface() {
+                Some((_, _, name)) => vec![name],
+                None => {
+                    error!("No default interface detected");
+                    return;
+                }
+            };
+
+            info!("Using default interfaces: {:?}", interfaces);
         } else {
             info!("Provided capture interfaces: {:?}", interfaces);
         }
@@ -440,68 +460,24 @@ impl LANScanCapture {
 
                 info!("Capture devices list: {:?}", device_list);
 
-                let (cap, device) = if interface_clone != "pcap" {
-                    // Find the device matching the current interface
-                    let device = match device_list.iter().find(|dev| dev.name == interface_clone) {
-                        Some(dev) => dev.clone(),
-                        None => {
-                            error!("Device not found: {}", interface_clone);
-                            return;
-                        }
-                    };
-
-                    info!("Starting packet capture on device {:?}", device);
-
-                    match Capture::from_device(interface_clone.as_str()) {
-                        Ok(cap) => (cap, device),
-                        Err(e) => {
-                            error!("Failed to create capture on device: {}", e);
-                            return;
-                        }
-                    }
+                // Find the device matching the current interface
+                // Match the default interface name in the device list
+                let device = if let Some(device_in_list) =
+                    device_list.iter().find(|dev| dev.name == interface_clone)
+                {
+                    device_in_list.clone()
                 } else {
-                    // In some cases, starting capture using the interface name doesn't work, so we use the internal device lookup
-                    let mut device = match pcap::Device::lookup() {
-                        Ok(device) => match device {
-                            Some(device) => device,
-                            None => {
-                                error!("No device available");
-                                return;
-                            }
-                        },
-                        Err(e) => {
-                            error!("Failed to lookup device: {}", e);
-                            return;
-                        }
-                    };
+                    error!("No default interface detected");
+                    return;
+                };
 
-                    // On modern macs, with WiFi, lookup returns the ap interface instead of the en interface
-                    // Check if the device name contains "ap"
-                    if device.name.contains("ap") {
-                        warn!("Device name contains 'ap', this is not supported for capture");
-                        // Detecting default interface name
-                        let default_interface = get_default_interface();
-                        if let Some((_, _, name)) = default_interface {
-                            info!("Default interface detected: {}", name);
+                info!("Starting packet capture on device {:?}", device);
 
-                            // Match the default interface name in the device list
-                            if let Some(device_in_list) =
-                                device_list.iter().find(|dev| dev.name == name)
-                            {
-                                device = device_in_list.clone();
-                            }
-                        }
-                    }
-
-                    info!("Starting packet capture on device {:?}", device);
-
-                    let device_clone = device.clone();
-                    match Capture::from_device(device) {
-                        Ok(cap) => (cap, device_clone),
-                        Err(e) => {
-                            error!("Failed to create capture on device: {}", e);
-                            return;
-                        }
+                let mut cap = match Capture::from_device(interface_clone.as_str()) {
+                    Ok(cap) => cap,
+                    Err(e) => {
+                        error!("Failed to create capture on device: {}", e);
+                        return;
                     }
                 };
 
@@ -511,6 +487,9 @@ impl LANScanCapture {
                     .iter()
                     .filter_map(|addr| Some(addr.addr))
                     .collect();
+
+                // Set immediate mode
+                cap = cap.immediate_mode(true);
 
                 // Open the capture
                 // Type is changing from Inactive to Active, we need a let
@@ -531,82 +510,116 @@ impl LANScanCapture {
                     }
                 };
 
-                // Define codec and packet structures
-                pub struct OwnedCodec;
-                pub struct PacketOwned {
-                    pub data: Box<[u8]>,
-                }
-
-                impl PacketCodec for OwnedCodec {
-                    type Item = PacketOwned;
-
-                    fn decode(&mut self, pkt: Packet) -> Self::Item {
-                        PacketOwned {
-                            data: pkt.data.into(),
-                        }
-                    }
-                }
-
-                // Create a new packet stream
-                let packet_stream = match cap.stream(OwnedCodec) {
-                    Ok(stream) => stream,
-                    Err(e) => {
-                        error!(
-                            "Failed to create packet stream on {}: {}",
-                            interface_clone, e
-                        );
-                        return;
-                    }
-                };
-
-                let mut interval = interval(Duration::from_millis(100));
-
-                // Reference from Tokio's Documentation:
-                // Care must be taken to prevent the select! macro from repeating the same branch when using futures
-                // that can complete (i.e. return Ready) multiple times. The select! macro will not automatically fuse
-                // futures, so when using select! you should use the futures crate's FutureExt::fuse() method or
-                // the StreamExt::fuse() method to ensure that the future does not complete multiple times.
-                let mut packet_stream_fused = packet_stream.fuse();
-
-                loop {
-                    select! {
-                        _ = interval.tick() => {
-                            if stop_flag_clone.load(Ordering::Relaxed) {
-                                info!("Stopping capture task for {}", interface_clone);
+                #[cfg(not(all(
+                    any(target_os = "macos", target_os = "linux"),
+                    feature = "standalone"
+                )))]
+                {
+                    while !stop_flag_clone.load(Ordering::Relaxed) {
+                        match cap.next_packet() {
+                            Ok(packet) => {
+                                if let Some(parsed_packet) = Self::parse_packet_pcap(packet.data) {
+                                    match parsed_packet {
+                                        ParsedPacket::SessionPacket(cp) => {
+                                            LANScanCapture::process_parsed_packet(
+                                                cp,
+                                                &sessions,
+                                                &current_sessions,
+                                                &self_ips,
+                                                &filter,
+                                            )
+                                            .await;
+                                        }
+                                        ParsedPacket::DnsPacket(dp) => {
+                                            Self::process_dns_packet(dp, &dns_resolutions);
+                                        }
+                                    }
+                                }
+                            }
+                            Err(pcap::Error::TimeoutExpired) => {
+                                // Read timeout occurred, check stop_flag
+                                continue;
+                            }
+                            Err(e) => {
+                                error!("Failed to read packet: {}", e);
                                 break;
                             }
                         }
-                        packet_owned = packet_stream_fused.next() => {
-                            match packet_owned {
-                                Some(Ok(packet_owned)) => match LANScanCapture::parse_packet_pcap(&packet_owned.data) {
-                                    Some(ParsedPacket::SessionPacket(cp)) => {
-                                        LANScanCapture::process_parsed_packet(
-                                            cp,
-                                            &sessions,
-                                            &current_sessions,
-                                            &self_ips,
-                                            &filter,
-                                        )
-                                        .await;
-                                    }
-                                    Some(ParsedPacket::DnsPacket(dp)) => {
-                                        LANScanCapture::process_dns_packet(dp, &dns_resolutions);
-                                    }
-                                    None => {
-                                        trace!("Error parsing packet on {}", interface_clone);
-                                    }
-                                }
-                                Some(Err(e)) => {
-                                    warn!("Error capturing packet on {}: {}", interface_clone, e);
-                                }
-                                None => {
-                                    warn!("Packet stream ended for {}", interface_clone);
-                                }
+                    }
+                }
+
+                // Use async when with helper, sync in standalone
+                #[cfg(all(any(target_os = "macos", target_os = "linux"), feature = "standalone"))]
+                {
+                    // Define codec and packet structures
+                    pub struct OwnedCodec;
+                    pub struct PacketOwned {
+                        pub data: Box<[u8]>,
+                    }
+
+                    impl PacketCodec for OwnedCodec {
+                        type Item = PacketOwned;
+
+                        fn decode(&mut self, pkt: Packet) -> Self::Item {
+                            PacketOwned {
+                                data: pkt.data.into(),
                             }
                         }
                     }
-                }
-                info!("Capture task for {} terminated", interface_clone);
+                    // Create a new packet stream
+                    let mut packet_stream = match cap.stream(OwnedCodec) {
+                        Ok(stream) => stream,
+                        Err(e) => {
+                            error!(
+                                "Failed to create packet stream on {}: {}",
+                                interface_clone, e
+                            );
+                            return;
+                        }
+                    };
+
+                    let mut interval = interval(Duration::from_millis(100));
+
+                    loop {
+                        select! {
+                            _ = interval.tick() => {
+                                if stop_flag_clone.load(Ordering::Relaxed) {
+                                    info!("Stopping capture task for {}", interface_clone);
+                                    break;
+                                }
+                            }
+                            packet_owned = packet_stream.next() => {
+                                match packet_owned {
+                                    Some(Ok(packet_owned)) => match LANScanCapture::parse_packet_pcap(&packet_owned.data) {
+                                        Some(ParsedPacket::SessionPacket(cp)) => {
+                                            LANScanCapture::process_parsed_packet(
+                                                cp,
+                                                &sessions,
+                                                &current_sessions,
+                                                &self_ips,
+                                                &filter,
+                                            )
+                                            .await;
+                                        }
+                                        Some(ParsedPacket::DnsPacket(dp)) => {
+                                            LANScanCapture::process_dns_packet(dp, &dns_resolutions);
+                                        }
+                                        None => {
+                                            trace!("Error parsing packet on {}", interface_clone);
+                                        }
+                                    }
+                                    Some(Err(e)) => {
+                                        warn!("Error capturing packet on {}: {}", interface_clone, e);
+                                    }
+                                    None => {
+                                        warn!("Packet stream ended for {}", interface_clone);
+                                    }
+                                }
+                            }
+                        }
+                        info!("Capture task for {} terminated", interface_clone);
+                    }
+                };
             });
 
             // Store the task handle and its stop flag
