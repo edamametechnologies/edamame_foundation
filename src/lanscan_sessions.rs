@@ -236,13 +236,10 @@ pub fn format_sessions_log(sessions: &Vec<SessionInfo>) -> Vec<String> {
             None => "ongoing".to_string(),
         };
 
-        // Replace IP addresses with resolved names when available and not "Resolving" or "Unknown", replace with the ASN information if no domain is available
+        // Replace IP addresses with resolved names when available and not "Resolving" or "Unknown"
         let src_name = match src_domain {
             Some(name) => match name.as_str() {
-                "Resolving" | "Unknown" => match session_info.src_asn.clone() {
-                    Some(asn) => format!("{} {} ({})", asn.owner, asn.country, asn.as_number),
-                    None => session.src_ip.to_string(),
-                },
+                "Resolving" | "Unknown" => session.src_ip.to_string(),
                 _ => name.clone(),
             },
             None => session.src_ip.to_string(),
@@ -250,30 +247,38 @@ pub fn format_sessions_log(sessions: &Vec<SessionInfo>) -> Vec<String> {
 
         let dst_name = match dst_domain {
             Some(name) => match name.as_str() {
-                "Resolving" | "Unknown" => match session_info.dst_asn.clone() {
-                    Some(asn) => format!("{} {} ({})", asn.owner, asn.country, asn.as_number),
-                    None => session.dst_ip.to_string(),
-                },
+                "Resolving" | "Unknown" => session.dst_ip.to_string(),
                 _ => name.clone(),
             },
             None => session.dst_ip.to_string(),
         };
 
-        let dst_service = session_info.dst_service.clone();
+        // Add ASN information
+        let dst_asn = match session_info.dst_asn.clone() {
+            Some(dst_asn) => format!(
+                "ASN{} / {} / {}",
+                dst_asn.as_number, dst_asn.owner, dst_asn.country
+            ),
+            None => "Unknown ASN".to_string(),
+        };
+
+        let dst_service = match session_info.dst_service.clone() {
+            Some(dst_service) => format!(
+                "{} ({})", session.dst_port.to_string(), dst_service),
+            None => format!("{}", session.dst_port.to_string()),
+        };
+
         let log_entry = format!(
-            "[{}] {} {} - {}:{} -> {}:{} ({}, {} bytes sent, {} bytes received, duration: {}, whitelisted: {})",
+            "[{}] {} {} - {} {}:{} -> {}:{} {} ({} bytes sent, {} bytes received, duration: {}, whitelisted: {})",
             start_time,
             username,
             process_name,
+            session.protocol,
             src_name,
             session.src_port,
             dst_name,
-            if dst_service.is_some() {
-                format!("{} ({})", dst_service.unwrap(), session.dst_port)
-            } else {
-                session.dst_port.to_string()
-            },
-            session.protocol,
+            dst_service,
+            dst_asn,
             stats.outbound_bytes,
             stats.inbound_bytes,
             duration,
