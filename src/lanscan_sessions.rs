@@ -95,16 +95,34 @@ pub fn filter_global_sessions(sessions: &Vec<SessionInfo>) -> Vec<SessionInfo> {
     filter_sessions(sessions, SessionFilter::GlobalOnly)
 }
 
+pub mod session_macros {
+
+    macro_rules! is_local_session {
+        ($entry:expr) => {
+            is_local_ip(&$entry.session.src_ip) && is_local_ip(&$entry.session.dst_ip)
+        };
+    }
+
+    macro_rules! is_global_session {
+        ($entry:expr) => {
+            !is_local_ip(&$entry.session.src_ip) || !is_local_ip(&$entry.session.dst_ip)
+        };
+    }
+
+    pub(crate) use is_global_session;
+    pub(crate) use is_local_session;
+}
+
 pub fn filter_sessions(sessions: &Vec<SessionInfo>, filter: SessionFilter) -> Vec<SessionInfo> {
     match filter {
         SessionFilter::LocalOnly => sessions
             .iter()
-            .filter(|c| is_local_ip(&c.session.src_ip) && is_local_ip(&c.session.dst_ip))
+            .filter(|c| session_macros::is_local_session!(c))
             .cloned()
             .collect(),
         SessionFilter::GlobalOnly => sessions
             .iter()
-            .filter(|c| !is_local_ip(&c.session.src_ip) || !is_local_ip(&c.session.dst_ip))
+            .filter(|c| session_macros::is_global_session!(c))
             .cloned()
             .collect(),
         SessionFilter::All => sessions.clone(),
@@ -296,11 +314,11 @@ pub fn is_local_ip(ip: &IpAddr) -> bool {
                 || ipv4.is_broadcast()
         }
         IpAddr::V6(ipv6) => {
-            ipv6.is_loopback()
+            is_private_ipv6(ip)
+                || is_link_local_ipv6(ip)
+                || ipv6.is_loopback()
                 || ipv6.is_multicast()
                 || ipv6.is_unspecified()
-                || is_link_local_ipv6(ip)
-                || is_private_ipv6(ip)
         }
     };
     if local {
