@@ -434,7 +434,7 @@ impl LANScanCapture {
             .filter(|s| !s.is_empty())
             .collect();
 
-        let using_default_interface = if interfaces.is_empty() {
+        if interfaces.is_empty() {
             info!("No valid interfaces provided for capture, using default interface discovery");
             interfaces = match get_default_interface() {
                 Some((_, _, name)) => vec![name],
@@ -443,12 +443,6 @@ impl LANScanCapture {
                     return;
                 }
             };
-
-            info!("Using default interfaces: {:?}", interfaces);
-            true
-        } else {
-            info!("Provided capture interfaces: {:?}", interfaces);
-            false
         };
 
         for interface in interfaces {
@@ -481,64 +475,21 @@ impl LANScanCapture {
 
                 // Find the device matching the current interface
                 // Match the default interface name in the device list
-                let (device, mut cap) = if !using_default_interface {
-                    let device = if let Some(device_in_list) =
-                        device_list.iter().find(|dev| dev.name == interface_clone)
-                    {
-                        device_in_list.clone()
-                    } else {
-                        error!("No default interface detected");
-                        return;
-                    };
-
-                    let cap = match Capture::from_device(interface_clone.as_str()) {
-                        Ok(cap) => cap,
-                        Err(e) => {
-                            error!("Failed to create capture on device: {}", e);
-                            return;
-                        }
-                    };
-                    (device, cap)
+                let device = if let Some(device_in_list) =
+                    device_list.iter().find(|dev| dev.name == interface_clone)
+                {
+                    device_in_list.clone()
                 } else {
-                    // Use the built-in pcap device lookup
-                    let device = match pcap::Device::lookup() {
-                        Ok(Some(device)) => {
-                            // Only for macOS
-                            if cfg!(target_os = "macos") && device.name.starts_with("ap") {
-                                info!(
-                                    "Interface from lookup is incorrect, using discovered default interface for capture: {}",
-                                    interface_clone
-                                );
-                                if let Some(device_in_list) =
-                                    device_list.iter().find(|dev| dev.name == interface_clone)
-                                {
-                                    device_in_list.clone()
-                                } else {
-                                    error!("No device found from lookup");
-                                    return;
-                                }
-                            } else {
-                                device
-                            }
-                        }
-                        Ok(None) => {
-                            error!("No device found from lookup");
-                            return;
-                        }
-                        Err(e) => {
-                            error!("Failed to lookup device: {}", e);
-                            return;
-                        }
-                    };
+                    error!("No default interface detected");
+                    return;
+                };
 
-                    let cap = match Capture::from_device(device.clone()) {
-                        Ok(cap) => cap,
-                        Err(e) => {
-                            error!("Failed to create capture on device: {}", e);
-                            return;
-                        }
-                    };
-                    (device, cap)
+                let mut cap = match Capture::from_device(interface_clone.as_str()) {
+                    Ok(cap) => cap,
+                    Err(e) => {
+                        error!("Failed to create capture on device: {}", e);
+                        return;
+                    }
                 };
 
                 info!("Starting packet capture on device {:?}", device);
