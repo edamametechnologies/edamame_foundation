@@ -4,6 +4,7 @@ use crate::lanscan_l7::LANScanL7;
 use crate::lanscan_mdns::*;
 use crate::lanscan_port_vulns::get_name_from_port;
 use crate::lanscan_resolver::LANScanResolver;
+use crate::lanscan_sessions::session_macros::*;
 use crate::lanscan_sessions::*;
 use crate::runtime::async_spawn;
 use crate::rwlock::CustomRwLock;
@@ -208,6 +209,7 @@ impl LANScanCapture {
     pub async fn restart(&mut self, interface: &str) {
         // Only restart if capturing and if the interface string has changed
         if !self.is_capturing().await || !self.interface.read().await.eq(interface) {
+            info!("Not restarting capture as it's not capturing or interface has not changed");
             return;
         };
 
@@ -1045,11 +1047,11 @@ impl LANScanCapture {
             if *filter == SessionFilter::All {
                 sessions_vec.push(session_info);
             } else if *filter == SessionFilter::LocalOnly {
-                if entry.is_local_src && entry.is_local_dst {
+                if is_local_session!(session_info) {
                     sessions_vec.push(session_info);
                 }
             } else if *filter == SessionFilter::GlobalOnly {
-                if !entry.is_local_src || !entry.is_local_dst {
+                if is_global_session!(session_info) {
                     sessions_vec.push(session_info);
                 }
             }
@@ -1073,11 +1075,11 @@ impl LANScanCapture {
                 if *filter == SessionFilter::All {
                     current_sessions_vec.push(session_info);
                 } else if *filter == SessionFilter::LocalOnly {
-                    if session_info.is_local_src && session_info.is_local_dst {
+                    if is_local_session!(session_info) {
                         current_sessions_vec.push(session_info);
                     }
                 } else if *filter == SessionFilter::GlobalOnly {
-                    if !session_info.is_local_src || !session_info.is_local_dst {
+                    if is_global_session!(session_info) {
                         current_sessions_vec.push(session_info);
                     }
                 }
@@ -1178,11 +1180,11 @@ impl LANScanCapture {
             // Apply filter here for performance reasons. This means that we won't keep the history of filtered sessions.
             let filter = filter.read().await.clone();
             if filter == SessionFilter::LocalOnly {
-                if !is_local_src || !is_local_dst {
+                if is_global_session!(parsed_packet) {
                     return;
                 }
             } else if filter == SessionFilter::GlobalOnly {
-                if is_local_src || is_local_dst {
+                if is_local_session!(parsed_packet) {
                     return;
                 }
             }
