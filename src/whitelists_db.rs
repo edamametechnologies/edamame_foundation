@@ -1,302 +1,114 @@
-// Built in default whitelists db
 pub static WHITELISTS: &str = r#"{
-  "date": "October 04th 2024",
+  "date": "October 22nd 2024",
   "whitelists": [
     {
-      "name": "base_whitelist",
-      "extends": "none",
+      "name": "edamame",
+      "extends": null,
       "endpoints": [
         {
-          "destination": "api.edamame.tech",
+          "domain": "ip-api.com",
+          "port": 80,
+          "description": "IP-API"
+        },
+        {
+          "domain": "d-22jhnwitx0.execute-api.eu-west-1.amazonaws.com",
           "port": 443,
-          "description": "Edamame API endpoint"
+          "description": "EDAMAME backend-assistance-prod"
+        },
+        {
+          "domain": "d-z6dc3lo29h.execute-api.eu-west-1.amazonaws.com",
+          "port": 443,
+          "description": "EDAMAME backend-score-prod"
+        },
+        {
+          "domain": "ec2-54-217-133-47.compute-1.amazonaws.com",
+          "port": 443,
+          "description": "Connection to AWS EC2 instance"
+        },
+        {
+          "domain": "ec2-108-128-89-104.compute-1.amazonaws.com",
+          "port": 443,
+          "description": "Connection to AWS EC2 instance"
         }
       ]
     },
     {
-      "name": "cicd_dependencies",
-      "extends": "base_whitelist",
+      "name": "github",
+      "extends": ["edamame"],
       "endpoints": [
         {
-          "destination": "github.com",
+          "domain": "*.github.com",
           "port": 443,
-          "description": "GitHub main website"
+          "description": "Connection to GitHub"
         },
         {
-          "destination": "api.github.com",
+          "domain": "*.actions.githubusercontent.com",
           "port": 443,
-          "description": "GitHub API endpoint"
-        },
-        {
-          "destination": "proxy.github.com",
-          "port": 443,
-          "description": "GitHub proxy server"
-        },
-        {
-          "destination": "raw.githubusercontent.com",
-          "port": 443,
-          "description": "GitHub raw content"
-        },
-        {
-          "destination": "objects.githubusercontent.com",
-          "port": 443,
-          "description": "GitHub object storage"
-        },
-        {
-          "destination": "proxy.golang.org",
-          "port": 443,
-          "description": "Go module proxy"
-        },
-        {
-          "destination": "registry.npmjs.org",
-          "port": 443,
-          "description": "npm package registry"
-        },
-        {
-          "destination": "registry.yarnpkg.com",
-          "port": 443,
-          "description": "Yarn package registry"
-        },
-        {
-          "destination": "pypi.org",
-          "port": 443,
-          "description": "Python Package Index"
-        },
-        {
-          "destination": "files.pythonhosted.org",
-          "port": 443,
-          "description": "Python package files"
-        },
-        {
-          "destination": "repo.maven.apache.org",
-          "port": 443,
-          "description": "Maven Central Repository"
-        },
-        {
-          "destination": "services.gradle.org",
-          "port": 443,
-          "description": "Gradle services"
-        },
-        {
-          "destination": "api.nuget.org",
-          "port": 443,
-          "description": "NuGet API"
-        },
-        {
-          "destination": "rubygems.org",
-          "port": 443,
-          "description": "RubyGems package registry"
-        },
-        {
-          "destination": "registry.hub.docker.com",
-          "port": 443,
-          "description": "Docker Hub registry"
-        },
-        {
-          "destination": "quay.io",
-          "port": 443,
-          "description": "Quay container registry"
-        },
-        {
-          "destination": "dart.dev",
-          "port": 443,
-          "description": "Dart programming language site"
-        },
-        {
-          "destination": "pub.dev",
-          "port": 443,
-          "description": "Dart and Flutter package repository"
-        },
-        {
-          "destination": "crates.io",
-          "port": 443,
-          "description": "Rust package registry"
-        },
-        {
-          "destination": "static.rust-lang.org",
-          "port": 443,
-          "description": "Rust static resources"
-        },
-        {
-          "destination": "golang.org",
-          "port": 443,
-          "description": "Go programming language site"
-        },
-        {
-          "destination": "pkg.go.dev",
-          "port": 443,
-          "description": "Go package documentation"
+          "description": "Connection to GitHub Actions"
         }
       ]
     },
     {
-      "name": "cicd_tools",
-      "extends": "none",
+      "name": "github_macos",
+      "extends": ["github"],
       "endpoints": [
         {
-          "destination": "jenkins.io",
+          "domain": "homebrew.github.io",
           "port": 443,
-          "description": "Jenkins CI/CD"
+          "description": "Connection to Homebrew"
         },
         {
-          "destination": "circleci.com",
+          "domain": "*.aaplimg.com",
           "port": 443,
-          "description": "CircleCI"
+          "description": "Connection to Apple services"
         },
         {
-          "destination": "api.travis-ci.com",
+          "domain": "20.7.220.66",
           "port": 443,
-          "description": "Travis CI API"
+          "description": "Connection to Microsoft ASN (ASN: 8075, Country: US, Owner: MICROSOFT-CORP-MSN-AS-BLOCK)"
         },
         {
-          "destination": "gitlab.com",
-          "port": 443,
-          "description": "GitLab"
-        },
-        {
-          "destination": "atlassian.com",
-          "port": 443,
-          "description": "Atlassian (Jira, Confluence, Bitbucket)"
-        },
-        {
-          "destination": "registry.terraform.io",
-          "port": 443,
-          "description": "Terraform registry"
-        },
-        {
-          "destination": "galaxy.ansible.com",
-          "port": 443,
-          "description": "Ansible Galaxy"
-        },
-        {
-          "destination": "api.chef.io",
-          "port": 443,
-          "description": "Chef API"
-        },
-        {
-          "destination": "puppet.com",
-          "port": 443,
-          "description": "Puppet"
-        },
-        {
-          "destination": "sonarqube.org",
-          "port": 443,
-          "description": "SonarQube"
-        },
-        {
-          "destination": "snyk.io",
-          "port": 443,
-          "description": "Snyk security platform"
-        },
-        {
-          "destination": "sentry.io",
-          "port": 443,
-          "description": "Sentry error tracking"
-        },
-        {
-          "destination": "newrelic.com",
-          "port": 443,
-          "description": "New Relic monitoring"
-        },
-        {
-          "destination": "api.datadoghq.com",
-          "port": 443,
-          "description": "Datadog API"
-        },
-        {
-          "destination": "cmake.org",
-          "port": 443,
-          "description": "CMake build system"
-        },
-        {
-          "destination": "bazel.build",
-          "port": 443,
-          "description": "Bazel build system"
-        },
-        {
-          "destination": "apache.org",
-          "port": 443,
-          "description": "Apache Software Foundation"
-        },
-        {
-          "destination": "visualstudio.com",
-          "port": 443,
-          "description": "Visual Studio services"
-        },
-        {
-          "destination": "jetbrains.com",
-          "port": 443,
-          "description": "JetBrains tools"
-        },
-        {
-          "destination": "codecov.io",
-          "port": 443,
-          "description": "Codecov code coverage"
-        },
-        {
-          "destination": "coveralls.io",
-          "port": 443,
-          "description": "Coveralls code coverage"
-        },
-        {
-          "destination": "selenium.dev",
-          "port": 443,
-          "description": "Selenium automation tool"
-        },
-        {
-          "destination": "ci.appveyor.com",
-          "port": 443,
-          "description": "AppVeyor CI"
-        },
-        {
-          "destination": "codeclimate.com",
-          "port": 443,
-          "description": "Code Climate quality platform"
-        },
-        {
-          "destination": "brew.sh",
-          "port": 443,
-          "description": "Homebrew package manager"
-        },
-        {
-          "destination": "packages.debian.org",
-          "port": 443,
-          "description": "Debian package repository"
-        },
-        {
-          "destination": "packages.ubuntu.com",
-          "port": 443,
-          "description": "Ubuntu package repository"
-        },
-        {
-          "destination": "fedoraproject.org",
-          "port": 443,
-          "description": "Fedora Project"
-        },
-        {
-          "destination": "centos.org",
-          "port": 443,
-          "description": "CentOS Project"
-        },
-        {
-          "destination": "alpinelinux.org",
-          "port": 443,
-          "description": "Alpine Linux"
-        },
-        {
-          "destination": "archlinux.org",
-          "port": 443,
-          "description": "Arch Linux"
+          "domain": "104.26.13.205",
+          "port": 80,
+          "description": "Connection to Cloudflare (ASN: 13335, Country: US, Owner: CLOUDFLARENET)"
         }
       ]
     },
     {
-      "name": "cicd",
-      "extends": [
-        "cicd_dependencies",
-        "cicd_tools"
-      ],
-      "endpoints": []
+      "name": "github_ubuntu",
+      "extends": ["github"],
+      "endpoints": [
+        {
+          "domain": "168.63.129.16",
+          "port": 32526,
+          "description": "Connection to Microsoft ASN (ASN: 8075, Country: US, Owner: MICROSOFT-CORP-MSN-AS-BLOCK)"
+        },
+        {
+          "domain": "168.63.129.16",
+          "port": 80,
+          "description": "Connection to Microsoft ASN (ASN: 8075, Country: US, Owner: MICROSOFT-CORP-MSN-AS-BLOCK)"
+        },
+        {
+          "domain": "20.85.130.105",
+          "port": 443,
+          "description": "Connection to Microsoft service (ASN: 8075, Country: US, Owner: MICROSOFT-CORP-MSN-AS-BLOCK)"
+        },
+        {
+          "domain": "52.136.4.16",
+          "port": 23456,
+          "description": "Connection to Microsoft service (aequus) (ASN: 8075, Country: US, Owner: MICROSOFT-CORP-MSN-AS-BLOCK)"
+        },
+        {
+          "domain": "20.237.33.78",
+          "port": 443,
+          "description": "Connection to Microsoft service (ASN: 8075, Country: US, Owner: MICROSOFT-CORP-MSN-AS-BLOCK)"
+        },
+        {
+          "domain": "104.26.12.205",
+          "port": 80,
+          "description": "Connection to Cloudflare (ASN: 13335, Country: US, Owner: CLOUDFLARENET)"
+        }
+      ]
     }
   ],
   "signature": "99ada0f91fb2df3694cb8feba3cbe31ccafa76ce2dba78b00f01986bda02cf14"

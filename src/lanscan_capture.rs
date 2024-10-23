@@ -692,9 +692,9 @@ impl LANScanCapture {
                 if let Some(dst_domain) = session_info.dst_domain {
                     if dst_domain == "Unknown".to_string() {
                         // The domain has not been resolved, use the IP address instead
-                        let destination = session_info.session.dst_ip.to_string();
-                        if !is_destination_in_whitelist(
-                            Some(&destination),
+                        if !is_session_in_whitelist(
+                            None,
+                            Some(&session_info.session.dst_ip.to_string()),
                             session_info.session.dst_port,
                             whitelist_name,
                             session_info.dst_asn.as_ref().map(|asn| asn.as_number),
@@ -713,8 +713,9 @@ impl LANScanCapture {
                         }
                     } else {
                         // The domain has been resolved
-                        if !is_destination_in_whitelist(
+                        if !is_session_in_whitelist(
                             Some(&dst_domain),
+                            None,
                             session_info.session.dst_port,
                             whitelist_name,
                             session_info.dst_asn.as_ref().map(|asn| asn.as_number),
@@ -734,9 +735,9 @@ impl LANScanCapture {
                     }
                 } else {
                     // The domain has not been resolved yet, use the IP address instead
-                    let destination = session_info.session.dst_ip.to_string();
-                    if !is_destination_in_whitelist(
-                        Some(&destination),
+                    if !is_session_in_whitelist(
+                        None,
+                        Some(&session_info.session.dst_ip.to_string()),
                         session_info.session.dst_port,
                         whitelist_name,
                         session_info.dst_asn.as_ref().map(|asn| asn.as_number),

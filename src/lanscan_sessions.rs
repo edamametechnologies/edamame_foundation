@@ -263,8 +263,7 @@ pub fn format_sessions_log(sessions: &Vec<SessionInfo>) -> Vec<String> {
         };
 
         let dst_service = match session_info.dst_service.clone() {
-            Some(dst_service) => format!(
-                "{} ({})", session.dst_port.to_string(), dst_service),
+            Some(dst_service) => format!("{} ({})", session.dst_port.to_string(), dst_service),
             None => format!("{}", session.dst_port.to_string()),
         };
 

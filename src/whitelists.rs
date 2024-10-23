@@ -1,32 +1,34 @@
+use crate::cloud_model::*;
 use crate::rwlock::CustomRwLock;
+use crate::whitelists_db::WHITELISTS;
 use anyhow::{anyhow, Context, Result};
 use dashmap::DashMap;
+use ipnet::IpNet;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::net::IpAddr;
 use tracing::{info, trace, warn};
-
-use crate::cloud_model::*; // Ensure this path is correct based on your project structure
-use crate::whitelists_db::WHITELISTS;
 
 // Constants
 const WHITELISTS_FILE_NAME: &str = "whitelists-db.json";
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct WhitelistEndpoint {
-    pub destination: Option<String>,
+    pub domain: Option<String>,
+    pub ip: Option<String>,
     pub port: Option<u16>,
-    pub as_number: Option<u32>,          // New field for ASN number
-    pub as_country: Option<String>,      // New field for ASN country
-    pub as_owner: Option<String>,        // New field for ASN owner
-    pub l7_process_name: Option<String>, // New field for L7 process name
+    pub as_number: Option<u32>,
+    pub as_country: Option<String>,
+    pub as_owner: Option<String>,
+    pub l7_process_name: Option<String>,
     pub description: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct WhitelistInfo {
     pub name: String,
-    #[serde(rename = "extends", deserialize_with = "deserialize_extends")]
+    #[serde(rename = "extends")]
     pub inherits: Option<Vec<String>>,
     pub endpoints: Vec<WhitelistEndpoint>,
 }
@@ -51,59 +53,6 @@ impl CloudSignature for Whitelists {
     fn set_signature(&mut self, signature: String) {
         self.signature = Some(signature);
     }
-}
-
-fn deserialize_extends<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    struct ExtendsVisitor;
-
-    impl<'de> serde::de::Visitor<'de> for ExtendsVisitor {
-        type Value = Option<Vec<String>>;
-
-        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-            formatter.write_str("a string, an array of strings, or null")
-        }
-
-        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
-        where
-            E: serde::de::Error,
-        {
-            if value.eq_ignore_ascii_case("none") {
-                Ok(None)
-            } else {
-                Ok(Some(vec![value.to_string()]))
-            }
-        }
-
-        fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
-        where
-            A: serde::de::SeqAccess<'de>,
-        {
-            let mut vec = Vec::new();
-            while let Some(value) = seq.next_element::<String>()? {
-                vec.push(value);
-            }
-            Ok(Some(vec))
-        }
-
-        fn visit_none<E>(self) -> Result<Self::Value, E>
-        where
-            E: serde::de::Error,
-        {
-            Ok(None)
-        }
-
-        fn visit_unit<E>(self) -> Result<Self::Value, E>
-        where
-            E: serde::de::Error,
-        {
-            Ok(None)
-        }
-    }
-
-    deserializer.deserialize_any(ExtendsVisitor)
 }
 
 impl Whitelists {
@@ -185,9 +134,10 @@ pub async fn is_valid_whitelist(whitelist_name: &str) -> bool {
         .contains_key(whitelist_name)
 }
 
-/// Checks if a given destination and port are in the specified whitelist.
-pub async fn is_destination_in_whitelist(
-    destination: Option<&str>, // Now optional
+/// Checks if a given session is in the specified whitelist.
+pub async fn is_session_in_whitelist(
+    session_domain: Option<&str>,
+    session_ip: Option<&str>,
     port: u16,
     whitelist_name: &str,
     as_number: Option<u32>,
@@ -196,8 +146,9 @@ pub async fn is_destination_in_whitelist(
     l7_process_name: Option<&str>,
 ) -> bool {
     trace!(
-        "Checking if {:?}:{} is in whitelist {} with ASN {:?}, Country {:?}, Owner {:?}, L7 Process {:?}",
-        destination,
+        "Checking if domain: {:?}, ip: {:?}, port: {} is in whitelist {} with ASN {:?}, Country {:?}, Owner {:?}, L7 Process {:?}",
+        session_domain,
+        session_ip,
         port,
         whitelist_name,
         as_number,
@@ -226,50 +177,110 @@ pub async fn is_destination_in_whitelist(
     };
 
     endpoints.iter().any(|endpoint| {
-        let dest_match = destination_matches(destination, &endpoint.destination);
-        let port_match = port_matches(port, endpoint.port);
-        let asn_match = as_number_matches(as_number, endpoint.as_number);
-        let country_match = as_country_matches(as_country, &endpoint.as_country);
-        let owner_match = as_owner_matches(as_owner, &endpoint.as_owner);
-        let l7_match = l7_process_name_matches(l7_process_name, &endpoint.l7_process_name);
-
-        if dest_match && port_match && asn_match && country_match && owner_match && l7_match {
-            trace!("Matched whitelist endpoint: {:?}", endpoint);
-            true
-        } else {
-            trace!(
-                "Did not match whitelist endpoint: {:?}, Reasons: dest_match={}, port_match={}, asn_match={}, country_match={}, owner_match={}, l7_match={}",
-                endpoint,
-                dest_match,
-                port_match,
-                asn_match,
-                country_match,
-                owner_match,
-                l7_match
-            );
-            false
-        }
+        endpoint_matches(
+            session_domain,
+            session_ip,
+            port,
+            as_number,
+            as_country,
+            as_owner,
+            l7_process_name,
+            endpoint,
+        )
     })
 }
 
-/// Helper function to match destinations, supporting wildcards.
-fn destination_matches(
-    session_destination: Option<&str>,
-    endpoint_destination: &Option<String>,
+/// Helper function to match the session against a whitelist endpoint.
+fn endpoint_matches(
+    session_domain: Option<&str>,
+    session_ip: Option<&str>,
+    port: u16,
+    as_number: Option<u32>,
+    as_country: Option<&str>,
+    as_owner: Option<&str>,
+    l7_process_name: Option<&str>,
+    endpoint: &WhitelistEndpoint,
 ) -> bool {
-    match endpoint_destination {
-        Some(pattern) => match session_destination {
-            Some(dest) => {
+    let domain_match = domain_matches(session_domain, &endpoint.domain);
+    let ip_match = ip_matches(session_ip, &endpoint.ip);
+    let port_match = port_matches(port, endpoint.port);
+    let asn_match = as_number_matches(as_number, endpoint.as_number);
+    let country_match = as_country_matches(as_country, &endpoint.as_country);
+    let owner_match = as_owner_matches(as_owner, &endpoint.as_owner);
+    let l7_match = l7_process_name_matches(l7_process_name, &endpoint.l7_process_name);
+
+    if domain_match
+        && ip_match
+        && port_match
+        && asn_match
+        && country_match
+        && owner_match
+        && l7_match
+    {
+        trace!("Matched whitelist endpoint: {:?}", endpoint);
+        true
+    } else {
+        trace!(
+            "Did not match whitelist endpoint: {:?}, Reasons: domain_match={}, ip_match={}, port_match={}, asn_match={}, country_match={}, owner_match={}, l7_match={}",
+            endpoint,
+            domain_match,
+            ip_match,
+            port_match,
+            asn_match,
+            country_match,
+            owner_match,
+            l7_match
+        );
+        false
+    }
+}
+
+/// Helper function to match domain names with optional wildcards.
+fn domain_matches(session_domain: Option<&str>, endpoint_domain: &Option<String>) -> bool {
+    match endpoint_domain {
+        Some(pattern) => match session_domain {
+            Some(domain) => {
+                let domain = domain.to_lowercase();
                 if pattern.starts_with("*.") {
-                    let suffix = &pattern[2..];
-                    dest == suffix || dest.ends_with(&format!(".{}", suffix))
+                    let suffix = pattern[2..].to_lowercase();
+                    domain.ends_with(&format!(".{}", suffix))
                 } else {
-                    dest.eq_ignore_ascii_case(pattern)
+                    domain.eq_ignore_ascii_case(&pattern.to_lowercase())
                 }
             }
-            None => false, // Session requires a destination but it's not provided
+            None => false,
         },
-        None => true, // Whitelist endpoint applies to any destination
+        None => true, // No domain specified in the endpoint, so it's a match
+    }
+}
+
+/// Helper function to match IP addresses and prefixes.
+fn ip_matches(session_ip: Option<&str>, endpoint_ip: &Option<String>) -> bool {
+    match endpoint_ip {
+        Some(pattern) => match session_ip {
+            Some(ip_str) => {
+                let ip_addr = match ip_str.parse::<IpAddr>() {
+                    Ok(ip) => ip,
+                    Err(_) => return false,
+                };
+
+                if pattern.contains('/') {
+                    // Pattern is an IP network (e.g., "192.168.1.0/24")
+                    match pattern.parse::<IpNet>() {
+                        Ok(ip_network) => ip_network.contains(&ip_addr),
+                        Err(_) => false,
+                    }
+                } else {
+                    // Pattern is a single IP address
+                    match pattern.parse::<IpAddr>() {
+                        Ok(pattern_ip) => pattern_ip == ip_addr,
+                        Err(_) => false,
+                    }
+                }
+            }
+            None => false,
+        },
+        None => true, // No IP specified in the endpoint, so it's a match
     }
 }
 
@@ -345,112 +356,63 @@ pub async fn update_whitelists(branch: &str) -> Result<UpdateStatus> {
     Ok(status)
 }
 
-// Tests
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
-    /// Helper function to initialize `LISTS` with controlled test data.
+    /// Helper function to initialize LISTS with controlled test data
     async fn initialize_test_whitelists() {
-        // Define test whitelists JSON
         let test_whitelist_json = WhitelistsJSON {
             date: "2024-10-19".to_string(),
             signature: Some("test_signature".to_string()),
             whitelists: vec![
-                // Base Whitelist
                 WhitelistInfo {
                     name: "base_whitelist".to_string(),
                     inherits: None,
                     endpoints: vec![WhitelistEndpoint {
-                        destination: Some("api.edamame.tech".to_string()),
+                        domain: Some("example.com".to_string()),
+                        ip: None,
                         port: Some(443),
                         as_number: None,
                         as_country: None,
                         as_owner: None,
                         l7_process_name: None,
-                        description: Some("Edamame API endpoint".to_string()),
+                        description: Some("HTTPS endpoint".to_string()),
                     }],
                 },
-                // CICD Dependencies Whitelist
-                WhitelistInfo {
-                    name: "cicd_dependencies".to_string(),
-                    inherits: Some(vec!["base_whitelist".to_string()]),
-                    endpoints: vec![
-                        WhitelistEndpoint {
-                            destination: Some("github.com".to_string()),
-                            port: Some(443),
-                            as_number: None,
-                            as_country: None,
-                            as_owner: None,
-                            l7_process_name: None,
-                            description: Some("GitHub main website".to_string()),
-                        },
-                        WhitelistEndpoint {
-                            destination: Some("api.github.com".to_string()),
-                            port: Some(443),
-                            as_number: None,
-                            as_country: None,
-                            as_owner: None,
-                            l7_process_name: None,
-                            description: Some("GitHub API endpoint".to_string()),
-                        },
-                    ],
-                },
-                // CICD Tools Whitelist
-                WhitelistInfo {
-                    name: "cicd_tools".to_string(),
-                    inherits: None,
-                    endpoints: vec![
-                        WhitelistEndpoint {
-                            destination: Some("jenkins.io".to_string()),
-                            port: Some(443),
-                            as_number: None,
-                            as_country: None,
-                            as_owner: None,
-                            l7_process_name: None,
-                            description: Some("Jenkins CI/CD".to_string()),
-                        },
-                        WhitelistEndpoint {
-                            destination: Some("circleci.com".to_string()),
-                            port: Some(443),
-                            as_number: None,
-                            as_country: None,
-                            as_owner: None,
-                            l7_process_name: None,
-                            description: Some("CircleCI".to_string()),
-                        },
-                    ],
-                },
-                // CICD Whitelist inheriting from dependencies and tools
-                WhitelistInfo {
-                    name: "cicd".to_string(),
-                    inherits: Some(vec![
-                        "cicd_dependencies".to_string(),
-                        "cicd_tools".to_string(),
-                    ]),
-                    endpoints: vec![], // No direct endpoints
-                },
-                // Extended Whitelist for ASN and L7 Testing
                 WhitelistInfo {
                     name: "extended_whitelist".to_string(),
                     inherits: Some(vec!["base_whitelist".to_string()]),
                     endpoints: vec![WhitelistEndpoint {
-                        destination: Some("api.example.com".to_string()),
-                        port: Some(443),
+                        domain: None,
+                        ip: Some("192.168.1.0/24".to_string()),
+                        port: Some(80),
                         as_number: Some(12345),
                         as_country: Some("US".to_string()),
-                        as_owner: Some("Example Corp".to_string()),
+                        as_owner: Some("Test ISP".to_string()),
                         l7_process_name: Some("nginx".to_string()),
-                        description: Some("Trusted API".to_string()),
+                        description: Some("Internal web server".to_string()),
+                    }],
+                },
+                WhitelistInfo {
+                    name: "wildcard_whitelist".to_string(),
+                    inherits: None,
+                    endpoints: vec![WhitelistEndpoint {
+                        domain: Some("*.example.com".to_string()),
+                        ip: None,
+                        port: None,
+                        as_number: None,
+                        as_country: None,
+                        as_owner: None,
+                        l7_process_name: None,
+                        description: Some("Wildcard domain".to_string()),
                     }],
                 },
             ],
         };
 
-        // Initialize `Whitelists` from the test JSON
         let whitelists = Whitelists::new_from_json(test_whitelist_json);
-
-        // Overwrite `LISTS` with the test data
         LISTS
             .write()
             .await
@@ -458,353 +420,562 @@ mod tests {
             .await;
     }
 
-    /// Ensures that `initialize_test_whitelists` is called before each test.
-    struct TestSetup;
-
-    #[async_trait::async_trait]
-    impl Drop for TestSetup {
-        fn drop(&mut self) {
-            // Note: Drop cannot be async. Ensure reset is called manually if needed.
-        }
-    }
-
     #[tokio::test]
-    async fn test_is_destination_in_whitelist() {
-        // Initialize test data
-        initialize_test_whitelists().await;
-
-        // Ensure cleanup after test
-        let _setup = TestSetup;
-
-        // Test that destinations are correctly identified in the whitelist
-        assert!(
-            is_destination_in_whitelist(
-                Some("api.edamame.tech"),
-                443,
-                "base_whitelist",
-                None,
-                None,
-                None,
-                None
-            )
-            .await,
-            "api.edamame.tech should be in base_whitelist"
-        );
-
-        assert!(
-            is_destination_in_whitelist(
-                Some("github.com"),
-                443,
-                "cicd_dependencies",
-                None,
-                None,
-                None,
-                None
-            )
-            .await,
-            "github.com should be in cicd_dependencies"
-        );
-
-        assert!(
-            is_destination_in_whitelist(
-                Some("api.edamame.tech"),
-                443,
-                "cicd_dependencies",
-                None,
-                None,
-                None,
-                None
-            )
-            .await,
-            "api.edamame.tech should be inherited in cicd_dependencies"
-        ); // inherited from base_whitelist
-
-        assert!(
-            is_destination_in_whitelist(Some("github.com"), 443, "cicd", None, None, None, None)
-                .await,
-            "github.com should be in cicd via inheritance"
-        );
-
-        assert!(
-            is_destination_in_whitelist(Some("jenkins.io"), 443, "cicd", None, None, None, None)
-                .await,
-            "jenkins.io should be in cicd via cicd_tools inheritance"
-        ); // from cicd_tools
-
-        assert!(
-            !is_destination_in_whitelist(
-                Some("malicious.com"),
-                80,
-                "cicd_dependencies",
-                None,
-                None,
-                None,
-                None
-            )
-            .await,
-            "malicious.com should not be in cicd_dependencies"
-        );
-
-        assert!(
-            !is_destination_in_whitelist(
-                Some("github.com"),
-                80,
-                "cicd_dependencies",
-                None,
-                None,
-                None,
-                None
-            )
-            .await,
-            "github.com on port 80 should not be in cicd_dependencies"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_destination_matches() {
-        // Initialize test data if necessary
-        initialize_test_whitelists().await;
-
-        // Test the destination matching function
-        assert!(
-            destination_matches(Some("example.com"), &Some("example.com".to_string())),
-            "Exact match should return true"
-        );
-
-        assert!(
-            destination_matches(
-                Some("subdestination.example.com"),
-                &Some("*.example.com".to_string())
-            ),
-            "Wildcard match should return true"
-        );
-
-        assert!(
-            destination_matches(Some("example.com"), &Some("*.example.com".to_string())),
-            "Exact match against wildcard should return true"
-        );
-
-        assert!(
-            !destination_matches(Some("notexample.com"), &Some("*.example.com".to_string())),
-            "Non-matching domain should return false"
-        );
-
-        assert!(
-            !destination_matches(
-                Some("anotherexample.com"),
-                &Some("*.example.com".to_string())
-            ),
-            "Another non-matching domain should return false"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_port_matches() {
-        // Initialize test data if necessary
-        initialize_test_whitelists().await;
-
-        // Test the port matching function
-        assert!(
-            port_matches(80, Some(80)),
-            "Port 80 should match whitelist port 80"
-        );
-
-        assert!(
-            port_matches(80, None),
-            "Port 80 should match when whitelist port is None (any port)"
-        );
-
-        assert!(
-            !port_matches(8080, Some(80)),
-            "Port 8080 should not match whitelist port 80"
-        );
-    }
-
-    #[tokio::test]
+    #[serial]
     async fn test_whitelist_inheritance() {
-        // Initialize test data
         initialize_test_whitelists().await;
 
-        // Ensure cleanup after test
-        let _setup = TestSetup;
-
-        // Test that inheritance works correctly
-        // "cicd_dependencies" inherits from "base_whitelist"
+        // Test inherited endpoint from base_whitelist
         assert!(
-            is_destination_in_whitelist(
-                Some("api.edamame.tech"),
-                443,
-                "cicd_dependencies",
-                None,
-                None,
-                None,
-                None
-            )
-            .await,
-            "api.edamame.tech should be inherited in cicd_dependencies"
-        );
-
-        // "cicd" inherits from "cicd_dependencies" and "cicd_tools"
-        assert!(
-            is_destination_in_whitelist(
-                Some("api.edamame.tech"),
-                443,
-                "cicd",
-                None,
-                None,
-                None,
-                None
-            )
-            .await,
-            "api.edamame.tech should be inherited in cicd via cicd_dependencies"
-        );
-
-        assert!(
-            is_destination_in_whitelist(Some("github.com"), 443, "cicd", None, None, None, None)
-                .await,
-            "github.com should be inherited in cicd via cicd_dependencies"
-        );
-
-        assert!(
-            is_destination_in_whitelist(Some("jenkins.io"), 443, "cicd", None, None, None, None)
-                .await,
-            "jenkins.io should be inherited in cicd via cicd_tools"
-        );
-
-        assert!(
-            !is_destination_in_whitelist(Some("unknown.com"), 80, "cicd", None, None, None, None)
-                .await,
-            "unknown.com should not be in cicd"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_whitelist_not_found() {
-        // Initialize test data
-        initialize_test_whitelists().await;
-
-        // Ensure cleanup after test
-        let _setup = TestSetup;
-
-        // Test that querying a non-existent whitelist returns false
-        assert!(
-            !is_destination_in_whitelist(
+            is_session_in_whitelist(
                 Some("example.com"),
-                80,
-                "non_existent_whitelist",
+                None,
+                443,
+                "extended_whitelist",
                 None,
                 None,
                 None,
                 None
             )
             .await,
-            "Non-existent whitelist should return false"
+            "Should match inherited endpoint"
+        );
+
+        // Test endpoint from extended_whitelist
+        assert!(
+            is_session_in_whitelist(
+                None,
+                Some("192.168.1.100"),
+                80,
+                "extended_whitelist",
+                Some(12345),
+                Some("US"),
+                Some("Test ISP"),
+                Some("nginx")
+            )
+            .await,
+            "Should match extended whitelist endpoint"
         );
     }
 
     #[tokio::test]
-    async fn test_wildcard_destination() {
-        // Initialize test data
+    #[serial]
+    async fn test_wildcard_domain_matching() {
         initialize_test_whitelists().await;
 
-        // Test destination matching with wildcard endpoints
+        // Test exact subdomain match
         assert!(
-            destination_matches(Some("sub.example.com"), &Some("*.example.com".to_string())),
-            "Wildcard subdomain should match"
+            is_session_in_whitelist(
+                Some("sub.example.com"),
+                None,
+                80,
+                "wildcard_whitelist",
+                None,
+                None,
+                None,
+                None
+            )
+            .await,
+            "Should match wildcard subdomain"
         );
 
+        // Test multiple level subdomain match
         assert!(
-            destination_matches(Some("example.com"), &Some("*.example.com".to_string())),
-            "Exact match against wildcard should return true"
+            is_session_in_whitelist(
+                Some("sub.sub2.example.com"),
+                None,
+                80,
+                "wildcard_whitelist",
+                None,
+                None,
+                None,
+                None
+            )
+            .await,
+            "Should match multiple level subdomain"
         );
 
+        // Test non-matching domain
         assert!(
-            !destination_matches(Some("other.com"), &Some("*.example.com".to_string())),
-            "Non-matching domain should return false"
+            !is_session_in_whitelist(
+                Some("example.org"),
+                None,
+                80,
+                "wildcard_whitelist",
+                None,
+                None,
+                None,
+                None
+            )
+            .await,
+            "Should not match different domain"
         );
     }
 
     #[tokio::test]
-    async fn test_is_destination_in_whitelist_with_asn_and_l7() {
-        // Initialize test data
+    #[serial]
+    async fn test_asn_matching() {
         initialize_test_whitelists().await;
 
-        // Ensure cleanup after test
-        let _setup = TestSetup;
-
-        // Test matching criteria with correct ASN and L7
+        // Test complete ASN match
         assert!(
-            is_destination_in_whitelist(
-                Some("api.example.com"),
-                443,
+            is_session_in_whitelist(
+                None,
+                Some("192.168.1.100"),
+                80,
                 "extended_whitelist",
                 Some(12345),
                 Some("US"),
-                Some("Example Corp"),
-                Some("nginx"),
+                Some("Test ISP"),
+                Some("nginx")
             )
             .await,
-            "api.example.com with correct ASN and L7 should be in extended_whitelist"
+            "Should match with complete ASN info"
         );
 
-        // Test mismatching ASN number
+        // Test partial ASN match (missing some fields)
         assert!(
-            !is_destination_in_whitelist(
-                Some("api.example.com"),
-                443,
-                "extended_whitelist",
-                Some(54321), // Different ASN
-                Some("US"),
-                Some("Example Corp"),
-                Some("nginx"),
-            )
-            .await,
-            "api.example.com with incorrect ASN should not be in extended_whitelist"
-        );
-
-        // Test mismatching country
-        assert!(
-            !is_destination_in_whitelist(
-                Some("api.example.com"),
-                443,
+            !is_session_in_whitelist(
+                None,
+                Some("192.168.1.100"),
+                80,
                 "extended_whitelist",
                 Some(12345),
-                Some("CA"), // Different country
-                Some("Example Corp"),
-                Some("nginx"),
+                Some("UK"), // Different country
+                Some("Test ISP"),
+                Some("nginx")
             )
             .await,
-            "api.example.com with incorrect country should not be in extended_whitelist"
+            "Should not match with different country"
         );
+    }
 
-        // Test mismatching owner
+    #[tokio::test]
+    #[serial]
+    async fn test_invalid_whitelist() {
+        initialize_test_whitelists().await;
+
+        // Test non-existent whitelist
         assert!(
-            !is_destination_in_whitelist(
-                Some("api.example.com"),
+            !is_session_in_whitelist(
+                Some("example.com"),
+                None,
                 443,
+                "nonexistent_whitelist",
+                None,
+                None,
+                None,
+                None
+            )
+            .await,
+            "Should return false for non-existent whitelist"
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_l7_process_matching() {
+        initialize_test_whitelists().await;
+
+        // Test matching l7 process
+        assert!(
+            is_session_in_whitelist(
+                None,
+                Some("192.168.1.100"),
+                80,
                 "extended_whitelist",
                 Some(12345),
                 Some("US"),
-                Some("Other Corp"), // Different owner
-                Some("nginx"),
+                Some("Test ISP"),
+                Some("nginx")
             )
             .await,
-            "api.example.com with incorrect owner should not be in extended_whitelist"
+            "Should match with correct l7 process"
         );
 
-        // Test mismatching L7 process name
+        // Test non-matching l7 process
         assert!(
-            !is_destination_in_whitelist(
-                Some("api.example.com"),
-                443,
+            !is_session_in_whitelist(
+                None,
+                Some("192.168.1.100"),
+                80,
                 "extended_whitelist",
                 Some(12345),
                 Some("US"),
-                Some("Example Corp"),
-                Some("apache"), // Different L7 process
+                Some("Test ISP"),
+                Some("apache")
             )
             .await,
-            "api.example.com with incorrect L7 should not be in extended_whitelist"
+            "Should not match with different l7 process"
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_is_valid_whitelist() {
+        initialize_test_whitelists().await;
+
+        assert!(
+            is_valid_whitelist("base_whitelist").await,
+            "Should return true for existing whitelist"
+        );
+        assert!(
+            !is_valid_whitelist("nonexistent_whitelist").await,
+            "Should return false for non-existent whitelist"
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_recursive_inheritance() {
+        // Initialize whitelists with recursive inheritance
+        let test_whitelist_json = WhitelistsJSON {
+            date: "2024-10-19".to_string(),
+            signature: Some("test_signature".to_string()),
+            whitelists: vec![
+                WhitelistInfo {
+                    name: "whitelist_a".to_string(),
+                    inherits: Some(vec!["whitelist_b".to_string()]),
+                    endpoints: vec![WhitelistEndpoint {
+                        domain: Some("a.com".to_string()),
+                        ip: None,
+                        port: Some(80),
+                        as_number: None,
+                        as_country: None,
+                        as_owner: None,
+                        l7_process_name: None,
+                        description: Some("Whitelist A".to_string()),
+                    }],
+                },
+                WhitelistInfo {
+                    name: "whitelist_b".to_string(),
+                    inherits: Some(vec!["whitelist_c".to_string()]),
+                    endpoints: vec![WhitelistEndpoint {
+                        domain: Some("b.com".to_string()),
+                        ip: None,
+                        port: Some(80),
+                        as_number: None,
+                        as_country: None,
+                        as_owner: None,
+                        l7_process_name: None,
+                        description: Some("Whitelist B".to_string()),
+                    }],
+                },
+                WhitelistInfo {
+                    name: "whitelist_c".to_string(),
+                    inherits: Some(vec!["whitelist_a".to_string()]), // Creates a cycle
+                    endpoints: vec![WhitelistEndpoint {
+                        domain: Some("c.com".to_string()),
+                        ip: None,
+                        port: Some(80),
+                        as_number: None,
+                        as_country: None,
+                        as_owner: None,
+                        l7_process_name: None,
+                        description: Some("Whitelist C".to_string()),
+                    }],
+                },
+            ],
+        };
+
+        let whitelists = Whitelists::new_from_json(test_whitelist_json);
+        LISTS
+            .write()
+            .await
+            .overwrite_with_test_data(whitelists)
+            .await;
+
+        // Test that endpoints are correctly aggregated without infinite recursion
+        assert!(
+            is_session_in_whitelist(
+                Some("a.com"),
+                None,
+                80,
+                "whitelist_c",
+                None,
+                None,
+                None,
+                None
+            )
+            .await,
+            "Should match 'a.com' in 'whitelist_c' due to recursive inheritance"
+        );
+
+        assert!(
+            is_session_in_whitelist(
+                Some("b.com"),
+                None,
+                80,
+                "whitelist_a",
+                None,
+                None,
+                None,
+                None
+            )
+            .await,
+            "Should match 'b.com' in 'whitelist_a' due to recursive inheritance"
+        );
+
+        assert!(
+            is_session_in_whitelist(
+                Some("c.com"),
+                None,
+                80,
+                "whitelist_b",
+                None,
+                None,
+                None,
+                None
+            )
+            .await,
+            "Should match 'c.com' in 'whitelist_b' due to recursive inheritance"
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_extended_wildcard_domain_matching() {
+        // Initialize test data with wildcard domains
+        let test_whitelist_json = WhitelistsJSON {
+            date: "2024-10-20".to_string(),
+            signature: Some("test_signature".to_string()),
+            whitelists: vec![WhitelistInfo {
+                name: "wildcard_domain_whitelist".to_string(),
+                inherits: None,
+                endpoints: vec![
+                    WhitelistEndpoint {
+                        domain: Some("*.example.com".to_string()),
+                        ip: None,
+                        port: None,
+                        as_number: None,
+                        as_country: None,
+                        as_owner: None,
+                        l7_process_name: None,
+                        description: Some("Wildcard domain".to_string()),
+                    },
+                    WhitelistEndpoint {
+                        domain: Some("specific.domain.com".to_string()),
+                        ip: None,
+                        port: None,
+                        as_number: None,
+                        as_country: None,
+                        as_owner: None,
+                        l7_process_name: None,
+                        description: Some("Specific domain".to_string()),
+                    },
+                ],
+            }],
+        };
+
+        let whitelists = Whitelists::new_from_json(test_whitelist_json);
+        LISTS
+            .write()
+            .await
+            .overwrite_with_test_data(whitelists)
+            .await;
+
+        // Should match subdomains of example.com
+        assert!(
+            is_session_in_whitelist(
+                Some("sub.example.com"),
+                None,
+                80,
+                "wildcard_domain_whitelist",
+                None,
+                None,
+                None,
+                None
+            )
+            .await,
+            "Should match sub.example.com"
+        );
+
+        // Should match multiple levels of subdomains
+        assert!(
+            is_session_in_whitelist(
+                Some("deep.sub.example.com"),
+                None,
+                80,
+                "wildcard_domain_whitelist",
+                None,
+                None,
+                None,
+                None
+            )
+            .await,
+            "Should match deep.sub.example.com"
+        );
+
+        // Should not match the base domain without subdomain
+        assert!(
+            !is_session_in_whitelist(
+                Some("example.com"),
+                None,
+                80,
+                "wildcard_domain_whitelist",
+                None,
+                None,
+                None,
+                None
+            )
+            .await,
+            "Should not match example.com without subdomain"
+        );
+
+        // Should match the specific domain
+        assert!(
+            is_session_in_whitelist(
+                Some("specific.domain.com"),
+                None,
+                80,
+                "wildcard_domain_whitelist",
+                None,
+                None,
+                None,
+                None
+            )
+            .await,
+            "Should match specific.domain.com"
+        );
+
+        // Should not match unrelated domains
+        assert!(
+            !is_session_in_whitelist(
+                Some("otherdomain.com"),
+                None,
+                80,
+                "wildcard_domain_whitelist",
+                None,
+                None,
+                None,
+                None
+            )
+            .await,
+            "Should not match otherdomain.com"
+        );
+    }
+    #[tokio::test]
+    #[serial]
+    async fn test_ipv4_network_matching() {
+        // Initialize test data with IPv4 network
+        let test_whitelist_json = WhitelistsJSON {
+            date: "2024-10-20".to_string(),
+            signature: Some("test_signature".to_string()),
+            whitelists: vec![WhitelistInfo {
+                name: "ipv4_network_whitelist".to_string(),
+                inherits: None,
+                endpoints: vec![WhitelistEndpoint {
+                    domain: None,
+                    ip: Some("192.168.1.0/24".to_string()),
+                    port: None,
+                    as_number: None,
+                    as_country: None,
+                    as_owner: None,
+                    l7_process_name: None,
+                    description: Some("IPv4 network".to_string()),
+                }],
+            }],
+        };
+
+        let whitelists = Whitelists::new_from_json(test_whitelist_json);
+        LISTS
+            .write()
+            .await
+            .overwrite_with_test_data(whitelists)
+            .await;
+
+        // Should match IP within the network
+        assert!(
+            is_session_in_whitelist(
+                None,
+                Some("192.168.1.50"),
+                80,
+                "ipv4_network_whitelist",
+                None,
+                None,
+                None,
+                None
+            )
+            .await,
+            "Should match IP within IPv4 network"
+        );
+
+        // Should not match IP outside the network
+        assert!(
+            !is_session_in_whitelist(
+                None,
+                Some("192.168.2.50"),
+                80,
+                "ipv4_network_whitelist",
+                None,
+                None,
+                None,
+                None
+            )
+            .await,
+            "Should not match IP outside IPv4 network"
+        );
+    }
+    #[tokio::test]
+    #[serial]
+    async fn test_ipv6_network_matching() {
+        // Initialize test data with IPv6 network
+        let test_whitelist_json = WhitelistsJSON {
+            date: "2024-10-20".to_string(),
+            signature: Some("test_signature".to_string()),
+            whitelists: vec![WhitelistInfo {
+                name: "ipv6_network_whitelist".to_string(),
+                inherits: None,
+                endpoints: vec![WhitelistEndpoint {
+                    domain: None,
+                    ip: Some("2001:db8::/32".to_string()),
+                    port: None,
+                    as_number: None,
+                    as_country: None,
+                    as_owner: None,
+                    l7_process_name: None,
+                    description: Some("IPv6 network".to_string()),
+                }],
+            }],
+        };
+
+        let whitelists = Whitelists::new_from_json(test_whitelist_json);
+        LISTS
+            .write()
+            .await
+            .overwrite_with_test_data(whitelists)
+            .await;
+
+        // Should match IP within the network
+        assert!(
+            is_session_in_whitelist(
+                None,
+                Some("2001:db8::1"),
+                80,
+                "ipv6_network_whitelist",
+                None,
+                None,
+                None,
+                None
+            )
+            .await,
+            "Should match IP within IPv6 network"
+        );
+
+        // Should not match IP outside the network
+        assert!(
+            !is_session_in_whitelist(
+                None,
+                Some("2001:db9::1"),
+                80,
+                "ipv6_network_whitelist",
+                None,
+                None,
+                None,
+                None
+            )
+            .await,
+            "Should not match IP outside IPv6 network"
         );
     }
 }
