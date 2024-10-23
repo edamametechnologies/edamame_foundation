@@ -613,6 +613,7 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_is_valid_whitelist() {
+        // Then test the test whitelists
         initialize_test_whitelists().await;
 
         assert!(

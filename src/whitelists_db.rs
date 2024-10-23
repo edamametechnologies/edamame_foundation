@@ -63,14 +63,24 @@ pub static WHITELISTS: &str = r#"{
           "description": "Connection to Apple services"
         },
         {
-          "domain": "20.7.220.66",
+          "ip": "20.7.220.66",
           "port": 443,
           "description": "Connection to Microsoft ASN (ASN: 8075, Country: US, Owner: MICROSOFT-CORP-MSN-AS-BLOCK)"
         },
         {
-          "domain": "104.26.13.205",
+          "ip": "104.26.13.205",
           "port": 80,
           "description": "Connection to Cloudflare (ASN: 13335, Country: US, Owner: CLOUDFLARENET)"
+        },
+        {
+          "asn": "714",
+          "port": 443,
+          "description": "Connection to Apple Servers (ASN: 714, Country: US, Owner: APPLE-ENGINEERING)"
+        },
+        {
+          "asn": "714",
+          "port": 5223,
+          "description": "Connection to Apple Servers (ASN: 714, Country: US, Owner: APPLE-ENGINEERING)"
         }
       ]
     },
@@ -79,32 +89,32 @@ pub static WHITELISTS: &str = r#"{
       "extends": ["github"],
       "endpoints": [
         {
-          "domain": "168.63.129.16",
+          "ip": "168.63.129.16",
           "port": 32526,
           "description": "Connection to Microsoft ASN (ASN: 8075, Country: US, Owner: MICROSOFT-CORP-MSN-AS-BLOCK)"
         },
         {
-          "domain": "168.63.129.16",
+          "ip": "168.63.129.16",
           "port": 80,
           "description": "Connection to Microsoft ASN (ASN: 8075, Country: US, Owner: MICROSOFT-CORP-MSN-AS-BLOCK)"
         },
         {
-          "domain": "20.85.130.105",
+          "ip": "20.85.130.105",
           "port": 443,
           "description": "Connection to Microsoft service (ASN: 8075, Country: US, Owner: MICROSOFT-CORP-MSN-AS-BLOCK)"
         },
         {
-          "domain": "52.136.4.16",
+          "ip": "52.136.4.16",
           "port": 23456,
           "description": "Connection to Microsoft service (aequus) (ASN: 8075, Country: US, Owner: MICROSOFT-CORP-MSN-AS-BLOCK)"
         },
         {
-          "domain": "20.237.33.78",
+          "ip": "20.237.33.78",
           "port": 443,
           "description": "Connection to Microsoft service (ASN: 8075, Country: US, Owner: MICROSOFT-CORP-MSN-AS-BLOCK)"
         },
         {
-          "domain": "104.26.12.205",
+          "ip": "104.26.12.205",
           "port": 80,
           "description": "Connection to Cloudflare (ASN: 13335, Country: US, Owner: CLOUDFLARENET)"
         }
