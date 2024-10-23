@@ -1211,13 +1211,17 @@ impl LANScanCapture {
 
             // This is the first packet, we need to determine the direction of the session
             // Check if the source port is a known service port and the destination port is not a known service port
-            let key = if !get_name_from_port(parsed_packet.session.src_port)
-                .await
-                .is_empty()
-                && get_name_from_port(parsed_packet.session.dst_port)
-                    .await
-                    .is_empty()
-            {
+            let reverse_ports =
+                // Source port is a known service port
+                !get_name_from_port(parsed_packet.session.src_port).await.is_empty()
+                // Destination port is not a known service port
+                && get_name_from_port(parsed_packet.session.dst_port).await.is_empty();
+
+            // Check if the dst is local and the src is not
+            let reverse_ip = !is_local_ip(&parsed_packet.session.src_ip)
+                && is_local_ip(&parsed_packet.session.dst_ip);
+
+            let key = if reverse_ports || reverse_ip {
                 // The key is reverse_key
                 reverse_key
             } else {

@@ -11,6 +11,11 @@ pub static WHITELISTS: &str = r#"{
           "description": "IP-API"
         },
         {
+          "domain": "api.ipify.org",
+          "port": 443,
+          "description": "IPify"
+        },
+        {
           "domain": "d-22jhnwitx0.execute-api.eu-west-1.amazonaws.com",
           "port": 443,
           "description": "EDAMAME backend-assistance-prod"
@@ -45,6 +50,11 @@ pub static WHITELISTS: &str = r#"{
           "domain": "*.actions.githubusercontent.com",
           "port": 443,
           "description": "Connection to GitHub Actions"
+        },
+        {
+          "ip": "104.26.12.205",
+          "port": 80,
+          "description": "Connection to Cloudflare (ASN: 13335, Country: US, Owner: CLOUDFLARENET)"
         }
       ]
     },
@@ -73,6 +83,11 @@ pub static WHITELISTS: &str = r#"{
           "description": "Connection to Cloudflare (ASN: 13335, Country: US, Owner: CLOUDFLARENET)"
         },
         {
+          "ip": "104.26.13.205",
+          "port": 80,
+          "description": "Connection to Cloudflare (ASN: 13335, Country: US, Owner: CLOUDFLARENET)"
+        },
+        {
           "asn": "714",
           "port": 443,
           "description": "Connection to Apple Servers (ASN: 714, Country: US, Owner: APPLE-ENGINEERING)"
@@ -90,16 +105,21 @@ pub static WHITELISTS: &str = r#"{
       "endpoints": [
         {
           "ip": "168.63.129.16",
-          "port": 32526,
-          "description": "Connection to Microsoft ASN (ASN: 8075, Country: US, Owner: MICROSOFT-CORP-MSN-AS-BLOCK)"
-        },
-        {
-          "ip": "168.63.129.16",
           "port": 80,
           "description": "Connection to Microsoft ASN (ASN: 8075, Country: US, Owner: MICROSOFT-CORP-MSN-AS-BLOCK)"
         },
         {
+          "ip": "168.63.129.16",
+          "port": 32526,
+          "description": "Connection to Microsoft ASN (ASN: 8075, Country: US, Owner: MICROSOFT-CORP-MSN-AS-BLOCK)"
+        },
+        {
           "ip": "20.85.130.105",
+          "port": 443,
+          "description": "Connection to Microsoft service (ASN: 8075, Country: US, Owner: MICROSOFT-CORP-MSN-AS-BLOCK)"
+        },
+        {
+          "ip": "20.237.33.78",
           "port": 443,
           "description": "Connection to Microsoft service (ASN: 8075, Country: US, Owner: MICROSOFT-CORP-MSN-AS-BLOCK)"
         },
@@ -109,14 +129,9 @@ pub static WHITELISTS: &str = r#"{
           "description": "Connection to Microsoft service (aequus) (ASN: 8075, Country: US, Owner: MICROSOFT-CORP-MSN-AS-BLOCK)"
         },
         {
-          "ip": "20.237.33.78",
-          "port": 443,
-          "description": "Connection to Microsoft service (ASN: 8075, Country: US, Owner: MICROSOFT-CORP-MSN-AS-BLOCK)"
-        },
-        {
-          "ip": "104.26.12.205",
-          "port": 80,
-          "description": "Connection to Cloudflare (ASN: 13335, Country: US, Owner: CLOUDFLARENET)"
+          "ip": "40.87.160.0",
+          "port": 23456,
+          "description": "Connection to Microsoft service (aequus) (ASN: 8075, Country: US, Owner: MICROSOFT-CORP-MSN-AS-BLOCK)"
         }
       ]
     }
