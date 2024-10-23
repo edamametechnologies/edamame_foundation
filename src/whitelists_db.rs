@@ -12,7 +12,7 @@ pub static WHITELISTS: &str = r#"{
         },
         {
           "domain": "api.ipify.org",
-          "port": 443,
+          "port": 80,
           "description": "IPify"
         },
         {
@@ -65,37 +65,37 @@ pub static WHITELISTS: &str = r#"{
         {
           "domain": "homebrew.github.io",
           "port": 443,
-          "description": "Connection to Homebrew"
+          "description": "Connection to Homebrew (https)"
         },
         {
           "domain": "*.aaplimg.com",
           "port": 443,
-          "description": "Connection to Apple services"
+          "description": "Connection to Apple services (https)"
         },
         {
           "ip": "20.7.220.66",
           "port": 443,
-          "description": "Connection to Microsoft ASN (ASN: 8075, Country: US, Owner: MICROSOFT-CORP-MSN-AS-BLOCK)"
+          "description": "Connection to Microsoft ASN (https) (ASN: 8075, Country: US, Owner: MICROSOFT-CORP-MSN-AS-BLOCK)"
         },
         {
           "ip": "104.26.13.205",
           "port": 80,
-          "description": "Connection to Cloudflare (ASN: 13335, Country: US, Owner: CLOUDFLARENET)"
+          "description": "Connection to Cloudflare (http) (ASN: 13335, Country: US, Owner: CLOUDFLARENET)"
         },
         {
           "ip": "104.26.13.205",
           "port": 80,
-          "description": "Connection to Cloudflare (ASN: 13335, Country: US, Owner: CLOUDFLARENET)"
+          "description": "Connection to Cloudflare (http) (ASN: 13335, Country: US, Owner: CLOUDFLARENET)"
         },
         {
           "asn": "714",
           "port": 443,
-          "description": "Connection to Apple Servers (ASN: 714, Country: US, Owner: APPLE-ENGINEERING)"
+          "description": "Connection to Apple Servers (https)(ASN: 714, Country: US, Owner: APPLE-ENGINEERING)"
         },
         {
           "asn": "714",
           "port": 5223,
-          "description": "Connection to Apple Servers (ASN: 714, Country: US, Owner: APPLE-ENGINEERING)"
+          "description": "Connection to Apple Servers (apple push) (ASN: 714, Country: US, Owner: APPLE-ENGINEERING)"
         }
       ]
     },
@@ -106,30 +106,25 @@ pub static WHITELISTS: &str = r#"{
         {
           "ip": "168.63.129.16",
           "port": 80,
-          "description": "Connection to Microsoft ASN (ASN: 8075, Country: US, Owner: MICROSOFT-CORP-MSN-AS-BLOCK)"
+          "description": "https://learn.microsoft.com/en-us/azure/virtual-network/what-is-ip-address-168-63-129-16"
         },
         {
           "ip": "168.63.129.16",
           "port": 32526,
-          "description": "Connection to Microsoft ASN (ASN: 8075, Country: US, Owner: MICROSOFT-CORP-MSN-AS-BLOCK)"
+          "description": "https://learn.microsoft.com/en-us/azure/virtual-network/what-is-ip-address-168-63-129-16"
         },
         {
           "ip": "20.85.130.105",
           "port": 443,
-          "description": "Connection to Microsoft service (ASN: 8075, Country: US, Owner: MICROSOFT-CORP-MSN-AS-BLOCK)"
+          "description": "Connection to Microsoft service (https) (ASN: 8075, Country: US, Owner: MICROSOFT-CORP-MSN-AS-BLOCK)"
         },
         {
           "ip": "20.237.33.78",
           "port": 443,
-          "description": "Connection to Microsoft service (ASN: 8075, Country: US, Owner: MICROSOFT-CORP-MSN-AS-BLOCK)"
+          "description": "Connection to Microsoft service (https) (ASN: 8075, Country: US, Owner: MICROSOFT-CORP-MSN-AS-BLOCK)"
         },
         {
-          "ip": "52.136.4.16",
-          "port": 23456,
-          "description": "Connection to Microsoft service (aequus) (ASN: 8075, Country: US, Owner: MICROSOFT-CORP-MSN-AS-BLOCK)"
-        },
-        {
-          "ip": "40.87.160.0",
+          "asn": "8075",
           "port": 23456,
           "description": "Connection to Microsoft service (aequus) (ASN: 8075, Country: US, Owner: MICROSOFT-CORP-MSN-AS-BLOCK)"
         }
