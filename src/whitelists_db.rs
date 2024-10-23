@@ -1,6 +1,6 @@
 // Built in default whitelists db
 pub static WHITELISTS: &str = r#"{
-  "date": "October 23rd 2024",
+  "date": "October 23th 2024",
   "whitelists": [
     {
       "name": "edamame",
@@ -40,7 +40,9 @@ pub static WHITELISTS: &str = r#"{
     },
     {
       "name": "github",
-      "extends": ["edamame"],
+      "extends": [
+        "edamame"
+      ],
       "endpoints": [
         {
           "domain": "*.github.com",
@@ -53,9 +55,9 @@ pub static WHITELISTS: &str = r#"{
           "description": "Connection to GitHub Actions"
         },
         {
-          "ip": "104.26.12.205",
+          "asn": "13335",
           "port": 80,
-          "description": "Connection to Cloudflare (ASN: 13335, Country: US, Owner: CLOUDFLARENET)"
+          "description": "Connection to Cloudflare (http) (ASN: 13335, Country: US, Owner: CLOUDFLARENET)"
         },
         {
           "domain": "*.pool.ntp.org",
@@ -66,7 +68,9 @@ pub static WHITELISTS: &str = r#"{
     },
     {
       "name": "github_macos",
-      "extends": ["github"],
+      "extends": [
+        "github"
+      ],
       "endpoints": [
         {
           "domain": "homebrew.github.io",
@@ -84,16 +88,6 @@ pub static WHITELISTS: &str = r#"{
           "description": "Connection to Microsoft ASN (https) (ASN: 8075, Country: US, Owner: MICROSOFT-CORP-MSN-AS-BLOCK)"
         },
         {
-          "ip": "104.26.13.205",
-          "port": 80,
-          "description": "Connection to Cloudflare (http) (ASN: 13335, Country: US, Owner: CLOUDFLARENET)"
-        },
-        {
-          "ip": "104.26.13.205",
-          "port": 80,
-          "description": "Connection to Cloudflare (http) (ASN: 13335, Country: US, Owner: CLOUDFLARENET)"
-        },
-        {
           "asn": "714",
           "port": 443,
           "description": "Connection to Apple Servers (https)(ASN: 714, Country: US, Owner: APPLE-ENGINEERING)"
@@ -107,7 +101,9 @@ pub static WHITELISTS: &str = r#"{
     },
     {
       "name": "github_ubuntu",
-      "extends": ["github"],
+      "extends": [
+        "github"
+      ],
       "endpoints": [
         {
           "ip": "168.63.129.16",
@@ -132,5 +128,5 @@ pub static WHITELISTS: &str = r#"{
       ]
     }
   ],
-  "signature": "99ada0f91fb2df3694cb8feba3cbe31ccafa76ce2dba78b00f01986bda02cf14"
+  "signature": "ff2f16c40fb277719760b6db19904ccc79055163522f59c675f7ed92cbd5195c"
 }"#;
