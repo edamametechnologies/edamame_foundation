@@ -723,6 +723,7 @@ impl LANScanCapture {
         last_whitelist_exception_time: &Arc<CustomRwLock<DateTime<Utc>>>,
     ) {
         let mut updated_exceptions = Vec::new();
+        let mut whitelisted_sessions = Vec::new();
         // Clone the current_sessions to avoid holding the lock for too long
         let current_sessions_clone = current_sessions.read().await.clone();
 
@@ -738,7 +739,7 @@ impl LANScanCapture {
 
                 if let Some(dst_domain) = session_info.dst_domain {
                     if dst_domain == "Unknown".to_string() {
-                        // The domain has not been resolved, use the IP address instead
+                        // The domain has not been resolved successfully, use the IP address instead
                         if !is_session_in_whitelist(
                             None,
                             Some(&session_info.session.dst_ip.to_string()),
@@ -757,27 +758,36 @@ impl LANScanCapture {
                             trace!("Session {:?} failed whitelist check", key);
                             updated_exceptions.push(session_info.session.clone());
                             *last_whitelist_exception_time.write().await = Utc::now();
+                        } else {
+                            whitelisted_sessions.push(session_info.session.clone());
                         }
                     } else {
-                        // The domain has been resolved
-                        if !is_session_in_whitelist(
-                            Some(&dst_domain),
-                            None,
-                            session_info.session.dst_port,
-                            whitelist_name,
-                            session_info.dst_asn.as_ref().map(|asn| asn.as_number),
-                            session_info
-                                .dst_asn
-                                .as_ref()
-                                .map(|asn| asn.country.as_str()),
-                            session_info.dst_asn.as_ref().map(|asn| asn.owner.as_str()),
-                            session_info.l7.as_ref().map(|l7| l7.process_name.as_str()),
-                        )
-                        .await
-                        {
-                            trace!("Session {:?} failed whitelist check", key);
-                            updated_exceptions.push(session_info.session.clone());
-                            *last_whitelist_exception_time.write().await = Utc::now();
+                        if dst_domain == "Resolving".to_string() {
+                            // The domain is still being resolved, ignore it
+                            continue;
+                        } else {
+                            // The domain has been resolved
+                            if !is_session_in_whitelist(
+                                Some(&dst_domain),
+                                None,
+                                session_info.session.dst_port,
+                                whitelist_name,
+                                session_info.dst_asn.as_ref().map(|asn| asn.as_number),
+                                session_info
+                                    .dst_asn
+                                    .as_ref()
+                                    .map(|asn| asn.country.as_str()),
+                                session_info.dst_asn.as_ref().map(|asn| asn.owner.as_str()),
+                                session_info.l7.as_ref().map(|l7| l7.process_name.as_str()),
+                            )
+                            .await
+                            {
+                                trace!("Session {:?} failed whitelist check", key);
+                                updated_exceptions.push(session_info.session.clone());
+                                *last_whitelist_exception_time.write().await = Utc::now();
+                            } else {
+                                whitelisted_sessions.push(session_info.session.clone());
+                            }
                         }
                     }
                 } else {
@@ -811,6 +821,13 @@ impl LANScanCapture {
             for exception in updated_exceptions.iter() {
                 if let Some(mut session) = sessions.get_mut(exception) {
                     session.value_mut().is_whitelisted = WhitelistState::NonConforming;
+                } else {
+                    error!("Session not found in sessions map");
+                }
+            }
+            for session in whitelisted_sessions.iter() {
+                if let Some(mut session_info) = sessions.get_mut(session) {
+                    session_info.value_mut().is_whitelisted = WhitelistState::Conforming;
                 } else {
                     error!("Session not found in sessions map");
                 }
@@ -1038,7 +1055,7 @@ impl LANScanCapture {
         let filter = self.filter.read().await;
         for entry in self.sessions.iter() {
             let mut session_info = entry.clone();
-            // Remove the "Unkown" flag from the domain
+            // Remove the "Unknown" flag from the domain
             if session_info.dst_domain == Some("Unknown".to_string()) {
                 session_info.dst_domain = None;
             }
@@ -1267,7 +1284,6 @@ impl LANScanCapture {
                     l7: None,
                     src_asn,
                     dst_asn,
-                    // Whitelisted by default
                     is_whitelisted: WhitelistState::Unknown,
                 },
             );
@@ -1538,7 +1554,7 @@ mod tests {
     #[tokio::test]
     async fn test_session_management() {
         let mut capture = LANScanCapture::new();
-        capture.set_whitelist("cicd").await;
+        capture.set_whitelist("github").await;
         capture.set_filter(SessionFilter::All).await; // Include all sessions in the filter
 
         // Do not call capture.start().await
@@ -1590,7 +1606,7 @@ mod tests {
     #[tokio::test]
     async fn test_populate_domain_names() {
         let mut capture = LANScanCapture::new();
-        capture.set_whitelist("cicd").await;
+        capture.set_whitelist("github").await;
 
         // Do not call capture.start().await
 
