@@ -55,6 +55,11 @@ pub static WHITELISTS: &str = r#"{
           "ip": "104.26.12.205",
           "port": 80,
           "description": "Connection to Cloudflare (ASN: 13335, Country: US, Owner: CLOUDFLARENET)"
+        },
+        {
+          "domain": "*.pool.ntp.org",
+          "port": 123,
+          "description": "Connection to NTP"
         }
       ]
     },
