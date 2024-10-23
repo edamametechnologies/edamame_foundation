@@ -1128,13 +1128,26 @@ impl LANScanCapture {
         // Set the time to now, we could use the time provided by pcap too but we don't want to bother converting to UTC
         let now = Utc::now();
 
-        let key = parsed_packet.session.clone();
-        let reverse_key = Session {
-            protocol: parsed_packet.session.protocol.clone(),
-            src_ip: parsed_packet.session.dst_ip,
-            src_port: parsed_packet.session.dst_port,
-            dst_ip: parsed_packet.session.src_ip,
-            dst_port: parsed_packet.session.src_port,
+        // Find the flow direction
+        // Determine if our IP is involved
+        let is_self_src = self_ips.contains(&parsed_packet.session.src_ip);
+        let is_self_dst = self_ips.contains(&parsed_packet.session.dst_ip);
+
+        // Normalize the session key to have the local IP as the source
+        let key = if is_self_src {
+            parsed_packet.session.clone()
+        } else if is_self_dst {
+            // Swap source and destination to have the local IP as the source
+            Session {
+                protocol: parsed_packet.session.protocol.clone(),
+                src_ip: parsed_packet.session.dst_ip,
+                src_port: parsed_packet.session.dst_port,
+                dst_ip: parsed_packet.session.src_ip,
+                dst_port: parsed_packet.session.src_port,
+            }
+        } else {
+            // Neither IP is local; keep the session as is
+            parsed_packet.session.clone()
         };
 
         // Update session stats
@@ -1154,24 +1167,8 @@ impl LANScanCapture {
                     stats.conn_state = Some(Self::determine_conn_state(&stats.history));
                 }
             }
-        } else if let Some(mut info) = sessions.get_mut(&reverse_key) {
-            // Packet from responder to originator
-            let stats: &mut SessionStats = &mut info.stats;
-            stats.last_activity = now.clone();
-            stats.inbound_bytes += parsed_packet.packet_length as u64;
-            stats.resp_pkts += 1;
-            stats.resp_ip_bytes += parsed_packet.ip_packet_length as u64;
-            // Update history
-            if let Some(flags) = parsed_packet.flags {
-                let c = Self::map_tcp_flags(flags, parsed_packet.packet_length, false);
-                stats.history.push(c);
-                if (flags & (TcpFlags::FIN | TcpFlags::RST)) != 0 && stats.end_time.is_none() {
-                    stats.end_time = Some(Utc::now());
-                    stats.conn_state = Some(Self::determine_conn_state(&stats.history));
-                }
-            }
         } else {
-            // Neither key nor reverse key found, new session
+            // New session
             let uid = Uuid::new_v4().to_string();
             let mut stats = SessionStats {
                 start_time: Utc::now(),
@@ -1189,10 +1186,6 @@ impl LANScanCapture {
                 uid,
             };
 
-            // Check if the session is local
-            let is_local_src = is_local_ip(&parsed_packet.session.src_ip);
-            let is_local_dst = is_local_ip(&parsed_packet.session.dst_ip);
-
             // Apply filter here for performance reasons. This means that we won't keep the history of filtered sessions.
             let filter = filter.read().await.clone();
             if filter == SessionFilter::LocalOnly {
@@ -1205,30 +1198,9 @@ impl LANScanCapture {
                 }
             }
 
-            // Check if the session is self by comparing to the pcap interface IP
-            let is_self_src = self_ips.contains(&parsed_packet.session.src_ip);
-            let is_self_dst = self_ips.contains(&parsed_packet.session.dst_ip);
-
-            // This is the first packet, we need to determine the direction of the session
-            // Check if the source port is a known service port and the destination port is not a known service port
-            let reverse_ports =
-                // Source port is a known service port
-                !get_name_from_port(parsed_packet.session.src_port).await.is_empty()
-                // Destination port is not a known service port
-                && get_name_from_port(parsed_packet.session.dst_port).await.is_empty();
-
-            // Check if the dst is local and the src is not
-            let reverse_ip = !is_local_ip(&parsed_packet.session.src_ip)
-                && is_local_ip(&parsed_packet.session.dst_ip);
-
-            let key = if reverse_ports || reverse_ip {
-                // The key is reverse_key
-                reverse_key
-            } else {
-                // We assume the packet is from the originator to the responder
-                // The key is key
-                key
-            };
+            // Check if the session is local
+            let is_local_src = is_local_ip(&parsed_packet.session.src_ip);
+            let is_local_dst = is_local_ip(&parsed_packet.session.dst_ip);
 
             // Update session stats
             stats.last_activity = Utc::now();
@@ -1602,6 +1574,56 @@ mod tests {
         // Check session details
         assert_eq!(session.src_ip, IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)));
         assert_eq!(session.dst_ip, IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)));
+        assert_eq!(stats.outbound_bytes, 100);
+        assert_eq!(stats.orig_pkts, 1);
+        assert_eq!(stats.history, "S");
+    }
+
+    #[tokio::test]
+    async fn test_session_management_revert() {
+        let mut capture = LANScanCapture::new();
+        capture.set_whitelist("github").await;
+        capture.set_filter(SessionFilter::All).await; // Include all sessions in the filter
+
+        // Create a synthetic packet that should be inverted TCP 168.63.129.16:32526 -> 10.1.0.40:44442
+        let session_packet = SessionPacketData {
+            session: Session {
+                protocol: Protocol::TCP,
+                src_ip: IpAddr::V4(Ipv4Addr::new(168, 63, 129, 16)),
+                src_port: 32526,
+                dst_ip: IpAddr::V4(Ipv4Addr::new(10, 1, 0, 40)),
+                dst_port: 44442,
+            },
+            packet_length: 100,
+            ip_packet_length: 120,
+            flags: Some(TcpFlags::SYN),
+        };
+
+        // Get self IPs (empty for testing)
+        let self_ips = vec![IpAddr::V4(Ipv4Addr::new(10, 1, 0, 40))];
+
+        // Process the synthetic packet
+        LANScanCapture::process_parsed_packet(
+            session_packet,
+            &capture.sessions,
+            &capture.current_sessions,
+            &self_ips,
+            &capture.filter,
+        )
+        .await;
+
+        // Check that the session has been added
+        let sessions = capture.get_sessions().await;
+        let sessions = sessions.iter().collect::<Vec<_>>();
+        assert_eq!(sessions.len(), 1);
+
+        let session_info = sessions[0].clone();
+        let session = session_info.session.clone();
+        let stats = session_info.stats.clone();
+
+        // Check that the session has been inverted
+        assert_eq!(session.src_ip, IpAddr::V4(Ipv4Addr::new(10, 1, 0, 40)));
+        assert_eq!(session.dst_ip, IpAddr::V4(Ipv4Addr::new(168, 63, 129, 16)));
         assert_eq!(stats.outbound_bytes, 100);
         assert_eq!(stats.orig_pkts, 1);
         assert_eq!(stats.history, "S");
