@@ -1,5 +1,6 @@
+// Built in default whitelists db
 pub static WHITELISTS: &str = r#"{
-  "date": "October 22nd 2024",
+  "date": "October 23rd 2024",
   "whitelists": [
     {
       "name": "edamame",
@@ -119,19 +120,14 @@ pub static WHITELISTS: &str = r#"{
           "description": "https://learn.microsoft.com/en-us/azure/virtual-network/what-is-ip-address-168-63-129-16"
         },
         {
-          "ip": "20.85.130.105",
+          "asn": "8075",
           "port": 443,
-          "description": "Connection to Microsoft service (https) (ASN: 8075, Country: US, Owner: MICROSOFT-CORP-MSN-AS-BLOCK)"
-        },
-        {
-          "ip": "20.237.33.78",
-          "port": 443,
-          "description": "Connection to Microsoft service (https) (ASN: 8075, Country: US, Owner: MICROSOFT-CORP-MSN-AS-BLOCK)"
+          "description": "Connection to Microsoft (https) (ASN: 8075, Country: US, Owner: MICROSOFT-CORP-MSN-AS-BLOCK)"
         },
         {
           "asn": "8075",
           "port": 23456,
-          "description": "Connection to Microsoft service (aequus) (ASN: 8075, Country: US, Owner: MICROSOFT-CORP-MSN-AS-BLOCK)"
+          "description": "Connection to Microsoft (aequus) (ASN: 8075, Country: US, Owner: MICROSOFT-CORP-MSN-AS-BLOCK)"
         }
       ]
     }
