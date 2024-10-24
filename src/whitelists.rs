@@ -19,10 +19,10 @@ pub struct WhitelistEndpoint {
     pub ip: Option<String>,
     pub port: Option<u16>,
     pub protocol: Option<String>,
-    pub asn: Option<u32>,
+    pub as_number: Option<u32>,
     pub as_country: Option<String>,
     pub as_owner: Option<String>,
-    pub l7_process_name: Option<String>,
+    pub process: Option<String>,
     pub description: Option<String>,
 }
 
@@ -141,10 +141,10 @@ pub async fn is_session_in_whitelist(
     port: u16,
     protocol: &str,
     whitelist_name: &str,
-    asn: Option<u32>,
+    as_number: Option<u32>,
     as_country: Option<&str>,
     as_owner: Option<&str>,
-    l7_process_name: Option<&str>,
+    process: Option<&str>,
 ) -> bool {
     trace!(
         "Checking if domain: {:?}, ip: {:?}, port: {} ({}) is in whitelist {} with ASN {:?}, Country {:?}, Owner {:?}, L7 Process {:?}",
@@ -153,10 +153,10 @@ pub async fn is_session_in_whitelist(
         port,
         protocol,
         whitelist_name,
-        asn,
+        as_number,
         as_country,
         as_owner,
-        l7_process_name
+        process
     );
     let mut visited = HashSet::new();
     visited.insert(whitelist_name.to_string());
@@ -184,10 +184,10 @@ pub async fn is_session_in_whitelist(
             session_ip,
             port,
             protocol,
-            asn,
+            as_number,
             as_country,
             as_owner,
-            l7_process_name,
+            process,
             endpoint,
         )
     })
@@ -199,26 +199,26 @@ fn endpoint_matches(
     session_ip: Option<&str>,
     port: u16,
     protocol: &str,
-    asn: Option<u32>,
+    as_number: Option<u32>,
     as_country: Option<&str>,
     as_owner: Option<&str>,
-    l7_process_name: Option<&str>,
+    process: Option<&str>,
     endpoint: &WhitelistEndpoint,
 ) -> bool {
     let domain_match = domain_matches(session_domain, &endpoint.domain);
     let ip_match = ip_matches(session_ip, &endpoint.ip);
     let port_match = port_matches(port, endpoint.port);
     let protocol_match = protocol_matches(protocol, &endpoint.protocol);
-    let asn_match = asn_matches(asn, endpoint.asn);
+    let as_number_match = as_number_matches(as_number, endpoint.as_number);
     let country_match = as_country_matches(as_country, &endpoint.as_country);
     let owner_match = as_owner_matches(as_owner, &endpoint.as_owner);
-    let l7_match = l7_process_name_matches(l7_process_name, &endpoint.l7_process_name);
+    let l7_match = process_matches(process, &endpoint.process);
 
     if domain_match
         && ip_match
         && port_match
         && protocol_match
-        && asn_match
+        && as_number_match
         && country_match
         && owner_match
         && l7_match
@@ -227,13 +227,13 @@ fn endpoint_matches(
         true
     } else {
         trace!(
-            "Did not match whitelist endpoint: {:?}, Reasons: domain_match={}, ip_match={}, port_match={}, protocol_match={}, asn_match={}, country_match={}, owner_match={}, l7_match={}",
+            "Did not match whitelist endpoint: {:?}, Reasons: domain_match={}, ip_match={}, port_match={}, protocol_match={}, as_number_match={}, country_match={}, owner_match={}, l7_match={}",
             endpoint,
             domain_match,
             ip_match,
             port_match,
             protocol_match,
-            asn_match,
+            as_number_match,
             country_match,
             owner_match,
             l7_match
@@ -297,9 +297,9 @@ fn port_matches(port: u16, whitelist_port: Option<u16>) -> bool {
 }
 
 /// Helper functions to match ASN and L7 criteria
-fn asn_matches(session_asn: Option<u32>, whitelist_asn: Option<u32>) -> bool {
-    match whitelist_asn {
-        Some(w_asn) => session_asn == Some(w_asn),
+fn as_number_matches(session_as_number: Option<u32>, whitelist_as_number: Option<u32>) -> bool {
+    match whitelist_as_number {
+        Some(w_as_number) => session_as_number == Some(w_as_number),
         None => true,
     }
 }
@@ -327,7 +327,7 @@ fn as_owner_matches(session_as_owner: Option<&str>, whitelist_as_owner: &Option<
     }
 }
 
-fn l7_process_name_matches(session_l7: Option<&str>, whitelist_l7: &Option<String>) -> bool {
+fn process_matches(session_l7: Option<&str>, whitelist_l7: &Option<String>) -> bool {
     match whitelist_l7 {
         Some(w_l7) => match session_l7 {
             Some(s_l7) => s_l7.eq_ignore_ascii_case(w_l7),
@@ -390,10 +390,10 @@ mod tests {
                         ip: None,
                         port: Some(443),
                         protocol: Some("TCP".to_string()),
-                        asn: None,
+                        as_number: None,
                         as_country: None,
                         as_owner: None,
-                        l7_process_name: None,
+                        process: None,
                         description: Some("HTTPS endpoint".to_string()),
                     }],
                 },
@@ -405,10 +405,10 @@ mod tests {
                         ip: Some("192.168.1.0/24".to_string()),
                         port: Some(80),
                         protocol: Some("TCP".to_string()),
-                        asn: Some(12345),
+                        as_number: Some(12345),
                         as_country: Some("US".to_string()),
                         as_owner: Some("Test ISP".to_string()),
-                        l7_process_name: Some("nginx".to_string()),
+                        process: Some("nginx".to_string()),
                         description: Some("Internal web server".to_string()),
                     }],
                 },
@@ -420,10 +420,10 @@ mod tests {
                         ip: None,
                         port: None,
                         protocol: Some("TCP".to_string()),
-                        asn: None,
+                        as_number: None,
                         as_country: None,
                         as_owner: None,
-                        l7_process_name: None,
+                        process: None,
                         description: Some("Wildcard domain".to_string()),
                     }],
                 },
@@ -537,7 +537,7 @@ mod tests {
 
     #[tokio::test]
     #[serial]
-    async fn test_asn_matching() {
+    async fn test_as_number_matching() {
         initialize_test_whitelists().await;
 
         // Test complete ASN match
@@ -670,10 +670,10 @@ mod tests {
                         ip: None,
                         port: Some(80),
                         protocol: Some("TCP".to_string()),
-                        asn: None,
+                        as_number: None,
                         as_country: None,
                         as_owner: None,
-                        l7_process_name: None,
+                        process: None,
                         description: Some("Whitelist A".to_string()),
                     }],
                 },
@@ -685,10 +685,10 @@ mod tests {
                         ip: None,
                         port: Some(80),
                         protocol: Some("TCP".to_string()),
-                        asn: None,
+                        as_number: None,
                         as_country: None,
                         as_owner: None,
-                        l7_process_name: None,
+                        process: None,
                         description: Some("Whitelist B".to_string()),
                     }],
                 },
@@ -700,10 +700,10 @@ mod tests {
                         ip: None,
                         port: Some(80),
                         protocol: Some("TCP".to_string()),
-                        asn: None,
+                        as_number: None,
                         as_country: None,
                         as_owner: None,
-                        l7_process_name: None,
+                        process: None,
                         description: Some("Whitelist C".to_string()),
                     }],
                 },
@@ -783,10 +783,10 @@ mod tests {
                         ip: None,
                         port: None,
                         protocol: Some("TCP".to_string()),
-                        asn: None,
+                        as_number: None,
                         as_country: None,
                         as_owner: None,
-                        l7_process_name: None,
+                        process: None,
                         description: Some("Wildcard domain".to_string()),
                     },
                     WhitelistEndpoint {
@@ -794,10 +794,10 @@ mod tests {
                         ip: None,
                         port: None,
                         protocol: Some("TCP".to_string()),
-                        asn: None,
+                        as_number: None,
                         as_country: None,
                         as_owner: None,
-                        l7_process_name: None,
+                        process: None,
                         description: Some("Specific domain".to_string()),
                     },
                 ],
@@ -912,10 +912,10 @@ mod tests {
                     ip: Some("192.168.1.0/24".to_string()),
                     port: None,
                     protocol: Some("TCP".to_string()),
-                    asn: None,
+                    as_number: None,
                     as_country: None,
                     as_owner: None,
-                    l7_process_name: None,
+                    process: None,
                     description: Some("IPv4 network".to_string()),
                 }],
             }],
@@ -978,10 +978,10 @@ mod tests {
                     ip: Some("2001:db8::/32".to_string()),
                     port: None,
                     protocol: Some("TCP".to_string()),
-                    asn: None,
+                    as_number: None,
                     as_country: None,
                     as_owner: None,
-                    l7_process_name: None,
+                    process: None,
                     description: Some("IPv6 network".to_string()),
                 }],
             }],
@@ -1044,10 +1044,10 @@ mod tests {
                     ip: None,
                     port: Some(8080),
                     protocol: None,
-                    asn: None,
+                    as_number: None,
                     as_country: None,
                     as_owner: None,
-                    l7_process_name: None,
+                    process: None,
                     description: Some("Port-only endpoint".to_string()),
                 }],
             }],
@@ -1069,10 +1069,10 @@ mod tests {
                 8080,                  // port
                 "TCP",                 // protocol
                 "port_only_whitelist", // whitelist_name
-                None,                  // asn
+                None,                  // as_number
                 None,                  // as_country
                 None,                  // as_owner
-                None                   // l7_process_name
+                None                   // process
             )
             .await,
             "Should match session with port 8080"
@@ -1086,10 +1086,10 @@ mod tests {
                 80,                    // port
                 "TCP",                 // protocol
                 "port_only_whitelist", // whitelist_name
-                None,                  // asn
+                None,                  // as_number
                 None,                  // as_country
                 None,                  // as_owner
-                None                   // l7_process_name
+                None                   // process
             )
             .await,
             "Should not match session with port 80"
@@ -1098,13 +1098,13 @@ mod tests {
 
     #[tokio::test]
     #[serial]
-    async fn test_asn_deserialization_and_matching() {
+    async fn test_as_number_deserialization_and_matching() {
         // Initialize test data with an endpoint specifying ASN
         let test_whitelist_json = WhitelistsJSON {
             date: "2024-10-24".to_string(),
             signature: Some("test_signature".to_string()),
             whitelists: vec![WhitelistInfo {
-                name: "asn_test_whitelist".to_string(),
+                name: "as_number_test_whitelist".to_string(),
                 extends: None,
                 endpoints: vec![
                     WhitelistEndpoint {
@@ -1112,10 +1112,10 @@ mod tests {
                         ip: None,
                         port: Some(443),
                         protocol: Some("TCP".to_string()),
-                        asn: Some(16509), // Amazon ASN
+                        as_number: Some(16509), // Amazon ASN
                         as_country: Some("US".to_string()),
                         as_owner: Some("AMAZON-02".to_string()),
-                        l7_process_name: None,
+                        process: None,
                         description: Some("Amazon HTTPS".to_string()),
                     },
                     WhitelistEndpoint {
@@ -1123,10 +1123,10 @@ mod tests {
                         ip: None,
                         port: Some(443),
                         protocol: Some("TCP".to_string()),
-                        asn: Some(13335), // Cloudflare ASN
+                        as_number: Some(13335), // Cloudflare ASN
                         as_country: Some("US".to_string()),
                         as_owner: Some("CLOUDFLARENET".to_string()),
-                        l7_process_name: None,
+                        process: None,
                         description: Some("Cloudflare HTTPS".to_string()),
                     },
                 ],
@@ -1148,11 +1148,11 @@ mod tests {
                 Some("54.239.28.85"), // Amazon IP
                 443,                  // port
                 "TCP",                // protocol
-                "asn_test_whitelist", // whitelist_name
-                Some(16509),          // asn
+                "as_number_test_whitelist", // whitelist_name
+                Some(16509),          // as_number
                 Some("US"),           // as_country
                 Some("AMAZON-02"),    // as_owner
-                None                  // l7_process_name
+                None                  // process
             )
             .await,
             "Should match session with ASN 16509 (Amazon)"
@@ -1165,11 +1165,11 @@ mod tests {
                 Some("8.8.8.8"),      // Google IP
                 443,                  // port
                 "TCP",                // protocol
-                "asn_test_whitelist", // whitelist_name
-                Some(15169),          // asn (Google ASN)
+                "as_number_test_whitelist", // whitelist_name
+                Some(15169),          // as_number (Google ASN)
                 Some("US"),           // as_country
                 Some("GOOGLE"),       // as_owner
-                None                  // l7_process_name
+                None                  // process
             )
             .await,
             "Should not match session with ASN 15169 (Google)"
@@ -1182,11 +1182,11 @@ mod tests {
                 Some("1.1.1.1"),       // Cloudflare IP
                 443,                   // port
                 "TCP",                 // protocol
-                "asn_test_whitelist",  // whitelist_name
-                Some(13335),           // asn
+                "as_number_test_whitelist",  // whitelist_name
+                Some(13335),           // as_number
                 Some("US"),            // as_country
                 Some("CLOUDFLARENET"), // as_owner
-                None                   // l7_process_name
+                None                   // process
             )
             .await,
             "Should match session with ASN 13335 (Cloudflare)"
