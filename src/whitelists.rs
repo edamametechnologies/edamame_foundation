@@ -14,6 +14,7 @@ use tracing::{info, trace, warn};
 const WHITELISTS_FILE_NAME: &str = "whitelists-db.json";
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(deny_unknown_fields)] // Enforce no unknown fields
 pub struct WhitelistEndpoint {
     pub domain: Option<String>,
     pub ip: Option<String>,
@@ -27,6 +28,7 @@ pub struct WhitelistEndpoint {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(deny_unknown_fields)] // Enforce no unknown fields
 pub struct WhitelistInfo {
     pub name: String,
     pub extends: Option<Vec<String>>,
@@ -34,6 +36,7 @@ pub struct WhitelistInfo {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)] // Enforce no unknown fields
 pub struct WhitelistsJSON {
     pub date: String,
     pub signature: Option<String>,
@@ -1120,7 +1123,7 @@ mod tests {
                     },
                     WhitelistEndpoint {
                         domain: None,
-                        ip: None,
+                        ip: Some("1.1.1.1".to_string()),
                         port: Some(443),
                         protocol: Some("TCP".to_string()),
                         as_number: Some(13335), // Cloudflare ASN
@@ -1144,15 +1147,15 @@ mod tests {
         // Session that should match (Amazon ASN)
         assert!(
             is_session_in_whitelist(
-                None,                 // session_domain
-                Some("54.239.28.85"), // Amazon IP
-                443,                  // port
-                "TCP",                // protocol
+                None,                       // session_domain
+                Some("54.239.28.85"),       // Amazon IP
+                443,                        // port
+                "TCP",                      // protocol
                 "as_number_test_whitelist", // whitelist_name
-                Some(16509),          // as_number
-                Some("US"),           // as_country
-                Some("AMAZON-02"),    // as_owner
-                None                  // process
+                Some(16509),                // as_number
+                Some("US"),                 // as_country
+                Some("AMAZON-02"),          // as_owner
+                None                        // process
             )
             .await,
             "Should match session with ASN 16509 (Amazon)"
@@ -1161,15 +1164,15 @@ mod tests {
         // Session that should not match (Different ASN)
         assert!(
             !is_session_in_whitelist(
-                None,                 // session_domain
-                Some("8.8.8.8"),      // Google IP
-                443,                  // port
-                "TCP",                // protocol
+                None,                       // session_domain
+                Some("8.8.8.8"),            // Google IP
+                443,                        // port
+                "TCP",                      // protocol
                 "as_number_test_whitelist", // whitelist_name
-                Some(15169),          // as_number (Google ASN)
-                Some("US"),           // as_country
-                Some("GOOGLE"),       // as_owner
-                None                  // process
+                Some(15169),                // as_number (Google ASN)
+                Some("US"),                 // as_country
+                Some("GOOGLE"),             // as_owner
+                None                        // process
             )
             .await,
             "Should not match session with ASN 15169 (Google)"
@@ -1178,18 +1181,55 @@ mod tests {
         // Session that should match (Cloudflare ASN)
         assert!(
             is_session_in_whitelist(
-                None,                  // session_domain
-                Some("1.1.1.1"),       // Cloudflare IP
-                443,                   // port
-                "TCP",                 // protocol
-                "as_number_test_whitelist",  // whitelist_name
-                Some(13335),           // as_number
-                Some("US"),            // as_country
-                Some("CLOUDFLARENET"), // as_owner
-                None                   // process
+                None,                       // session_domain
+                Some("1.1.1.1"),            // Cloudflare IP
+                443,                        // port
+                "TCP",                      // protocol
+                "as_number_test_whitelist", // whitelist_name
+                Some(13335),                // as_number
+                Some("US"),                 // as_country
+                Some("CLOUDFLARENET"),      // as_owner
+                None                        // process
             )
             .await,
             "Should match session with ASN 13335 (Cloudflare)"
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_invalid_field_in_whitelist_entry() {
+        // Initialize test data with an invalid field "domaine" instead of "domain"
+        let invalid_whitelist_json = r#"
+        {
+            "date": "2024-10-25",
+            "signature": "invalid_test_signature",
+            "whitelists": [
+                {
+                    "name": "invalid_whitelist",
+                    "extends": null,
+                    "endpoints": [
+                        {
+                            "domaine": "invalid.com", // Invalid field
+                            "ip": "10.0.0.1",
+                            "port": 8080,
+                            "protocol": "TCP",
+                            "description": "Invalid endpoint"
+                        }
+                    ]
+                }
+            ]
+        }
+        "#;
+
+        // Attempt to deserialize the invalid JSON
+        let result: Result<WhitelistsJSON> =
+            serde_json::from_str(invalid_whitelist_json).context("Deserialization failed");
+
+        // Assert that deserialization fails due to unknown field
+        assert!(
+            result.is_err(),
+            "Deserialization should fail due to unknown field 'domaine'"
         );
     }
 }
