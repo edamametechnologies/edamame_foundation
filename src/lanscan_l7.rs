@@ -179,7 +179,8 @@ impl LANScanL7 {
                     );
                 }
 
-                sleep(Duration::from_secs(5)).await;
+                // Tight loop to catch short-lived connections
+                sleep(Duration::from_secs(1)).await;
             }
 
             info!("L7 resolver task completed");

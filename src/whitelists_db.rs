@@ -17,24 +17,22 @@ pub static WHITELISTS: &str = r#"{
           "description": "IPify"
         },
         {
-          "domain": "d-22jhnwitx0.execute-api.eu-west-1.amazonaws.com",
+          "process": "edamame_posture",
+          "domain": "*.execute-api.eu-west-1.amazonaws.com",
           "port": 443,
-          "description": "EDAMAME backend-assistance-prod"
+          "description": "EDAMAME backend"
         },
         {
-          "domain": "d-z6dc3lo29h.execute-api.eu-west-1.amazonaws.com",
+          "process": "edamame_posture",
+          "domain": "*.compute-1.amazonaws.com",
           "port": 443,
-          "description": "EDAMAME backend-score-prod"
+          "description": "EDAMAME backend"
         },
         {
-          "domain": "ec2-54-217-133-47.compute-1.amazonaws.com",
+          "process": "edamame_posture",
+          "domain": "raw.githubusercontent.com",
           "port": 443,
-          "description": "Connection to AWS EC2 instance"
-        },
-        {
-          "domain": "ec2-108-128-89-104.compute-1.amazonaws.com",
-          "port": 443,
-          "description": "Connection to AWS EC2 instance"
+          "description": "EDAMAME backend"
         }
       ]
     },
@@ -45,6 +43,11 @@ pub static WHITELISTS: &str = r#"{
       ],
       "endpoints": [
         {
+          "domain": "github.com",
+          "port": 443,
+          "description": "Connection to GitHub"
+        },
+        {
           "domain": "*.github.com",
           "port": 443,
           "description": "Connection to GitHub"
@@ -53,21 +56,6 @@ pub static WHITELISTS: &str = r#"{
           "domain": "*.actions.githubusercontent.com",
           "port": 443,
           "description": "Connection to GitHub Actions"
-        },
-        {
-          "asn": 13335,
-          "port": 80,
-          "description": "Connection to Cloudflare (http) (ASN: 13335, Country: US, Owner: CLOUDFLARENET)"
-        },
-        {
-          "asn": 54113,
-          "port": 443,
-          "description": "Connection to Fastly (https) (ASN: 54113, Country: US, Owner: FASTLY)"
-        },
-        {
-          "domain": "*.cloudfront.net",
-          "port": 443,
-          "description": "Connection to CloudFront (https)"
         },
         {
           "port": 123,
@@ -92,11 +80,6 @@ pub static WHITELISTS: &str = r#"{
           "description": "Connection to Apple services (https)"
         },
         {
-          "ip": "20.7.220.66",
-          "port": 443,
-          "description": "Connection to Microsoft ASN (https) (ASN: 8075, Country: US, Owner: MICROSOFT-CORP-MSN-AS-BLOCK)"
-        },
-        {
           "asn": 714,
           "port": 443,
           "description": "Connection to Apple Servers (https)(ASN: 714, Country: US, Owner: APPLE-ENGINEERING)"
@@ -115,7 +98,7 @@ pub static WHITELISTS: &str = r#"{
       ],
       "endpoints": [
         {
-          "domain": "motd.ubuntu.com",
+          "domain": "*.ubuntu.com",
           "port": 443,
           "description": "Connection to Ubuntu"
         },
@@ -133,16 +116,6 @@ pub static WHITELISTS: &str = r#"{
           "ip": "168.63.129.16",
           "port": 32526,
           "description": "https://learn.microsoft.com/en-us/azure/virtual-network/what-is-ip-address-168-63-129-16"
-        },
-        {
-          "asn": 8075,
-          "port": 443,
-          "description": "Connection to Microsoft (https) (ASN: 8075, Country: US, Owner: MICROSOFT-CORP-MSN-AS-BLOCK)"
-        },
-        {
-          "asn": 8075,
-          "port": 23456,
-          "description": "Connection to Microsoft (aequus) (ASN: 8075, Country: US, Owner: MICROSOFT-CORP-MSN-AS-BLOCK)"
         }
       ]
     }
