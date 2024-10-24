@@ -67,7 +67,7 @@ pub static WHITELISTS: &str = r#"{
           "description": "Connection to NTP"
         },
         {
-          "asn": 8075,
+          "as_number": 8075,
           "port": 443,
           "description": "Connection to Microsoft (https) (ASN: 8075, Country: US, Owner: MICROSOFT-CORP-MSN-AS-BLOCK)"
         },
@@ -95,12 +95,12 @@ pub static WHITELISTS: &str = r#"{
           "description": "Connection to Homebrew (https)"
         },
         {
-          "asn": 714,
+          "as_number": 714,
           "port": 443,
           "description": "Connection to Apple Servers (https) (ASN: 714, Country: US, Owner: APPLE-ENGINEERING)"
         },
         {
-          "asn": 714,
+          "as_number": 714,
           "port": 5223,
           "description": "Connection to Apple Servers (apple push) (ASN: 714, Country: US, Owner: APPLE-ENGINEERING)"
         }
