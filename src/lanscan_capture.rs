@@ -1346,29 +1346,39 @@ impl LANScanCapture {
                 // If it's a response, extract the answers
                 if !dns_packet.answers.is_empty() {
                     for answer in dns_packet.answers {
-                        if let dns_parser::rdata::RData::A(ipv4_addr) = answer.data {
-                            let ip_addr = IpAddr::V4(ipv4_addr.0);
-                            let domain_name = answer.name.to_string();
-                            // Exclude "myip.opendns.com"
-                            if domain_name != "myip.opendns.com" {
-                                trace!(
-                                    "DNS resolution (using capture): {} -> {}",
-                                    ip_addr,
-                                    domain_name
-                                );
-                                dns_resolutions.insert(ip_addr, domain_name);
+                        match answer.data {
+                            dns_parser::rdata::RData::A(ipv4_addr) => {
+                                let ip_addr = IpAddr::V4(ipv4_addr.0);
+                                let domain_name = answer.name.to_string();
+                                // Exclude "myip.opendns.com"
+                                if domain_name != "myip.opendns.com" {
+                                    trace!(
+                                        "DNS resolution (using capture): {} -> {}",
+                                        ip_addr,
+                                        domain_name
+                                    );
+                                    dns_resolutions.insert(ip_addr, domain_name);
+                                }
                             }
-                        } else if let dns_parser::rdata::RData::AAAA(ipv6_addr) = answer.data {
-                            let ip_addr = IpAddr::V6(ipv6_addr.0);
-                            let domain_name = answer.name.to_string();
-                            // Exclude "myip.opendns.com"
-                            if domain_name != "myip.opendns.com" {
+                            dns_parser::rdata::RData::AAAA(ipv6_addr) => {
+                                let ip_addr = IpAddr::V6(ipv6_addr.0);
+                                let domain_name = answer.name.to_string();
+                                // Exclude "myip.opendns.com"
+                                if domain_name != "myip.opendns.com" {
+                                    trace!(
+                                        "DNS resolution (using capture): {} -> {}",
+                                        ip_addr,
+                                        domain_name
+                                    );
+                                    dns_resolutions.insert(ip_addr, domain_name);
+                                }
+                            }
+                            _ => {
+                                // Handle other DNS record types if necessary
                                 trace!(
-                                    "DNS resolution (using capture): {} -> {}",
-                                    ip_addr,
-                                    domain_name
+                                    "Ignored DNS record type for domain: {}",
+                                    answer.name.to_string()
                                 );
-                                dns_resolutions.insert(ip_addr, domain_name);
                             }
                         }
                     }
@@ -1399,7 +1409,14 @@ impl LANScanCapture {
 
                         if src_port == 53 || dst_port == 53 {
                             // This is DNS over TCP
-                            let dns_payload = tcp.payload().to_vec();
+                            let mut dns_payload = tcp.payload().to_vec();
+                            // Ensure that the payload has at least 2 bytes for the length
+                            if dns_payload.len() < 2 {
+                                trace!("DNS-over-TCP payload too short: {:?}", dns_payload);
+                                return None;
+                            }
+                            // Strip the first two bytes (length prefix)
+                            dns_payload.drain(0..2);
                             trace!("Found DNS over TCP for IPv4: {:?}", dns_payload);
                             return Some(ParsedPacket::DnsPacket(DnsPacketData { dns_payload }));
                         }
@@ -1468,7 +1485,14 @@ impl LANScanCapture {
 
                         if src_port == 53 || dst_port == 53 {
                             // This is DNS over TCP
-                            let dns_payload = tcp.payload().to_vec();
+                            let mut dns_payload = tcp.payload().to_vec();
+                            // Ensure that the payload has at least 2 bytes for the length
+                            if dns_payload.len() < 2 {
+                                trace!("DNS-over-TCP payload too short: {:?}", dns_payload);
+                                return None;
+                            }
+                            // Strip the first two bytes (length prefix)
+                            dns_payload.drain(0..2);
                             trace!("Found DNS over TCP for IPv6: {:?}", dns_payload);
                             return Some(ParsedPacket::DnsPacket(DnsPacketData { dns_payload }));
                         }
@@ -1915,6 +1939,50 @@ mod tests {
             assert_eq!(domain.as_str(), "www.google.com");
         } else {
             panic!("DNS resolution not found");
+        };
+    }
+
+    #[tokio::test]
+    async fn test_process_dns_packet_tcp() {
+        // Construct a DNS-over-TCP payload
+        // DNS-over-TCP starts with a 2-byte length field followed by the DNS message
+        let dns_message = vec![
+            // A minimal DNS response packet in bytes (without length prefix)
+            0x00, 0x00, // Transaction ID
+            0x81, 0x80, // Flags
+            0x00, 0x01, // Questions
+            0x00, 0x01, // Answer RRs
+            0x00, 0x00, // Authority RRs
+            0x00, 0x00, // Additional RRs
+            // Queries
+            0x03, b'w', b'w', b'w', 0x06, b'g', b'o', b'o', b'g', b'l', b'e', 0x03, b'c', b'o',
+            b'm', 0x00, // Name: www.google.com
+            0x00, 0x01, // Type: A
+            0x00, 0x01, // Class: IN
+            // Answers
+            0xc0, 0x0c, // Name: pointer to offset 12 (www.google.com)
+            0x00, 0x01, // Type: A
+            0x00, 0x01, // Class: IN
+            0x00, 0x00, 0x00, 0x3c, // TTL: 60
+            0x00, 0x04, // Data length: 4
+            0x08, 0x08, 0x08, 0x08, // Address: 8.8.8.8
+        ];
+
+        // Create DnsPacketData without the length prefix
+        let dns_packet_data = DnsPacketData {
+            dns_payload: dns_message,
+        };
+
+        let dns_resolutions = Arc::new(DashMap::new());
+
+        // Process the DNS-over-TCP packet
+        LANScanCapture::process_dns_packet(dns_packet_data, &dns_resolutions);
+
+        // Check that the DNS resolution was stored
+        if let Some(domain) = dns_resolutions.get(&IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8))) {
+            assert_eq!(domain.as_str(), "www.google.com");
+        } else {
+            panic!("DNS-over-TCP resolution not found");
         };
     }
 }

@@ -55,9 +55,19 @@ pub static WHITELISTS: &str = r#"{
           "description": "Connection to GitHub Actions"
         },
         {
-          "asn": "13335",
+          "asn": 13335,
           "port": 80,
           "description": "Connection to Cloudflare (http) (ASN: 13335, Country: US, Owner: CLOUDFLARENET)"
+        },
+        {
+          "asn": 54113,
+          "port": 443,
+          "description": "Connection to Fastly (https) (ASN: 54113, Country: US, Owner: FASTLY)"
+        },
+        {
+          "domain": "*.cloudfront.net",
+          "port": 443,
+          "description": "Connection to CloudFront (https)"
         },
         {
           "port": 123,
@@ -87,12 +97,12 @@ pub static WHITELISTS: &str = r#"{
           "description": "Connection to Microsoft ASN (https) (ASN: 8075, Country: US, Owner: MICROSOFT-CORP-MSN-AS-BLOCK)"
         },
         {
-          "asn": "714",
+          "asn": 714,
           "port": 443,
           "description": "Connection to Apple Servers (https)(ASN: 714, Country: US, Owner: APPLE-ENGINEERING)"
         },
         {
-          "asn": "714",
+          "asn": 714,
           "port": 5223,
           "description": "Connection to Apple Servers (apple push) (ASN: 714, Country: US, Owner: APPLE-ENGINEERING)"
         }
@@ -105,6 +115,16 @@ pub static WHITELISTS: &str = r#"{
       ],
       "endpoints": [
         {
+          "domain": "motd.ubuntu.com",
+          "port": 443,
+          "description": "Connection to Ubuntu"
+        },
+        {
+          "domain": "api.snapcraft.io",
+          "port": 443,
+          "description": "Connection to Snapcraft"
+        },
+        {
           "ip": "168.63.129.16",
           "port": 80,
           "description": "https://learn.microsoft.com/en-us/azure/virtual-network/what-is-ip-address-168-63-129-16"
@@ -115,12 +135,12 @@ pub static WHITELISTS: &str = r#"{
           "description": "https://learn.microsoft.com/en-us/azure/virtual-network/what-is-ip-address-168-63-129-16"
         },
         {
-          "asn": "8075",
+          "asn": 8075,
           "port": 443,
           "description": "Connection to Microsoft (https) (ASN: 8075, Country: US, Owner: MICROSOFT-CORP-MSN-AS-BLOCK)"
         },
         {
-          "asn": "8075",
+          "asn": 8075,
           "port": 23456,
           "description": "Connection to Microsoft (aequus) (ASN: 8075, Country: US, Owner: MICROSOFT-CORP-MSN-AS-BLOCK)"
         }
