@@ -100,12 +100,17 @@ pub static WHITELISTS: &str = r#"{
           "description": "Connection to Apple services (https)"
         },
         {
-          "domain": "apple-dns.net",
+          "domain": "*.apple-dns.net",
           "port": 443,
           "description": "Connection to Apple Servers (https) (ASN: 714, Country: US, Owner: APPLE-ENGINEERING)"
         },
         {
           "domain": "*.push-apple.com.akadns.net",
+          "port": 5223,
+          "description": "Connection to Apple Servers (apple push) (ASN: 714, Country: US, Owner: APPLE-ENGINEERING)"
+        },
+        {
+          "domain": "*.idms-apple.apple-dns.net",
           "port": 5223,
           "description": "Connection to Apple Servers (apple push) (ASN: 714, Country: US, Owner: APPLE-ENGINEERING)"
         }
@@ -136,6 +141,11 @@ pub static WHITELISTS: &str = r#"{
           "ip": "168.63.129.16",
           "port": 32526,
           "description": "https://learn.microsoft.com/en-us/azure/virtual-network/what-is-ip-address-168-63-129-16"
+        },
+        {
+          "as_number": 8075,
+          "port": 23456,
+          "description": "Connection to Microsoft (23456) (ASN: 8075, Country: US, Owner: MICROSOFT-CORP-MSN-AS-BLOCK)"
         }
       ]
     }
