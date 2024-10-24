@@ -30,7 +30,7 @@ pub static WHITELISTS: &str = r#"{
         },
         {
           "process": "edamame_posture",
-          "domain": "raw.githubusercontent.com",
+          "domain": "*.compute.amazonaws.com",
           "port": 443,
           "description": "EDAMAME backend"
         }
@@ -53,6 +53,11 @@ pub static WHITELISTS: &str = r#"{
           "description": "Connection to GitHub"
         },
         {
+          "domain": "raw.githubusercontent.com",
+          "port": 443,
+          "description": "Connection to GitHub raw content"
+        },
+        {
           "domain": "*.actions.githubusercontent.com",
           "port": 443,
           "description": "Connection to GitHub Actions"
@@ -60,6 +65,21 @@ pub static WHITELISTS: &str = r#"{
         {
           "port": 123,
           "description": "Connection to NTP"
+        },
+        {
+          "asn": 8075,
+          "port": 443,
+          "description": "Connection to Microsoft (https) (ASN: 8075, Country: US, Owner: MICROSOFT-CORP-MSN-AS-BLOCK)"
+        },
+        {
+          "domain": "*.fastly.net",
+          "port": 443,
+          "description": "Connection to Fastly (https) - used by dependencies repos, finer grain requires a proxy"
+        },
+        {
+          "domain": "*.cloudfront.net",
+          "port": 443,
+          "description": "Connection to CloudFront (https) - used by dependencies repos, finer grain requires a proxy"
         }
       ]
     },
@@ -75,14 +95,9 @@ pub static WHITELISTS: &str = r#"{
           "description": "Connection to Homebrew (https)"
         },
         {
-          "domain": "*.aaplimg.com",
-          "port": 443,
-          "description": "Connection to Apple services (https)"
-        },
-        {
           "asn": 714,
           "port": 443,
-          "description": "Connection to Apple Servers (https)(ASN: 714, Country: US, Owner: APPLE-ENGINEERING)"
+          "description": "Connection to Apple Servers (https) (ASN: 714, Country: US, Owner: APPLE-ENGINEERING)"
         },
         {
           "asn": 714,
