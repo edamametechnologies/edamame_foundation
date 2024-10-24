@@ -849,9 +849,10 @@ impl LANScanCapture {
                 "Total whitelist exceptions: {}",
                 whitelist_exceptions.read().await.len()
             );
-            // Clear the whitelist_conformance if it's been more than 600 seconds
-            if Utc::now()
-                > *last_whitelist_exception_time.read().await + WHITELIST_EXCEPTION_TIMEOUT
+            // Clear the whitelist_conformance if it's been more than WHITELIST_EXCEPTION_TIMEOUT seconds
+            if !whitelist_conformance.load(Ordering::Relaxed)
+                && Utc::now()
+                    > *last_whitelist_exception_time.read().await + WHITELIST_EXCEPTION_TIMEOUT
             {
                 info!(
                     "Clearing whitelist conformance after no activity for {} seconds",
