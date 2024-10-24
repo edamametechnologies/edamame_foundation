@@ -55,7 +55,7 @@ pub static WHITELISTS: &str = r#"{
         {
           "domain": "raw.githubusercontent.com",
           "port": 443,
-          "description": "Connection to GitHub raw content"
+          "description": "Connection to GitHub raw content (used by EDAMAME)"
         },
         {
           "domain": "*.actions.githubusercontent.com",
@@ -95,12 +95,17 @@ pub static WHITELISTS: &str = r#"{
           "description": "Connection to Homebrew (https)"
         },
         {
-          "as_number": 714,
+          "domain": "*.aaplimg.com",
+          "port": 443,
+          "description": "Connection to Apple services (https)"
+        },
+        {
+          "domain": "apple-dns.net",
           "port": 443,
           "description": "Connection to Apple Servers (https) (ASN: 714, Country: US, Owner: APPLE-ENGINEERING)"
         },
         {
-          "as_number": 714,
+          "domain": "*.push-apple.com.akadns.net",
           "port": 5223,
           "description": "Connection to Apple Servers (apple push) (ASN: 714, Country: US, Owner: APPLE-ENGINEERING)"
         }
