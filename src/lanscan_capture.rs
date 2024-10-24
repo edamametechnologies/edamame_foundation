@@ -1357,6 +1357,10 @@ impl LANScanCapture {
                                         ip_addr,
                                         domain_name
                                     );
+                                    debug!(
+                                        "DNS resolution (using capture): {} -> {}",
+                                        ip_addr, domain_name
+                                    );
                                     dns_resolutions.insert(ip_addr, domain_name);
                                 }
                             }
@@ -1370,11 +1374,14 @@ impl LANScanCapture {
                                         ip_addr,
                                         domain_name
                                     );
+                                    debug!(
+                                        "DNS resolution (using capture): {} -> {}",
+                                        ip_addr, domain_name
+                                    );
                                     dns_resolutions.insert(ip_addr, domain_name);
                                 }
                             }
                             _ => {
-                                // Handle other DNS record types if necessary
                                 trace!(
                                     "Ignored DNS record type for domain: {}",
                                     answer.name.to_string()
@@ -1385,7 +1392,7 @@ impl LANScanCapture {
                 }
             }
             Err(e) => {
-                trace!("Failed to parse DNS packet: {}", e);
+                warn!("Failed to parse DNS packet: {}", e);
             }
         }
     }
@@ -1412,7 +1419,7 @@ impl LANScanCapture {
                             let mut dns_payload = tcp.payload().to_vec();
                             // Ensure that the payload has at least 2 bytes for the length
                             if dns_payload.len() < 2 {
-                                trace!("DNS-over-TCP payload too short: {:?}", dns_payload);
+                                warn!("DNS-over-TCP payload too short: {:?}", dns_payload);
                                 return None;
                             }
                             // Strip the first two bytes (length prefix)
