@@ -744,6 +744,7 @@ impl LANScanCapture {
                             None,
                             Some(&session_info.session.dst_ip.to_string()),
                             session_info.session.dst_port,
+                            session_info.session.protocol.to_string().as_str(),
                             whitelist_name,
                             session_info.dst_asn.as_ref().map(|asn| asn.as_number),
                             session_info
@@ -771,6 +772,7 @@ impl LANScanCapture {
                                 Some(&dst_domain),
                                 None,
                                 session_info.session.dst_port,
+                                session_info.session.protocol.to_string().as_str(),
                                 whitelist_name,
                                 session_info.dst_asn.as_ref().map(|asn| asn.as_number),
                                 session_info
@@ -796,6 +798,7 @@ impl LANScanCapture {
                         None,
                         Some(&session_info.session.dst_ip.to_string()),
                         session_info.session.dst_port,
+                        session_info.session.protocol.to_string().as_str(),
                         whitelist_name,
                         session_info.dst_asn.as_ref().map(|asn| asn.as_number),
                         session_info
