@@ -60,7 +60,6 @@ pub static WHITELISTS: &str = r#"{
           "description": "Connection to Cloudflare (http) (ASN: 13335, Country: US, Owner: CLOUDFLARENET)"
         },
         {
-          "domain": "*.pool.ntp.org",
           "port": 123,
           "description": "Connection to NTP"
         }
@@ -128,5 +127,5 @@ pub static WHITELISTS: &str = r#"{
       ]
     }
   ],
-  "signature": "ff2f16c40fb277719760b6db19904ccc79055163522f59c675f7ed92cbd5195c"
+  "signature": "0876cecf231a2cabf5f4897596eb2ed86507f7859313d429e7bf914f348ac88d"
 }"#;

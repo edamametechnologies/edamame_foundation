@@ -18,6 +18,7 @@ pub struct WhitelistEndpoint {
     pub domain: Option<String>,
     pub ip: Option<String>,
     pub port: Option<u16>,
+    pub protocol: Option<String>,
     pub as_number: Option<u32>,
     pub as_country: Option<String>,
     pub as_owner: Option<String>,
@@ -139,6 +140,7 @@ pub async fn is_session_in_whitelist(
     session_domain: Option<&str>,
     session_ip: Option<&str>,
     port: u16,
+    protocol: &str,
     whitelist_name: &str,
     as_number: Option<u32>,
     as_country: Option<&str>,
@@ -146,10 +148,11 @@ pub async fn is_session_in_whitelist(
     l7_process_name: Option<&str>,
 ) -> bool {
     trace!(
-        "Checking if domain: {:?}, ip: {:?}, port: {} is in whitelist {} with ASN {:?}, Country {:?}, Owner {:?}, L7 Process {:?}",
+        "Checking if domain: {:?}, ip: {:?}, port: {} ({}) is in whitelist {} with ASN {:?}, Country {:?}, Owner {:?}, L7 Process {:?}",
         session_domain,
         session_ip,
         port,
+        protocol,
         whitelist_name,
         as_number,
         as_country,
@@ -181,6 +184,7 @@ pub async fn is_session_in_whitelist(
             session_domain,
             session_ip,
             port,
+            protocol,
             as_number,
             as_country,
             as_owner,
@@ -195,6 +199,7 @@ fn endpoint_matches(
     session_domain: Option<&str>,
     session_ip: Option<&str>,
     port: u16,
+    protocol: &str,
     as_number: Option<u32>,
     as_country: Option<&str>,
     as_owner: Option<&str>,
@@ -204,6 +209,7 @@ fn endpoint_matches(
     let domain_match = domain_matches(session_domain, &endpoint.domain);
     let ip_match = ip_matches(session_ip, &endpoint.ip);
     let port_match = port_matches(port, endpoint.port);
+    let protocol_match = protocol_matches(protocol, &endpoint.protocol);
     let asn_match = as_number_matches(as_number, endpoint.as_number);
     let country_match = as_country_matches(as_country, &endpoint.as_country);
     let owner_match = as_owner_matches(as_owner, &endpoint.as_owner);
@@ -212,6 +218,7 @@ fn endpoint_matches(
     if domain_match
         && ip_match
         && port_match
+        && protocol_match
         && asn_match
         && country_match
         && owner_match
@@ -221,11 +228,12 @@ fn endpoint_matches(
         true
     } else {
         trace!(
-            "Did not match whitelist endpoint: {:?}, Reasons: domain_match={}, ip_match={}, port_match={}, asn_match={}, country_match={}, owner_match={}, l7_match={}",
+            "Did not match whitelist endpoint: {:?}, Reasons: domain_match={}, ip_match={}, port_match={}, protocol_match={}, asn_match={}, country_match={}, owner_match={}, l7_match={}",
             endpoint,
             domain_match,
             ip_match,
             port_match,
+            protocol_match,
             asn_match,
             country_match,
             owner_match,
@@ -330,6 +338,14 @@ fn l7_process_name_matches(session_l7: Option<&str>, whitelist_l7: &Option<Strin
     }
 }
 
+fn protocol_matches(session_protocol: &str, whitelist_protocol: &Option<String>) -> bool {
+    match whitelist_protocol {
+        // Convert to uppercase both sides
+        Some(w_protocol) => session_protocol.eq_ignore_ascii_case(w_protocol),
+        None => true,
+    }
+}
+
 /// Updates the whitelists by fetching the latest data from the specified branch.
 /// This function utilizes the `CloudModel` to perform the update.
 pub async fn update_whitelists(branch: &str) -> Result<UpdateStatus> {
@@ -374,6 +390,7 @@ mod tests {
                         domain: Some("example.com".to_string()),
                         ip: None,
                         port: Some(443),
+                        protocol: Some("TCP".to_string()),
                         as_number: None,
                         as_country: None,
                         as_owner: None,
@@ -388,6 +405,7 @@ mod tests {
                         domain: None,
                         ip: Some("192.168.1.0/24".to_string()),
                         port: Some(80),
+                        protocol: Some("TCP".to_string()),
                         as_number: Some(12345),
                         as_country: Some("US".to_string()),
                         as_owner: Some("Test ISP".to_string()),
@@ -402,6 +420,7 @@ mod tests {
                         domain: Some("*.example.com".to_string()),
                         ip: None,
                         port: None,
+                        protocol: Some("TCP".to_string()),
                         as_number: None,
                         as_country: None,
                         as_owner: None,
@@ -431,6 +450,7 @@ mod tests {
                 Some("example.com"),
                 None,
                 443,
+                "TCP",
                 "extended_whitelist",
                 None,
                 None,
@@ -447,6 +467,7 @@ mod tests {
                 None,
                 Some("192.168.1.100"),
                 80,
+                "TCP",
                 "extended_whitelist",
                 Some(12345),
                 Some("US"),
@@ -469,6 +490,7 @@ mod tests {
                 Some("sub.example.com"),
                 None,
                 80,
+                "TCP",
                 "wildcard_whitelist",
                 None,
                 None,
@@ -485,6 +507,7 @@ mod tests {
                 Some("sub.sub2.example.com"),
                 None,
                 80,
+                "TCP",
                 "wildcard_whitelist",
                 None,
                 None,
@@ -501,6 +524,7 @@ mod tests {
                 Some("example.org"),
                 None,
                 80,
+                "TCP",
                 "wildcard_whitelist",
                 None,
                 None,
@@ -523,6 +547,7 @@ mod tests {
                 None,
                 Some("192.168.1.100"),
                 80,
+                "TCP",
                 "extended_whitelist",
                 Some(12345),
                 Some("US"),
@@ -539,6 +564,7 @@ mod tests {
                 None,
                 Some("192.168.1.100"),
                 80,
+                "TCP",
                 "extended_whitelist",
                 Some(12345),
                 Some("UK"), // Different country
@@ -561,6 +587,7 @@ mod tests {
                 Some("example.com"),
                 None,
                 443,
+                "TCP",
                 "nonexistent_whitelist",
                 None,
                 None,
@@ -583,6 +610,7 @@ mod tests {
                 None,
                 Some("192.168.1.100"),
                 80,
+                "TCP",
                 "extended_whitelist",
                 Some(12345),
                 Some("US"),
@@ -599,6 +627,7 @@ mod tests {
                 None,
                 Some("192.168.1.100"),
                 80,
+                "TCP",
                 "extended_whitelist",
                 Some(12345),
                 Some("US"),
@@ -641,6 +670,7 @@ mod tests {
                         domain: Some("a.com".to_string()),
                         ip: None,
                         port: Some(80),
+                        protocol: Some("TCP".to_string()),
                         as_number: None,
                         as_country: None,
                         as_owner: None,
@@ -655,6 +685,7 @@ mod tests {
                         domain: Some("b.com".to_string()),
                         ip: None,
                         port: Some(80),
+                        protocol: Some("TCP".to_string()),
                         as_number: None,
                         as_country: None,
                         as_owner: None,
@@ -669,6 +700,7 @@ mod tests {
                         domain: Some("c.com".to_string()),
                         ip: None,
                         port: Some(80),
+                        protocol: Some("TCP".to_string()),
                         as_number: None,
                         as_country: None,
                         as_owner: None,
@@ -692,6 +724,7 @@ mod tests {
                 Some("a.com"),
                 None,
                 80,
+                "TCP",
                 "whitelist_c",
                 None,
                 None,
@@ -707,6 +740,7 @@ mod tests {
                 Some("b.com"),
                 None,
                 80,
+                "TCP",
                 "whitelist_a",
                 None,
                 None,
@@ -722,6 +756,7 @@ mod tests {
                 Some("c.com"),
                 None,
                 80,
+                "TCP",
                 "whitelist_b",
                 None,
                 None,
@@ -748,6 +783,7 @@ mod tests {
                         domain: Some("*.example.com".to_string()),
                         ip: None,
                         port: None,
+                        protocol: Some("TCP".to_string()),
                         as_number: None,
                         as_country: None,
                         as_owner: None,
@@ -758,6 +794,7 @@ mod tests {
                         domain: Some("specific.domain.com".to_string()),
                         ip: None,
                         port: None,
+                        protocol: Some("TCP".to_string()),
                         as_number: None,
                         as_country: None,
                         as_owner: None,
@@ -781,6 +818,7 @@ mod tests {
                 Some("sub.example.com"),
                 None,
                 80,
+                "TCP",
                 "wildcard_domain_whitelist",
                 None,
                 None,
@@ -797,6 +835,7 @@ mod tests {
                 Some("deep.sub.example.com"),
                 None,
                 80,
+                "TCP",
                 "wildcard_domain_whitelist",
                 None,
                 None,
@@ -813,6 +852,7 @@ mod tests {
                 Some("example.com"),
                 None,
                 80,
+                "TCP",
                 "wildcard_domain_whitelist",
                 None,
                 None,
@@ -829,6 +869,7 @@ mod tests {
                 Some("specific.domain.com"),
                 None,
                 80,
+                "TCP",
                 "wildcard_domain_whitelist",
                 None,
                 None,
@@ -845,6 +886,7 @@ mod tests {
                 Some("otherdomain.com"),
                 None,
                 80,
+                "TCP",
                 "wildcard_domain_whitelist",
                 None,
                 None,
@@ -869,6 +911,7 @@ mod tests {
                     domain: None,
                     ip: Some("192.168.1.0/24".to_string()),
                     port: None,
+                    protocol: Some("TCP".to_string()),
                     as_number: None,
                     as_country: None,
                     as_owner: None,
@@ -891,6 +934,7 @@ mod tests {
                 None,
                 Some("192.168.1.50"),
                 80,
+                "TCP",
                 "ipv4_network_whitelist",
                 None,
                 None,
@@ -907,6 +951,7 @@ mod tests {
                 None,
                 Some("192.168.2.50"),
                 80,
+                "TCP",
                 "ipv4_network_whitelist",
                 None,
                 None,
@@ -931,6 +976,7 @@ mod tests {
                     domain: None,
                     ip: Some("2001:db8::/32".to_string()),
                     port: None,
+                    protocol: Some("TCP".to_string()),
                     as_number: None,
                     as_country: None,
                     as_owner: None,
@@ -953,6 +999,7 @@ mod tests {
                 None,
                 Some("2001:db8::1"),
                 80,
+                "TCP",
                 "ipv6_network_whitelist",
                 None,
                 None,
@@ -969,6 +1016,7 @@ mod tests {
                 None,
                 Some("2001:db9::1"),
                 80,
+                "TCP",
                 "ipv6_network_whitelist",
                 None,
                 None,
@@ -977,6 +1025,73 @@ mod tests {
             )
             .await,
             "Should not match IP outside IPv6 network"
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_port_only_whitelist() {
+        // Initialize test data with a port-only whitelist
+        let test_whitelist_json = WhitelistsJSON {
+            date: "2024-10-20".to_string(),
+            signature: Some("test_signature".to_string()),
+            whitelists: vec![WhitelistInfo {
+                name: "port_only_whitelist".to_string(),
+                inherits: None,
+                endpoints: vec![WhitelistEndpoint {
+                    domain: None,
+                    ip: None,
+                    port: Some(8080),
+                    protocol: None,
+                    as_number: None,
+                    as_country: None,
+                    as_owner: None,
+                    l7_process_name: None,
+                    description: Some("Port-only endpoint".to_string()),
+                }],
+            }],
+        };
+
+        // Overwrite the global LISTS with the test data
+        let whitelists = Whitelists::new_from_json(test_whitelist_json);
+        LISTS
+            .write()
+            .await
+            .overwrite_with_test_data(whitelists)
+            .await;
+
+        // Test that a session with port 8080 matches the whitelist
+        assert!(
+            is_session_in_whitelist(
+                None,                  // session_domain
+                None,                  // session_ip
+                8080,                  // port
+                "TCP",                 // protocol
+                "port_only_whitelist", // whitelist_name
+                None,                  // as_number
+                None,                  // as_country
+                None,                  // as_owner
+                None                   // l7_process_name
+            )
+            .await,
+            "Should match session with port 8080"
+        );
+
+        // Test that a session with a different port does not match
+        assert!(
+            !is_session_in_whitelist(
+                None,                  // session_domain
+                None,                  // session_ip
+                80,                    // port
+                "TCP",                 // protocol
+                "port_only_whitelist", // whitelist_name
+                None,                  // as_number
+                None,                  // as_country
+                None,                  // as_owner
+                None                   // l7_process_name
+            )
+            .await,
+            "Should not match session with port 80"
         );
     }
 }
