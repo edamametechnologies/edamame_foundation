@@ -102,17 +102,17 @@ pub static WHITELISTS: &str = r#"{
         {
           "domain": "*.apple-dns.net",
           "port": 443,
-          "description": "Connection to Apple Servers (https) (ASN: 714, Country: US, Owner: APPLE-ENGINEERING)"
+          "description": "Connection to Apple DNS"
+        },
+        {
+          "domain": "*.idms-apple.com.akadns.net",
+          "port": 443,
+          "description": "Connection to Apple DNS"
         },
         {
           "domain": "*.push-apple.com.akadns.net",
           "port": 5223,
-          "description": "Connection to Apple Servers (apple push) (ASN: 714, Country: US, Owner: APPLE-ENGINEERING)"
-        },
-        {
-          "domain": "*.idms-apple.apple-dns.net",
-          "port": 5223,
-          "description": "Connection to Apple Servers (apple push) (ASN: 714, Country: US, Owner: APPLE-ENGINEERING)"
+          "description": "Connection to Apple DNS"
         }
       ]
     },
