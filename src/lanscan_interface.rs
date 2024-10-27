@@ -90,6 +90,7 @@ pub fn get_valid_network_interfaces() -> Vec<(String, u8, String)> {
 }
 
 // Get the default interface name
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub fn get_default_interface() -> Option<(String, u8, String)> {
     match netdev::get_default_interface() {
         Ok(iface) => match iface.ipv4.first() {

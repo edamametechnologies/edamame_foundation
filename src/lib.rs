@@ -4,9 +4,12 @@ pub mod backend;
 pub mod cloud_model;
 pub mod health;
 pub mod helper_proto;
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub mod helper_rx;
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub mod helper_rx_utility;
 pub mod helper_state;
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub mod helper_tx;
 pub mod history;
 pub mod lanscan_arp;

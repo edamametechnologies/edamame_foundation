@@ -56,10 +56,10 @@ use uuid::Uuid;
 static CONNECTION_ACTIVITY_TIMEOUT: ChronoDuration = ChronoDuration::seconds(60);
 // A session is considered current if it has been active in the last 300 seconds
 static CONNECTION_CURRENT_TIMEOUT: ChronoDuration = ChronoDuration::seconds(300);
-// Current whitelist exceptions
-static WHITELIST_EXCEPTION_TIMEOUT: ChronoDuration = CONNECTION_CURRENT_TIMEOUT;
 // Keep 2 hours of history
 static CONNECTION_RETENTION_TIMEOUT: ChronoDuration = ChronoDuration::seconds(60 * 60 * 2);
+// Current whitelist exceptions
+static WHITELIST_EXCEPTION_TIMEOUT: ChronoDuration = CONNECTION_RETENTION_TIMEOUT;
 
 #[derive(Debug)]
 enum ParsedPacket {
@@ -1991,5 +1991,82 @@ mod tests {
         } else {
             panic!("DNS-over-TCP resolution not found");
         };
+    }
+
+    #[tokio::test]
+    async fn test_whitelist_conformance_with_multiple_exceptions() {
+        let mut capture = LANScanCapture::new();
+        capture.set_whitelist("github").await;
+        capture.set_filter(SessionFilter::All).await;
+
+        // Add multiple non-conforming sessions
+        for i in 0..5 {
+            let session = Session {
+                protocol: Protocol::TCP,
+                src_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, i)),
+                src_port: 12345 + i as u16,
+                dst_ip: IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)),
+                dst_port: 80,
+            };
+
+            let stats = SessionStats {
+                start_time: Utc::now(),
+                end_time: None,
+                last_activity: Utc::now(),
+                inbound_bytes: 0,
+                outbound_bytes: 0,
+                orig_pkts: 0,
+                resp_pkts: 0,
+                orig_ip_bytes: 0,
+                resp_ip_bytes: 0,
+                history: String::new(),
+                conn_state: None,
+                missed_bytes: 0,
+                uid: Uuid::new_v4().to_string(),
+            };
+
+            let session_info = SessionInfo {
+                session: session.clone(),
+                stats,
+                status: SessionStatus {
+                    active: false,
+                    added: false,
+                    activated: false,
+                    deactivated: false,
+                },
+                is_local_src: false,
+                is_local_dst: false,
+                is_self_src: false,
+                is_self_dst: false,
+                src_domain: None,
+                dst_domain: None,
+                dst_service: None,
+                l7: None,
+                src_asn: None,
+                dst_asn: None,
+                is_whitelisted: WhitelistState::Unknown,
+            };
+
+            capture.sessions.insert(session.clone(), session_info);
+            capture.current_sessions.write().await.push(session.clone());
+        }
+
+        // Run whitelist check
+        LANScanCapture::check_whitelisted_destinations(
+            "github",
+            &capture.whitelist_conformance,
+            &capture.whitelist_exceptions,
+            &capture.sessions,
+            &capture.current_sessions,
+            &capture.last_whitelist_exception_time,
+        )
+        .await;
+
+        // Assert that conformance is false
+        assert!(!capture.get_whitelist_conformance().await);
+
+        // Assert that exceptions are recorded
+        let exceptions = capture.get_whitelist_exceptions().await;
+        assert_eq!(exceptions.len(), 5);
     }
 }
