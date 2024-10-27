@@ -1,4 +1,3 @@
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 pub fn get_admin_status() -> bool {
     // macOS and Linux
     #[cfg(any(target_os = "linux", target_os = "macos"))]
