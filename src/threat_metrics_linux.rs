@@ -58,8 +58,8 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "minversion": 5,
         "maxversion": 0,
         "class": "cli",
-        "elevation": "system",
-        "target": "apt remove edamame_helper",
+        "elevation": "admin",
+        "target": "sudo apt remove edamame_helper",
         "education": []
       }
     },
@@ -728,8 +728,8 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "minversion": 5,
         "maxversion": 0,
         "class": "cli",
-        "elevation": "system",
-        "target": "apt list --upgradeable 2>/dev/null | grep 'upgradable'",
+        "elevation": "admin",
+        "target": "sudo apt list --upgradeable 2>/dev/null | grep 'upgradable'",
         "education": []
       },
       "remediation": {
@@ -737,7 +737,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "minversion": 5,
         "maxversion": 0,
         "class": "cli",
-        "elevation": "system",
+        "elevation": "admin",
         "target": "sudo apt update && sudo apt upgrade -y",
         "education": []
       },
