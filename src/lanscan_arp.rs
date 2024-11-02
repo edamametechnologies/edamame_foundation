@@ -12,6 +12,13 @@ use regex::Regex;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::time::Duration;
 
+fn mac_address_is_valid(mac_address: &str) -> bool {
+    // Syntax is xx:xx:xx:xx:xx:xx
+    mac_address.len() == 17 && mac_address.chars().all(|c| c.is_ascii_hexdigit() || c == ':')
+    // Check we don't have 00:00:00:00:00:00
+    && mac_address != "00:00:00:00:00:00"
+}
+
 // Gets the MAC address of a device given its IP address.
 pub async fn get_mac_address_from_ip(interface_name: &str, ip_addr: &IpAddr) -> Result<String> {
     trace!(
@@ -56,6 +63,12 @@ pub async fn get_mac_address_from_ip(interface_name: &str, ip_addr: &IpAddr) -> 
         let mac = caps[2].trim().to_string();
         // Convert to lowercase and replace - by :
         let formatted_mac = mac.to_lowercase().replace("-", ":");
+
+        // Check that the MAC address is valid
+        if !mac_address_is_valid(&formatted_mac) {
+            return Err(anyhow!("Invalid MAC address: {}", formatted_mac));
+        }
+
         Ok(formatted_mac)
     }
 
@@ -84,6 +97,11 @@ pub async fn get_mac_address_from_ip(interface_name: &str, ip_addr: &IpAddr) -> 
                     .ip_to_mac(*ipv4_addr, Some(Duration::from_millis(8000)))
                     .await?;
                 trace!("Ending ARP scan");
+                // Check that the MAC address is valid
+                if !mac_address_is_valid(&mac_address.to_string()) {
+                    return Err(anyhow!("Invalid MAC address: {}", mac_address));
+                }
+
                 Ok(mac_address.to_string())
             }
             _ => Err(anyhow!("Only IPv4 addresses are supported")),
