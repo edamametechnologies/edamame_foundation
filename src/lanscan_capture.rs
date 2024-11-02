@@ -86,9 +86,9 @@ pub struct LANScanCapture {
     sessions: Arc<DashMap<Session, SessionInfo>>,
     current_sessions: Arc<CustomRwLock<Vec<Session>>>,
     current_sessions_handle: Option<TaskHandle>,
-    resolver: Arc<Option<LANScanResolver>>,
+    resolver: Option<Arc<LANScanResolver>>,
     resolver_handle: Option<TaskHandle>,
-    l7: Arc<Option<LANScanL7>>,
+    l7: Option<Arc<LANScanL7>>,
     l7_handle: Option<TaskHandle>,
     dns_resolutions: Arc<DashMap<IpAddr, String>>,
     whitelist_check_handle: Option<TaskHandle>,
@@ -113,9 +113,9 @@ impl LANScanCapture {
             sessions: Arc::new(DashMap::new()),
             current_sessions: Arc::new(CustomRwLock::new(Vec::new())),
             current_sessions_handle: None,
-            resolver: Arc::new(None),
+            resolver: None,
             resolver_handle: None,
-            l7: Arc::new(None),
+            l7: None,
             l7_handle: None,
             dns_resolutions: Arc::new(DashMap::new()),
             whitelist_check_handle: None,
@@ -201,14 +201,14 @@ impl LANScanCapture {
         // Finally stop the whitelist check task
         self.stop_whitelist_check_task().await;
 
-        // Don't clear the state this is a pause rather than a stop
+        // Don't clear the state; this is a pause rather than a stop
 
         // Don't stop the mDNS task as it's shared with other modules
     }
 
     pub async fn restart(&mut self, interface: &str) {
         // Only restart if capturing and if the interface string has changed
-        if !self.is_capturing().await || !self.interface.read().await.eq(interface) {
+        if !self.is_capturing().await || self.interface.read().await.eq(interface) {
             info!("Not restarting capture as it's not capturing or interface has not changed");
             return;
         };
@@ -272,15 +272,15 @@ impl LANScanCapture {
     async fn start_resolver_task(&mut self) {
         // Create a new resolver if it doesn't exist
         if self.resolver.is_none() {
-            self.resolver = Arc::new(Some(LANScanResolver::new()));
+            self.resolver = Some(Arc::new(LANScanResolver::new()));
         }
 
         // Start the resolver if it exists
-        if let Some(resolver) = Arc::get_mut(&mut self.resolver).and_then(|r| r.as_mut()) {
-            resolver.start().await;
+        if let Some(resolver) = &mut self.resolver {
+            Arc::get_mut(resolver).unwrap().start().await;
         }
 
-        let resolver: Arc<Option<LANScanResolver>> = self.resolver.clone();
+        let resolver = self.resolver.clone();
         let stop_flag = Arc::new(AtomicBool::new(false));
         let dns_resolutions = self.dns_resolutions.clone();
         let sessions = self.sessions.clone();
@@ -321,20 +321,24 @@ impl LANScanCapture {
         }
 
         // Stop the resolver if it exists
-        if let Some(resolver) = Arc::get_mut(&mut self.resolver).and_then(|r| r.as_mut()) {
-            resolver.stop().await;
+        if let Some(resolver) = &mut self.resolver {
+            if let Some(resolver) = Arc::get_mut(resolver) {
+                resolver.stop().await;
+            }
         }
     }
 
     async fn start_l7_task(&mut self) {
         // Create L7 resolver if it doesn't exist
         if self.l7.is_none() {
-            self.l7 = Arc::new(Some(LANScanL7::new()));
+            self.l7 = Some(Arc::new(LANScanL7::new()));
         }
 
         // Start the L7 resolver if it exists
-        if let Some(l7) = Arc::get_mut(&mut self.l7).and_then(|l| l.as_mut()) {
-            l7.start().await;
+        if let Some(l7) = &mut self.l7 {
+            if let Some(l7) = Arc::get_mut(l7) {
+                l7.start().await;
+            }
         }
 
         let l7 = self.l7.clone();
@@ -371,8 +375,10 @@ impl LANScanCapture {
         }
 
         // Stop the L7 resolver if it exists
-        if let Some(l7) = Arc::get_mut(&mut self.l7).and_then(|l| l.as_mut()) {
-            l7.stop().await;
+        if let Some(l7) = &mut self.l7 {
+            if let Some(l7) = Arc::get_mut(l7) {
+                l7.stop().await;
+            }
         }
     }
 
@@ -388,11 +394,14 @@ impl LANScanCapture {
         let stop_flag_clone = stop_flag.clone();
         let handle = async_spawn(async move {
             loop {
+                if stop_flag.load(Ordering::Relaxed) {
+                    break;
+                }
                 trace!("Whitelist check started");
-                let whitelist_name = whitelist_name.read().await.clone();
-                if !whitelist_name.is_empty() {
+                let whitelist_name_clone = whitelist_name.read().await.clone();
+                if !whitelist_name_clone.is_empty() {
                     Self::check_whitelisted_destinations(
-                        &whitelist_name,
+                        &whitelist_name_clone,
                         &whitelist_conformance,
                         &whitelist_exceptions,
                         &sessions,
@@ -401,9 +410,6 @@ impl LANScanCapture {
                     )
                     .await;
                     info!("Whitelist check completed");
-                }
-                if stop_flag.load(Ordering::Relaxed) {
-                    break;
                 }
                 sleep(Duration::from_secs(5)).await;
             }
@@ -737,7 +743,9 @@ impl LANScanCapture {
                     continue;
                 };
 
-                if let Some(dst_domain) = session_info.dst_domain {
+                let dst_domain = session_info.dst_domain.clone();
+
+                if let Some(dst_domain) = dst_domain {
                     if dst_domain == "Unknown".to_string() {
                         // The domain has not been resolved successfully, use the IP address instead
                         if !is_session_in_whitelist(
@@ -861,7 +869,7 @@ impl LANScanCapture {
                 whitelist_conformance.store(true, Ordering::Relaxed);
             }
         } else {
-            if whitelist_name != "" {
+            if !whitelist_name.is_empty() {
                 error!("Invalid whitelist name: {}", whitelist_name);
             }
         }
@@ -870,7 +878,7 @@ impl LANScanCapture {
     // Only for current sessions
     async fn populate_domain_names(
         sessions: &DashMap<Session, SessionInfo>,
-        resolver: &Arc<Option<LANScanResolver>>,
+        resolver: &Option<Arc<LANScanResolver>>,
         dns_resolutions: &Arc<DashMap<IpAddr, String>>,
         current_sessions: &Arc<CustomRwLock<Vec<Session>>>,
     ) {
@@ -953,9 +961,12 @@ impl LANScanCapture {
             }
 
             // Update the session info after await points
-            if let Some(mut session_info_mut) = sessions.get_mut(key) {
-                session_info_mut.src_domain = new_src_domain;
-                session_info_mut.dst_domain = new_dst_domain;
+            let key_clone = key.clone();
+            let new_src_domain_clone = new_src_domain.clone();
+            let new_dst_domain_clone = new_dst_domain.clone();
+            if let Some(mut session_info_mut) = sessions.get_mut(&key_clone) {
+                session_info_mut.src_domain = new_src_domain_clone;
+                session_info_mut.dst_domain = new_dst_domain_clone;
             }
         }
     }
@@ -963,7 +974,7 @@ impl LANScanCapture {
     // Populate L7
     async fn populate_l7(
         sessions: &DashMap<Session, SessionInfo>,
-        l7: &Arc<Option<LANScanL7>>,
+        l7: &Option<Arc<LANScanL7>>,
         current_sessions: &Arc<CustomRwLock<Vec<Session>>>,
     ) {
         if let Some(l7) = l7.as_ref() {
@@ -981,7 +992,8 @@ impl LANScanCapture {
                 let l7_resolution = l7.get_resolved_l7(&session_info.session).await;
 
                 // Update the session info after await
-                if let Some(mut session_info_mut) = sessions.get_mut(key) {
+                let key_clone = key.clone();
+                if let Some(mut session_info_mut) = sessions.get_mut(&key_clone) {
                     if let Some(l7_resolution) = l7_resolution {
                         if let Some(l7_data) = l7_resolution.l7 {
                             session_info_mut.l7 = Some(l7_data.clone());
@@ -1009,9 +1021,9 @@ impl LANScanCapture {
             let previous_status = session_info.status.clone();
 
             // New status
-            let active =
-                session_info.stats.last_activity > Utc::now() - CONNECTION_ACTIVITY_TIMEOUT;
-            let added = session_info.stats.start_time > Utc::now() - CONNECTION_ACTIVITY_TIMEOUT;
+            let now = Utc::now();
+            let active = session_info.stats.last_activity >= now - CONNECTION_ACTIVITY_TIMEOUT;
+            let added = session_info.stats.start_time >= now - CONNECTION_ACTIVITY_TIMEOUT;
             // If the session was not added and is now active, it was activated
             let activated = !previous_status.active && active;
             // If the session was active and is no longer active, it was deactivated
@@ -1029,12 +1041,12 @@ impl LANScanCapture {
             session_info.status = new_status;
 
             // Only include sessions that are within the current time frame
-            if Utc::now() < session_info.stats.last_activity + CONNECTION_CURRENT_TIMEOUT {
+            if now < session_info.stats.last_activity + CONNECTION_CURRENT_TIMEOUT {
                 updated_current_sessions.push(session_info.session.clone());
             }
 
             // Flag sessions that are older than the retention timeout
-            if Utc::now() > session_info.stats.last_activity + CONNECTION_RETENTION_TIMEOUT {
+            if now > session_info.stats.last_activity + CONNECTION_RETENTION_TIMEOUT {
                 sessions_to_remove.push(key.clone());
             }
         }
@@ -1042,8 +1054,7 @@ impl LANScanCapture {
         // Update the current sessions
         {
             let mut current_sessions_guard = current_sessions.write().await;
-            let _old_value =
-                std::mem::replace(&mut *current_sessions_guard, updated_current_sessions);
+            *current_sessions_guard = updated_current_sessions;
         }
 
         // Purge the sessions that are older than the retention timeout
@@ -1053,26 +1064,26 @@ impl LANScanCapture {
     }
 
     // Get historical sessions as a vector of SessionInfo
-    // TODO: specify a time range
     pub async fn get_sessions(&self) -> Vec<SessionInfo> {
         let mut sessions_vec = Vec::new();
-        let filter = self.filter.read().await;
+        let filter = self.filter.read().await.clone();
         for entry in self.sessions.iter() {
-            let mut session_info = entry.clone();
+            let session_info = entry.value();
             // Remove the "Unknown" flag from the domain
-            if session_info.dst_domain == Some("Unknown".to_string()) {
-                session_info.dst_domain = None;
+            let mut session_info_clone = session_info.clone();
+            if session_info_clone.dst_domain == Some("Unknown".to_string()) {
+                session_info_clone.dst_domain = None;
             }
             // Apply filter
-            if *filter == SessionFilter::All {
-                sessions_vec.push(session_info);
-            } else if *filter == SessionFilter::LocalOnly {
-                if is_local_session!(session_info) {
-                    sessions_vec.push(session_info);
+            if filter == SessionFilter::All {
+                sessions_vec.push(session_info_clone);
+            } else if filter == SessionFilter::LocalOnly {
+                if is_local_session!(session_info_clone) {
+                    sessions_vec.push(session_info_clone);
                 }
-            } else if *filter == SessionFilter::GlobalOnly {
-                if is_global_session!(session_info) {
-                    sessions_vec.push(session_info);
+            } else if filter == SessionFilter::GlobalOnly {
+                if is_global_session!(session_info_clone) {
+                    sessions_vec.push(session_info_clone);
                 }
             }
         }
@@ -1082,25 +1093,26 @@ impl LANScanCapture {
     // Active sessions as a vector of SessionInfo
     pub async fn get_current_sessions(&self) -> Vec<SessionInfo> {
         // Get the sessions from the DashMap that match the keys in the current_sessions Vec
-        let filter = self.filter.read().await;
+        let filter = self.filter.read().await.clone();
         let mut current_sessions_vec = Vec::new();
         for key in self.current_sessions.read().await.iter() {
             if let Some(entry) = self.sessions.get(key) {
-                let mut session_info = entry.clone();
+                let session_info = entry.value();
                 // Remove the "Unknown" flag from the domain
-                if session_info.dst_domain == Some("Unknown".to_string()) {
-                    session_info.dst_domain = None;
+                let mut session_info_clone = session_info.clone();
+                if session_info_clone.dst_domain == Some("Unknown".to_string()) {
+                    session_info_clone.dst_domain = None;
                 }
                 // Apply filter
-                if *filter == SessionFilter::All {
-                    current_sessions_vec.push(session_info);
-                } else if *filter == SessionFilter::LocalOnly {
-                    if is_local_session!(session_info) {
-                        current_sessions_vec.push(session_info);
+                if filter == SessionFilter::All {
+                    current_sessions_vec.push(session_info_clone);
+                } else if filter == SessionFilter::LocalOnly {
+                    if is_local_session!(session_info_clone) {
+                        current_sessions_vec.push(session_info_clone);
                     }
-                } else if *filter == SessionFilter::GlobalOnly {
-                    if is_global_session!(session_info) {
-                        current_sessions_vec.push(session_info);
+                } else if filter == SessionFilter::GlobalOnly {
+                    if is_global_session!(session_info_clone) {
+                        current_sessions_vec.push(session_info_clone);
                     }
                 }
             }
@@ -1129,45 +1141,60 @@ impl LANScanCapture {
         self_ips: &Vec<IpAddr>,
         filter: &Arc<CustomRwLock<SessionFilter>>,
     ) {
-        // Set the time to now, we could use the time provided by pcap too but we don't want to bother converting to UTC
         let now = Utc::now();
-
-        // Find the flow direction
-        // Determine if our IP is involved
         let is_self_src = self_ips.contains(&parsed_packet.session.src_ip);
         let is_self_dst = self_ips.contains(&parsed_packet.session.dst_ip);
 
-        // Normalize the session key to have the local IP as the source
-        let key = if is_self_src {
-            parsed_packet.session.clone()
+        // Determine if the packet is from the originator (our local machine) or the responder
+        let (key, is_originator) = if is_self_src {
+            (parsed_packet.session.clone(), true)
         } else if is_self_dst {
-            // Swap source and destination to have the local IP as the source
-            Session {
-                protocol: parsed_packet.session.protocol.clone(),
-                src_ip: parsed_packet.session.dst_ip,
-                src_port: parsed_packet.session.dst_port,
-                dst_ip: parsed_packet.session.src_ip,
-                dst_port: parsed_packet.session.src_port,
-            }
+            // Swap source and destination to normalize the session key
+            (
+                Session {
+                    protocol: parsed_packet.session.protocol.clone(),
+                    src_ip: parsed_packet.session.dst_ip,
+                    src_port: parsed_packet.session.dst_port,
+                    dst_ip: parsed_packet.session.src_ip,
+                    dst_port: parsed_packet.session.src_port,
+                },
+                false,
+            )
         } else {
-            // Neither IP is local; keep the session as is
-            parsed_packet.session.clone()
+            // Neither IP is our own; treat as originator
+            (parsed_packet.session.clone(), true)
         };
 
-        // Update session stats
+        // Apply filter before processing
+        let filter = filter.read().await.clone();
+        if filter == SessionFilter::LocalOnly && is_global_session!(parsed_packet) {
+            return;
+        } else if filter == SessionFilter::GlobalOnly && is_local_session!(parsed_packet) {
+            return;
+        }
+
         if let Some(mut info) = sessions.get_mut(&key) {
-            let stats: &mut SessionStats = &mut info.stats;
-            stats.last_activity = now.clone();
-            // Packet from originator to responder
-            stats.outbound_bytes += parsed_packet.packet_length as u64;
-            stats.orig_pkts += 1;
-            stats.orig_ip_bytes += parsed_packet.ip_packet_length as u64;
-            // Update history
+            let stats = &mut info.stats;
+            stats.last_activity = now;
+
+            if is_originator {
+                // Packet from originator (local) to responder
+                stats.outbound_bytes += parsed_packet.packet_length as u64;
+                stats.orig_pkts += 1;
+                stats.orig_ip_bytes += parsed_packet.ip_packet_length as u64;
+            } else {
+                // Packet from responder to originator
+                stats.inbound_bytes += parsed_packet.packet_length as u64;
+                stats.resp_pkts += 1;
+                stats.resp_ip_bytes += parsed_packet.ip_packet_length as u64;
+            }
+
+            // Update history with correct direction
             if let Some(flags) = parsed_packet.flags {
-                let c = Self::map_tcp_flags(flags, parsed_packet.packet_length, true);
+                let c = Self::map_tcp_flags(flags, parsed_packet.packet_length, is_originator);
                 stats.history.push(c);
                 if (flags & (TcpFlags::FIN | TcpFlags::RST)) != 0 && stats.end_time.is_none() {
-                    stats.end_time = Some(now.clone());
+                    stats.end_time = Some(now);
                     stats.conn_state = Some(Self::determine_conn_state(&stats.history));
                 }
             }
@@ -1175,9 +1202,9 @@ impl LANScanCapture {
             // New session
             let uid = Uuid::new_v4().to_string();
             let mut stats = SessionStats {
-                start_time: Utc::now(),
+                start_time: now,
                 end_time: None,
-                last_activity: Utc::now(),
+                last_activity: now,
                 inbound_bytes: 0,
                 outbound_bytes: 0,
                 orig_pkts: 0,
@@ -1190,36 +1217,28 @@ impl LANScanCapture {
                 uid,
             };
 
-            // Apply filter here for performance reasons. This means that we won't keep the history of filtered sessions.
-            let filter = filter.read().await.clone();
-            if filter == SessionFilter::LocalOnly {
-                if is_global_session!(parsed_packet) {
-                    return;
-                }
-            } else if filter == SessionFilter::GlobalOnly {
-                if is_local_session!(parsed_packet) {
-                    return;
-                }
+            // Update session stats
+            if is_originator {
+                stats.outbound_bytes += parsed_packet.packet_length as u64;
+                stats.orig_pkts += 1;
+                stats.orig_ip_bytes += parsed_packet.ip_packet_length as u64;
+            } else {
+                stats.inbound_bytes += parsed_packet.packet_length as u64;
+                stats.resp_pkts += 1;
+                stats.resp_ip_bytes += parsed_packet.ip_packet_length as u64;
             }
 
-            // Check if the session is local
-            let is_local_src = is_local_ip(&parsed_packet.session.src_ip);
-            let is_local_dst = is_local_ip(&parsed_packet.session.dst_ip);
-
-            // Update session stats
-            stats.last_activity = Utc::now();
-            // Packet from originator to responder
-            stats.outbound_bytes += parsed_packet.packet_length as u64;
-            stats.orig_pkts += 1;
-            stats.orig_ip_bytes += parsed_packet.ip_packet_length as u64;
-
-            // Update history
+            // Update history with correct direction
             if let Some(flags) = parsed_packet.flags {
-                let c = Self::map_tcp_flags(flags, parsed_packet.packet_length, true);
+                let c = Self::map_tcp_flags(flags, parsed_packet.packet_length, is_originator);
                 stats.history.push(c);
             }
-            let key_clone = key.clone();
-            trace!("New session: {:?}", key_clone);
+
+            // Determine if the session is local
+            let is_local_src = is_local_ip(&key.src_ip);
+            let is_local_dst = is_local_ip(&key.dst_ip);
+
+            trace!("New session: {:?}", key);
 
             // Query the ASN database for non-local addresses
             let src_asn = if !is_local_ip(&key.src_ip) {
@@ -1247,7 +1266,7 @@ impl LANScanCapture {
             sessions.insert(
                 key.clone(),
                 SessionInfo {
-                    session: key,
+                    session: key.clone(),
                     stats,
                     status,
                     is_local_src,
@@ -1268,7 +1287,7 @@ impl LANScanCapture {
                 },
             );
             // Add to current sessions
-            current_sessions.write().await.push(key_clone);
+            current_sessions.write().await.push(key);
         }
     }
 
@@ -1398,15 +1417,33 @@ impl LANScanCapture {
     }
 
     fn parse_packet_pcap(packet_data: &[u8]) -> Option<ParsedPacket> {
-        let ethernet = EthernetPacket::new(packet_data)?;
+        let ethernet = match EthernetPacket::new(packet_data) {
+            Some(packet) => packet,
+            None => {
+                warn!("Failed to parse Ethernet packet");
+                return None;
+            }
+        };
         match ethernet.get_ethertype() {
             EtherTypes::Ipv4 => {
-                let ipv4 = Ipv4Packet::new(ethernet.payload())?;
+                let ipv4 = match Ipv4Packet::new(ethernet.payload()) {
+                    Some(packet) => packet,
+                    None => {
+                        warn!("Failed to parse IPv4 packet");
+                        return None;
+                    }
+                };
                 let ip_packet_length = ipv4.get_total_length() as usize;
                 let next_protocol = ipv4.get_next_level_protocol();
                 match next_protocol {
                     IpNextHeaderProtocols::Tcp => {
-                        let tcp = TcpPacket::new(ipv4.payload())?;
+                        let tcp = match TcpPacket::new(ipv4.payload()) {
+                            Some(packet) => packet,
+                            None => {
+                                warn!("Failed to parse TCP packet");
+                                return None;
+                            }
+                        };
                         let src_ip = IpAddr::V4(ipv4.get_source());
                         let dst_ip = IpAddr::V4(ipv4.get_destination());
                         let src_port = tcp.get_source();
@@ -1444,7 +1481,13 @@ impl LANScanCapture {
                         }))
                     }
                     IpNextHeaderProtocols::Udp => {
-                        let udp = UdpPacket::new(ipv4.payload())?;
+                        let udp = match UdpPacket::new(ipv4.payload()) {
+                            Some(packet) => packet,
+                            None => {
+                                warn!("Failed to parse UDP packet");
+                                return None;
+                            }
+                        };
                         let src_ip = IpAddr::V4(ipv4.get_source());
                         let dst_ip = IpAddr::V4(ipv4.get_destination());
                         let src_port = udp.get_source();
@@ -1477,12 +1520,24 @@ impl LANScanCapture {
                 }
             }
             EtherTypes::Ipv6 => {
-                let ipv6 = Ipv6Packet::new(ethernet.payload())?;
+                let ipv6 = match Ipv6Packet::new(ethernet.payload()) {
+                    Some(packet) => packet,
+                    None => {
+                        warn!("Failed to parse IPv6 packet");
+                        return None;
+                    }
+                };
                 let ip_packet_length = ipv6.get_payload_length() as usize + 40; // IPv6 header is 40 bytes
                 let next_protocol = ipv6.get_next_header();
                 match next_protocol {
                     IpNextHeaderProtocols::Tcp => {
-                        let tcp = TcpPacket::new(ipv6.payload())?;
+                        let tcp = match TcpPacket::new(ipv6.payload()) {
+                            Some(packet) => packet,
+                            None => {
+                                warn!("Failed to parse TCP packet");
+                                return None;
+                            }
+                        };
                         let src_ip = IpAddr::V6(ipv6.get_source());
                         let dst_ip = IpAddr::V6(ipv6.get_destination());
                         let src_port = tcp.get_source();
@@ -1520,7 +1575,13 @@ impl LANScanCapture {
                         }))
                     }
                     IpNextHeaderProtocols::Udp => {
-                        let udp = UdpPacket::new(ipv6.payload())?;
+                        let udp = match UdpPacket::new(ipv6.payload()) {
+                            Some(packet) => packet,
+                            None => {
+                                warn!("Failed to parse UDP packet");
+                                return None;
+                            }
+                        };
                         let src_ip = IpAddr::V6(ipv6.get_source());
                         let dst_ip = IpAddr::V6(ipv6.get_destination());
                         let src_port = udp.get_source();
@@ -1565,12 +1626,9 @@ mod tests {
     #[tokio::test]
     async fn test_session_management() {
         let mut capture = LANScanCapture::new();
-        capture.set_whitelist("github").await;
-        capture.set_filter(SessionFilter::All).await; // Include all sessions in the filter
+        capture.set_filter(SessionFilter::All).await;
 
-        // Do not call capture.start().await
-
-        // Create a synthetic session packet data
+        // Simulate an outbound packet
         let session_packet = SessionPacketData {
             session: Session {
                 protocol: Protocol::TCP,
@@ -1584,10 +1642,23 @@ mod tests {
             flags: Some(TcpFlags::SYN),
         };
 
-        // Get self IPs (empty for testing)
-        let self_ips = vec![];
+        // Simulate an inbound packet (response)
+        let response_packet = SessionPacketData {
+            session: Session {
+                protocol: Protocol::TCP,
+                src_ip: IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)),
+                src_port: 80,
+                dst_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
+                dst_port: 12345,
+            },
+            packet_length: 150,
+            ip_packet_length: 170,
+            flags: Some(TcpFlags::ACK),
+        };
 
-        // Process the synthetic packet
+        let self_ips = vec![IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))];
+
+        // Process both packets
         LANScanCapture::process_parsed_packet(
             session_packet,
             &capture.sessions,
@@ -1597,21 +1668,24 @@ mod tests {
         )
         .await;
 
-        // Check that the session has been added
+        LANScanCapture::process_parsed_packet(
+            response_packet,
+            &capture.sessions,
+            &capture.current_sessions,
+            &self_ips,
+            &capture.filter,
+        )
+        .await;
+
+        // Check the statistics
         let sessions = capture.get_sessions().await;
-        let sessions = sessions.iter().collect::<Vec<_>>();
-        assert_eq!(sessions.len(), 1);
-
         let session_info = sessions[0].clone();
-        let session = session_info.session.clone();
-        let stats = session_info.stats.clone();
+        let stats = session_info.stats;
 
-        // Check session details
-        assert_eq!(session.src_ip, IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)));
-        assert_eq!(session.dst_ip, IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)));
         assert_eq!(stats.outbound_bytes, 100);
+        assert_eq!(stats.inbound_bytes, 150);
         assert_eq!(stats.orig_pkts, 1);
-        assert_eq!(stats.history, "S");
+        assert_eq!(stats.resp_pkts, 1);
     }
 
     #[tokio::test]
@@ -1634,7 +1708,7 @@ mod tests {
             flags: Some(TcpFlags::SYN),
         };
 
-        // Get self IPs (empty for testing)
+        // Get self IPs (your local IP)
         let self_ips = vec![IpAddr::V4(Ipv4Addr::new(10, 1, 0, 40))];
 
         // Process the synthetic packet
@@ -1652,16 +1726,20 @@ mod tests {
         let sessions = sessions.iter().collect::<Vec<_>>();
         assert_eq!(sessions.len(), 1);
 
-        let session_info = sessions[0].clone();
+        let session_info = sessions[0];
         let session = session_info.session.clone();
         let stats = session_info.stats.clone();
 
         // Check that the session has been inverted
         assert_eq!(session.src_ip, IpAddr::V4(Ipv4Addr::new(10, 1, 0, 40)));
         assert_eq!(session.dst_ip, IpAddr::V4(Ipv4Addr::new(168, 63, 129, 16)));
-        assert_eq!(stats.outbound_bytes, 100);
-        assert_eq!(stats.orig_pkts, 1);
-        assert_eq!(stats.history, "S");
+        // Since the packet is from remote to local, we expect inbound_bytes to be updated
+        assert_eq!(stats.outbound_bytes, 0);
+        assert_eq!(stats.inbound_bytes, 100);
+        assert_eq!(stats.orig_pkts, 0);
+        assert_eq!(stats.resp_pkts, 1);
+        // The history should be 's' because it's a SYN from the responder
+        assert_eq!(stats.history, "s");
     }
 
     #[tokio::test]

@@ -82,7 +82,6 @@ impl EdamameHelper for Helper {
         let signature = req_order.signature;
         let version = req_order.version;
 
-        debug!("Executing order {} / {}", ordertype, subordertype);
         rpc_run_safe(
             &ordertype,
             &subordertype,
