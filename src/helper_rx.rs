@@ -34,7 +34,7 @@ use tokio::sync::oneshot;
 use tokio::sync::Mutex;
 use tonic::transport::{Certificate, Identity, Server, ServerTlsConfig};
 use tonic::{Code, Request, Response, Status};
-use tracing::{debug, error, info, trace, warn};
+use tracing::{error, info, trace, warn};
 
 #[cfg(all(
     any(target_os = "macos", target_os = "linux"),
@@ -791,7 +791,6 @@ mod tests {
                 &self,
                 request: Request<HelperRequest>,
             ) -> std::result::Result<Response<HelperResponse>, Status> {
-                debug!("Received request: {:?}", request);
                 let req = request.into_inner();
                 if req.ordertype == "utilityorder" && req.subordertype == "helper_check" {
                     Ok(Response::new(HelperResponse {
