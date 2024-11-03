@@ -1,3 +1,4 @@
+use crate::runtime::async_spawn;
 use chrono::{DateTime, Utc};
 use lazy_static::lazy_static;
 use regex::Regex;
@@ -10,9 +11,9 @@ use tokio::sync::Mutex;
 use tokio::task;
 use tokio::time::Duration;
 use tracing::{debug, info, trace, warn};
-// Our own fork with minor adjustements
-use crate::runtime::async_spawn;
-use wez_mdns::{Host, QueryParameters};
+use crate::lanscan_arp::mac_address_is_valid;
+use wez_mdns::{Host, QueryParameters}; // Our own fork with minor adjustements
+
 
 lazy_static! {
     static ref MDNS_STOP: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
@@ -144,12 +145,26 @@ fn v6_to_mac(ipv6: &str) -> Option<String> {
         ipv6,
         mac
     );
-    Some(mac)
+
+    // Check if the MAC address is valid
+    if mac_address_is_valid(&mac) {
+        Some(mac)
+    } else {
+        None
+    }
 }
 
 fn extract_mac_address(input: &str) -> Option<String> {
     let re = Regex::new(r"([0-9a-fA-F]{2}[:-]){5}([0-9a-fA-F]{2})").unwrap();
-    re.find(input).map(|mat| mat.as_str().to_string())
+    if let Some(mac) = re.find(input).map(|mat| mat.as_str().to_string()) {
+        if mac_address_is_valid(&mac) {
+            Some(mac)
+        } else {
+            None
+        }
+    } else {
+        None
+    }
 }
 
 async fn process_host(host: Host, service_name: String) {
