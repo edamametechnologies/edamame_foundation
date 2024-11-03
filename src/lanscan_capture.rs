@@ -1550,7 +1550,7 @@ impl LANScanCapture {
                             let mut dns_payload = tcp.payload().to_vec();
                             // Ensure that the payload has at least 2 bytes for the length
                             if dns_payload.len() < 2 {
-                                trace!("DNS-over-TCP payload too short: {:?}", dns_payload);
+                                warn!("DNS-over-TCP payload too short: {:?}", dns_payload);
                                 return None;
                             }
                             // Strip the first two bytes (length prefix)
