@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_MACOS: &str = r#"{
   "name": "threat model macOS",
   "extends": "none",
-  "date": "October 04th 2024",
-  "signature": "e5d0ea7c838b9fdaf352c783607a8896ed64053a348fa1e2c8c2f378724b916a",
+  "date": "November 03th 2024",
+  "signature": "0aa40272d46f48860bcc56f59a6b6e937e86628ba13b5440c2b5e36a69a9ba0d",
   "metrics": [
     {
       "name": "edamame helper disabled",
@@ -208,13 +208,13 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "education": [
           {
             "locale": "EN",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=5Btm7jvBO2s"
+            "class": "link",
+            "target": "https://support.apple.com/en-us/guide/deployment/depc0aadd3fe/web"
           },
           {
             "locale": "FR",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=5ii7kcEVmmo"
+            "class": "link",
+            "target": "https://support.apple.com/fr-fr/guide/deployment/depc0aadd3fe/web"
           }
         ]
       }
@@ -1301,13 +1301,13 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "education": [
           {
             "locale": "EN",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=1vIf7ujOYdY"
+            "class": "link",
+            "target": "https://www.apple.com/fr/macos/security/"
           },
           {
             "locale": "FR",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=1vIf7ujOYdY"
+            "class": "link",
+            "target": "https://www.apple.com/fr/macos/security/"
           }
         ]
       }
@@ -1355,13 +1355,13 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "education": [
           {
             "locale": "EN",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=Fx_1OPFzu88"
+            "class": "link",
+            "target": "https://support.apple.com/en-us/HT204899"
           },
           {
             "locale": "FR",
             "class": "link",
-            "target": "https://www.remosoftware.com/info/fr/comment-activer-ou-desactiver-la-protection-de-lintegrite-du-systeme-mac/"
+            "target": "https://support.apple.com/fr-fr/HT204899"
           }
         ]
       },
@@ -1375,8 +1375,13 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "education": [
           {
             "locale": "EN",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=StAn0ZHiXTc"
+            "class": "link",
+            "target": "https://support.apple.com/en-us/HT204899"
+          },
+          {
+            "locale": "FR",
+            "class": "link",
+            "target": "https://support.apple.com/fr-fr/HT204899"
           }
         ]
       }
@@ -1497,13 +1502,13 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "education": [
           {
             "locale": "EN",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=Sx8o8C1oqyc"
+            "class": "link",
+            "target": "https://support.apple.com/HT204012"
           },
           {
             "locale": "FR",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=Bw05ksrrD4g"
+            "class": "link",
+            "target": "https://support.apple.com/fr-fr/HT204012"
           }
         ]
       },
@@ -1517,13 +1522,13 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "education": [
           {
             "locale": "EN",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=Sx8o8C1oqyc"
+            "class": "link",
+            "target": "https://support.apple.com/HT204012"
           },
           {
             "locale": "FR",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=Bw05ksrrD4g"
+            "class": "link",
+            "target": "https://support.apple.com/fr-fr/HT204012"
           }
         ]
       }
@@ -1812,13 +1817,13 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "education": [
           {
             "locale": "EN",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=QAK15Z59a2Y?cc_load_policy=1"
+            "class": "link",
+            "target": "https://www.macworld.com/article/673171/how-to-install-older-versions-of-macos-or-os-x.html"
           },
           {
             "locale": "FR",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=QAK15Z59a2Y?cc_load_policy=1&hl=fr"
+            "class": "link",
+            "target": "https://www.techadvisor.com/article/1490855/comment-installer-ancienne-version-macos.html"
           }
         ]
       }

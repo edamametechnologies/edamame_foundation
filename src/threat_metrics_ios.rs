@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_IOS: &str = r#"{
   "name": "threat model iOS",
   "extends": "none",
-  "date": "October 04th 2024",
-  "signature": "b32f4533ce0486ea66bb4b3412169c8922bac937625f0e58e73b6ab66ae72bd4",
+  "date": "November 03th 2024",
+  "signature": "4ae3901c7b220293c4b724290702e924af59ecdf88f47dbf2d726f163e1a3329",
   "metrics": [
     {
       "name": "MDM profiles",
@@ -45,13 +45,13 @@ pub static THREAT_METRICS_IOS: &str = r#"{
         "education": [
           {
             "locale": "EN",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=5Btm7jvBO2s"
+            "class": "link",
+            "target": "https://support.apple.com/en-us/guide/deployment/depc0aadd3fe/web"
           },
           {
             "locale": "FR",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=5ii7kcEVmmo"
+            "class": "link",
+            "target": "https://support.apple.com/fr-fr/guide/deployment/depc0aadd3fe/web"
           }
         ]
       },
@@ -65,13 +65,13 @@ pub static THREAT_METRICS_IOS: &str = r#"{
         "education": [
           {
             "locale": "EN",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=5Btm7jvBO2s"
+            "class": "link",
+            "target": "https://support.apple.com/en-us/guide/deployment/depc0aadd3fe/web"
           },
           {
             "locale": "FR",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=5ii7kcEVmmo"
+            "class": "link",
+            "target": "https://support.apple.com/fr-fr/guide/deployment/depc0aadd3fe/web"
           }
         ]
       }
@@ -119,13 +119,13 @@ pub static THREAT_METRICS_IOS: &str = r#"{
         "education": [
           {
             "locale": "EN",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=2t0NrqIwI2s"
+            "class": "link",
+            "target": "https://support.apple.com/en-us/guide/iphone/iph9a2a69136/ios"
           },
           {
             "locale": "FR",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=55lKpx3SCK0"
+            "class": "link",
+            "target": "https://support.apple.com/fr-fr/guide/iphone/iph9a2a69136/ios"
           }
         ]
       },
@@ -139,13 +139,13 @@ pub static THREAT_METRICS_IOS: &str = r#"{
         "education": [
           {
             "locale": "EN",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=2t0NrqIwI2s"
+            "class": "link",
+            "target": "https://support.apple.com/en-us/guide/iphone/iph9a2a69136/ios"
           },
           {
             "locale": "FR",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=55lKpx3SCK0"
+            "class": "link",
+            "target": "https://support.apple.com/fr-fr/guide/iphone/iph9a2a69136/ios"
           }
         ]
       }
@@ -193,13 +193,13 @@ pub static THREAT_METRICS_IOS: &str = r#"{
         "education": [
           {
             "locale": "EN",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=_VNsH_OWmRw"
+            "class": "link",
+            "target": "https://support.apple.com/en-us/HT201252"
           },
           {
             "locale": "FR",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=jdIrJ2ex0gE"
+            "class": "link",
+            "target": "https://support.apple.com/fr-fr/HT201252"
           }
         ]
       },
@@ -213,13 +213,13 @@ pub static THREAT_METRICS_IOS: &str = r#"{
         "education": [
           {
             "locale": "EN",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=_VNsH_OWmRw"
+            "class": "link",
+            "target": "https://support.apple.com/en-us/HT201252"
           },
           {
             "locale": "FR",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=jdIrJ2ex0gE"
+            "class": "link",
+            "target": "https://support.apple.com/fr-fr/HT201252"
           }
         ]
       }
@@ -410,13 +410,13 @@ pub static THREAT_METRICS_IOS: &str = r#"{
         "education": [
           {
             "locale": "EN",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=50ZgIargFJ4"
+            "class": "link",
+            "target": "https://support.apple.com/en-us/HT202180"
           },
           {
             "locale": "FR",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=AlZVQbLdvSY"
+            "class": "link",
+            "target": "https://support.apple.com/fr-fr/HT202180"
           }
         ]
       },
@@ -430,13 +430,13 @@ pub static THREAT_METRICS_IOS: &str = r#"{
         "education": [
           {
             "locale": "EN",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=50ZgIargFJ4"
+            "class": "link",
+            "target": "https://support.apple.com/en-us/HT202180"
           },
           {
             "locale": "FR",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=AlZVQbLdvSY"
+            "class": "link",
+            "target": "https://support.apple.com/fr-fr/HT202180"
           }
         ]
       }
@@ -484,13 +484,13 @@ pub static THREAT_METRICS_IOS: &str = r#"{
         "education": [
           {
             "locale": "EN",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=o4zUfDPwHnM"
+            "class": "link",
+            "target": "https://support.apple.com/en-us/HT204204"
           },
           {
             "locale": "FR",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=02UHT0OBGlo"
+            "class": "link",
+            "target": "https://support.apple.com/fr-fr/HT204204"
           }
         ]
       },
@@ -504,13 +504,13 @@ pub static THREAT_METRICS_IOS: &str = r#"{
         "education": [
           {
             "locale": "EN",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=o4zUfDPwHnM"
+            "class": "link",
+            "target": "https://support.apple.com/en-us/HT204204"
           },
           {
             "locale": "FR",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=02UHT0OBGlo"
+            "class": "link",
+            "target": "https://support.apple.com/fr-fr/HT204204"
           }
         ]
       }
