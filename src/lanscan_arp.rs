@@ -1,10 +1,9 @@
 use std::net::IpAddr;
 use tracing::trace;
 // Not on Windows as it depends on Packet.lib / Packet.dll that we don't want to ship with the binary
+use anyhow::{anyhow, Result};
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use libarp::{client::ArpClient, interfaces::Interface};
-// Rather just use PS...
-use anyhow::{anyhow, Result};
 #[cfg(target_os = "windows")]
 use powershell_script::PsScriptBuilder;
 #[cfg(target_os = "windows")]
@@ -12,7 +11,7 @@ use regex::Regex;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::time::Duration;
 
-fn mac_address_is_valid(mac_address: &str) -> bool {
+pub fn mac_address_is_valid(mac_address: &str) -> bool {
     // Syntax is xx:xx:xx:xx:xx:xx
     mac_address.len() == 17 && mac_address.chars().all(|c| c.is_ascii_hexdigit() || c == ':')
     // Check we don't have 00:00:00:00:00:00
@@ -27,6 +26,7 @@ pub async fn get_mac_address_from_ip(interface_name: &str, ip_addr: &IpAddr) -> 
         interface_name
     );
 
+    // Just use PS...
     #[cfg(target_os = "windows")]
     {
         // No need to specify the interface
