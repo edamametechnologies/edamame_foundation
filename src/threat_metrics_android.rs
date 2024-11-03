@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_ANDROID: &str = r#"{
   "name": "threat model Android",
   "extends": "none",
-  "date": "October 04th 2024",
-  "signature": "07f351cb91f8c9e694c00e564c39f95299f7287f1fd7bdb72c455c9f7a6e9446",
+  "date": "November 03th 2024",
+  "signature": "e43e541153e95c0ffcc71f41c40cab75d6c82b2a2386dee652960911ecb6d95d",
   "metrics": [
     {
       "name": "MDM profiles",
@@ -45,13 +45,13 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
         "education": [
           {
             "locale": "EN",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=5Btm7jvBO2s"
+            "class": "link",
+            "target": "https://support.google.com/work/android/answer/6191949?hl=en"
           },
           {
             "locale": "FR",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=5ii7kcEVmmo"
+            "class": "link",
+            "target": "https://support.google.com/work/android/answer/6191949?hl=fr"
           }
         ]
       },
@@ -65,13 +65,13 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
         "education": [
           {
             "locale": "EN",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=5Btm7jvBO2s"
+            "class": "link",
+            "target": "https://support.google.com/work/android/answer/6191949?hl=en"
           },
           {
             "locale": "FR",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=5ii7kcEVmmo"
+            "class": "link",
+            "target": "https://support.google.com/work/android/answer/6191949?hl=fr"
           }
         ]
       }
@@ -119,13 +119,13 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
         "education": [
           {
             "locale": "EN",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=E5OPbL4YJUk"
+            "class": "link",
+            "target": "https://support.google.com/android/answer/9079129?hl=en"
           },
           {
             "locale": "FR",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=k2RVUT7Yai0"
+            "class": "link",
+            "target": "https://support.google.com/android/answer/9079129?hl=fr"
           }
         ]
       },
@@ -139,13 +139,13 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
         "education": [
           {
             "locale": "EN",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=E5OPbL4YJUk"
+            "class": "link",
+            "target": "https://support.google.com/android/answer/9079129?hl=en"
           },
           {
             "locale": "FR",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=k2RVUT7Yai0"
+            "class": "link",
+            "target": "https://support.google.com/android/answer/9079129?hl=fr"
           }
         ]
       }
@@ -193,13 +193,13 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
         "education": [
           {
             "locale": "EN",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=UXyeb3n8Gc8"
+            "class": "link",
+            "target": "https://support.google.com/android/answer/6088915?hl=en"
           },
           {
             "locale": "FR",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=-lRlQdBxmmM"
+            "class": "link",
+            "target": "https://support.google.com/android/answer/6088915?hl=fr"
           }
         ]
       },
@@ -213,13 +213,13 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
         "education": [
           {
             "locale": "EN",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=UXyeb3n8Gc8"
+            "class": "link",
+            "target": "https://support.google.com/android/answer/6088915?hl=en"
           },
           {
             "locale": "FR",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=-lRlQdBxmmM"
+            "class": "link",
+            "target": "https://support.google.com/android/answer/6088915?hl=fr"
           }
         ]
       }
@@ -410,13 +410,13 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
         "education": [
           {
             "locale": "EN",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=v9H4pcZ1QFc"
+            "class": "link",
+            "target": "https://support.google.com/googleplay/answer/113412?hl=en"
           },
           {
             "locale": "FR",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=fVLLgBFgNMg"
+            "class": "link",
+            "target": "https://support.google.com/googleplay/answer/113412?hl=fr"
           }
         ]
       },
@@ -430,13 +430,13 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
         "education": [
           {
             "locale": "EN",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=v9H4pcZ1QFc"
+            "class": "link",
+            "target": "https://support.google.com/googleplay/answer/113412?hl=en"
           },
           {
             "locale": "FR",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=fVLLgBFgNMg"
+            "class": "link",
+            "target": "https://support.google.com/googleplay/answer/113412?hl=fr"
           }
         ]
       }
@@ -484,13 +484,13 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
         "education": [
           {
             "locale": "EN",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=wLWbhRZ7VXI"
+            "class": "link",
+            "target": "https://support.google.com/android/answer/7680439?hl=en"
           },
           {
             "locale": "FR",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=or1OJxptpqQ"
+            "class": "link",
+            "target": "https://support.google.com/android/answer/7680439?hl=fr"
           }
         ]
       },
@@ -504,13 +504,13 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
         "education": [
           {
             "locale": "EN",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=wLWbhRZ7VXI"
+            "class": "link",
+            "target": "https://support.google.com/android/answer/7680439?hl=en"
           },
           {
             "locale": "FR",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=or1OJxptpqQ"
+            "class": "link",
+            "target": "https://support.google.com/android/answer/7680439?hl=fr"
           }
         ]
       }

@@ -1,3 +1,4 @@
+use crate::lanscan_arp::mac_address_is_valid;
 use crate::runtime::async_spawn;
 use chrono::{DateTime, Utc};
 use lazy_static::lazy_static;
@@ -11,9 +12,7 @@ use tokio::sync::Mutex;
 use tokio::task;
 use tokio::time::Duration;
 use tracing::{debug, info, trace, warn};
-use crate::lanscan_arp::mac_address_is_valid;
 use wez_mdns::{Host, QueryParameters}; // Our own fork with minor adjustements
-
 
 lazy_static! {
     static ref MDNS_STOP: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));

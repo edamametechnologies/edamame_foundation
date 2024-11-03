@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_WINDOWS: &str = r#"{
   "name": "threat model Windows",
   "extends": "none",
-  "date": "October 04th 2024",
-  "signature": "be5f83930f5448d9dc20d3cadeb91cddc32a5ceda8f5c4c3eff9cecd320ec0d1",
+  "date": "November 03th 2024",
+  "signature": "63f1cf5324a9f1317d2075809f6fcd2e8bd844435563f7447f70331c4e6ca020",
   "metrics": [
     {
       "name": "edamame helper disabled",
@@ -63,13 +63,13 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "education": [
           {
             "locale": "EN",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=xORy1bFBKCI"
+            "class": "link",
+            "target": "https://github.com/edamametechnologies/edamame_helper"
           },
           {
             "locale": "FR",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=cOmJt_U8WMs"
+            "class": "link",
+            "target": "https://github.com/edamametechnologies/edamame_helper"
           }
         ]
       }
@@ -264,13 +264,13 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "education": [
           {
             "locale": "EN",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=PtMyu9xrJ_E"
+            "class": "link",
+            "target": "https://support.microsoft.com/en-us/windows/turn-on-device-encryption-0c453637-bc88-7d95-5074-dc66c78d6d5b"
           },
           {
             "locale": "FR",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=RqWzTzUVYaM"
+            "class": "link",
+            "target": "https://support.microsoft.com/fr-fr/windows/activer-le-chiffrement-de-l-appareil-0c453637-bc88-7d95-5074-dc66c78d6d5b"
           }
         ]
       },
@@ -284,13 +284,13 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "education": [
           {
             "locale": "EN",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=lY0Iz0NpAoU"
+            "class": "link",
+            "target": "https://support.microsoft.com/en-us/windows/turn-off-bitlocker-drive-encryption-0026063e-abe0-0e75-12dc-f6239c715f5d"
           },
           {
             "locale": "FR",
-            "class": "youtube",
-            "target": "https://www.youtube.com/watch?v=Cj4UUMxm6D8"
+            "class": "link",
+            "target": "https://support.microsoft.com/fr-fr/windows/d%C3%A9sactiver-bitlocker-c98bb8d0-0fe7-88d8-7436-c29e90abef0c"
           }
         ]
       }
