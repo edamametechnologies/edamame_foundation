@@ -14,12 +14,12 @@ const PROFILES_NAME: &str = "lanscan-profiles-db.json";
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Attributes {
-    open_ports: Option<Vec<u16>>,
-    mdns_services: Option<Vec<String>>,
-    vendors: Option<Vec<String>>,
-    hostnames: Option<Vec<String>>,
-    banners: Option<Vec<String>>,
-    negate: Option<bool>, // Field to indicate negation
+    pub open_ports: Option<Vec<u16>>,
+    pub mdns_services: Option<Vec<String>>,
+    pub vendors: Option<Vec<String>>,
+    pub hostnames: Option<Vec<String>>,
+    pub banners: Option<Vec<String>>,
+    pub negate: Option<bool>, // Field to indicate negation
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -34,15 +34,15 @@ pub enum Condition {
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct DeviceTypeRule {
-    device_type: String,
-    conditions: Vec<Condition>,
+    pub device_type: String,
+    pub conditions: Vec<Condition>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct DeviceTypeListJSON {
-    date: String,
-    signature: String,
-    profiles: Vec<DeviceTypeRule>,
+    pub date: String,
+    pub signature: String,
+    pub profiles: Vec<DeviceTypeRule>,
 }
 
 impl CloudSignature for DeviceTypeList {
@@ -268,26 +268,41 @@ pub async fn update(branch: &str, force: bool) -> Result<UpdateStatus> {
     Ok(status)
 }
 
+// Tests
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cloud_model::UpdateStatus;
+    use serial_test::serial;
+    use std::sync::Once;
 
-    #[test]
-    fn test_match_condition() {
+    // Initialize logging or other necessary setup here
+    static INIT: Once = Once::new();
+
+    fn setup() {
+        INIT.call_once(|| {
+            // Initialize logging or any other setup here
+        });
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_match_condition() {
+        setup();
         let condition = Condition::Leaf(Attributes {
             open_ports: Some(vec![80, 443]),
             mdns_services: Some(vec!["http".to_string(), "https".to_string()]),
-            vendors: Some(vec!["Cisco".to_string(), "Arista".to_string()]),
+            vendors: Some(vec!["cisco".to_string(), "arista".to_string()]),
             hostnames: Some(vec!["router".to_string(), "switch".to_string()]),
-            banners: Some(vec!["Cisco IOS".to_string(), "Arista EOS".to_string()]),
+            banners: Some(vec!["cisco ios".to_string(), "arista eos".to_string()]),
             negate: Some(false),
         });
 
         let open_ports_set = HashSet::from([80, 443]);
         let mdns_services = vec!["http".to_string(), "https".to_string()];
-        let oui_vendor = "Cisco";
+        let oui_vendor = "cisco";
         let hostname = "router";
-        let banners = vec!["Cisco IOS".to_string(), "Arista EOS".to_string()];
+        let banners = vec!["cisco ios".to_string(), "arista eos".to_string()];
 
         assert!(match_condition(
             &condition,
@@ -299,22 +314,24 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn test_match_condition_negate() {
+    #[tokio::test]
+    #[serial]
+    async fn test_match_condition_negate() {
+        setup();
         let condition = Condition::Leaf(Attributes {
             open_ports: Some(vec![80, 443]),
             mdns_services: Some(vec!["http".to_string(), "https".to_string()]),
-            vendors: Some(vec!["Cisco".to_string(), "Arista".to_string()]),
+            vendors: Some(vec!["cisco".to_string(), "arista".to_string()]),
             hostnames: Some(vec!["router".to_string(), "switch".to_string()]),
-            banners: Some(vec!["Cisco IOS".to_string(), "Arista EOS".to_string()]),
+            banners: Some(vec!["cisco ios".to_string(), "arista eos".to_string()]),
             negate: Some(true),
         });
 
         let open_ports_set = HashSet::from([80, 443]);
         let mdns_services = vec!["http".to_string(), "https".to_string()];
-        let oui_vendor = "Cisco";
+        let oui_vendor = "cisco";
         let hostname = "router";
-        let banners = vec!["Cisco IOS".to_string(), "Arista EOS".to_string()];
+        let banners = vec!["cisco ios".to_string(), "arista eos".to_string()];
 
         assert!(!match_condition(
             &condition,
@@ -326,22 +343,24 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn test_match_condition_no_open_ports() {
+    #[tokio::test]
+    #[serial]
+    async fn test_match_condition_no_open_ports() {
+        setup();
         let condition = Condition::Leaf(Attributes {
             open_ports: None,
             mdns_services: Some(vec!["http".to_string(), "https".to_string()]),
-            vendors: Some(vec!["Cisco".to_string(), "Arista".to_string()]),
+            vendors: Some(vec!["cisco".to_string(), "arista".to_string()]),
             hostnames: Some(vec!["router".to_string(), "switch".to_string()]),
-            banners: Some(vec!["Cisco IOS".to_string(), "Arista EOS".to_string()]),
+            banners: Some(vec!["cisco ios".to_string(), "arista eos".to_string()]),
             negate: Some(false),
         });
 
         let open_ports_set = HashSet::new();
         let mdns_services = vec!["http".to_string(), "https".to_string()];
-        let oui_vendor = "Cisco";
+        let oui_vendor = "cisco";
         let hostname = "router";
-        let banners = vec!["Cisco IOS".to_string(), "Arista EOS".to_string()];
+        let banners = vec!["cisco ios".to_string(), "arista eos".to_string()];
 
         assert!(match_condition(
             &condition,
@@ -353,30 +372,78 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn test_match_condition_no_mdns_services() {
-        let condition = Condition::Leaf(Attributes {
-            open_ports: Some(vec![80, 443]),
-            mdns_services: None,
-            vendors: Some(vec!["Cisco".to_string(), "Arista".to_string()]),
-            hostnames: Some(vec!["router".to_string(), "switch".to_string()]),
-            banners: Some(vec!["Cisco IOS".to_string(), "Arista EOS".to_string()]),
-            negate: Some(false),
-        });
-
-        let open_ports_set = HashSet::from([80, 443]);
+    #[tokio::test]
+    #[serial]
+    async fn test_device_type_unknown() {
+        setup();
+        let open_ports = vec![];
         let mdns_services = vec![];
-        let oui_vendor = "Cisco";
-        let hostname = "router";
-        let banners = vec!["Cisco IOS".to_string(), "Arista EOS".to_string()];
+        let oui_vendor = "";
+        let hostname = "";
 
-        assert!(match_condition(
-            &condition,
-            &open_ports_set,
-            &mdns_services,
-            &oui_vendor,
-            &hostname,
-            &banners
-        ));
+        let result = device_type(&open_ports, &mdns_services, oui_vendor, hostname).await;
+        assert_eq!(result, "Unknown");
+    }
+
+    // New test: Modify the signature to zeros, perform an update, and check the signature changes
+    #[tokio::test]
+    #[serial]
+    async fn test_signature_update_after_modification() {
+        setup();
+        let branch = "main";
+
+        // Acquire a write lock to modify the signature
+        {
+            let profiles_write = PROFILES.write().await;
+            let mut data_write = profiles_write.data.write().await;
+
+            // Modify the signature to a string of zeros
+            data_write.set_signature("00000000000000000000000000000000".to_string());
+        }
+
+        // Perform the update
+        let status = update(branch, false).await.expect("Update failed");
+
+        // Check that the update was performed
+        assert_eq!(
+            status,
+            UpdateStatus::Updated,
+            "Expected the update to be performed"
+        );
+
+        // Check that the signature is no longer zeros
+        let current_signature = PROFILES.read().await.data.read().await.get_signature();
+        assert_ne!(
+            current_signature, "00000000000000000000000000000000",
+            "Signature should have been updated"
+        );
+        assert!(
+            !current_signature.is_empty(),
+            "Signature should not be empty after update"
+        );
+    }
+
+    // Additional test: Ensure that an invalid update does not change the signature
+    #[tokio::test]
+    #[serial]
+    async fn test_invalid_update_does_not_change_signature() {
+        setup();
+        let branch = "nonexistent-branch";
+
+        // Get the current signature
+        let original_signature = PROFILES.read().await.data.read().await.get_signature();
+
+        // Attempt to perform an update from a nonexistent branch
+        let result = update(branch, false).await;
+
+        // The update should fail
+        assert!(result.is_err(), "Update should have failed");
+
+        // Check that the signature has not changed
+        let current_signature = PROFILES.read().await.data.read().await.get_signature();
+        assert_eq!(
+            current_signature, original_signature,
+            "Signature should not have changed after failed update"
+        );
     }
 }

@@ -134,3 +134,108 @@ pub async fn update(branch: &str, force: bool) -> Result<UpdateStatus> {
         .await?;
     Ok(status)
 }
+
+// Tests
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serial_test::serial;
+
+    // Initialize logging or other necessary setup here
+    fn setup() {
+        // Setup code here if needed
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_get_vendors() {
+        setup();
+        let vendors = get_vendors().await;
+        assert!(!vendors.is_empty(), "Vendors list should not be empty");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_get_vulns_of_vendor() {
+        setup();
+        let vendor = "6Wind";
+        let vulns = get_vulns_of_vendor(vendor).await;
+        assert!(
+            !vulns.is_empty(),
+            "Vulnerabilities for the vendor should not be empty"
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_update_vendor_vulns() {
+        setup();
+        let branch = "main";
+        let status = update(branch, false).await.expect("Update failed");
+        assert!(
+            matches!(status, UpdateStatus::Updated | UpdateStatus::NotUpdated),
+            "Update status should be either Updated or NotUpdated"
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_signature_update_after_modification() {
+        setup();
+        let branch = "main";
+
+        // Acquire a write lock to modify the signature
+        {
+            let vulns_write = VULNS.write().await;
+            let mut data_write = vulns_write.data.write().await;
+
+            // Modify the signature to a string of zeros
+            data_write.set_signature("00000000000000000000000000000000".to_string());
+        }
+
+        // Perform the update
+        let status = update(branch, false).await.expect("Update failed");
+
+        // Check that the update was performed
+        assert_eq!(
+            status,
+            UpdateStatus::Updated,
+            "Expected the update to be performed"
+        );
+
+        // Check that the signature is no longer zeros
+        let current_signature = VULNS.read().await.data.read().await.get_signature();
+        assert_ne!(
+            current_signature, "00000000000000000000000000000000",
+            "Signature should have been updated"
+        );
+        assert!(
+            !current_signature.is_empty(),
+            "Signature should not be empty after update"
+        );
+    }
+
+    // Additional test: Ensure that an invalid update does not change the signature
+    #[tokio::test]
+    #[serial]
+    async fn test_invalid_update_does_not_change_signature() {
+        setup();
+        let branch = "nonexistent-branch";
+
+        // Get the current signature
+        let original_signature = VULNS.read().await.data.read().await.get_signature();
+
+        // Attempt to perform an update from a nonexistent branch
+        let result = update(branch, false).await;
+
+        // The update should fail
+        assert!(result.is_err(), "Update should have failed");
+
+        // Check that the signature has not changed
+        let current_signature = VULNS.read().await.data.read().await.get_signature();
+        assert_eq!(
+            current_signature, original_signature,
+            "Signature should not have changed after failed update"
+        );
+    }
+}

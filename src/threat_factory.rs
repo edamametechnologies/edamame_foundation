@@ -3,7 +3,7 @@ use anyhow::{anyhow, Context, Result};
 use lazy_static::lazy_static;
 use tracing::{info, warn};
 
-use crate::cloud_model::*; // Ensure this path is correct based on your project structure
+use crate::cloud_model::*;
 use crate::threat::*;
 use crate::threat_metrics_android::*;
 use crate::threat_metrics_ios::*;
@@ -33,7 +33,7 @@ fn get_platform() -> &'static str {
 }
 
 lazy_static! {
-    // Global THREATS variable using CloudModel and Tokio's RwLock
+    // Global THREATS variable using CloudModel and a custom RwLock
     pub static ref THREATS: CustomRwLock<CloudModel<ThreatMetrics>> = {
 
         // Determine the built-in data and model name
@@ -150,7 +150,7 @@ pub async fn update(branch: &str, force: bool) -> Result<UpdateStatus> {
         branch
     );
 
-    // Acquire lock on THREATS
+    // Acquire read lock on THREATS
     let model = THREATS.read().await;
 
     // Perform the update
@@ -165,7 +165,9 @@ pub async fn update(branch: &str, force: bool) -> Result<UpdateStatus> {
     match status {
         UpdateStatus::Updated => info!("Threat metrics were successfully updated."),
         UpdateStatus::NotUpdated => info!("Threat metrics are already up to date."),
-        UpdateStatus::FormatError => warn!("There was a format error in the threat metrics data."),
+        UpdateStatus::FormatError => {
+            warn!("There was a format error in the threat metrics data.")
+        }
     }
 
     Ok(status)
@@ -179,6 +181,7 @@ pub async fn get_threat_metrics() -> ThreatMetrics {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     // Initialize logging or other necessary setup here
     fn setup() {
@@ -186,6 +189,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_builtin_version() {
         setup();
         let builtin = THREATS.read().await.clone();
@@ -196,6 +200,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_update_threat_metrics() {
         setup();
         let branch = "main";
@@ -208,6 +213,7 @@ mod tests {
 
     // Forced update
     #[tokio::test]
+    #[serial]
     async fn test_forced_update_threat_metrics() {
         setup();
         let branch = "main";
@@ -217,6 +223,68 @@ mod tests {
         assert!(
             matches!(status, UpdateStatus::Updated | UpdateStatus::NotUpdated),
             "Update status should be one of the expected variants"
+        );
+    }
+
+    // New test: Modify the signature to zeros, perform an update, and check the signature changes
+    #[tokio::test]
+    #[serial]
+    async fn test_signature_update_after_modification() {
+        setup();
+        let branch = "main";
+
+        // Acquire a write lock to modify the signature
+        {
+            let threats_write = THREATS.write().await;
+            let mut data_write = threats_write.data.write().await;
+
+            // Modify the signature to a string of zeros
+            data_write.set_signature("00000000000000000000000000000000".to_string());
+        }
+
+        // Perform the update
+        let status = update(branch, false).await.expect("Update failed");
+
+        // Check that the update was performed
+        assert_eq!(
+            status,
+            UpdateStatus::Updated,
+            "Expected the update to be performed"
+        );
+
+        // Check that the signature is no longer zeros
+        let current_signature = THREATS.read().await.data.read().await.get_signature();
+        assert_ne!(
+            current_signature, "00000000000000000000000000000000",
+            "Signature should have been updated"
+        );
+        assert!(
+            !current_signature.is_empty(),
+            "Signature should not be empty after update"
+        );
+    }
+
+    // Additional test: Ensure that an invalid update does not change the signature
+    #[tokio::test]
+    #[serial]
+    async fn test_invalid_update_does_not_change_signature() {
+        setup();
+        let branch = "nonexistent-branch";
+
+        // Get the current signature
+        let original_signature = THREATS.read().await.data.read().await.get_signature();
+
+        // Attempt to perform an update from a nonexistent branch
+        let result = update(branch, false).await;
+
+        // The update should fail
+        assert!(result.is_err(), "Update should have failed");
+
+        // Check that the signature has not changed
+        let current_signature = THREATS.read().await.data.read().await.get_signature();
+        assert_eq!(
+            current_signature, original_signature,
+            "Signature should not have changed after failed update"
         );
     }
 }
