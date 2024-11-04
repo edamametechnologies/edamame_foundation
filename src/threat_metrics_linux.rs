@@ -36,11 +36,6 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
             "locale": "EN",
             "class": "link",
             "target": "https://github.com/edamametechnologies/edamame_helper"
-          },
-          {
-            "locale": "FR",
-            "class": "link",
-            "target": "https://github.com/edamametechnologies/edamame_helper"
           }
         ]
       },
@@ -107,11 +102,6 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
             "locale": "EN",
             "class": "link",
             "target": "https://help.ubuntu.com/community/Antivirus"
-          },
-          {
-            "locale": "FR",
-            "class": "link",
-            "target": "https://doc.ubuntu-fr.org/antivirus"
           }
         ]
       },
@@ -127,11 +117,6 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
             "locale": "EN",
             "class": "link",
             "target": "https://help.ubuntu.com/community/Antivirus"
-          },
-          {
-            "locale": "FR",
-            "class": "link",
-            "target": "https://doc.ubuntu-fr.org/antivirus"
           }
         ]
       }
@@ -173,19 +158,31 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "system": "Ubuntu",
         "minversion": 20,
         "maxversion": 0,
-        "class": "link",
+        "class": "",
         "elevation": "",
-        "target": "https://help.ubuntu.com/community/EncryptedHome",
-        "education": []
+        "target": "",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "link",
+            "target": "https://help.ubuntu.com/community/EncryptedHome"
+          }
+        ]
       },
       "rollback": {
         "system": "Ubuntu",
         "minversion": 20,
         "maxversion": 0,
-        "class": "link",
+        "class": "",
         "elevation": "",
-        "target": "https://help.ubuntu.com/community/EncryptedHome",
-        "education": []
+        "target": "",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "link",
+            "target": "https://help.ubuntu.com/community/EncryptedHome"
+          }
+        ]
       }
     },
     {
@@ -225,19 +222,31 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "system": "Ubuntu",
         "minversion": 20,
         "maxversion": 0,
-        "class": "link",
+        "class": "",
         "elevation": "",
-        "target": "https://help.ubuntu.com/community/FullDiskEncryptionHowto",
-        "education": []
+        "target": "",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "link",
+            "target": "https://help.ubuntu.com/community/FullDiskEncryptionHowto"
+          }
+        ]
       },
       "rollback": {
         "system": "Ubuntu",
         "minversion": 20,
         "maxversion": 0,
-        "class": "link",
+        "class": "",
         "elevation": "",
-        "target": "https://help.ubuntu.com/community/FullDiskEncryptionHowto",
-        "education": []
+        "target": "",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "link",
+            "target": "https://help.ubuntu.com/community/FullDiskEncryptionHowto"
+          }
+        ]
       }
     },
     {
@@ -305,11 +314,6 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
             "locale": "EN",
             "class": "link",
             "target": "https://haveibeenpwned.com/"
-          },
-          {
-            "locale": "FR",
-            "class": "link",
-            "target": "https://www.futura-sciences.com/tech/actualites/internet-voici-savoir-si-vos-donnees-personnelles-internet-ont-ete-piratees-103095/"
           }
         ]
       }
@@ -1150,11 +1154,6 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
             "locale": "EN",
             "class": "link",
             "target": "https://wiki.debian.org/SecureBoot"
-          },
-          {
-            "locale": "FR",
-            "class": "link",
-            "target": "https://wiki.debian.org/SecureBoot"
           }
         ]
       },
@@ -1162,17 +1161,12 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "system": "Linux",
         "minversion": 5,
         "maxversion": 0,
-        "class": "link",
+        "class": "",
         "elevation": "",
         "target": "",
         "education": [
           {
             "locale": "EN",
-            "class": "link",
-            "target": "https://wiki.debian.org/SecureBoot"
-          },
-          {
-            "locale": "FR",
             "class": "link",
             "target": "https://wiki.debian.org/SecureBoot"
           }
@@ -1224,11 +1218,6 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
             "locale": "EN",
             "class": "link",
             "target": "https://manpages.ubuntu.com/manpages/oracular/en/man3/pwquality.3.html"
-          },
-          {
-            "locale": "FR",
-            "class": "link",
-            "target": "https://manpages.ubuntu.com/manpages/oracular/en/man3/pwquality.3.html"
           }
         ]
       },
@@ -1242,11 +1231,6 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "education": [
           {
             "locale": "EN",
-            "class": "link",
-            "target": "https://manpages.ubuntu.com/manpages/oracular/en/man3/pwquality.3.html"
-          },
-          {
-            "locale": "FR",
             "class": "link",
             "target": "https://manpages.ubuntu.com/manpages/oracular/en/man3/pwquality.3.html"
           }
