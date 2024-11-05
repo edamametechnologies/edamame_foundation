@@ -148,6 +148,29 @@ pub static WHITELISTS: &str = r#"{
           "description": "Connection to Microsoft (23456) (ASN: 8075, Country: US, Owner: MICROSOFT-CORP-MSN-AS-BLOCK)"
         }
       ]
+    },
+    {
+      "name": "github_windows",
+      "extends": [
+        "github"
+      ],
+      "endpoints": [
+        {
+          "ip": "168.63.129.16",
+          "port": 80,
+          "description": "https://learn.microsoft.com/en-us/azure/virtual-network/what-is-ip-address-168-63-129-16"
+        },
+        {
+          "ip": "168.63.129.16",
+          "port": 32526,
+          "description": "https://learn.microsoft.com/en-us/azure/virtual-network/what-is-ip-address-168-63-129-16"
+        },
+        {
+          "as_number": 8075,
+          "port": 23456,
+          "description": "Connection to Microsoft (23456) (ASN: 8075, Country: US, Owner: MICROSOFT-CORP-MSN-AS-BLOCK)"
+        }
+      ]
     }
   ],
   "signature": "59f413ef43164267f84c3bd41424313b2eed558fd5de8365fbd1cbce9794688e"
