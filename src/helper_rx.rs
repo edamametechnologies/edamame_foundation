@@ -1,14 +1,14 @@
 use crate::helper_proto::*;
 use crate::helper_rx_utility::*;
 #[cfg(all(
-    any(target_os = "macos", target_os = "linux"),
+    any(target_os = "macos", target_os = "linux", target_os = "windows"),
     feature = "packetcapture"
 ))]
 use crate::lanscan_capture::LANScanCapture;
 use crate::lanscan_interface::*;
 use crate::lanscan_mdns::mdns_flush;
 #[cfg(all(
-    any(target_os = "macos", target_os = "linux"),
+    any(target_os = "macos", target_os = "linux", target_os = "windows"),
     feature = "packetcapture"
 ))]
 use crate::lanscan_sessions::SessionFilter;
@@ -37,7 +37,7 @@ use tonic::{Code, Request, Response, Status};
 use tracing::{error, info, trace, warn};
 
 #[cfg(all(
-    any(target_os = "macos", target_os = "linux"),
+    any(target_os = "macos", target_os = "linux", target_os = "windows"),
     feature = "packetcapture"
 ))]
 lazy_static! {
@@ -497,7 +497,7 @@ pub async fn rpc_run(
                 }
             }
             #[cfg(all(
-                any(target_os = "macos", target_os = "linux"),
+                any(target_os = "macos", target_os = "linux", target_os = "windows"),
                 feature = "packetcapture"
             ))]
             "start_capture" => {
@@ -514,7 +514,7 @@ pub async fn rpc_run(
                 Ok("".to_string())
             }
             #[cfg(all(
-                any(target_os = "macos", target_os = "linux"),
+                any(target_os = "macos", target_os = "linux", target_os = "windows"),
                 feature = "packetcapture"
             ))]
             "stop_capture" => {
@@ -522,7 +522,7 @@ pub async fn rpc_run(
                 Ok("".to_string())
             }
             #[cfg(all(
-                any(target_os = "macos", target_os = "linux"),
+                any(target_os = "macos", target_os = "linux", target_os = "windows"),
                 feature = "packetcapture"
             ))]
             "restart_capture" => {
@@ -540,7 +540,7 @@ pub async fn rpc_run(
                 Ok("".to_string())
             }
             #[cfg(all(
-                any(target_os = "macos", target_os = "linux"),
+                any(target_os = "macos", target_os = "linux", target_os = "windows"),
                 feature = "packetcapture"
             ))]
             "is_capturing" => {
@@ -550,7 +550,7 @@ pub async fn rpc_run(
                 Ok(result)
             }
             #[cfg(all(
-                any(target_os = "macos", target_os = "linux"),
+                any(target_os = "macos", target_os = "linux", target_os = "windows"),
                 feature = "packetcapture"
             ))]
             "set_whitelist" => {
@@ -559,7 +559,7 @@ pub async fn rpc_run(
                 Ok("".to_string())
             }
             #[cfg(all(
-                any(target_os = "macos", target_os = "linux"),
+                any(target_os = "macos", target_os = "linux", target_os = "windows"),
                 feature = "packetcapture"
             ))]
             "get_whitelist" => {
@@ -568,7 +568,7 @@ pub async fn rpc_run(
                 Ok(whitelist)
             }
             #[cfg(all(
-                any(target_os = "macos", target_os = "linux"),
+                any(target_os = "macos", target_os = "linux", target_os = "windows"),
                 feature = "packetcapture"
             ))]
             "set_filter" => {
@@ -585,7 +585,7 @@ pub async fn rpc_run(
                 Ok("".to_string())
             }
             #[cfg(all(
-                any(target_os = "macos", target_os = "linux"),
+                any(target_os = "macos", target_os = "linux", target_os = "windows"),
                 feature = "packetcapture"
             ))]
             "get_filter" => {
@@ -604,7 +604,7 @@ pub async fn rpc_run(
                 Ok(json_filter)
             }
             #[cfg(all(
-                any(target_os = "macos", target_os = "linux"),
+                any(target_os = "macos", target_os = "linux", target_os = "windows"),
                 feature = "packetcapture"
             ))]
             "get_sessions" => {
@@ -635,7 +635,7 @@ pub async fn rpc_run(
                 Ok(json_sessions)
             }
             #[cfg(all(
-                any(target_os = "macos", target_os = "linux"),
+                any(target_os = "macos", target_os = "linux", target_os = "windows"),
                 feature = "packetcapture"
             ))]
             "get_current_sessions" => {
@@ -666,7 +666,7 @@ pub async fn rpc_run(
                 Ok(json_active_sessions)
             }
             #[cfg(all(
-                any(target_os = "macos", target_os = "linux"),
+                any(target_os = "macos", target_os = "linux", target_os = "windows"),
                 feature = "packetcapture"
             ))]
             "get_whitelist_conformance" => {
@@ -681,7 +681,7 @@ pub async fn rpc_run(
                 Ok(result)
             }
             #[cfg(all(
-                any(target_os = "macos", target_os = "linux"),
+                any(target_os = "macos", target_os = "linux", target_os = "windows"),
                 feature = "packetcapture"
             ))]
             "get_whitelist_exceptions" => {

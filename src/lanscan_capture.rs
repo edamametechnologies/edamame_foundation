@@ -13,17 +13,17 @@ use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use dashmap::DashMap;
 use dns_parser::Packet as DnsPacket;
 #[cfg(all(
-    any(target_os = "macos", target_os = "linux"),
+    any(target_os = "macos", target_os = "linux", target_os = "windows"),
     feature = "asyncpacketcapture"
 ))]
 use futures::StreamExt;
 #[cfg(not(all(
-    any(target_os = "macos", target_os = "linux"),
+    any(target_os = "macos", target_os = "linux", target_os = "windows"),
     feature = "asyncpacketcapture"
 )))]
 use pcap::Capture;
 #[cfg(all(
-    any(target_os = "macos", target_os = "linux"),
+    any(target_os = "macos", target_os = "linux", target_os = "windows"),
     feature = "asyncpacketcapture"
 ))]
 use pcap::{Capture, Packet, PacketCodec};
@@ -38,13 +38,13 @@ use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 #[cfg(all(
-    any(target_os = "macos", target_os = "linux"),
+    any(target_os = "macos", target_os = "linux", target_os = "windows"),
     feature = "asyncpacketcapture"
 ))]
 use tokio::select;
 use tokio::task::JoinHandle;
 #[cfg(all(
-    any(target_os = "macos", target_os = "linux"),
+    any(target_os = "macos", target_os = "linux", target_os = "windows"),
     feature = "asyncpacketcapture"
 ))]
 use tokio::time::interval;
@@ -568,7 +568,7 @@ impl LANScanCapture {
                 };
 
                 #[cfg(not(all(
-                    any(target_os = "macos", target_os = "linux"),
+                    any(target_os = "macos", target_os = "linux", target_os = "windows"),
                     feature = "asyncpacketcapture"
                 )))]
                 {
@@ -609,7 +609,7 @@ impl LANScanCapture {
                 }
 
                 #[cfg(all(
-                    any(target_os = "macos", target_os = "linux"),
+                    any(target_os = "macos", target_os = "linux", target_os = "windows"),
                     feature = "asyncpacketcapture"
                 ))]
                 {
