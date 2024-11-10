@@ -440,21 +440,18 @@ impl LANScanCapture {
             .filter(|s| !s.is_empty())
             .collect();
 
-        let using_default_interface = if interfaces.is_empty() {
+
+        interfaces = if interfaces.is_empty() {
             info!("No valid interfaces provided for capture, using default interface discovery");
-            interfaces = match get_default_interface() {
+            match get_default_interface() {
                 Some((_, _, name)) => vec![name],
                 None => {
                     error!("No default interface detected");
                     return;
                 }
-            };
-
-            info!("Using default interfaces: {:?}", interfaces);
-            true
+            }
         } else {
-            info!("Provided capture interfaces: {:?}", interfaces);
-            false
+            interfaces
         };
 
         for interface in interfaces {
@@ -483,21 +480,21 @@ impl LANScanCapture {
                     }
                 };
 
-                info!("Capture devices list: {:?}", device_list);
+                info!("Capture devices list: {:#?}", device_list);
 
                 // Find the device matching the current interface
                 // Match the default interface name in the device list
-                let (device, mut cap) = if !using_default_interface {
+                let (device, mut cap) = if interface_clone != "pcap" {
                     let device = if let Some(device_in_list) =
-                        device_list.iter().find(|dev| dev.name == interface_clone)
+                        device_list.iter().find(|dev| dev.name.contains(&interface_clone))
                     {
                         device_in_list.clone()
                     } else {
-                        error!("No default interface detected");
+                        error!("Default interface {} not found in device list", interface_clone);
                         return;
                     };
 
-                    let cap = match Capture::from_device(interface_clone.as_str()) {
+                    let cap = match Capture::from_device(device.name.as_str()) {
                         Ok(cap) => cap,
                         Err(e) => {
                             error!("Failed to create capture on device: {}", e);
@@ -507,6 +504,7 @@ impl LANScanCapture {
                     (device, cap)
                 } else {
                     // Use the built-in pcap device lookup
+                    info!("Using pcap device lookup");
                     let device = match pcap::Device::lookup() {
                         Ok(Some(device)) => {
                             // Only for macOS
@@ -536,6 +534,8 @@ impl LANScanCapture {
                             return;
                         }
                     };
+
+                    info!("pcap default interface: {:?}", device);
 
                     let cap = match Capture::from_device(device.clone()) {
                         Ok(cap) => cap,
@@ -653,6 +653,7 @@ impl LANScanCapture {
 
                     let mut interval = interval(Duration::from_millis(100));
 
+                    debug!("Starting async capture task for {}", interface_clone);
                     loop {
                         select! {
                             _ = interval.tick() => {
@@ -662,6 +663,7 @@ impl LANScanCapture {
                                 }
                             }
                             packet_owned = packet_stream.next() => {
+                                debug!("Received packet on {}", interface_clone);
                                 match packet_owned {
                                     Some(Ok(packet_owned)) => match LANScanCapture::parse_packet_pcap(&packet_owned.data) {
                                         Some(ParsedPacket::SessionPacket(cp)) => {
@@ -1622,8 +1624,10 @@ impl LANScanCapture {
 mod tests {
     use super::*;
     use std::net::{IpAddr, Ipv4Addr};
+    use serial_test::serial;
 
     #[tokio::test]
+    #[serial]
     async fn test_session_management() {
         let mut capture = LANScanCapture::new();
         capture.set_filter(SessionFilter::All).await;
@@ -1689,6 +1693,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_session_management_revert() {
         let mut capture = LANScanCapture::new();
         capture.set_whitelist("github").await;
@@ -1743,6 +1748,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_populate_domain_names() {
         let mut capture = LANScanCapture::new();
         capture.set_whitelist("github").await;
@@ -1823,6 +1829,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_update_sessions_status_added() {
         let mut capture = LANScanCapture::new();
         capture.set_filter(SessionFilter::All).await; // Include all sessions in the filter
@@ -1901,6 +1908,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_update_sessions_status_activated() {
         let mut capture = LANScanCapture::new();
         capture.set_filter(SessionFilter::All).await; // Include all sessions in the filter
@@ -1990,7 +1998,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_process_dns_packet() {
+    #[serial]
+   async fn test_process_dns_packet() {
         let dns_payload = vec![
             // A minimal DNS response packet in bytes
             0x00, 0x00, // Transaction ID
@@ -2028,6 +2037,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_process_dns_packet_tcp() {
         // Construct a DNS-over-TCP payload
         // DNS-over-TCP starts with a 2-byte length field followed by the DNS message
@@ -2072,6 +2082,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_whitelist_conformance_with_multiple_exceptions() {
         let mut capture = LANScanCapture::new();
         capture.set_whitelist("github").await;
