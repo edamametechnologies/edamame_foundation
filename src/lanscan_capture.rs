@@ -440,7 +440,6 @@ impl LANScanCapture {
             .filter(|s| !s.is_empty())
             .collect();
 
-
         interfaces = if interfaces.is_empty() {
             info!("No valid interfaces provided for capture, using default interface discovery");
             match get_default_interface() {
@@ -485,12 +484,16 @@ impl LANScanCapture {
                 // Find the device matching the current interface
                 // Match the default interface name in the device list
                 let (device, mut cap) = if interface_clone != "pcap" {
-                    let device = if let Some(device_in_list) =
-                        device_list.iter().find(|dev| dev.name.contains(&interface_clone))
+                    let device = if let Some(device_in_list) = device_list
+                        .iter()
+                        .find(|dev| dev.name.contains(&interface_clone))
                     {
                         device_in_list.clone()
                     } else {
-                        error!("Default interface {} not found in device list", interface_clone);
+                        error!(
+                            "Default interface {} not found in device list",
+                            interface_clone
+                        );
                         return;
                     };
 
@@ -1623,8 +1626,8 @@ impl LANScanCapture {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::{IpAddr, Ipv4Addr};
     use serial_test::serial;
+    use std::net::{IpAddr, Ipv4Addr};
 
     #[tokio::test]
     #[serial]
@@ -1999,7 +2002,7 @@ mod tests {
 
     #[tokio::test]
     #[serial]
-   async fn test_process_dns_packet() {
+    async fn test_process_dns_packet() {
         let dns_payload = vec![
             // A minimal DNS response packet in bytes
             0x00, 0x00, // Transaction ID
