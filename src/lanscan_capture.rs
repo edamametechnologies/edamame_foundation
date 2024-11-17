@@ -9,6 +9,7 @@ use crate::lanscan_sessions::*;
 use crate::runtime::async_spawn;
 use crate::rwlock::CustomRwLock;
 use crate::whitelists::*;
+use anyhow::{anyhow, Result};
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use dashmap::DashMap;
 use dns_parser::Packet as DnsPacket;
@@ -431,279 +432,280 @@ impl LANScanCapture {
         }
     }
 
+    async fn get_device_from_interface(&self, interface: &str) -> Result<pcap::Device> {
+        let device_list = match pcap::Device::list() {
+            Ok(list) => list,
+            Err(e) => return Err(anyhow!(e)),
+        };
+
+        let device = if let Some(device_in_list) =
+            device_list.iter().find(|dev| dev.name.contains(&interface))
+        {
+            device_in_list.clone()
+        } else {
+            return Err(anyhow!(format!(
+                "Interface {} not found in device list",
+                interface
+            )));
+        };
+        Ok(device)
+    }
+
+    async fn get_default_device() -> Result<pcap::Device> {
+        let device = match pcap::Device::lookup() {
+            Ok(Some(device)) => {
+                // Only for macOS
+                if cfg!(target_os = "macos") && device.name.starts_with("ap") {
+                    return Err(anyhow!("Interface from lookup is incorrect"));
+                } else {
+                    device
+                }
+            }
+            Ok(None) => {
+                return Err(anyhow!("No device found from lookup"));
+            }
+            Err(e) => {
+                return Err(anyhow!(e));
+            }
+        };
+        Ok(device)
+    }
+
     async fn start_capture_task(&mut self) {
         // Read and split the interfaces by comma, trimming whitespace
         let interfaces_str = self.interface.read().await.clone();
-        let mut interfaces: Vec<String> = interfaces_str
+        let interfaces: Vec<String> = interfaces_str
             .split(',')
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect();
 
-        interfaces = if interfaces.is_empty() {
-            info!("No valid interfaces provided for capture, using default interface discovery");
-            match get_default_interface() {
-                Some((_, _, name)) => vec![name],
-                None => {
-                    error!("No default interface detected");
-                    return;
-                }
+        if !interfaces.is_empty() {
+            for interface in interfaces {
+                info!("Initializing capture task for {}", interface);
+                let device = match self.get_device_from_interface(&interface).await {
+                    Ok(device) => device,
+                    Err(e) => {
+                        error!("Failed to get device from interface: {}", e);
+                        continue;
+                    }
+                };
+                self.start_capture_task_for_device(&device, &interface)
+                    .await;
             }
         } else {
-            interfaces
-        };
+            let mut default_interface = match get_default_interface() {
+                Some((_, _, name)) => name,
+                None => {
+                    error!("No default interface detected, aborting capture");
+                    return;
+                }
+            };
 
-        for interface in interfaces {
-            info!("Initializing capture task for {}", interface);
-
-            // Clone shared resources for each capture task
-            let sessions = self.sessions.clone();
-            let current_sessions = self.current_sessions.clone();
-            let dns_resolutions = self.dns_resolutions.clone();
-            let filter = self.filter.clone();
-
-            // Create a new stop flag for this interface's capture task
-            let stop_flag = Arc::new(AtomicBool::new(false));
-            let stop_flag_clone = stop_flag.clone();
-
-            // Clone the interface name for the async move block
-            let interface_clone = interface.clone();
-
-            // Spawn the capture task
-            let handle = async_spawn(async move {
-                let device_list = match pcap::Device::list() {
-                    Ok(list) => list,
-                    Err(e) => {
-                        error!("Failed to get device list for {}: {}", interface_clone, e);
-                        return;
+            let default_device = match self.get_device_from_interface(&default_interface).await {
+                Ok(device) => device,
+                Err(e) => {
+                    warn!(
+                        "Failed to get device from default interface, using lookup: {}",
+                        e
+                    );
+                    match Self::get_default_device().await {
+                        Ok(device) => {
+                            default_interface = device.name.clone();
+                            device
+                        }
+                        Err(e) => {
+                            error!("Failed to get default device: {}", e);
+                            return;
+                        }
                     }
-                };
+                }
+            };
 
-                info!("Capture devices list: {:#?}", device_list);
+            self.start_capture_task_for_device(&default_device, &default_interface)
+                .await;
+        }
+    }
 
-                // Find the device matching the current interface
-                // Match the default interface name in the device list
-                let (device, mut cap) = if interface_clone != "pcap" {
-                    let device = if let Some(device_in_list) = device_list
-                        .iter()
-                        .find(|dev| dev.name.contains(&interface_clone))
-                    {
-                        device_in_list.clone()
-                    } else {
-                        error!(
-                            "Default interface {} not found in device list",
-                            interface_clone
-                        );
-                        return;
-                    };
+    async fn start_capture_task_for_device(&mut self, device: &pcap::Device, interface: &str) {
+        // Clone shared resources for each capture task
+        let sessions = self.sessions.clone();
+        let current_sessions = self.current_sessions.clone();
+        let dns_resolutions = self.dns_resolutions.clone();
+        let filter = self.filter.clone();
 
-                    let cap = match Capture::from_device(device.name.as_str()) {
-                        Ok(cap) => cap,
-                        Err(e) => {
-                            error!("Failed to create capture on device: {}", e);
-                            return;
-                        }
-                    };
-                    (device, cap)
-                } else {
-                    // Use the built-in pcap device lookup
-                    info!("Using pcap device lookup");
-                    let device = match pcap::Device::lookup() {
-                        Ok(Some(device)) => {
-                            // Only for macOS
-                            if cfg!(target_os = "macos") && device.name.starts_with("ap") {
-                                info!(
-                                    "Interface from lookup is incorrect, using discovered default interface for capture: {}",
-                                    interface_clone
-                                );
-                                if let Some(device_in_list) =
-                                    device_list.iter().find(|dev| dev.name == interface_clone)
-                                {
-                                    device_in_list.clone()
-                                } else {
-                                    error!("No device found from lookup");
-                                    return;
-                                }
-                            } else {
-                                device
-                            }
-                        }
-                        Ok(None) => {
-                            error!("No device found from lookup");
-                            return;
-                        }
-                        Err(e) => {
-                            error!("Failed to lookup device: {}", e);
-                            return;
-                        }
-                    };
+        // Create a new stop flag for this interface's capture task
+        let stop_flag = Arc::new(AtomicBool::new(false));
+        let stop_flag_clone = stop_flag.clone();
 
-                    info!("pcap default interface: {:?}", device);
+        // Clone the interface name for the async move block
+        let interface_clone = interface.to_string();
 
-                    let cap = match Capture::from_device(device.clone()) {
-                        Ok(cap) => cap,
-                        Err(e) => {
-                            error!("Failed to create capture on device: {}", e);
-                            return;
-                        }
-                    };
-                    (device, cap)
-                };
+        // Clone the device for the async move block
+        let device_clone = device.clone();
 
-                // Extract a vector of IP addresses from the device addresses
-                let self_ips: Vec<_> = device
-                    .addresses
-                    .iter()
-                    .filter_map(|addr| Some(addr.addr))
-                    .collect();
+        // Spawn the capture task
+        let handle = async_spawn(async move {
+            let mut cap = match Capture::from_device(device_clone.clone()) {
+                Ok(cap) => cap,
+                Err(e) => {
+                    error!("Failed to create capture on device: {}", e);
+                    return;
+                }
+            };
 
-                // Set immediate mode
-                cap = cap.immediate_mode(true);
+            // Extract a vector of IP addresses from the device addresses
+            let self_ips: Vec<_> = device_clone
+                .addresses
+                .iter()
+                .filter_map(|addr| Some(addr.addr))
+                .collect();
 
-                // Open the capture
-                // Type is changing from Inactive to Active, we need a let
-                let mut cap = match cap.promisc(false).timeout(1000).open() {
-                    Ok(cap) => cap,
-                    Err(e) => {
-                        error!("Failed to open pcap capture: {}", e);
-                        return;
-                    }
-                };
+            // Set immediate mode
+            cap = cap.immediate_mode(true);
 
-                #[cfg(not(all(
-                    any(target_os = "macos", target_os = "linux", target_os = "windows"),
-                    feature = "asyncpacketcapture"
-                )))]
-                {
-                    info!("Using sync capture for {}", interface_clone);
+            // Open the capture
+            // Type is changing from Inactive to Active, we need a let
+            let mut cap = match cap.promisc(false).timeout(1000).open() {
+                Ok(cap) => cap,
+                Err(e) => {
+                    error!("Failed to open pcap capture: {}", e);
+                    return;
+                }
+            };
 
-                    while !stop_flag_clone.load(Ordering::Relaxed) {
-                        match cap.next_packet() {
-                            Ok(packet) => {
-                                if let Some(parsed_packet) = Self::parse_packet_pcap(packet.data) {
-                                    match parsed_packet {
-                                        ParsedPacket::SessionPacket(cp) => {
-                                            LANScanCapture::process_parsed_packet(
-                                                cp,
-                                                &sessions,
-                                                &current_sessions,
-                                                &self_ips,
-                                                &filter,
-                                            )
-                                            .await;
-                                        }
-                                        ParsedPacket::DnsPacket(dp) => {
-                                            Self::process_dns_packet(dp, &dns_resolutions);
-                                        }
+            #[cfg(not(all(
+                any(target_os = "macos", target_os = "linux", target_os = "windows"),
+                feature = "asyncpacketcapture"
+            )))]
+            {
+                info!("Using sync capture for {}", interface_clone);
+
+                while !stop_flag_clone.load(Ordering::Relaxed) {
+                    match cap.next_packet() {
+                        Ok(packet) => {
+                            if let Some(parsed_packet) = Self::parse_packet_pcap(packet.data) {
+                                match parsed_packet {
+                                    ParsedPacket::SessionPacket(cp) => {
+                                        LANScanCapture::process_parsed_packet(
+                                            cp,
+                                            &sessions,
+                                            &current_sessions,
+                                            &self_ips,
+                                            &filter,
+                                        )
+                                        .await;
+                                    }
+                                    ParsedPacket::DnsPacket(dp) => {
+                                        Self::process_dns_packet(dp, &dns_resolutions);
                                     }
                                 }
                             }
-                            Err(pcap::Error::TimeoutExpired) => {
-                                // Read timeout occurred, check stop_flag
-                                continue;
-                            }
-                            Err(e) => {
-                                error!("Failed to read packet: {}", e);
+                        }
+                        Err(pcap::Error::TimeoutExpired) => {
+                            // Read timeout occurred, check stop_flag
+                            continue;
+                        }
+                        Err(e) => {
+                            error!("Failed to read packet: {}", e);
+                            break;
+                        }
+                    }
+                }
+                info!("Stopping sync capture for {}", interface_clone);
+            }
+
+            #[cfg(all(
+                any(target_os = "macos", target_os = "linux", target_os = "windows"),
+                feature = "asyncpacketcapture"
+            ))]
+            {
+                info!("Using async capture for {}", interface_clone);
+
+                // Required for async
+                cap = match cap.setnonblock() {
+                    Ok(cap) => cap,
+                    Err(e) => {
+                        error!("Failed to set non blocking: {}", e);
+                        return;
+                    }
+                };
+
+                // Define codec and packet structures
+                pub struct OwnedCodec;
+                pub struct PacketOwned {
+                    pub data: Box<[u8]>,
+                }
+
+                impl PacketCodec for OwnedCodec {
+                    type Item = PacketOwned;
+
+                    fn decode(&mut self, pkt: Packet) -> Self::Item {
+                        PacketOwned {
+                            data: pkt.data.into(),
+                        }
+                    }
+                }
+                // Create a new packet stream
+                let mut packet_stream = match cap.stream(OwnedCodec) {
+                    Ok(stream) => stream,
+                    Err(e) => {
+                        error!(
+                            "Failed to create packet stream on {}: {}",
+                            interface_clone, e
+                        );
+                        return;
+                    }
+                };
+
+                let mut interval = interval(Duration::from_millis(100));
+
+                debug!("Starting async capture task for {}", interface_clone);
+                loop {
+                    select! {
+                        _ = interval.tick() => {
+                            if stop_flag_clone.load(Ordering::Relaxed) {
+                                info!("Stopping async capture task for {}", interface_clone);
                                 break;
                             }
                         }
-                    }
-                    info!("Stopping sync capture for {}", interface_clone);
-                }
-
-                #[cfg(all(
-                    any(target_os = "macos", target_os = "linux", target_os = "windows"),
-                    feature = "asyncpacketcapture"
-                ))]
-                {
-                    info!("Using async capture for {}", interface_clone);
-
-                    // Required for async
-                    cap = match cap.setnonblock() {
-                        Ok(cap) => cap,
-                        Err(e) => {
-                            error!("Failed to set non blocking: {}", e);
-                            return;
-                        }
-                    };
-
-                    // Define codec and packet structures
-                    pub struct OwnedCodec;
-                    pub struct PacketOwned {
-                        pub data: Box<[u8]>,
-                    }
-
-                    impl PacketCodec for OwnedCodec {
-                        type Item = PacketOwned;
-
-                        fn decode(&mut self, pkt: Packet) -> Self::Item {
-                            PacketOwned {
-                                data: pkt.data.into(),
-                            }
-                        }
-                    }
-                    // Create a new packet stream
-                    let mut packet_stream = match cap.stream(OwnedCodec) {
-                        Ok(stream) => stream,
-                        Err(e) => {
-                            error!(
-                                "Failed to create packet stream on {}: {}",
-                                interface_clone, e
-                            );
-                            return;
-                        }
-                    };
-
-                    let mut interval = interval(Duration::from_millis(100));
-
-                    debug!("Starting async capture task for {}", interface_clone);
-                    loop {
-                        select! {
-                            _ = interval.tick() => {
-                                if stop_flag_clone.load(Ordering::Relaxed) {
-                                    info!("Stopping async capture task for {}", interface_clone);
-                                    break;
-                                }
-                            }
-                            packet_owned = packet_stream.next() => {
-                                debug!("Received packet on {}", interface_clone);
-                                match packet_owned {
-                                    Some(Ok(packet_owned)) => match LANScanCapture::parse_packet_pcap(&packet_owned.data) {
-                                        Some(ParsedPacket::SessionPacket(cp)) => {
-                                            LANScanCapture::process_parsed_packet(
-                                                cp,
-                                                &sessions,
-                                                &current_sessions,
-                                                &self_ips,
-                                                &filter,
-                                            )
-                                            .await;
-                                        }
-                                        Some(ParsedPacket::DnsPacket(dp)) => {
-                                            LANScanCapture::process_dns_packet(dp, &dns_resolutions);
-                                        }
-                                        None => {
-                                            trace!("Error parsing packet on {}", interface_clone);
-                                        }
+                        packet_owned = packet_stream.next() => {
+                            trace!("Received packet on {}", interface_clone);
+                            match packet_owned {
+                                Some(Ok(packet_owned)) => match LANScanCapture::parse_packet_pcap(&packet_owned.data) {
+                                    Some(ParsedPacket::SessionPacket(cp)) => {
+                                        LANScanCapture::process_parsed_packet(
+                                            cp,
+                                            &sessions,
+                                            &current_sessions,
+                                            &self_ips,
+                                            &filter,
+                                        )
+                                        .await;
                                     }
-                                    Some(Err(e)) => {
-                                        warn!("Error capturing packet on {}: {}", interface_clone, e);
+                                    Some(ParsedPacket::DnsPacket(dp)) => {
+                                        LANScanCapture::process_dns_packet(dp, &dns_resolutions);
                                     }
                                     None => {
-                                        warn!("Packet stream ended for {}", interface_clone);
+                                        trace!("Error parsing packet on {}", interface_clone);
                                     }
+                                }
+                                Some(Err(e)) => {
+                                    warn!("Error capturing packet on {}: {}", interface_clone, e);
+                                }
+                                None => {
+                                    warn!("Packet stream ended for {}", interface_clone);
                                 }
                             }
                         }
                     }
-                };
-                info!("Capture task for {} terminated", interface_clone);
-            });
-
-            // Store the task handle and its stop flag
-            self.capture_task_handles
-                .insert(interface.clone(), TaskHandle { handle, stop_flag });
-        }
+                }
+            };
+            info!("Capture task for {} terminated", interface_clone);
+        });
+        // Store the task handle and its stop flag
+        self.capture_task_handles
+            .insert(interface.to_string(), TaskHandle { handle, stop_flag });
     }
 
     async fn stop_capture_tasks(&mut self) {
