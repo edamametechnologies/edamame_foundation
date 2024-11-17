@@ -480,20 +480,27 @@ impl LANScanCapture {
             .filter(|s| !s.is_empty())
             .collect();
 
-        if !interfaces.is_empty() {
+        let passed_interface_success = if !interfaces.is_empty() {
+            let mut at_least_one_success = false;
             for interface in interfaces {
                 info!("Initializing capture task for {}", interface);
                 let device = match self.get_device_from_interface(&interface).await {
                     Ok(device) => device,
                     Err(e) => {
-                        error!("Failed to get device from interface: {}", e);
+                        warn!("Failed to get device from interface: {}", e);
                         continue;
                     }
                 };
                 self.start_capture_task_for_device(&device, &interface)
                     .await;
+                at_least_one_success = true;
             }
+            at_least_one_success
         } else {
+            false
+        };
+
+        if !passed_interface_success {
             let mut default_interface = match get_default_interface() {
                 Some((_, _, name)) => name,
                 None => {
