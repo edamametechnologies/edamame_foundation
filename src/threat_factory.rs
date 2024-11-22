@@ -69,6 +69,13 @@ fn get_builtin_version(platform: &str) -> Result<&'static str> {
 }
 
 fn get_model_name(platform: &str) -> Result<&'static str> {
+    // If set to autodetect
+    let platform = if platform == "" {
+        get_platform()
+    } else {
+        platform
+    };
+
     match platform.to_lowercase().as_str() {
         "macos" => Ok(THREAT_MODEL_MACOS),
         "windows" => Ok(THREAT_MODEL_WINDOWS),
