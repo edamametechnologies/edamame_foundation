@@ -3,7 +3,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
   "name": "threat model Linux",
   "extends": "none",
   "date": "November 22th 2024",
-  "signature": "46263df5313addc70ed11b57b0455603f0e5b3ffce7b65f9c9053582524b2866",
+  "signature": "04363cc863206b5ddd92fd09e0c19a17a0e8d14dd21676f04e5a1e8077be3612",
   "metrics": [
     {
       "name": "edamame helper disabled",
@@ -54,7 +54,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
-        "target": "sudo apt remove edamame_helper",
+        "target": "apt remove edamame_helper",
         "education": []
       }
     },
@@ -215,7 +215,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
-        "target": "sudo apt install virt-what -y > /dev/null 2>&1 && output=$(sudo virt-what) && [ -z \"$output\" ] && { lsblk -o MOUNTPOINT,FSTYPE | grep \"/ \" | grep -q 'crypt' || echo encryption_disabled; lsblk -o MOUNTPOINT,FSTYPE | grep '/swap' | grep -q 'crypt' || echo encryption_disabled; }",
+        "target": "apt install virt-what -y > /dev/null 2>&1 && output=$(virt-what) && [ -z \"$output\" ] && { lsblk -o MOUNTPOINT,FSTYPE | grep \"/ \" | grep -q 'crypt' || echo encryption_disabled; lsblk -o MOUNTPOINT,FSTYPE | grep '/swap' | grep -q 'crypt' || echo encryption_disabled; }",
         "education": []
       },
       "remediation": {
@@ -431,7 +431,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
-        "target": "sudo chmod 644 /etc/passwd",
+        "target": "chmod 644 /etc/passwd",
         "education": []
       },
       "rollback": {
@@ -483,7 +483,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
-        "target": "sudo chmod 600 /etc/shadow",
+        "target": "chmod 600 /etc/shadow",
         "education": []
       },
       "rollback": {
@@ -535,7 +535,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
-        "target": "sudo chmod 644 /etc/fstab",
+        "target": "chmod 644 /etc/fstab",
         "education": []
       },
       "rollback": {
@@ -587,7 +587,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
-        "target": "sudo chmod 644 /etc/group",
+        "target": "chmod 644 /etc/group",
         "education": []
       },
       "rollback": {
@@ -639,7 +639,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
-        "target": "sudo chown root:root /etc/group",
+        "target": "chown root:root /etc/group",
         "education": []
       },
       "rollback": {
@@ -691,7 +691,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
-        "target": "sudo chown root:shadow /etc/shadow",
+        "target": "chown root:shadow /etc/shadow",
         "education": []
       },
       "rollback": {
@@ -733,7 +733,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
-        "target": "sudo apt list --upgradeable 2>/dev/null | grep 'upgradable'",
+        "target": "apt list --upgradeable 2>/dev/null | grep 'upgradable'",
         "education": []
       },
       "remediation": {
@@ -742,7 +742,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
-        "target": "sudo apt update && sudo apt upgrade -y",
+        "target": "apt update && apt upgrade -y",
         "education": []
       },
       "rollback": {
@@ -785,7 +785,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
-        "target": "sudo ufw status | grep -q 'Status: active' || echo firewall_disabled",
+        "target": "ufw status | grep -q 'Status: active' || echo firewall_disabled",
         "education": []
       },
       "remediation": {
@@ -794,7 +794,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
-        "target": "sudo apt install ufw -y > /dev/null 2>&1 && sudo ufw enable",
+        "target": "apt install ufw -y > /dev/null 2>&1 && ufw enable",
         "education": [
           {
             "locale": "EN",
@@ -809,7 +809,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "",
         "elevation": "admin",
-        "target": "sudo ufw disable",
+        "target": "ufw disable",
         "education": []
       }
     },
@@ -852,7 +852,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
-        "target": "sudo systemctl stop ssh && sudo systemctl disable ssh",
+        "target": "systemctl stop ssh && systemctl disable ssh",
         "education": [
           {
             "locale": "EN",
@@ -872,7 +872,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
-        "target": "sudo systemctl enable ssh && sudo systemctl start ssh",
+        "target": "systemctl enable ssh && systemctl start ssh",
         "education": [
           {
             "locale": "EN",
@@ -926,7 +926,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
-        "target": "sudo systemctl stop xrdp && sudo systemctl disable xrdp",
+        "target": "systemctl stop xrdp && systemctl disable xrdp",
         "education": [
           {
             "locale": "EN",
@@ -946,7 +946,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
-        "target": "sudo apt install xrdp -y > /dev/null 2>&1 && sudo systemctl start xrdp && sudo systemctl enable xrdp",
+        "target": "apt install xrdp -y > /dev/null 2>&1 && systemctl start xrdp && systemctl enable xrdp",
         "education": [
           {
             "locale": "EN",
@@ -1000,7 +1000,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
-        "target": "sudo systemctl stop smbd && sudo systemctl disable smbd; sudo systemctl stop nfs-kernel-server && sudo systemctl disable nfs-kernel-server",
+        "target": "systemctl stop smbd && systemctl disable smbd; systemctl stop nfs-kernel-server && systemctl disable nfs-kernel-server",
         "education": [
           {
             "locale": "EN",
@@ -1020,7 +1020,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
-        "target": "sudo apt install samba -y > /dev/null 2>&1 && sudo systemctl start smbd && sudo systemctl enable smbd; sudo apt install nfs-kernel-server -y > /dev/null 2>&1 && sudo systemctl start nfs-kernel-server && sudo systemctl enable nfs-kernel-server",
+        "target": "apt install samba -y > /dev/null 2>&1 && systemctl start smbd && systemctl enable smbd; apt install nfs-kernel-server -y > /dev/null 2>&1 && systemctl start nfs-kernel-server && systemctl enable nfs-kernel-server",
         "education": [
           {
             "locale": "EN",

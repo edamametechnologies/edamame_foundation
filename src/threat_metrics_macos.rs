@@ -3,7 +3,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
   "name": "threat model macOS",
   "extends": "none",
   "date": "November 22th 2024",
-  "signature": "c101701fd43dcb73b45be299970d4ec2fb39796ef67d7b1968a27f393232d124",
+  "signature": "08ae146b1bad159adf314438783172adbb2b5e4e22bd45ac7b5fa59a922a1bbe",
   "metrics": [
     {
       "name": "edamame helper disabled",
@@ -708,7 +708,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "fulldisk",
-        "target": "sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate",
+        "target": "/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate",
         "education": [
           {
             "locale": "EN",
