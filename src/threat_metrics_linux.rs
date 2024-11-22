@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_LINUX: &str = r#"{
   "name": "threat model Linux",
   "extends": "none",
-  "date": "November 04th 2024",
-  "signature": "51575134ff21ae0d49209fb153f2b7452b01bfab26d0e56fc7890dac106e1ec6",
+  "date": "November 22th 2024",
+  "signature": "46263df5313addc70ed11b57b0455603f0e5b3ffce7b65f9c9053582524b2866",
   "metrics": [
     {
       "name": "edamame helper disabled",
@@ -26,7 +26,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       ],
       "implementation": {
         "system": "Linux",
-        "minversion": 5,
+        "minversion": 3,
         "maxversion": 0,
         "class": "internal",
         "elevation": "user",
@@ -41,7 +41,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       },
       "remediation": {
         "system": "Linux",
-        "minversion": 5,
+        "minversion": 3,
         "maxversion": 0,
         "class": "installer",
         "elevation": "user",
@@ -50,7 +50,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       },
       "rollback": {
         "system": "Linux",
-        "minversion": 5,
+        "minversion": 3,
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
@@ -83,7 +83,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       ],
       "implementation": {
         "system": "Linux",
-        "minversion": 5,
+        "minversion": 3,
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
@@ -92,7 +92,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       },
       "remediation": {
         "system": "Linux",
-        "minversion": 5,
+        "minversion": 3,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -107,7 +107,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       },
       "rollback": {
         "system": "Linux",
-        "minversion": 5,
+        "minversion": 3,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -275,7 +275,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       ],
       "implementation": {
         "system": "Linux",
-        "minversion": 5,
+        "minversion": 3,
         "maxversion": 0,
         "class": "internal",
         "elevation": "user",
@@ -284,7 +284,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       },
       "remediation": {
         "system": "Linux",
-        "minversion": 5,
+        "minversion": 3,
         "maxversion": 0,
         "class": "internal",
         "elevation": "",
@@ -304,7 +304,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       },
       "rollback": {
         "system": "Linux",
-        "minversion": 5,
+        "minversion": 3,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -344,7 +344,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       ],
       "implementation": {
         "system": "Linux",
-        "minversion": 5,
+        "minversion": 3,
         "maxversion": 0,
         "class": "internal",
         "elevation": "user",
@@ -353,7 +353,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       },
       "remediation": {
         "system": "Linux",
-        "minversion": 5,
+        "minversion": 3,
         "maxversion": 0,
         "class": "internal",
         "elevation": "",
@@ -373,7 +373,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       },
       "rollback": {
         "system": "Linux",
-        "minversion": 5,
+        "minversion": 3,
         "maxversion": 0,
         "class": "internal",
         "elevation": "",
@@ -418,7 +418,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       ],
       "implementation": {
         "system": "Linux",
-        "minversion": 5,
+        "minversion": 3,
         "maxversion": 0,
         "class": "cli",
         "elevation": "user",
@@ -427,7 +427,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       },
       "remediation": {
         "system": "Linux",
-        "minversion": 5,
+        "minversion": 3,
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
@@ -436,7 +436,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       },
       "rollback": {
         "system": "Linux",
-        "minversion": 5,
+        "minversion": 3,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -470,7 +470,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       ],
       "implementation": {
         "system": "Linux",
-        "minversion": 5,
+        "minversion": 3,
         "maxversion": 0,
         "class": "cli",
         "elevation": "user",
@@ -479,7 +479,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       },
       "remediation": {
         "system": "Linux",
-        "minversion": 5,
+        "minversion": 3,
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
@@ -488,7 +488,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       },
       "rollback": {
         "system": "Linux",
-        "minversion": 5,
+        "minversion": 3,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -522,7 +522,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       ],
       "implementation": {
         "system": "Linux",
-        "minversion": 5,
+        "minversion": 3,
         "maxversion": 0,
         "class": "cli",
         "elevation": "user",
@@ -531,7 +531,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       },
       "remediation": {
         "system": "Linux",
-        "minversion": 5,
+        "minversion": 3,
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
@@ -540,7 +540,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       },
       "rollback": {
         "system": "Linux",
-        "minversion": 5,
+        "minversion": 3,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -574,7 +574,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       ],
       "implementation": {
         "system": "Linux",
-        "minversion": 5,
+        "minversion": 3,
         "maxversion": 0,
         "class": "cli",
         "elevation": "user",
@@ -583,7 +583,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       },
       "remediation": {
         "system": "Linux",
-        "minversion": 5,
+        "minversion": 3,
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
@@ -592,7 +592,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       },
       "rollback": {
         "system": "Linux",
-        "minversion": 5,
+        "minversion": 3,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -626,7 +626,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       ],
       "implementation": {
         "system": "Linux",
-        "minversion": 5,
+        "minversion": 3,
         "maxversion": 0,
         "class": "cli",
         "elevation": "user",
@@ -635,7 +635,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       },
       "remediation": {
         "system": "Linux",
-        "minversion": 5,
+        "minversion": 3,
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
@@ -644,7 +644,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       },
       "rollback": {
         "system": "Linux",
-        "minversion": 5,
+        "minversion": 3,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -678,7 +678,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       ],
       "implementation": {
         "system": "Linux",
-        "minversion": 5,
+        "minversion": 3,
         "maxversion": 0,
         "class": "cli",
         "elevation": "user",
@@ -687,7 +687,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       },
       "remediation": {
         "system": "Linux",
-        "minversion": 5,
+        "minversion": 3,
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
@@ -696,7 +696,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       },
       "rollback": {
         "system": "Linux",
-        "minversion": 5,
+        "minversion": 3,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -729,7 +729,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       ],
       "implementation": {
         "system": "Linux",
-        "minversion": 5,
+        "minversion": 3,
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
@@ -738,7 +738,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       },
       "remediation": {
         "system": "Linux",
-        "minversion": 5,
+        "minversion": 3,
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
@@ -747,7 +747,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       },
       "rollback": {
         "system": "Linux",
-        "minversion": 5,
+        "minversion": 3,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -781,7 +781,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       ],
       "implementation": {
         "system": "Linux",
-        "minversion": 5,
+        "minversion": 3,
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
@@ -790,7 +790,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       },
       "remediation": {
         "system": "Linux",
-        "minversion": 5,
+        "minversion": 3,
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
@@ -805,7 +805,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       },
       "rollback": {
         "system": "Linux",
-        "minversion": 5,
+        "minversion": 3,
         "maxversion": 0,
         "class": "",
         "elevation": "admin",
@@ -839,7 +839,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       ],
       "implementation": {
         "system": "Linux",
-        "minversion": 5,
+        "minversion": 3,
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
@@ -848,7 +848,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       },
       "remediation": {
         "system": "Linux",
-        "minversion": 5,
+        "minversion": 3,
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
@@ -868,7 +868,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       },
       "rollback": {
         "system": "Linux",
-        "minversion": 5,
+        "minversion": 3,
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
@@ -913,7 +913,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       ],
       "implementation": {
         "system": "Linux",
-        "minversion": 5,
+        "minversion": 3,
         "maxversion": 0,
         "class": "cli",
         "elevation": "user",
@@ -922,7 +922,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       },
       "remediation": {
         "system": "Linux",
-        "minversion": 5,
+        "minversion": 3,
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
@@ -942,7 +942,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       },
       "rollback": {
         "system": "Linux",
-        "minversion": 5,
+        "minversion": 3,
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
@@ -987,7 +987,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       ],
       "implementation": {
         "system": "Linux",
-        "minversion": 5,
+        "minversion": 3,
         "maxversion": 0,
         "class": "cli",
         "elevation": "user",
@@ -996,7 +996,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       },
       "remediation": {
         "system": "Linux",
-        "minversion": 5,
+        "minversion": 3,
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
@@ -1016,7 +1016,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       },
       "rollback": {
         "system": "Linux",
-        "minversion": 5,
+        "minversion": 3,
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
@@ -1061,7 +1061,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       ],
       "implementation": {
         "system": "Linux",
-        "minversion": 5,
+        "minversion": 3,
         "maxversion": 0,
         "class": "cli",
         "elevation": "user",
@@ -1070,7 +1070,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       },
       "remediation": {
         "system": "Linux",
-        "minversion": 5,
+        "minversion": 3,
         "maxversion": 0,
         "class": "cli",
         "elevation": "user",
@@ -1090,7 +1090,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       },
       "rollback": {
         "system": "Linux",
-        "minversion": 5,
+        "minversion": 3,
         "maxversion": 0,
         "class": "cli",
         "elevation": "user",
@@ -1135,7 +1135,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       ],
       "implementation": {
         "system": "Linux",
-        "minversion": 5,
+        "minversion": 3,
         "maxversion": 0,
         "class": "cli",
         "elevation": "user",
@@ -1144,7 +1144,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       },
       "remediation": {
         "system": "Linux",
-        "minversion": 5,
+        "minversion": 3,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -1159,7 +1159,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       },
       "rollback": {
         "system": "Linux",
-        "minversion": 5,
+        "minversion": 3,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -1199,7 +1199,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       ],
       "implementation": {
         "system": "Linux",
-        "minversion": 5,
+        "minversion": 3,
         "maxversion": 0,
         "class": "cli",
         "elevation": "user",
@@ -1208,7 +1208,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       },
       "remediation": {
         "system": "Linux",
-        "minversion": 5,
+        "minversion": 3,
         "maxversion": 0,
         "class": "",
         "elevation": "",
@@ -1223,7 +1223,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       },
       "rollback": {
         "system": "Linux",
-        "minversion": 5,
+        "minversion": 3,
         "maxversion": 0,
         "class": "",
         "elevation": "",

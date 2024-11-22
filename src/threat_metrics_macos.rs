@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_MACOS: &str = r#"{
   "name": "threat model macOS",
   "extends": "none",
-  "date": "November 03th 2024",
-  "signature": "0aa40272d46f48860bcc56f59a6b6e937e86628ba13b5440c2b5e36a69a9ba0d",
+  "date": "November 22th 2024",
+  "signature": "c101701fd43dcb73b45be299970d4ec2fb39796ef67d7b1968a27f393232d124",
   "metrics": [
     {
       "name": "edamame helper disabled",
@@ -1268,7 +1268,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
-        "target": "if ! { pgrep BDLDaemon >/dev/null || pgrep RTProtectionDaemon >/dev/null || sentinelctl version 2>/dev/null | grep -q \"Agent version\"; }; then echo epp_disabled; fi",
+        "target": "if ! { pgrep BDLDaemon >/dev/null || pgrep RTProtectionDaemon >/dev/null || sentinelctl version 2>/dev/null | grep -q \"SentinelOne\"; }; then echo epp_disabled; fi",
         "education": []
       },
       "remediation": {
@@ -1857,7 +1857,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "user",
-        "target": "if defaults read /Applications/Google\\ Chrome.app/Contents/Info.plist CFBundleShortVersionString &>/dev/null; then latest_version=$(curl -s \"https://formulae.brew.sh/api/cask/google-chrome.json\" | awk -F'[\"]' '{for(i=1;i<=NF;i++) if ($i==\"version\") {print $(i+2); exit}}'); local_version=$(defaults read /Applications/Google\\ Chrome.app/Contents/Info.plist CFBundleShortVersionString); if [ \"$latest_version\" = \"$local_version\" ]; then echo \"\"; else echo \"Chrome is not up to date (Installed: $local_version, Latest: $latest_version)\"; fi; else echo \"\"; fi",
+        "target": "defaults read /Applications/Google\\ Chrome.app/Contents/Info.plist CFBundleShortVersionString &>/dev/null && { local_version=$(defaults read /Applications/Google\\ Chrome.app/Contents/Info.plist CFBundleShortVersionString); latest_version=$(curl -s \"https://formulae.brew.sh/api/cask/google-chrome.json\" | awk -F'[\"]' '{for(i=1;i<=NF;i++) if ($i==\"version\") {print $(i+2); exit}}'); [[ \"${local_version}\" < \"${latest_version}\" ]] && echo \"Chrome is not up to date (Installed: $local_version, Latest: $latest_version)\"; }",
         "education": []
       },
       "remediation": {
