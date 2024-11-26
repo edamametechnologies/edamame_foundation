@@ -291,6 +291,9 @@ pub fn init_logger(
         } else {
             "edamame"
         };
+        // Add the PID to the basename
+        let pid = std::process::id();
+        let basename = format!("{}_{}", basename, pid);
         let file_appender = RollingFileAppender::new(Rotation::DAILY, log_dir.clone(), basename);
         //println!(
         //    "Logging to rolling file with basename {} in directory {:?}",

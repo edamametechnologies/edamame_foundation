@@ -2,6 +2,7 @@ use std::future::Future;
 use std::sync::{Arc, Mutex};
 use tokio::runtime::{Handle, Runtime};
 use tokio::task::JoinHandle;
+use tracing::{trace, warn};
 
 // Use Arc to wrap the Runtime for safe sharing across threads
 static RUNTIME: Mutex<Option<Arc<Runtime>>> = Mutex::new(None);
@@ -11,7 +12,7 @@ static RUNTIME: Mutex<Option<Arc<Runtime>>> = Mutex::new(None);
 pub fn async_init() {
     // Check if the runtime has already been initialized
     if RUNTIME.lock().expect("Failed to lock runtime").is_some() {
-        eprintln!("Runtime already initialized");
+        warn!("Runtime already initialized");
         return;
     }
 
@@ -29,13 +30,18 @@ pub fn async_init() {
 
 // Gets the handle of the initialized runtime.
 // If the runtime is not initialized, it returns the current default Tokio runtime handle.
-// This is used during unit tests
 fn get_runtime_handle() -> Handle {
     match RUNTIME.lock() {
         Ok(rt_lock) => {
             if let Some(rt) = &*rt_lock {
+                trace!("Using custom runtime handle");
+                // Show backtrace
+                use std::backtrace::Backtrace;
+                let backtrace = Backtrace::capture();
+                trace!("Backtrace: {:?}", backtrace);
                 rt.handle().clone()
             } else {
+                warn!("Runtime not initialized, using default Tokio runtime handle");
                 Handle::current()
             }
         }
