@@ -23,6 +23,11 @@ pub mod lanscan_asn_v6_db;
 ))]
 pub mod lanscan_capture;
 pub mod lanscan_device_info;
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux", target_os = "windows"),
+    feature = "packetcapture"
+))]
+pub mod lanscan_dns;
 pub mod lanscan_interface;
 #[cfg(all(
     any(target_os = "macos", target_os = "linux", target_os = "windows"),
@@ -32,6 +37,11 @@ pub mod lanscan_l7;
 pub mod lanscan_mdns;
 pub mod lanscan_oui;
 pub mod lanscan_oui_db;
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux", target_os = "windows"),
+    feature = "packetcapture"
+))]
+pub mod lanscan_packets;
 pub mod lanscan_port_info;
 pub mod lanscan_port_vulns;
 pub mod lanscan_port_vulns_db;

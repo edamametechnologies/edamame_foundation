@@ -1,8 +1,15 @@
 use std::future::Future;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use tokio::runtime::{Handle, Runtime};
 use tokio::task::JoinHandle;
 use tracing::{trace, warn};
+
+#[derive(Debug)]
+pub struct TaskHandle {
+    pub handle: JoinHandle<()>,
+    pub stop_flag: Arc<AtomicBool>,
+}
 
 // Use Arc to wrap the Runtime for safe sharing across threads
 static RUNTIME: Mutex<Option<Arc<Runtime>>> = Mutex::new(None);

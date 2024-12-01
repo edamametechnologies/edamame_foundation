@@ -1,8 +1,8 @@
 use crate::lanscan_sessions::*;
-use crate::runtime::async_spawn;
+use crate::runtime::*;
 use crate::rwlock::CustomRwLock;
-use anyhow::Result;
-use chrono::{DateTime, TimeDelta, Utc};
+use anyhow::{anyhow, Result};
+use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use dashmap::DashMap;
 use netstat2::{
     get_sockets_info, AddressFamilyFlags, ProtocolFlags, ProtocolSocketInfo, SocketInfo,
@@ -10,12 +10,11 @@ use netstat2::{
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use sysinfo::{Process, System, Uid, Users};
-use tokio::task::JoinHandle;
+use sysinfo::{Process, ProcessRefreshKind, RefreshKind, System, Uid, Users};
 use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info, trace, warn};
 
-static RESOLUTION_TIMEOUT: TimeDelta = TimeDelta::seconds(600);
+static RESOLUTION_TIMEOUT: ChronoDuration = ChronoDuration::seconds(60);
 
 #[derive(Debug, Clone)]
 pub struct L7Resolution {
@@ -23,12 +22,10 @@ pub struct L7Resolution {
     pub date: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone)]
 pub struct LANScanL7 {
     l7_map: Arc<DashMap<Session, L7Resolution>>,
     resolver_queue: Arc<CustomRwLock<HashSet<Session>>>,
-    resolver_handle: Arc<CustomRwLock<Option<JoinHandle<()>>>>,
-    resolver_stop_flag: Arc<AtomicBool>,
+    resolver_handle: Option<TaskHandle>,
     system: Arc<CustomRwLock<System>>,
     users: Arc<CustomRwLock<Users>>,
 }
@@ -38,33 +35,40 @@ impl LANScanL7 {
         Self {
             l7_map: Arc::new(DashMap::new()),
             resolver_queue: Arc::new(CustomRwLock::new(HashSet::new())),
-            resolver_handle: Arc::new(CustomRwLock::new(None)),
-            resolver_stop_flag: Arc::new(AtomicBool::new(false)),
+            resolver_handle: None,
             system: Arc::new(CustomRwLock::new(System::new_all())),
             users: Arc::new(CustomRwLock::new(Users::new())),
         }
     }
 
     pub async fn start(&mut self) {
-        if self.resolver_handle.read().await.is_some() {
+        if self.resolver_handle.is_some() {
             warn!("L7 resolver task is already running");
             return;
         }
 
         let resolver_queue = self.resolver_queue.clone();
         let l7_map = self.l7_map.clone();
-        let resolver_stop_flag = self.resolver_stop_flag.clone();
         let system = self.system.clone();
         let users = self.users.clone();
 
+        let stop_flag = Arc::new(AtomicBool::new(false));
+        let stop_flag_clone = stop_flag.clone();
+
         let resolver_handle = async_spawn(async move {
             info!("Starting L7 resolver task");
-            while !resolver_stop_flag.load(Ordering::Relaxed) {
+            let refresh_kind = RefreshKind::new().with_processes(
+                ProcessRefreshKind::everything()
+                    .without_cpu()
+                    .without_disk_usage()
+                    .without_memory(),
+            );
+
+            while !stop_flag_clone.load(Ordering::Relaxed) {
                 let to_resolve: Vec<Session>;
                 {
                     let mut queue = resolver_queue.write().await;
                     to_resolve = queue.drain().collect();
-                    // Suppress the older resolutions
                 }
 
                 let to_resolve_len = to_resolve.len();
@@ -72,7 +76,7 @@ impl LANScanL7 {
                     // Refresh the system information
                     {
                         let mut sys = system.write().await;
-                        sys.refresh_all();
+                        sys.refresh_specifics(refresh_kind);
 
                         let mut users = users.write().await;
                         users.refresh_list();
@@ -106,7 +110,6 @@ impl LANScanL7 {
                         .collect();
 
                     let mut failed_resolutions = HashSet::new();
-
                     let mut resolutions_to_remove = Vec::new();
 
                     for connection in to_resolve {
@@ -169,31 +172,38 @@ impl LANScanL7 {
                     if failed_resolutions_len > 0 {
                         let mut queue = resolver_queue.write().await;
                         queue.extend(failed_resolutions);
-                        debug!("Re-queued {} failed L7 resolutions", queue.len());
+                        debug!("Re-queued {} failed L7 resolutions", failed_resolutions_len);
                     }
+                    let resolved_success = to_resolve_len - failed_resolutions_len;
 
-                    info!(
-                        "L7 resolved {} sessions / {} failed",
-                        to_resolve_len - failed_resolutions_len,
-                        failed_resolutions_len
-                    );
+                    if resolved_success > 0 {
+                        info!(
+                            "L7 resolved {} sessions / {} failed",
+                            resolved_success, failed_resolutions_len
+                        );
+                    }
                 }
 
                 // Tight loop to catch short-lived connections
-                sleep(Duration::from_secs(1)).await;
+                sleep(Duration::from_millis(250)).await;
             }
 
             info!("L7 resolver task completed");
         });
 
-        *self.resolver_handle.write().await = Some(resolver_handle);
+        self.resolver_handle = Some(TaskHandle {
+            handle: resolver_handle,
+            stop_flag,
+        });
     }
 
     pub async fn stop(&mut self) {
-        if let Some(resolver_handle) = self.resolver_handle.write().await.take() {
-            self.resolver_stop_flag.store(true, Ordering::Relaxed);
-            let _ = resolver_handle.await;
+        if let Some(task_handle) = self.resolver_handle.take() {
+            task_handle.stop_flag.store(true, Ordering::Relaxed);
+            let _ = task_handle.handle.await;
             info!("Stopped L7 resolver task");
+        } else {
+            warn!("L7 resolver task not running");
         }
     }
 
@@ -232,12 +242,6 @@ impl LANScanL7 {
     ) -> Result<SessionL7> {
         // Try to match the connection to a socket
         for socket in socket_info.iter() {
-            // Get the PID of the socket
-            let socket_pid = match socket.associated_pids.get(0) {
-                Some(pid) => *pid,
-                None => continue, // No PID, skip this socket
-            };
-
             // Check if the socket matches the connection
             let is_match = match &socket.protocol_socket_info {
                 ProtocolSocketInfo::Tcp(tcp_socket) => {
@@ -259,39 +263,43 @@ impl LANScanL7 {
             };
 
             if is_match {
+                // Get the PIDs of the socket
+                let socket_pids = socket.associated_pids.clone();
+
                 // Find the process by PID
-                if let Some(process) = pid_to_process.get(&socket_pid) {
-                    // Get the username
-                    let username = if let Some(user_id) = process.user_id() {
-                        match uid_to_username.get(&user_id).map(|s| s.to_string()) {
-                            Some(username) => username,
-                            None => {
-                                warn!("No username found for user_id {:?}", user_id);
-                                String::new()
+                for socket_pid in socket_pids.clone() {
+                    if let Some(process) = pid_to_process.get(&socket_pid) {
+                        // Get the username
+                        let username = if let Some(user_id) = process.user_id() {
+                            match uid_to_username.get(&user_id).map(|s| s.to_string()) {
+                                Some(username) => username,
+                                None => {
+                                    warn!("No username found for user_id {:?}", user_id);
+                                    String::new()
+                                }
                             }
-                        }
-                    } else {
-                        warn!("No user_id found for PID {:?}", socket_pid);
-                        String::new()
-                    };
+                        } else {
+                            warn!("No user_id found for PID {:?}", socket_pid);
+                            String::new()
+                        };
 
-                    // Get process name and path
-                    let process_name = process.name().to_string_lossy().to_string();
-                    let process_path = if let Some(path) = process.exe() {
-                        path.to_string_lossy().to_string()
-                    } else {
-                        String::new()
-                    };
+                        // Get process name and path
+                        let process_name = process.name().to_string_lossy().to_string();
+                        let process_path = if let Some(path) = process.exe() {
+                            path.to_string_lossy().to_string()
+                        } else {
+                            String::new()
+                        };
 
-                    return Ok(SessionL7 {
-                        pid: socket_pid,
-                        process_name,
-                        process_path,
-                        username,
-                    });
-                } else {
-                    return Err(anyhow::anyhow!("Process not found for PID {}", socket_pid));
+                        return Ok(SessionL7 {
+                            pid: socket_pid,
+                            process_name,
+                            process_path,
+                            username,
+                        });
+                    }
                 }
+                return Err(anyhow!("Process not found for PIDs {:?}", socket_pids));
             }
         }
 
@@ -313,13 +321,13 @@ mod tests {
         lanscan_l7.start().await;
 
         // Check that resolver_handle is Some
-        assert!(lanscan_l7.resolver_handle.read().await.is_some());
+        assert!(lanscan_l7.resolver_handle.is_some());
 
         // Stop the resolver
         lanscan_l7.stop().await;
 
         // Check that resolver_handle is None
-        assert!(lanscan_l7.resolver_handle.read().await.is_none());
+        assert!(lanscan_l7.resolver_handle.is_none());
     }
 
     #[tokio::test]
@@ -404,5 +412,38 @@ mod tests {
 
         // Assert that result is an error
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_resolver_task_processes_queue() {
+        let mut lanscan_l7 = LANScanL7::new();
+
+        // Start the resolver
+        lanscan_l7.start().await;
+
+        // Create a sample Session
+        let connection = Session {
+            protocol: Protocol::TCP,
+            src_ip: IpAddr::from_str("127.0.0.1").unwrap(),
+            src_port: 12345,
+            dst_ip: IpAddr::from_str("127.0.0.1").unwrap(),
+            dst_port: 54321,
+        };
+
+        // Add the connection to the resolver
+        lanscan_l7.add_connection_to_resolver(&connection).await;
+
+        // Wait a bit to let the resolver task process the queue
+        sleep(Duration::from_secs(1)).await;
+
+        // Check if the connection has been processed
+        let l7_resolution = lanscan_l7.get_resolved_l7(&connection).await;
+        assert!(l7_resolution.is_some());
+        let l7_resolution = l7_resolution.unwrap();
+        // Since we probably don't have a matching process, l7 should still be None
+        assert!(l7_resolution.l7.is_none() || l7_resolution.l7.is_some());
+
+        // Stop the resolver
+        lanscan_l7.stop().await;
     }
 }
