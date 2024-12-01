@@ -70,7 +70,12 @@ impl MemoryWriter {
             "device_id",
             "code",
         ];
-        let log_line_sanitized = sanitize_keywords(log_line, &keywords);
+        // Sanitize the log line (not in debug mode)
+        let log_line_sanitized = if cfg!(debug_assertions) {
+            log_line.to_string()
+        } else {
+            sanitize_keywords(log_line, &keywords)
+        };
         // Remove all escape codes (x1b\[[0-9;]*m) from the log line before storing it in the log buffer x1b\[[0-9;]*m
         let re = Regex::new(r"\x1b\[[0-9;]*m").unwrap();
         let log_line_formatted = re.replace_all(&log_line_sanitized, "");
@@ -520,19 +525,14 @@ mod tests {
 
     #[test]
     fn test_logger_functionality() {
-        // Step 1: Initialize logger
+        // Initialize logger
         init_logger("posture", "", "", "", &[]);
 
-        // Step 2: Test MemoryWriter initialization
+        // Test MemoryWriter initialization
         let writer = MemoryWriter::new();
         assert!(writer.data.lock().unwrap().logs.is_empty());
 
-        // Step 3: Test log sanitization
-        let test_log = r#"{"id": "12345", "password": "secret"}"#;
-        let sanitized_log = sanitize_keywords(test_log, &["id", "password"]);
-        assert_eq!(sanitized_log, r#"{"id": "*****", "password": "******"}"#);
-
-        // Step 4: Test log storage in memory writer
+        // Test log storage in memory writer
         {
             let logger_guard = LOGGER.lock().unwrap();
             let logger = logger_guard.as_ref().unwrap();
@@ -544,7 +544,7 @@ mod tests {
             assert!(locked_data.logs[0].contains("This is a test log"));
         }
 
-        // Step 5: Test get_new_logs
+        // Test get_new_logs
         info!("New log entry");
 
         let log_data = get_new_logs();
@@ -571,5 +571,12 @@ mod tests {
         assert!(log_data.contains("This is an error log"));
         assert!(log_data.contains("This is a warn log"));
         // Note: Depending on the log level set, debug and trace logs may not be captured
+    }
+
+    #[test]
+    fn test_sanitize_keywords() {
+        let test_log = r#"{"id": "12345", "password": "secret"}"#;
+        let sanitized_log = sanitize_keywords(test_log, &["id", "password"]);
+        assert_eq!(sanitized_log, r#"{"id": "*****", "password": "******"}"#);
     }
 }

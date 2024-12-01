@@ -1,4 +1,4 @@
-use crate::runtime::async_spawn;
+use crate::runtime::*;
 use crate::rwlock::CustomRwLock;
 use dashmap::DashMap;
 use hickory_resolver::{name_server::TokioConnectionProvider, TokioAsyncResolver};
@@ -6,18 +6,15 @@ use std::collections::VecDeque;
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tokio::task::JoinHandle;
 use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info, trace, warn};
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct LANScanResolver {
     resolver: Arc<CustomRwLock<Option<TokioAsyncResolver>>>,
     reverse_dns: Arc<DashMap<IpAddr, String>>,
     resolver_queue: Arc<CustomRwLock<VecDeque<IpAddr>>>,
-    // We wrap the resolver handle in a CustomRwLock to allow for cloning
-    resolver_handle: Arc<CustomRwLock<Option<JoinHandle<()>>>>,
-    resolver_stop_flag: Arc<AtomicBool>,
+    resolver_handle: Arc<CustomRwLock<Option<TaskHandle>>>,
 }
 
 impl LANScanResolver {
@@ -27,44 +24,19 @@ impl LANScanResolver {
             reverse_dns: Arc::new(DashMap::new()),
             resolver_queue: Arc::new(CustomRwLock::new(VecDeque::new())),
             resolver_handle: Arc::new(CustomRwLock::new(None)),
-            resolver_stop_flag: Arc::new(AtomicBool::new(false)),
         }
     }
 
     fn create_resolver() -> Option<TokioAsyncResolver> {
-        // To make this independent, if targeting macOS, BSD, Linux, or Windows, we can use the system's configuration:
-        #[cfg(any(unix, windows))]
-        {
-            // Use the system resolver configuration
-            match TokioAsyncResolver::from_system_conf(TokioConnectionProvider::default()) {
-                Ok(resolver) => Some(resolver),
-                Err(err) => {
-                    error!(
-                        "Failed to create resolver from system configuration: {:?}",
-                        err
-                    );
-                    return None;
-                }
-            }
-        }
-
-        // For other operating systems, we can use one of the preconfigured definitions
-        #[cfg(not(any(unix, windows)))]
-        {
-            // Directly reference the config types
-            use hickory_resolver::config::{ResolverConfig, ResolverOpts};
-
-            // Get a new resolver with the google nameservers as the upstream recursive resolvers
-            match TokioAsyncResolver::new(
-                ResolverConfig::google(),
-                ResolverOpts::default(),
-                runtime.handle().clone(),
-            ) {
-                Ok(resolver) => Some(resolver),
-                Err(err) => {
-                    error!("Failed to create resolver: {:?}", err);
-                    return None;
-                }
+        // Use the system resolver configuration
+        match TokioAsyncResolver::from_system_conf(TokioConnectionProvider::default()) {
+            Ok(resolver) => Some(resolver),
+            Err(err) => {
+                error!(
+                    "Failed to create resolver from system configuration: {:?}",
+                    err
+                );
+                None
             }
         }
     }
@@ -72,7 +44,7 @@ impl LANScanResolver {
     async fn perform_reverse_dns_lookup(
         ip_addr: IpAddr,
         reverse_dns: Arc<DashMap<IpAddr, String>>,
-        resolver: &TokioAsyncResolver,
+        resolver: TokioAsyncResolver,
     ) {
         match resolver.reverse_lookup(ip_addr).await {
             Ok(lookup) => {
@@ -89,9 +61,9 @@ impl LANScanResolver {
         }
     }
 
-    pub async fn start(&mut self) {
+    pub async fn start(&self) {
         if self.resolver_handle.read().await.is_some() {
-            warn!("L7 resolver task is already running");
+            warn!("Resolver task is already running");
             return;
         }
 
@@ -99,12 +71,14 @@ impl LANScanResolver {
         if let Some(resolver) = Self::create_resolver() {
             let resolver_queue = self.resolver_queue.clone();
             let reverse_dns = self.reverse_dns.clone();
-            let resolver_stop_flag = self.resolver_stop_flag.clone();
+            let stop_flag = Arc::new(AtomicBool::new(false));
+            let stop_flag_clone = stop_flag.clone();
             let resolver_clone = resolver.clone();
+
             let resolver_handle = async_spawn(async move {
                 info!("Starting resolver task");
 
-                while !resolver_stop_flag.load(Ordering::Relaxed)
+                while !stop_flag_clone.load(Ordering::Relaxed)
                     || !resolver_queue.read().await.is_empty()
                 {
                     // Get the IPs to resolve from the queue
@@ -118,7 +92,7 @@ impl LANScanResolver {
                             let resolver = resolver.clone();
                             let reverse_dns = reverse_dns.clone();
                             async move {
-                                Self::perform_reverse_dns_lookup(ip, reverse_dns, &resolver).await
+                                Self::perform_reverse_dns_lookup(ip, reverse_dns, resolver).await
                             }
                         }))
                         .await;
@@ -132,16 +106,22 @@ impl LANScanResolver {
 
                 info!("Resolver task completed");
             });
+
             *self.resolver.write().await = Some(resolver_clone);
-            *self.resolver_handle.write().await = Some(resolver_handle);
+            *self.resolver_handle.write().await = Some(TaskHandle {
+                handle: resolver_handle,
+                stop_flag,
+            });
         }
     }
 
-    pub async fn stop(&mut self) {
-        if let Some(resolver_handle) = self.resolver_handle.write().await.take() {
-            self.resolver_stop_flag.store(true, Ordering::Relaxed);
-            let _ = resolver_handle.await;
+    pub async fn stop(&self) {
+        if let Some(task_handle) = self.resolver_handle.write().await.take() {
+            task_handle.stop_flag.store(true, Ordering::Relaxed);
+            let _ = task_handle.handle.await;
             info!("Stopped resolver task");
+        } else {
+            warn!("Resolver task not running");
         }
     }
 
@@ -152,11 +132,10 @@ impl LANScanResolver {
         }
 
         // Add the IP to the resolver queue
-        self.resolver_queue.write().await.push_back(ip_addr.clone());
+        self.resolver_queue.write().await.push_back(*ip_addr);
         debug!("Added IP to resolver queue: {}", ip_addr);
         // Mark the IP as resolving
-        self.reverse_dns
-            .insert(ip_addr.clone(), "Resolving".to_string());
+        self.reverse_dns.insert(*ip_addr, "Resolving".to_string());
     }
 
     pub async fn get_resolved_ip(&self, ip_addr: &IpAddr) -> Option<String> {
@@ -166,23 +145,20 @@ impl LANScanResolver {
                 "Resolving" => None,
                 _ => Some(domain),
             },
-            None => {
-                // Just return None if we don't have it cached, the caller can add it to the resolver queue if they want
-                None
-            }
+            None => None,
         }
     }
 }
 
 #[cfg(test)]
-#[cfg(test)]
 mod tests {
     use super::*;
     use std::net::{IpAddr, Ipv4Addr};
+    use tokio::time::sleep;
 
     #[tokio::test]
     async fn test_reverse_dns_lookup_success() {
-        let mut resolver = LANScanResolver::new();
+        let resolver = Arc::new(LANScanResolver::new());
         resolver.start().await;
 
         // Use a real IP address for testing (Google's DNS)
@@ -199,11 +175,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_reverse_dns_lookup_unknown() {
-        let mut resolver = LANScanResolver::new();
+        let resolver = Arc::new(LANScanResolver::new());
         resolver.start().await;
 
         // Use a non-existent IP address for testing
-        let ip_addr = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)); // Usually not resolved
+        let ip_addr = IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1)); // Reserved IP for documentation
         resolver.add_ip_to_resolver(&ip_addr).await;
 
         // Wait for the resolver to complete
@@ -216,7 +192,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_add_same_ip_multiple_times() {
-        let mut resolver = LANScanResolver::new();
+        let resolver = Arc::new(LANScanResolver::new());
         resolver.start().await;
 
         let ip_addr = IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8));
@@ -233,18 +209,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_concurrent_ip_additions() {
-        let mut resolver = LANScanResolver::new();
+        let resolver = Arc::new(LANScanResolver::new());
         resolver.start().await;
 
         let ip_addr1 = IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)); // Google DNS
         let ip_addr2 = IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)); // Cloudflare DNS
 
         // Add IPs concurrently
-        let resolver_clone = resolver.clone();
+        let resolver_clone = Arc::clone(&resolver);
         let handle1 = tokio::spawn(async move {
             resolver_clone.add_ip_to_resolver(&ip_addr1).await;
         });
-        let resolver_clone = resolver.clone();
+        let resolver_clone = Arc::clone(&resolver);
         let handle2 = tokio::spawn(async move {
             resolver_clone.add_ip_to_resolver(&ip_addr2).await;
         });
@@ -268,7 +244,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_stop_resolver() {
-        let mut resolver = LANScanResolver::new();
+        let resolver = Arc::new(LANScanResolver::new());
         resolver.start().await;
 
         // Ensure the resolver is running

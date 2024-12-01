@@ -1,18 +1,17 @@
-use crate::lanscan_asn::*;
+use crate::lanscan_dns::DnsPacketProcessor;
 use crate::lanscan_interface::get_default_interface;
 use crate::lanscan_l7::LANScanL7;
 use crate::lanscan_mdns::*;
-use crate::lanscan_port_vulns::get_name_from_port;
+use crate::lanscan_packets::*;
 use crate::lanscan_resolver::LANScanResolver;
 use crate::lanscan_sessions::session_macros::*;
 use crate::lanscan_sessions::*;
-use crate::runtime::async_spawn;
+use crate::runtime::*;
 use crate::rwlock::CustomRwLock;
 use crate::whitelists::*;
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use dashmap::DashMap;
-use dns_parser::Packet as DnsPacket;
 #[cfg(all(
     any(target_os = "macos", target_os = "linux", target_os = "windows"),
     feature = "asyncpacketcapture"
@@ -28,13 +27,6 @@ use pcap::Capture;
     feature = "asyncpacketcapture"
 ))]
 use pcap::{Capture, Packet, PacketCodec};
-use pnet_packet::ethernet::{EtherTypes, EthernetPacket};
-use pnet_packet::ip::IpNextHeaderProtocols;
-use pnet_packet::ipv4::Ipv4Packet;
-use pnet_packet::ipv6::Ipv6Packet;
-use pnet_packet::tcp::{TcpFlags, TcpPacket};
-use pnet_packet::udp::UdpPacket;
-use pnet_packet::Packet as PnetPacket;
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -43,7 +35,6 @@ use std::sync::Arc;
     feature = "asyncpacketcapture"
 ))]
 use tokio::select;
-use tokio::task::JoinHandle;
 #[cfg(all(
     any(target_os = "macos", target_os = "linux", target_os = "windows"),
     feature = "asyncpacketcapture"
@@ -51,7 +42,6 @@ use tokio::task::JoinHandle;
 use tokio::time::interval;
 use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info, trace, warn};
-use uuid::Uuid;
 
 // A session is considered active if it has had activity in the last 60 seconds
 static CONNECTION_ACTIVITY_TIMEOUT: ChronoDuration = ChronoDuration::seconds(60);
@@ -61,25 +51,6 @@ static CONNECTION_CURRENT_TIMEOUT: ChronoDuration = ChronoDuration::seconds(300)
 static CONNECTION_RETENTION_TIMEOUT: ChronoDuration = ChronoDuration::seconds(60 * 60 * 2);
 // Current whitelist exceptions
 static WHITELIST_EXCEPTION_TIMEOUT: ChronoDuration = CONNECTION_RETENTION_TIMEOUT;
-
-#[derive(Debug)]
-enum ParsedPacket {
-    SessionPacket(SessionPacketData),
-    DnsPacket(DnsPacketData),
-}
-
-#[derive(Debug)]
-struct SessionPacketData {
-    session: Session,
-    packet_length: usize,
-    ip_packet_length: usize,
-    flags: Option<u8>,
-}
-
-#[derive(Debug)]
-struct DnsPacketData {
-    dns_payload: Vec<u8>,
-}
 
 pub struct LANScanCapture {
     interface: Arc<CustomRwLock<String>>,
@@ -91,18 +62,13 @@ pub struct LANScanCapture {
     resolver_handle: Option<TaskHandle>,
     l7: Option<Arc<LANScanL7>>,
     l7_handle: Option<TaskHandle>,
-    dns_resolutions: Arc<DashMap<IpAddr, String>>,
     whitelist_check_handle: Option<TaskHandle>,
     whitelist_name: Arc<CustomRwLock<String>>,
     whitelist_conformance: Arc<AtomicBool>,
     last_whitelist_exception_time: Arc<CustomRwLock<DateTime<Utc>>>,
     whitelist_exceptions: Arc<CustomRwLock<Vec<Session>>>,
     filter: Arc<CustomRwLock<SessionFilter>>,
-}
-
-struct TaskHandle {
-    handle: JoinHandle<()>,
-    stop_flag: Arc<AtomicBool>,
+    dns_packet_processor: Option<Arc<DnsPacketProcessor>>,
 }
 
 impl LANScanCapture {
@@ -118,7 +84,6 @@ impl LANScanCapture {
             resolver_handle: None,
             l7: None,
             l7_handle: None,
-            dns_resolutions: Arc::new(DashMap::new()),
             whitelist_check_handle: None,
             whitelist_name: Arc::new(CustomRwLock::new("".to_string())),
             whitelist_conformance: Arc::new(AtomicBool::new(true)),
@@ -127,6 +92,7 @@ impl LANScanCapture {
             ))),
             whitelist_exceptions: Arc::new(CustomRwLock::new(Vec::new())),
             filter: Arc::new(CustomRwLock::new(SessionFilter::GlobalOnly)),
+            dns_packet_processor: None,
         }
     }
 
@@ -160,12 +126,6 @@ impl LANScanCapture {
     pub async fn start(&mut self, interface: &str) {
         info!("Starting LANScanCapture");
 
-        // If the capture task is already running, return
-        if !self.capture_task_handles.is_empty() {
-            warn!("Capture task already running");
-            return;
-        }
-
         // Start mDNS task
         mdns_start().await;
 
@@ -173,10 +133,18 @@ impl LANScanCapture {
         *self.interface.write().await = interface.to_string();
 
         // Start tasks
-        // First start the capture task to populate the sessions map
+        // If the capture task is already running, return
+        if !self.capture_task_handles.is_empty() {
+            warn!("Capture task already running");
+            return;
+        }
+        // First start DNS packet processor task
+        self.start_dns_packet_processor_task().await;
+        // Then start the capture task to populate the sessions map
         self.start_capture_task().await;
-        // Then start DNS/L7 resolution tasks
+        // Then start DNS resolution tasks
         self.start_resolver_task().await;
+        // Then start L7 task
         self.start_l7_task().await;
         // Then start current sessions task
         self.start_current_sessions_task().await;
@@ -196,14 +164,16 @@ impl LANScanCapture {
         self.stop_capture_tasks().await;
         // Then stop the other tasks, they will populate their latest data
         self.stop_l7_task().await;
+        // Then stop the resolver task
         self.stop_resolver_task().await;
         // Then stop the current sessions task
         self.stop_current_sessions_task().await;
-        // Finally stop the whitelist check task
+        // Then stop the whitelist check task
         self.stop_whitelist_check_task().await;
+        // Finally stop the DNS packet processor task
+        self.stop_dns_packet_processor_task().await;
 
         // Don't clear the state; this is a pause rather than a stop
-
         // Don't stop the mDNS task as it's shared with other modules
     }
 
@@ -283,21 +253,23 @@ impl LANScanCapture {
 
         let resolver = self.resolver.clone();
         let stop_flag = Arc::new(AtomicBool::new(false));
-        let dns_resolutions = self.dns_resolutions.clone();
         let sessions = self.sessions.clone();
         let current_sessions = self.current_sessions.clone();
+        let dns_packet_processor = self.dns_packet_processor.clone();
 
         let stop_flag_clone = stop_flag.clone();
         let handle = async_spawn(async move {
             loop {
                 trace!("Domain name population started");
-                Self::populate_domain_names(
-                    &sessions,
-                    &resolver,
-                    &dns_resolutions,
-                    &current_sessions,
-                )
-                .await;
+                if let Some(dns_packet_processor) = dns_packet_processor.as_ref() {
+                    Self::populate_domain_names(
+                        &sessions,
+                        &resolver,
+                        &dns_packet_processor.get_dns_resolutions(),
+                        &current_sessions,
+                    )
+                    .await;
+                }
                 info!("Domain name population completed");
                 if stop_flag.load(Ordering::Relaxed) {
                     break;
@@ -325,6 +297,28 @@ impl LANScanCapture {
         if let Some(resolver) = &mut self.resolver {
             if let Some(resolver) = Arc::get_mut(resolver) {
                 resolver.stop().await;
+            }
+        }
+    }
+
+    async fn start_dns_packet_processor_task(&mut self) {
+        // Create a new DNS packet processor if it doesn't exist
+        if self.dns_packet_processor.is_none() {
+            self.dns_packet_processor = Some(Arc::new(DnsPacketProcessor::new()));
+        }
+
+        // Start the DNS packet processor if it exists
+        if let Some(dns_processor) = &mut self.dns_packet_processor {
+            if let Some(dns_processor) = Arc::get_mut(dns_processor) {
+                dns_processor.start_dns_query_cleanup_task().await;
+            }
+        }
+    }
+
+    async fn stop_dns_packet_processor_task(&mut self) {
+        if let Some(dns_processor) = &mut self.dns_packet_processor {
+            if let Some(dns_processor) = Arc::get_mut(dns_processor) {
+                dns_processor.stop_dns_query_cleanup_task().await;
             }
         }
     }
@@ -538,7 +532,6 @@ impl LANScanCapture {
         // Clone shared resources for each capture task
         let sessions = self.sessions.clone();
         let current_sessions = self.current_sessions.clone();
-        let dns_resolutions = self.dns_resolutions.clone();
         let filter = self.filter.clone();
 
         // Create a new stop flag for this interface's capture task
@@ -550,6 +543,9 @@ impl LANScanCapture {
 
         // Clone the device for the async move block
         let device_clone = device.clone();
+
+        // Clone the DNS packet processor for the async move block
+        let dns_packet_processor = self.dns_packet_processor.clone();
 
         // Spawn the capture task
         let handle = async_spawn(async move {
@@ -591,10 +587,10 @@ impl LANScanCapture {
                 while !stop_flag_clone.load(Ordering::Relaxed) {
                     match cap.next_packet() {
                         Ok(packet) => {
-                            if let Some(parsed_packet) = Self::parse_packet_pcap(packet.data) {
+                            if let Some(parsed_packet) = parse_packet_pcap(packet.data) {
                                 match parsed_packet {
                                     ParsedPacket::SessionPacket(cp) => {
-                                        LANScanCapture::process_parsed_packet(
+                                        process_parsed_packet(
                                             cp,
                                             &sessions,
                                             &current_sessions,
@@ -604,7 +600,13 @@ impl LANScanCapture {
                                         .await;
                                     }
                                     ParsedPacket::DnsPacket(dp) => {
-                                        Self::process_dns_packet(dp, &dns_resolutions);
+                                        if let Some(dns_packet_processor) =
+                                            dns_packet_processor.as_ref()
+                                        {
+                                            dns_packet_processor
+                                                .process_dns_packet(dp.dns_payload)
+                                                .await;
+                                        }
                                     }
                                 }
                             }
@@ -679,9 +681,9 @@ impl LANScanCapture {
                         packet_owned = packet_stream.next() => {
                             trace!("Received packet on {}", interface_clone);
                             match packet_owned {
-                                Some(Ok(packet_owned)) => match LANScanCapture::parse_packet_pcap(&packet_owned.data) {
+                                Some(Ok(packet_owned)) => match parse_packet_pcap(&packet_owned.data) {
                                     Some(ParsedPacket::SessionPacket(cp)) => {
-                                        LANScanCapture::process_parsed_packet(
+                                        process_parsed_packet(
                                             cp,
                                             &sessions,
                                             &current_sessions,
@@ -691,7 +693,9 @@ impl LANScanCapture {
                                         .await;
                                     }
                                     Some(ParsedPacket::DnsPacket(dp)) => {
-                                        LANScanCapture::process_dns_packet(dp, &dns_resolutions);
+                                        if let Some(dns_packet_processor) = dns_packet_processor.as_ref() {
+                                            dns_packet_processor.process_dns_packet(dp.dns_payload).await;
+                                        }
                                     }
                                     None => {
                                         trace!("Error parsing packet on {}", interface_clone);
@@ -897,6 +901,8 @@ impl LANScanCapture {
         current_sessions: &Arc<CustomRwLock<Vec<Session>>>,
     ) {
         let current_sessions_clone = current_sessions.read().await.clone();
+        let mut dst_dns_resolution_count = 0;
+        let mut dst_resolver_resolution_count = 0;
 
         for key in current_sessions_clone.iter() {
             // Clone necessary data to avoid holding lock across await
@@ -947,6 +953,7 @@ impl LANScanCapture {
             if let Some(domain) = dns_resolutions.get(&session_info.session.dst_ip) {
                 trace!("Using DNS resolution for dst_ip: {:?}", domain);
                 new_dst_domain = Some(domain.clone());
+                dst_dns_resolution_count += 1;
             } else {
                 if !is_local_ip(&session_info.session.dst_ip) {
                     if let Some(resolver) = resolver.as_ref() {
@@ -957,6 +964,7 @@ impl LANScanCapture {
                                 session_info.session.dst_ip
                             );
                             new_dst_domain = Some(domain);
+                            dst_resolver_resolution_count += 1;
                         } else {
                             resolver
                                 .add_ip_to_resolver(&session_info.session.dst_ip)
@@ -983,6 +991,18 @@ impl LANScanCapture {
                 session_info_mut.dst_domain = new_dst_domain_clone;
             }
         }
+        // Compute domain % of successful resolutions
+        let total_sessions = sessions.len();
+        let domain_success_rate = (dst_dns_resolution_count + dst_resolver_resolution_count) as f64
+            / total_sessions as f64
+            * 100.0;
+        let dns_success_rate = dst_dns_resolution_count as f64 / total_sessions as f64 * 100.0;
+        let resolver_success_rate =
+            dst_resolver_resolution_count as f64 / total_sessions as f64 * 100.0;
+        info!(
+            "Destination domain success rate: {:.2}% (DNS: {:.2}% + Resolver: {:.2}%)",
+            domain_success_rate, dns_success_rate, resolver_success_rate
+        );
     }
 
     // Populate L7
@@ -1017,6 +1037,14 @@ impl LANScanCapture {
                 }
             }
         }
+        // Compute L7 % of successful resolutions
+        let total_sessions = sessions.len();
+        let successful_resolutions = sessions
+            .iter()
+            .filter(|session| session.value().l7.is_some())
+            .count();
+        let l7_success_rate = (successful_resolutions as f64 / total_sessions as f64) * 100.0;
+        info!("L7 success rate: {:.2}%", l7_success_rate);
     }
 
     async fn update_sessions_status(
@@ -1147,496 +1175,15 @@ impl LANScanCapture {
         }
         exceptions
     }
-
-    async fn process_parsed_packet(
-        parsed_packet: SessionPacketData,
-        sessions: &Arc<DashMap<Session, SessionInfo>>,
-        current_sessions: &Arc<CustomRwLock<Vec<Session>>>,
-        self_ips: &Vec<IpAddr>,
-        filter: &Arc<CustomRwLock<SessionFilter>>,
-    ) {
-        let now = Utc::now();
-        let is_self_src = self_ips.contains(&parsed_packet.session.src_ip);
-        let is_self_dst = self_ips.contains(&parsed_packet.session.dst_ip);
-
-        // Determine if the packet is from the originator (our local machine) or the responder
-        let (key, is_originator) = if is_self_src {
-            (parsed_packet.session.clone(), true)
-        } else if is_self_dst {
-            // Swap source and destination to normalize the session key
-            (
-                Session {
-                    protocol: parsed_packet.session.protocol.clone(),
-                    src_ip: parsed_packet.session.dst_ip,
-                    src_port: parsed_packet.session.dst_port,
-                    dst_ip: parsed_packet.session.src_ip,
-                    dst_port: parsed_packet.session.src_port,
-                },
-                false,
-            )
-        } else {
-            // Neither IP is our own; treat as originator
-            (parsed_packet.session.clone(), true)
-        };
-
-        // Apply filter before processing
-        let filter = filter.read().await.clone();
-        if filter == SessionFilter::LocalOnly && is_global_session!(parsed_packet) {
-            return;
-        } else if filter == SessionFilter::GlobalOnly && is_local_session!(parsed_packet) {
-            return;
-        }
-
-        if let Some(mut info) = sessions.get_mut(&key) {
-            let stats = &mut info.stats;
-            stats.last_activity = now;
-
-            if is_originator {
-                // Packet from originator (local) to responder
-                stats.outbound_bytes += parsed_packet.packet_length as u64;
-                stats.orig_pkts += 1;
-                stats.orig_ip_bytes += parsed_packet.ip_packet_length as u64;
-            } else {
-                // Packet from responder to originator
-                stats.inbound_bytes += parsed_packet.packet_length as u64;
-                stats.resp_pkts += 1;
-                stats.resp_ip_bytes += parsed_packet.ip_packet_length as u64;
-            }
-
-            // Update history with correct direction
-            if let Some(flags) = parsed_packet.flags {
-                let c = Self::map_tcp_flags(flags, parsed_packet.packet_length, is_originator);
-                stats.history.push(c);
-                if (flags & (TcpFlags::FIN | TcpFlags::RST)) != 0 && stats.end_time.is_none() {
-                    stats.end_time = Some(now);
-                    stats.conn_state = Some(Self::determine_conn_state(&stats.history));
-                }
-            }
-        } else {
-            // New session
-            let uid = Uuid::new_v4().to_string();
-            let mut stats = SessionStats {
-                start_time: now,
-                end_time: None,
-                last_activity: now,
-                inbound_bytes: 0,
-                outbound_bytes: 0,
-                orig_pkts: 0,
-                resp_pkts: 0,
-                orig_ip_bytes: 0,
-                resp_ip_bytes: 0,
-                history: String::new(),
-                conn_state: None,
-                missed_bytes: 0,
-                uid,
-            };
-
-            // Update session stats
-            if is_originator {
-                stats.outbound_bytes += parsed_packet.packet_length as u64;
-                stats.orig_pkts += 1;
-                stats.orig_ip_bytes += parsed_packet.ip_packet_length as u64;
-            } else {
-                stats.inbound_bytes += parsed_packet.packet_length as u64;
-                stats.resp_pkts += 1;
-                stats.resp_ip_bytes += parsed_packet.ip_packet_length as u64;
-            }
-
-            // Update history with correct direction
-            if let Some(flags) = parsed_packet.flags {
-                let c = Self::map_tcp_flags(flags, parsed_packet.packet_length, is_originator);
-                stats.history.push(c);
-            }
-
-            // Determine if the session is local
-            let is_local_src = is_local_ip(&key.src_ip);
-            let is_local_dst = is_local_ip(&key.dst_ip);
-
-            trace!("New session: {:?}", key);
-
-            // Query the ASN database for non-local addresses
-            let src_asn = if !is_local_ip(&key.src_ip) {
-                get_asn(key.src_ip).await
-            } else {
-                None
-            };
-            let dst_asn = if !is_local_ip(&key.dst_ip) {
-                get_asn(key.dst_ip).await
-            } else {
-                None
-            };
-
-            // Get the service from the destination port
-            let final_dst_service = get_name_from_port(key.dst_port).await;
-
-            // Set initial status
-            let status = SessionStatus {
-                active: true,
-                added: true,
-                activated: false,
-                deactivated: false,
-            };
-
-            sessions.insert(
-                key.clone(),
-                SessionInfo {
-                    session: key.clone(),
-                    stats,
-                    status,
-                    is_local_src,
-                    is_local_dst,
-                    is_self_src,
-                    is_self_dst,
-                    src_domain: None,
-                    dst_domain: None,
-                    dst_service: if final_dst_service.is_empty() {
-                        None
-                    } else {
-                        Some(final_dst_service)
-                    },
-                    l7: None,
-                    src_asn,
-                    dst_asn,
-                    is_whitelisted: WhitelistState::Unknown,
-                },
-            );
-            // Add to current sessions
-            current_sessions.write().await.push(key);
-        }
-    }
-
-    fn determine_conn_state(history: &str) -> String {
-        if history.contains('S')
-            && history.contains('H')
-            && history.contains('F')
-            && history.contains('f')
-        {
-            "SF".to_string()
-        } else if history.contains('S') && !history.contains('h') && !history.contains('r') {
-            "S0".to_string()
-        } else if history.contains('R') || history.contains('r') {
-            "REJ".to_string()
-        } else if history.contains('S')
-            && history.contains('H')
-            && !history.contains('F')
-            && !history.contains('f')
-        {
-            "S1".to_string()
-        } else {
-            "-".to_string()
-        }
-    }
-
-    fn map_tcp_flags(flags: u8, packet_length: usize, is_originator: bool) -> char {
-        if flags & TcpFlags::SYN != 0 && flags & TcpFlags::ACK == 0 {
-            if is_originator {
-                'S'
-            } else {
-                's'
-            }
-        } else if flags & TcpFlags::SYN != 0 && flags & TcpFlags::ACK != 0 {
-            if is_originator {
-                'H'
-            } else {
-                'h'
-            }
-        } else if flags & TcpFlags::FIN != 0 {
-            if is_originator {
-                'F'
-            } else {
-                'f'
-            }
-        } else if flags & TcpFlags::RST != 0 {
-            if is_originator {
-                'R'
-            } else {
-                'r'
-            }
-        } else if packet_length > 0 {
-            if is_originator {
-                '>'
-            } else {
-                '<'
-            }
-        } else if flags & TcpFlags::ACK != 0 {
-            if is_originator {
-                'A'
-            } else {
-                'a'
-            }
-        } else {
-            '-'
-        }
-    }
-
-    fn process_dns_packet(
-        dns_packet_data: DnsPacketData,
-        dns_resolutions: &Arc<DashMap<IpAddr, String>>,
-    ) {
-        match DnsPacket::parse(&dns_packet_data.dns_payload) {
-            Ok(dns_packet) => {
-                // Process the DNS packet
-                // If it's a response, extract the answers
-                if !dns_packet.answers.is_empty() {
-                    for answer in dns_packet.answers {
-                        match answer.data {
-                            dns_parser::rdata::RData::A(ipv4_addr) => {
-                                let ip_addr = IpAddr::V4(ipv4_addr.0);
-                                let domain_name = answer.name.to_string();
-                                // Exclude "myip.opendns.com"
-                                if domain_name != "myip.opendns.com" {
-                                    trace!(
-                                        "DNS resolution (using capture): {} -> {}",
-                                        ip_addr,
-                                        domain_name
-                                    );
-                                    debug!(
-                                        "DNS resolution (using capture): {} -> {}",
-                                        ip_addr, domain_name
-                                    );
-                                    dns_resolutions.insert(ip_addr, domain_name);
-                                }
-                            }
-                            dns_parser::rdata::RData::AAAA(ipv6_addr) => {
-                                let ip_addr = IpAddr::V6(ipv6_addr.0);
-                                let domain_name = answer.name.to_string();
-                                // Exclude "myip.opendns.com"
-                                if domain_name != "myip.opendns.com" {
-                                    trace!(
-                                        "DNS resolution (using capture): {} -> {}",
-                                        ip_addr,
-                                        domain_name
-                                    );
-                                    debug!(
-                                        "DNS resolution (using capture): {} -> {}",
-                                        ip_addr, domain_name
-                                    );
-                                    dns_resolutions.insert(ip_addr, domain_name);
-                                }
-                            }
-                            _ => {
-                                trace!(
-                                    "Ignored DNS record type for domain: {}",
-                                    answer.name.to_string()
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                warn!("Failed to parse DNS packet: {}", e);
-            }
-        }
-    }
-
-    fn parse_packet_pcap(packet_data: &[u8]) -> Option<ParsedPacket> {
-        let ethernet = match EthernetPacket::new(packet_data) {
-            Some(packet) => packet,
-            None => {
-                warn!("Failed to parse Ethernet packet");
-                return None;
-            }
-        };
-        match ethernet.get_ethertype() {
-            EtherTypes::Ipv4 => {
-                let ipv4 = match Ipv4Packet::new(ethernet.payload()) {
-                    Some(packet) => packet,
-                    None => {
-                        warn!("Failed to parse IPv4 packet");
-                        return None;
-                    }
-                };
-                let ip_packet_length = ipv4.get_total_length() as usize;
-                let next_protocol = ipv4.get_next_level_protocol();
-                match next_protocol {
-                    IpNextHeaderProtocols::Tcp => {
-                        let tcp = match TcpPacket::new(ipv4.payload()) {
-                            Some(packet) => packet,
-                            None => {
-                                warn!("Failed to parse TCP packet");
-                                return None;
-                            }
-                        };
-                        let src_ip = IpAddr::V4(ipv4.get_source());
-                        let dst_ip = IpAddr::V4(ipv4.get_destination());
-                        let src_port = tcp.get_source();
-                        let dst_port = tcp.get_destination();
-                        let flags = tcp.get_flags(); // flags is u8
-                        let packet_length = tcp.payload().len();
-
-                        if src_port == 53 || dst_port == 53 {
-                            // This is DNS over TCP
-                            let mut dns_payload = tcp.payload().to_vec();
-                            // Ensure that the payload has at least 2 bytes for the length
-                            if dns_payload.len() < 2 {
-                                warn!("DNS-over-TCP payload too short: {:?}", dns_payload);
-                                return None;
-                            }
-                            // Strip the first two bytes (length prefix)
-                            dns_payload.drain(0..2);
-                            trace!("Found DNS over TCP for IPv4: {:?}", dns_payload);
-                            return Some(ParsedPacket::DnsPacket(DnsPacketData { dns_payload }));
-                        }
-
-                        let session = Session {
-                            protocol: Protocol::TCP,
-                            src_ip,
-                            src_port,
-                            dst_ip,
-                            dst_port,
-                        };
-
-                        Some(ParsedPacket::SessionPacket(SessionPacketData {
-                            session,
-                            packet_length,
-                            ip_packet_length,
-                            flags: Some(flags),
-                        }))
-                    }
-                    IpNextHeaderProtocols::Udp => {
-                        let udp = match UdpPacket::new(ipv4.payload()) {
-                            Some(packet) => packet,
-                            None => {
-                                warn!("Failed to parse UDP packet");
-                                return None;
-                            }
-                        };
-                        let src_ip = IpAddr::V4(ipv4.get_source());
-                        let dst_ip = IpAddr::V4(ipv4.get_destination());
-                        let src_port = udp.get_source();
-                        let dst_port = udp.get_destination();
-                        let packet_length = udp.payload().len();
-
-                        if src_port == 53 || dst_port == 53 {
-                            // This is DNS over UDP
-                            let dns_payload = udp.payload().to_vec();
-                            trace!("Found DNS over UDP for IPv4: {:?}", dns_payload);
-                            return Some(ParsedPacket::DnsPacket(DnsPacketData { dns_payload }));
-                        }
-
-                        let session = Session {
-                            protocol: Protocol::UDP,
-                            src_ip,
-                            src_port,
-                            dst_ip,
-                            dst_port,
-                        };
-
-                        Some(ParsedPacket::SessionPacket(SessionPacketData {
-                            session,
-                            packet_length,
-                            ip_packet_length,
-                            flags: None,
-                        }))
-                    }
-                    _ => None,
-                }
-            }
-            EtherTypes::Ipv6 => {
-                let ipv6 = match Ipv6Packet::new(ethernet.payload()) {
-                    Some(packet) => packet,
-                    None => {
-                        warn!("Failed to parse IPv6 packet");
-                        return None;
-                    }
-                };
-                let ip_packet_length = ipv6.get_payload_length() as usize + 40; // IPv6 header is 40 bytes
-                let next_protocol = ipv6.get_next_header();
-                match next_protocol {
-                    IpNextHeaderProtocols::Tcp => {
-                        let tcp = match TcpPacket::new(ipv6.payload()) {
-                            Some(packet) => packet,
-                            None => {
-                                warn!("Failed to parse TCP packet");
-                                return None;
-                            }
-                        };
-                        let src_ip = IpAddr::V6(ipv6.get_source());
-                        let dst_ip = IpAddr::V6(ipv6.get_destination());
-                        let src_port = tcp.get_source();
-                        let dst_port = tcp.get_destination();
-                        let flags = tcp.get_flags(); // flags is u8
-                        let packet_length = tcp.payload().len();
-
-                        if src_port == 53 || dst_port == 53 {
-                            // This is DNS over TCP
-                            let mut dns_payload = tcp.payload().to_vec();
-                            // Ensure that the payload has at least 2 bytes for the length
-                            if dns_payload.len() < 2 {
-                                warn!("DNS-over-TCP payload too short: {:?}", dns_payload);
-                                return None;
-                            }
-                            // Strip the first two bytes (length prefix)
-                            dns_payload.drain(0..2);
-                            trace!("Found DNS over TCP for IPv6: {:?}", dns_payload);
-                            return Some(ParsedPacket::DnsPacket(DnsPacketData { dns_payload }));
-                        }
-
-                        let session = Session {
-                            protocol: Protocol::TCP,
-                            src_ip,
-                            src_port,
-                            dst_ip,
-                            dst_port,
-                        };
-
-                        Some(ParsedPacket::SessionPacket(SessionPacketData {
-                            session,
-                            packet_length,
-                            ip_packet_length,
-                            flags: Some(flags),
-                        }))
-                    }
-                    IpNextHeaderProtocols::Udp => {
-                        let udp = match UdpPacket::new(ipv6.payload()) {
-                            Some(packet) => packet,
-                            None => {
-                                warn!("Failed to parse UDP packet");
-                                return None;
-                            }
-                        };
-                        let src_ip = IpAddr::V6(ipv6.get_source());
-                        let dst_ip = IpAddr::V6(ipv6.get_destination());
-                        let src_port = udp.get_source();
-                        let dst_port = udp.get_destination();
-                        let packet_length = udp.payload().len();
-
-                        if src_port == 53 || dst_port == 53 {
-                            // This is DNS over UDP
-                            let dns_payload = udp.payload().to_vec();
-                            trace!("Found DNS over UDP for IPv6: {:?}", dns_payload);
-                            return Some(ParsedPacket::DnsPacket(DnsPacketData { dns_payload }));
-                        }
-
-                        let session = Session {
-                            protocol: Protocol::UDP,
-                            src_ip,
-                            src_port,
-                            dst_ip,
-                            dst_port,
-                        };
-
-                        Some(ParsedPacket::SessionPacket(SessionPacketData {
-                            session,
-                            packet_length,
-                            ip_packet_length,
-                            flags: None,
-                        }))
-                    }
-                    _ => None,
-                }
-            }
-            _ => None,
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pnet_packet::tcp::TcpFlags;
     use serial_test::serial;
     use std::net::{IpAddr, Ipv4Addr};
+    use uuid::Uuid;
 
     #[tokio::test]
     #[serial]
@@ -1675,7 +1222,7 @@ mod tests {
         let self_ips = vec![IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))];
 
         // Process both packets
-        LANScanCapture::process_parsed_packet(
+        process_parsed_packet(
             session_packet,
             &capture.sessions,
             &capture.current_sessions,
@@ -1684,7 +1231,7 @@ mod tests {
         )
         .await;
 
-        LANScanCapture::process_parsed_packet(
+        process_parsed_packet(
             response_packet,
             &capture.sessions,
             &capture.current_sessions,
@@ -1729,7 +1276,7 @@ mod tests {
         let self_ips = vec![IpAddr::V4(Ipv4Addr::new(10, 1, 0, 40))];
 
         // Process the synthetic packet
-        LANScanCapture::process_parsed_packet(
+        process_parsed_packet(
             session_packet,
             &capture.sessions,
             &capture.current_sessions,
@@ -1762,6 +1309,8 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_populate_domain_names() {
+        // Updated to reflect the new dns_packet_processor
+
         let mut capture = LANScanCapture::new();
         capture.set_whitelist("github").await;
 
@@ -1817,8 +1366,11 @@ mod tests {
         capture.sessions.insert(session.clone(), session_info);
         capture.current_sessions.write().await.push(session.clone());
 
+        // Use the dns_packet_processor
+        let dns_processor = DnsPacketProcessor::new();
+
         // Insert a DNS resolution into dns_resolutions
-        capture.dns_resolutions.insert(
+        dns_processor.get_dns_resolutions().insert(
             IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)),
             "dns.google".to_string(),
         );
@@ -1827,7 +1379,7 @@ mod tests {
         LANScanCapture::populate_domain_names(
             &capture.sessions,
             &capture.resolver,
-            &capture.dns_resolutions,
+            &dns_processor.get_dns_resolutions(),
             &capture.current_sessions,
         )
         .await;
@@ -2012,9 +1564,11 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_process_dns_packet() {
+        // Updated to use DnsPacketProcessor
+
         let dns_payload = vec![
             // A minimal DNS response packet in bytes
-            0x00, 0x00, // Transaction ID
+            0x12, 0x34, // Transaction ID
             0x81, 0x80, // Flags
             0x00, 0x01, // Questions
             0x00, 0x01, // Answer RRs
@@ -2034,14 +1588,35 @@ mod tests {
             0x08, 0x08, 0x08, 0x08, // Address: 8.8.8.8
         ];
 
-        let dns_packet_data = DnsPacketData { dns_payload };
+        let dns_processor = DnsPacketProcessor::new();
 
-        let dns_resolutions = Arc::new(DashMap::new());
+        // Simulate receiving the DNS query first
+        let dns_query_payload = vec![
+            // Same Transaction ID as response
+            0x12, 0x34, // Transaction ID
+            0x01, 0x00, // Flags (standard query)
+            0x00, 0x01, // Questions
+            0x00, 0x00, // Answer RRs
+            0x00, 0x00, // Authority RRs
+            0x00, 0x00, // Additional RRs
+            // Queries
+            0x03, b'w', b'w', b'w', 0x06, b'g', b'o', b'o', b'g', b'l', b'e', 0x03, b'c', b'o',
+            b'm', 0x00, // Name: www.google.com
+            0x00, 0x01, // Type: A
+            0x00, 0x01, // Class: IN
+        ];
 
-        LANScanCapture::process_dns_packet(dns_packet_data, &dns_resolutions);
+        // Process the DNS query
+        dns_processor.process_dns_packet(dns_query_payload).await;
+
+        // Process the DNS response
+        dns_processor.process_dns_packet(dns_payload).await;
 
         // Check that the DNS resolution was stored
-        if let Some(domain) = dns_resolutions.get(&IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8))) {
+        if let Some(domain) = dns_processor
+            .get_dns_resolutions()
+            .get(&IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)))
+        {
             assert_eq!(domain.as_str(), "www.google.com");
         } else {
             panic!("DNS resolution not found");
@@ -2051,11 +1626,13 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_process_dns_packet_tcp() {
+        // Updated to use DnsPacketProcessor
+
         // Construct a DNS-over-TCP payload
         // DNS-over-TCP starts with a 2-byte length field followed by the DNS message
         let dns_message = vec![
             // A minimal DNS response packet in bytes (without length prefix)
-            0x00, 0x00, // Transaction ID
+            0x12, 0x34, // Transaction ID
             0x81, 0x80, // Flags
             0x00, 0x01, // Questions
             0x00, 0x01, // Answer RRs
@@ -2075,18 +1652,34 @@ mod tests {
             0x08, 0x08, 0x08, 0x08, // Address: 8.8.8.8
         ];
 
-        // Create DnsPacketData without the length prefix
-        let dns_packet_data = DnsPacketData {
-            dns_payload: dns_message,
-        };
+        let dns_processor = DnsPacketProcessor::new();
 
-        let dns_resolutions = Arc::new(DashMap::new());
+        // Simulate receiving the DNS query first
+        let dns_query_message = vec![
+            0x12, 0x34, // Transaction ID
+            0x01, 0x00, // Flags (standard query)
+            0x00, 0x01, // Questions
+            0x00, 0x00, // Answer RRs
+            0x00, 0x00, // Authority RRs
+            0x00, 0x00, // Additional RRs
+            // Queries
+            0x03, b'w', b'w', b'w', 0x06, b'g', b'o', b'o', b'g', b'l', b'e', 0x03, b'c', b'o',
+            b'm', 0x00, // Name: www.google.com
+            0x00, 0x01, // Type: A
+            0x00, 0x01, // Class: IN
+        ];
 
-        // Process the DNS-over-TCP packet
-        LANScanCapture::process_dns_packet(dns_packet_data, &dns_resolutions);
+        // Process the DNS query
+        dns_processor.process_dns_packet(dns_query_message).await;
+
+        // Process the DNS response
+        dns_processor.process_dns_packet(dns_message).await;
 
         // Check that the DNS resolution was stored
-        if let Some(domain) = dns_resolutions.get(&IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8))) {
+        if let Some(domain) = dns_processor
+            .get_dns_resolutions()
+            .get(&IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)))
+        {
             assert_eq!(domain.as_str(), "www.google.com");
         } else {
             panic!("DNS-over-TCP resolution not found");
