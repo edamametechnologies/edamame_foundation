@@ -12,6 +12,7 @@ use crate::lanscan_mdns::mdns_flush;
     feature = "packetcapture"
 ))]
 use crate::lanscan_sessions::SessionFilter;
+use crate::logger::get_all_logs;
 use crate::runner_cli::*;
 use crate::threat_factory::*;
 use anyhow::{anyhow, Error, Result};
@@ -495,6 +496,10 @@ pub async fn rpc_run(
                 {
                     Ok("".to_string())
                 }
+            }
+            "get_logs" => {
+                let logs = get_all_logs();
+                Ok(logs)
             }
             #[cfg(all(
                 any(target_os = "macos", target_os = "linux", target_os = "windows"),
