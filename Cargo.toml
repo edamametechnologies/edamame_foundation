@@ -1,6 +1,6 @@
 [package]
 name = "edamame_foundation"
-version = "0.7.1"
+version = "0.7.2"
 edition = "2021"
 
 [lints.rust]
@@ -21,8 +21,8 @@ edamame_backend = { git = "https://github.com/edamametechnologies/edamame_backen
 #edamame_backend = { path = "../edamame_backend" }
 
 # Sentry
-sentry = "0.34.0"
-sentry-tracing = "0.34.0"
+sentry = "0.35.0"
+sentry-tracing = "0.35.0"
 
 # Global statics w/ mutex
 lazy_static = "1.5.0"
@@ -119,13 +119,13 @@ network-interface = "2.0.0"
 # pcap requires libpcap-devel on Linux, and Npcap on Windows
 pcap = { version = "2.2.0" , optional = true, features = ["capture-stream"] }
 hickory-resolver = { version = "0.24.1", optional = true }
-dns-parser = { version = "0.8.0", optional = true }
+dns-parser = { git = "https://github.com/edamametechnologies/dns-parser", branch = "pr47", optional = true }
 pnet_packet = { version = "0.35.0", optional = true }
 # System information
 sysinfo = { version = "0.32.0", optional = true }
 # netstat2 breaks with libc higher than v0.2.159 on Linux
 libc = "=0.2.159"
-netstat2 = { version = "0.9.1", optional = true }
+netstat2 = { version = "0.11.0", optional = true }
 
 [target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
 # Arp-toolkit depends on Libpnet, a dependency that is not working on iOS/Android and depends on WinPcap on windows (we use an alternative on Windows)
