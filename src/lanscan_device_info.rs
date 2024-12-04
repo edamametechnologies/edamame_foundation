@@ -213,7 +213,20 @@ impl DeviceInfo {
     }
 
     pub fn merge(device: &mut DeviceInfo, new_device: &DeviceInfo) {
-        // We merge based on the hostname or IP address(es)
+        // If we receive a deleted flag with a last modified date more recent than our last modified date, we clear ourselves and flag ourselves as deleted
+        if new_device.deleted && new_device.last_modified > device.last_modified {
+            device.delete();
+            // We don't need to merge anything
+            return;
+        }
+
+        // Undelete the device if the new device last_seen is more recent than our last_modified
+        if device.deleted && new_device.last_seen > device.last_modified {
+            device.undelete();
+            // We continue to merge
+        }
+
+        // Now we merge based on the hostname or IP address(es)
 
         // Use the most recent non empty ip address
         if !new_device.ip_address.is_empty() {
@@ -367,13 +380,31 @@ impl DeviceInfo {
             device.custom_name.clone_from(&new_device.custom_name);
             device.dismissed_ports = new_device.dismissed_ports.clone();
             device.last_modified = new_device.last_modified;
-            device.deleted = new_device.deleted;
         }
+    }
 
-        // Undelete the device if last_seen is more recent than last_modified
-        if device.deleted && device.last_seen > device.last_modified {
-            device.deleted = false;
-        }
+    pub fn clear(&mut self) {
+        // Clear the device, only keep the main IP address
+        let ip_address = self.ip_address.clone();
+        *self = DeviceInfo::new();
+        self.ip_address = ip_address.clone();
+        self.ip_addresses = vec![ip_address];
+    }
+
+    pub fn delete(&mut self) {
+        // Clear the device
+        self.clear();
+        // Flag the device as deleted
+        self.deleted = true;
+        // Update the last modified to now
+        self.last_modified = Utc::now();
+    }
+
+    pub fn undelete(&mut self) {
+        // Flag the device as not deleted
+        self.deleted = false;
+        // Update the last modified to now
+        self.last_modified = Utc::now();
     }
 }
 
@@ -846,5 +877,66 @@ mod tests {
         assert_eq!(devices.len(), 1);
         assert_eq!(devices[0].device_type, "Smartphone"); // device_type should be updated to the more recent value
         assert_eq!(devices[0].last_seen, device2.last_seen); // last_seen should be updated to the more recent value
+    }
+
+    // Test if a new device with a delete flag result into the same device ip address and all the other fields are cleared
+    #[test]
+    fn test_delete_flag() {
+        let mut device = DeviceInfo::new();
+        device.ip_address = "192.168.1.1".to_string();
+        device.ip_addresses = vec!["192.168.1.1".to_string(), "192.168.1.2".to_string()];
+        device.hostname = "device1".to_string();
+        device.mac_address = "AA:BB:CC:DD:EE:FF".to_string();
+        device.mac_addresses = vec![
+            "AA:BB:CC:DD:EE:FF".to_string(),
+            "FF:EE:DD:CC:BB:AA".to_string(),
+        ];
+        device.deleted = true;
+        device.clear();
+        assert_eq!(device.ip_address, "192.168.1.1".to_string());
+        assert_eq!(device.ip_addresses.len(), 1);
+        assert!(device.ip_addresses.contains(&"192.168.1.1".to_string()));
+        assert_eq!(device.hostname, "");
+        assert_eq!(device.mac_address, "");
+        assert_eq!(device.mac_addresses.len(), 0);
+    }
+
+    // Test if a new device with a last modified date more recent than our last modified date properly deletes us
+    #[test]
+    fn test_delete_with_last_modified() {
+        let mut new_device = DeviceInfo::new();
+        new_device.ip_address = "192.168.1.1".to_string();
+        new_device.last_modified = Utc::now() - Duration::seconds(600); // 5 minutes ago
+        new_device.deleted = true;
+
+        let mut device = DeviceInfo::new();
+        device.ip_address = "192.168.1.1".to_string();
+        device.last_seen = Utc::now() - Duration::seconds(30); // 30 minutes ago
+        device.last_modified = Utc::now() - Duration::seconds(1800); // 30 minutes ago
+        device.deleted = false;
+
+        DeviceInfo::merge(&mut device, &new_device);
+
+        assert!(device.deleted);
+        assert!(device.last_modified > new_device.last_modified);
+    }
+
+    // Test if a last modified date of a new device properly undelete a device
+    #[test]
+    fn test_undelete_with_last_seen() {
+        let mut new_device = DeviceInfo::new();
+        new_device.ip_address = "192.168.1.1".to_string();
+        new_device.last_seen = Utc::now() - Duration::seconds(600); // 5 minutes ago
+        new_device.last_modified = Utc::now() - Duration::seconds(1800); // 30 minutes ago
+        new_device.deleted = false;
+
+        let mut device = DeviceInfo::new();
+        device.ip_address = "192.168.1.1".to_string();
+        device.last_modified = Utc::now() - Duration::seconds(1800); // 30 minutes ago
+        device.deleted = true;
+        DeviceInfo::merge(&mut device, &new_device);
+
+        assert!(!device.deleted);
+        assert!(device.last_modified > new_device.last_modified);
     }
 }
