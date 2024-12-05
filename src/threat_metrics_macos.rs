@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_MACOS: &str = r#"{
   "name": "threat model macOS",
   "extends": "none",
-  "date": "November 22th 2024",
-  "signature": "08ae146b1bad159adf314438783172adbb2b5e4e22bd45ac7b5fa59a922a1bbe",
+  "date": "December 04th 2024",
+  "signature": "56976cd284b177eb47fdc654328c041ab10e94b38800c3e38ce130c50f38717c",
   "metrics": [
     {
       "name": "edamame helper disabled",
@@ -1857,7 +1857,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "user",
-        "target": "defaults read /Applications/Google\\ Chrome.app/Contents/Info.plist CFBundleShortVersionString &>/dev/null && { local_version=$(defaults read /Applications/Google\\ Chrome.app/Contents/Info.plist CFBundleShortVersionString); latest_version=$(curl -s \"https://formulae.brew.sh/api/cask/google-chrome.json\" | awk -F'[\"]' '{for(i=1;i<=NF;i++) if ($i==\"version\") {print $(i+2); exit}}'); [[ \"${local_version}\" < \"${latest_version}\" ]] && echo \"Chrome is not up to date (Installed: $local_version, Latest: $latest_version)\"; }",
+        "target": "defaults read /Applications/Google\\ Chrome.app/Contents/Info.plist CFBundleShortVersionString &>/dev/null && { local_version=$(defaults read /Applications/Google\\ Chrome.app/Contents/Info.plist CFBundleShortVersionString); latest_version=$(curl -s \"https://formulae.brew.sh/api/cask/google-chrome.json\" | sed -n 's/.*\\\"version\\\": \\\"\\([^\\\"]*\\)\\\".*/\\1/p'); if [ \"$(printf '%s\\n%s\\n' \"$local_version\" \"$latest_version\" | sort -V | tail -n1)\" = \"$latest_version\" ] && [ \"$local_version\" != \"$latest_version\" ]; then echo \"Chrome is not up to date (Installed: $local_version, Latest: $latest_version)\"; fi; }",
         "education": []
       },
       "remediation": {
