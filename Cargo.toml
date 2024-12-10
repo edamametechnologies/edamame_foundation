@@ -106,25 +106,33 @@ csv = "1.0.10"
 [target.aarch64-unknown-linux-gnu.dependencies]
 # OpenSSL - required for easy cross-compilation
 openssl = { version = "0.10.68", features = ["vendored"] }
+# Reqwest will use non-vendored OpenSSL unless we specify it
+reqwest = { version = "0.12.5", default-features = false, features = ["native-tls-vendored", "json", "gzip"] }
 
 # Linux ARM musl
 [target.aarch64-unknown-linux-musl.dependencies]
 # OpenSSL - required for easy cross-compilation
 openssl = { version = "0.10.68", features = ["vendored"] }
+# Reqwest will use non-vendored OpenSSL unless we specify it
+reqwest = { version = "0.12.5", default-features = false, features = ["native-tls-vendored", "json", "gzip"] }
 
 # Android
 [target.'cfg(target_os = "android")'.dependencies]
-# OpenSSL - required for easy cross-compilation
+# SSL related deps for iOS (rustls doesn't work on iOS/Android due to missing certs but native-tls does)
 openssl = { version = "0.10.68", features = ["vendored"] }
+# Reqwest will use non-vendored OpenSSL unless we specify it - vendored OpenSSL is required for easy cross-compilation
+reqwest = { version = "0.12.5", default-features = false, features = ["native-tls-vendored", "json", "gzip"] }
 # Native Android tracing
 tracing-android = "0.2.0"
 
-# SSL related deps for iOS/Android (rustls doesn't work on iOS/Android due to missing certs but native-tls does)
-[target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
+# SSL related deps for iOS (rustls doesn't work on iOS/Android due to missing certs but native-tls does)
+[target.'cfg(target_os = "ios")'.dependencies]
+# No need to use the vendored OpenSSL as it's not needed
 reqwest = { version = "0.12.5", default-features = false, features = ["native-tls", "json", "gzip"] }
 
 # SSL related deps for not iOS/Android
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+# No need to use openssl, we use the default (rustls)
 reqwest = { version = "0.12.5", features = ["json", "gzip"] }
 
 # Not supported on iOS an Android (only implemented in Flutter for those platforms)

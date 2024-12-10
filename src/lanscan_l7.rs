@@ -57,7 +57,7 @@ impl LANScanL7 {
 
         let resolver_handle = async_spawn(async move {
             info!("Starting L7 resolver task");
-            let refresh_kind = RefreshKind::new().with_processes(
+            let refresh_kind = RefreshKind::nothing().with_processes(
                 ProcessRefreshKind::everything()
                     .without_cpu()
                     .without_disk_usage()
@@ -79,7 +79,7 @@ impl LANScanL7 {
                         sys.refresh_specifics(refresh_kind);
 
                         let mut users = users.write().await;
-                        users.refresh_list();
+                        users.refresh();
                     }
 
                     // Get the socket info
