@@ -1,4 +1,4 @@
-use crate::lanscan_arp::mac_address_is_valid;
+use crate::lanscan_arp::is_valid_mac_address;
 use crate::runtime::async_spawn;
 use chrono::{DateTime, Utc};
 use lazy_static::lazy_static;
@@ -146,7 +146,7 @@ fn v6_to_mac(ipv6: &str) -> Option<String> {
     );
 
     // Check if the MAC address is valid
-    if mac_address_is_valid(&mac) {
+    if is_valid_mac_address(&mac) {
         Some(mac)
     } else {
         None
@@ -156,7 +156,7 @@ fn v6_to_mac(ipv6: &str) -> Option<String> {
 fn extract_mac_address(input: &str) -> Option<String> {
     let re = Regex::new(r"([0-9a-fA-F]{2}[:-]){5}([0-9a-fA-F]{2})").unwrap();
     if let Some(mac) = re.find(input).map(|mat| mat.as_str().to_string()) {
-        if mac_address_is_valid(&mac) {
+        if is_valid_mac_address(&mac) {
             Some(mac)
         } else {
             None

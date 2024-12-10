@@ -11,7 +11,7 @@ use regex::Regex;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::time::Duration;
 
-pub fn mac_address_is_valid(mac_address: &str) -> bool {
+pub fn is_valid_mac_address(mac_address: &str) -> bool {
     // Syntax is xx:xx:xx:xx:xx:xx
     mac_address.len() == 17 && mac_address.chars().all(|c| c.is_ascii_hexdigit() || c == ':')
     // Check we don't have 00:00:00:00:00:00
@@ -65,7 +65,7 @@ pub async fn get_mac_address_from_ip(interface_name: &str, ip_addr: &IpAddr) -> 
         let formatted_mac = mac.to_lowercase().replace("-", ":");
 
         // Check that the MAC address is valid
-        if !mac_address_is_valid(&formatted_mac) {
+        if !is_valid_mac_address(&formatted_mac) {
             return Err(anyhow!("Invalid MAC address: {}", formatted_mac));
         }
 
@@ -98,7 +98,7 @@ pub async fn get_mac_address_from_ip(interface_name: &str, ip_addr: &IpAddr) -> 
                     .await?;
                 trace!("Ending ARP scan");
                 // Check that the MAC address is valid
-                if !mac_address_is_valid(&mac_address.to_string()) {
+                if !is_valid_mac_address(&mac_address.to_string()) {
                     return Err(anyhow!("Invalid MAC address: {}", mac_address));
                 }
 

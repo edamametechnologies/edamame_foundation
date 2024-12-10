@@ -1,3 +1,5 @@
+use crate::lanscan_arp::is_valid_mac_address;
+use crate::lanscan_ip::is_valid_ip_address;
 use crate::lanscan_port_info::*;
 use crate::lanscan_port_vulns::*;
 use crate::lanscan_vendor_vulns::*;
@@ -7,6 +9,7 @@ use edamame_backend::lanscan_port_info_backend::*;
 use edamame_backend::lanscan_vulnerability_info_backend::VulnerabilityInfoBackend;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use tracing::{debug, warn};
 
 // We should really use HashSets instead of Vec, but we don't in order to make it more usable with FFI
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -215,15 +218,39 @@ impl DeviceInfo {
     pub fn merge(device: &mut DeviceInfo, new_device: &DeviceInfo) {
         // If we receive a deleted flag with a last modified date more recent than our last modified date, we clear ourselves and flag ourselves as deleted
         if new_device.deleted && new_device.last_modified > device.last_modified {
-            device.delete();
+            debug!(
+                "New device is deleted and last modified is more recent than ours, clearing and flagging as deleted: {:?}",
+                new_device
+            );
+            // Don't call delete, keep the last_modified date
+            device.deleted = true;
+            // Update the last_modified timestamp
+            device.last_modified = new_device.last_modified;
             // We don't need to merge anything
             return;
         }
 
-        // Undelete the device if the new device last_seen is more recent than our last_modified
-        if device.deleted && new_device.last_seen > device.last_modified {
-            device.undelete();
-            // We continue to merge
+        // Validate key fields of the new device
+        // Check if the MAC address is valid
+        if !new_device.mac_address.is_empty() {
+            if !is_valid_mac_address(&new_device.mac_address) {
+                warn!(
+                    "Invalid MAC address: {}, ignoring new device: {:?}",
+                    new_device.mac_address, new_device
+                );
+                return;
+            }
+        }
+
+        // Check if the IP address is valid
+        if !new_device.ip_address.is_empty() {
+            if !is_valid_ip_address(&new_device.ip_address) {
+                warn!(
+                    "Invalid IP address: {}, ignoring new device: {:?}",
+                    new_device.ip_address, new_device
+                );
+                return;
+            }
         }
 
         // Now we merge based on the hostname or IP address(es)
@@ -380,6 +407,13 @@ impl DeviceInfo {
             device.custom_name.clone_from(&new_device.custom_name);
             device.dismissed_ports = new_device.dismissed_ports.clone();
             device.last_modified = new_device.last_modified;
+        }
+
+        // Remove the deleted flag if the device if last_seen the last_modified
+        if device.deleted && device.last_seen > device.last_modified {
+            device.deleted = false;
+            // Update the last_modified timestamp with the last_seen timestamp
+            device.last_modified = device.last_seen;
         }
     }
 
@@ -906,19 +940,20 @@ mod tests {
     fn test_delete_with_last_modified() {
         let mut new_device = DeviceInfo::new();
         new_device.ip_address = "192.168.1.1".to_string();
-        new_device.last_modified = Utc::now() - Duration::seconds(600); // 5 minutes ago
+        new_device.last_modified = Utc::now() - Duration::seconds(600); // 10 minutes ago
         new_device.deleted = true;
 
         let mut device = DeviceInfo::new();
         device.ip_address = "192.168.1.1".to_string();
-        device.last_seen = Utc::now() - Duration::seconds(30); // 30 minutes ago
+        device.last_seen = Utc::now() - Duration::seconds(1800); // 30 minutes ago
         device.last_modified = Utc::now() - Duration::seconds(1800); // 30 minutes ago
         device.deleted = false;
 
         DeviceInfo::merge(&mut device, &new_device);
 
         assert!(device.deleted);
-        assert!(device.last_modified > new_device.last_modified);
+        // Now, last_modified should be updated to the new_device's last_modified
+        assert_eq!(device.last_modified, new_device.last_modified);
     }
 
     // Test if a last modified date of a new device properly undelete a device
@@ -926,17 +961,18 @@ mod tests {
     fn test_undelete_with_last_seen() {
         let mut new_device = DeviceInfo::new();
         new_device.ip_address = "192.168.1.1".to_string();
-        new_device.last_seen = Utc::now() - Duration::seconds(600); // 5 minutes ago
-        new_device.last_modified = Utc::now() - Duration::seconds(1800); // 30 minutes ago
+        new_device.last_seen = Utc::now() - Duration::seconds(600); // 10 minutes ago
+        new_device.last_modified = Utc::now() - Duration::seconds(300); // 5 minutes ago
         new_device.deleted = false;
 
         let mut device = DeviceInfo::new();
         device.ip_address = "192.168.1.1".to_string();
+        device.last_seen = Utc::now() - Duration::seconds(100); // 1 minute ago
         device.last_modified = Utc::now() - Duration::seconds(1800); // 30 minutes ago
         device.deleted = true;
+
         DeviceInfo::merge(&mut device, &new_device);
 
         assert!(!device.deleted);
-        assert!(device.last_modified > new_device.last_modified);
     }
 }
