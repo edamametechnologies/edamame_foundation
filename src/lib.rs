@@ -29,6 +29,7 @@ pub mod lanscan_device_info;
 ))]
 pub mod lanscan_dns;
 pub mod lanscan_interface;
+pub mod lanscan_ip;
 #[cfg(all(
     any(target_os = "macos", target_os = "linux", target_os = "windows"),
     feature = "packetcapture"
