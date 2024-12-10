@@ -102,6 +102,23 @@ oui = "0.8.1"
 ipnet = "2.9.0"
 csv = "1.0.10"
 
+# Linux ARM
+[target.aarch64-unknown-linux-gnu.dependencies]
+# OpenSSL - required for easy cross-compilation
+openssl = { version = "0.10.68", features = ["vendored"] }
+
+# Linux ARM musl
+[target.aarch64-unknown-linux-musl.dependencies]
+# OpenSSL - required for easy cross-compilation
+openssl = { version = "0.10.68", features = ["vendored"] }
+
+# Android
+[target.'cfg(target_os = "android")'.dependencies]
+# OpenSSL - required for easy cross-compilation
+openssl = { version = "0.10.68", features = ["vendored"] }
+# Native Android tracing
+tracing-android = "0.2.0"
+
 # SSL related deps for iOS/Android (rustls doesn't work on iOS/Android due to missing certs but native-tls does)
 [target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
 reqwest = { version = "0.12.5", default-features = false, features = ["native-tls", "json", "gzip"] }
@@ -138,11 +155,6 @@ windows = { version = "0.58.0", features = [ "Data_Xml_Dom", "Win32_Foundation",
 [patch.crates-io]
 system-configuration = { git = "https://github.com/edamametechnologies/system-configuration-rs", branch = "main" }
 system-configuration-sys = { git = "https://github.com/edamametechnologies/system-configuration-rs", branch = "main" }
-
-
-# Android
-[target.'cfg(target_os = "android")'.dependencies]
-tracing-android = "0.2.0"
 
 # iOS or macOS
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
