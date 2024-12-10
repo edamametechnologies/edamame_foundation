@@ -132,7 +132,7 @@ reqwest = { version = "0.12.5", default-features = false, features = ["native-tl
 
 # SSL related deps for not iOS/Android
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
-# No need to use openssl, we use the default (rustls)
+# No need to use openssl, we use the default
 reqwest = { version = "0.12.5", features = ["json", "gzip"] }
 
 # Not supported on iOS an Android (only implemented in Flutter for those platforms)
