@@ -3,16 +3,16 @@ syntax = "proto2";
 package edamame;
 
 message HelperRequest {
-  string ordertype = 1;
-  string subordertype = 2;
-  string arg1 = 3;
-  string arg2 = 4;
-  string signature = 5;
-  string version = 6;
+  required string ordertype = 1;
+  required string subordertype = 2;
+  required string arg1 = 3;
+  required string arg2 = 4;
+  required string signature = 5;
+  required string version = 6;
 }
 
 message HelperResponse {
-  string output = 1;
+  required string output = 1;
 }
 
 // Service definition
