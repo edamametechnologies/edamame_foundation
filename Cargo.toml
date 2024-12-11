@@ -21,7 +21,8 @@ edamame_backend = { git = "https://github.com/edamametechnologies/edamame_backen
 #edamame_backend = { path = "../edamame_backend" }
 
 # Sentry
-sentry = "0.35.0"
+# Beware it will use reqwest with native-tls by default, not rustls
+sentry = { version = "0.35.0", default-features = false, features = ["reqwest", "rustls"] }
 sentry-tracing = "0.35.0"
 
 # Global statics w/ mutex
@@ -49,7 +50,8 @@ tracing-subscriber = { version = "0.3.18", features = ["env-filter", "fmt"] }
 tracing-appender = "0.2.3"
 humantime = "2.1.0"
 
-# gRPC server/client, marked as optional
+# gRPC server/client
+# This uses rustls
 tonic = { version = "0.12.1", features = ["tls"] }
 prost = "0.13.1"
 
@@ -101,39 +103,13 @@ eui48 = { version = "1.1.0", features = ["disp_hexstring", "serde"] }
 oui = "0.8.1"
 ipnet = "2.9.0"
 csv = "1.0.10"
-
-# Linux ARM
-[target.aarch64-unknown-linux-gnu.dependencies]
-# OpenSSL - required for easy cross-compilation
-openssl = { version = "0.10.68", features = ["vendored"] }
-# Reqwest will use non-vendored OpenSSL unless we specify it
-reqwest = { version = "0.12.5", default-features = false, features = ["native-tls-vendored", "json", "gzip"] }
-
-# Linux ARM musl
-[target.aarch64-unknown-linux-musl.dependencies]
-# OpenSSL - required for easy cross-compilation
-openssl = { version = "0.10.68", features = ["vendored"] }
-# Reqwest will use non-vendored OpenSSL unless we specify it
-reqwest = { version = "0.12.5", default-features = false, features = ["native-tls-vendored", "json", "gzip"] }
+# Prevent reqwest from using native-tls
+reqwest = { version = "0.12.5", default-features = false, features = ["gzip", "rustls-tls"] }
 
 # Android
 [target.'cfg(target_os = "android")'.dependencies]
-# SSL related deps for iOS (rustls doesn't work on iOS/Android due to missing certs but native-tls does)
-openssl = { version = "0.10.68", features = ["vendored"] }
-# Reqwest will use non-vendored OpenSSL unless we specify it - vendored OpenSSL is required for easy cross-compilation
-reqwest = { version = "0.12.5", default-features = false, features = ["native-tls-vendored", "json", "gzip"] }
 # Native Android tracing
 tracing-android = "0.2.0"
-
-# SSL related deps for iOS (rustls doesn't work on iOS/Android due to missing certs but native-tls does)
-[target.'cfg(target_os = "ios")'.dependencies]
-# No need to use the vendored OpenSSL as it's not needed
-reqwest = { version = "0.12.5", default-features = false, features = ["native-tls", "json", "gzip"] }
-
-# SSL related deps for not iOS/Android
-[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
-# No need to use openssl, we use the default
-reqwest = { version = "0.12.5", features = ["json", "gzip"] }
 
 # Not supported on iOS an Android (only implemented in Flutter for those platforms)
 [target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
@@ -178,5 +154,6 @@ serial_test = "3.1.1"
 tonic-build = "0.12.1"
 
 # Npcap
-reqwest = { version = "0.12.5", features = ["blocking"] }
+# Prevent reqwest from using native-tls
+reqwest = { version = "0.12.5", default-features = false, features = ["blocking", "rustls-tls"] }
 zip = "2.2.0"

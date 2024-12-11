@@ -4,9 +4,8 @@ use ipnet::ipv4_mask_to_prefix;
 use netdev;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 use network_interface::{Addr, NetworkInterface, NetworkInterfaceConfig};
-use tracing::error;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-use tracing::{info, trace};
+use tracing::{error, info, trace};
 
 // Search for the interfaces - the ones that are up, not loopback or link layer and has an IPv4 address and sorted with the lowest index first (the default)
 // Returns (ip, prefix, name)
