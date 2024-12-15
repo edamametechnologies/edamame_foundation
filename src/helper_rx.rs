@@ -345,7 +345,7 @@ pub async fn rpc_run(
                 );
                 // Perform update
                 let branch = BRANCH.lock().await.clone();
-                match update(&branch, false).await {
+                match update(&branch, false, "").await {
                     Ok(_) => {
                         info!(
                             "Updated model from backend successfully - new signature is: {}",
