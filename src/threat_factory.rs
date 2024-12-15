@@ -57,7 +57,7 @@ lazy_static! {
 }
 
 // Helper functions to get built-in versions and model names
-fn get_builtin_version(platform: &str) -> Result<&'static str> {
+pub fn get_builtin_version(platform: &str) -> Result<&'static str> {
     match platform.to_lowercase().as_str() {
         "macos" => Ok(THREAT_METRICS_MACOS),
         "windows" => Ok(THREAT_METRICS_WINDOWS),
