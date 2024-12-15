@@ -150,11 +150,17 @@ impl ThreatMetricImplementationJSON {
     }
 }
 
-pub async fn update(branch: &str, force: bool) -> Result<UpdateStatus> {
+// Allow to force the platform
+pub async fn update(branch: &str, force: bool, platform: &str) -> Result<UpdateStatus> {
+    let platform = if platform == "" {
+        get_platform()
+    } else {
+        platform
+    };
+
     info!(
         "Starting threat metrics update for platform '{}' from branch '{}'",
-        get_platform(),
-        branch
+        platform, branch
     );
 
     // Acquire read lock on THREATS
@@ -211,7 +217,7 @@ mod tests {
     async fn test_update_threat_metrics() {
         setup();
         let branch = "main";
-        let status = update(branch, false).await.expect("Update failed");
+        let status = update(branch, false, "").await.expect("Update failed");
         assert!(
             matches!(status, UpdateStatus::Updated | UpdateStatus::NotUpdated),
             "Update status should be one of the expected variants"
@@ -226,7 +232,7 @@ mod tests {
         let branch = "main";
 
         // Run the update
-        let status = update(branch, true).await.expect("Update failed");
+        let status = update(branch, true, "").await.expect("Update failed");
         assert!(
             matches!(status, UpdateStatus::Updated | UpdateStatus::NotUpdated),
             "Update status should be one of the expected variants"
@@ -250,7 +256,7 @@ mod tests {
         }
 
         // Perform the update
-        let status = update(branch, false).await.expect("Update failed");
+        let status = update(branch, false, "").await.expect("Update failed");
 
         // Check that the update was performed
         assert_eq!(
@@ -282,7 +288,7 @@ mod tests {
         let original_signature = THREATS.read().await.data.read().await.get_signature();
 
         // Attempt to perform an update from a nonexistent branch
-        let result = update(branch, false).await;
+        let result = update(branch, false, "").await;
 
         // The update should fail
         assert!(result.is_err(), "Update should have failed");
