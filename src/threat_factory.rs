@@ -1,21 +1,21 @@
-use crate::rwlock::CustomRwLock;
-use anyhow::{anyhow, Context, Result};
-use lazy_static::lazy_static;
-use tracing::{info, warn};
 use crate::cloud_model::*;
+use crate::rwlock::CustomRwLock;
 use crate::threat::*;
 use crate::threat_metrics_android::*;
 use crate::threat_metrics_ios::*;
 use crate::threat_metrics_linux::*;
 use crate::threat_metrics_macos::*;
 use crate::threat_metrics_windows::*;
+use anyhow::{anyhow, Context, Result};
+use lazy_static::lazy_static;
+use tracing::{info, warn};
 
 // Constants for model names and built-in data
-const THREAT_MODEL_MACOS: &str = "threatmodel-macOS.json";
-const THREAT_MODEL_WINDOWS: &str = "threatmodel-Windows.json";
-const THREAT_MODEL_IOS: &str = "threatmodel-iOS.json";
-const THREAT_MODEL_ANDROID: &str = "threatmodel-Android.json";
-const THREAT_MODEL_LINUX: &str = "threatmodel-Linux.json";
+pub const THREAT_MODEL_MACOS: &str = "threatmodel-macOS.json";
+pub const THREAT_MODEL_WINDOWS: &str = "threatmodel-Windows.json";
+pub const THREAT_MODEL_IOS: &str = "threatmodel-iOS.json";
+pub const THREAT_MODEL_ANDROID: &str = "threatmodel-Android.json";
+pub const THREAT_MODEL_LINUX: &str = "threatmodel-Linux.json";
 
 fn get_platform() -> &'static str {
     if cfg!(target_os = "macos") {
@@ -297,6 +297,29 @@ mod tests {
         assert_eq!(
             current_signature, original_signature,
             "Signature should not have changed after failed update"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_platform() {
+        let builtin_data = get_builtin_version("macOS").expect("Unsupported platform");
+        let threat_metrics_json: ThreatMetricsJSON = serde_json::from_str(builtin_data)
+            .unwrap_or_else(|e| {
+                panic!("Failed to parse JSON data: {}", e);
+            });
+        let threat_metrics = ThreatMetrics::new_from_json(&threat_metrics_json, "macOS")
+            .unwrap_or_else(|e| {
+                panic!("Failed to create ThreatMetrics: {}", e);
+            });
+
+        assert!(threat_metrics.metrics.len() > 0);
+
+        let model_name = get_model_name("macOS").expect("Unsupported platform");
+        assert!(
+            model_name == THREAT_MODEL_MACOS,
+            "Model name {} should be {}",
+            model_name,
+            THREAT_MODEL_MACOS
         );
     }
 }
