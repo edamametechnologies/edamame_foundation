@@ -90,7 +90,7 @@ impl<T> CustomRwLock<T> {
         self.write_locked.store(false, Ordering::SeqCst);
         // Check if the read lock took too long
         let duration = start.elapsed();
-        if duration.as_secs() > 5 {
+        if duration.as_secs() > 10 {
             error!(
                 "Write lock '{}' took too long to acquire: {:?} seconds - backtrace:\n{}",
                 self.name,
