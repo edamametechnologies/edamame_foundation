@@ -2,7 +2,6 @@ use crate::rwlock::CustomRwLock;
 use anyhow::{anyhow, Context, Result};
 use lazy_static::lazy_static;
 use tracing::{info, warn};
-
 use crate::cloud_model::*;
 use crate::threat::*;
 use crate::threat_metrics_android::*;
@@ -68,7 +67,7 @@ pub fn get_builtin_version(platform: &str) -> Result<&'static str> {
     }
 }
 
-fn get_model_name(platform: &str) -> Result<&'static str> {
+pub fn get_model_name(platform: &str) -> Result<&'static str> {
     // If set to autodetect
     let platform = if platform == "" {
         get_platform()
