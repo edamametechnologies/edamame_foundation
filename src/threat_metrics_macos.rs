@@ -81,10 +81,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
       "severity": 3,
       "scope": "generic",
       "tags": [
-        "CIS Benchmark Level 1,macos_security/sysprefs_firewall_stealth_mode_enable",
-        "ISO 27001/2,Communications Security",
-        "PCI-DSS,Requirement-1",
-        "SOC 2,CC-System Operations"
+        "CIS Benchmark Level 1,Enable Stealth Mode"
       ],
       "description": [
         {
@@ -286,10 +283,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
       "severity": 1,
       "scope": "generic",
       "tags": [
-        "CIS Benchmark Level 1,macos_security/sysprefs_wake_network_access_disable",
-        "ISO 27001/2,Communications Security",
-        "PCI-DSS,Requirement-1",
-        "SOC 2,CC-System Operations"
+        "CIS Benchmark Level 1,Disable Wake on Network Access"
       ],
       "description": [
         {
@@ -349,10 +343,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
       "severity": 3,
       "scope": "generic",
       "tags": [
-        "CIS Benchmark Level 1,macos_security/sysprefs_software_update_app_update_enforce",
-        "ISO 27001/2,Information Systems Acquisition, Development, and Maintenance",
-        "PCI-DSS,Requirement-6",
-        "SOC 2,CC-System Development and Maintenance"
+        "CIS Benchmark Level 1,Enable App Store Automatic Update"
       ],
       "description": [
         {
@@ -423,10 +414,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
       "severity": 2,
       "scope": "generic",
       "tags": [
-        "CIS Benchmark Level 1,macos_security/sysprefs_firewall_enable",
-        "ISO 27001/2,Communications Security",
-        "PCI-DSS,Requirement-1",
-        "SOC 2,CC-Network Protection"
+        "CIS Benchmark Level 1,Enable Firewall"
       ],
       "description": [
         {
@@ -497,10 +485,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
       "severity": 4,
       "scope": "generic",
       "tags": [
-        "CIS Benchmark Level 1,macos_security/sysprefs_automatic_login_disable",
-        "ISO 27001/2,Access Control",
-        "PCI-DSS,Requirement-8",
-        "SOC 2,CC-Logical Access"
+        "CIS Benchmark Level 1,Disable automatic login"
       ],
       "description": [
         {
@@ -582,10 +567,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
       "severity": 4,
       "scope": "generic",
       "tags": [
-        "CIS Benchmark Level 1,macos_security/sysprefs_ssh_disable",
-        "ISO 27001/2,Access Control",
-        "PCI-DSS,Requirement-8",
-        "SOC 2,CC-System Integrity"
+        "CIS Benchmark Level 1,Disable Remote Login"
       ],
       "description": [
         {
@@ -656,10 +638,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
       "severity": 4,
       "scope": "generic",
       "tags": [
-        "CIS Benchmark Level 1,macos_security/sysprefs_remote_management_disable",
-        "ISO 27001/2,Access Control",
-        "PCI-DSS,Requirement-8",
-        "SOC 2,CC-System Integrity"
+        "CIS Benchmark Level 1,Disable Remote Desktop Sharing"
       ],
       "description": [
         {
@@ -730,10 +709,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
       "severity": 4,
       "scope": "generic",
       "tags": [
-        "CIS Benchmark Level 1,macos_security/sysprefs_smbd_disable",
-        "ISO 27001/2,Information Security Policies",
-        "PCI-DSS,Requirement-9",
-        "SOC 2,CC-System Services"
+        "CIS Benchmark Level 1,Disable File Sharing"
       ],
       "description": [
         {
@@ -804,10 +780,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
       "severity": 4,
       "scope": "macOS",
       "tags": [
-        "CIS Benchmark Level 1,macos_security/sysprefs_rae_disable",
-        "ISO 27001/2,Access Control",
-        "PCI-DSS,Requirement-6.5",
-        "SOC 2,CC-System Integrity"
+        "CIS Benchmark Level 1,Disable Remote Apple Events"
       ],
       "description": [
         {
@@ -949,10 +922,9 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
       "severity": 4,
       "scope": "generic",
       "tags": [
-        "CIS Benchmark Level 1,macos_security/sysprefs_filevault_enforce",
-        "ISO 27001/2,Information Security Incident Management",
-        "PCI-DSS,Requirement-3.4",
-        "SOC 2,CC-Data Protection"
+        "CIS Benchmark Level 1,Enable FileVault",
+        "ISO 27001/2,A.8.3.1-Media Protection",
+        "SOC 2,CC6.7-Data Protection"
       ],
       "description": [
         {
@@ -1023,10 +995,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
       "severity": 4,
       "scope": "generic",
       "tags": [
-        "CIS Benchmark Level 1,macos_security/os_gatekeeper_enable",
-        "ISO 27001/2,Information Systems Acquisition, Development, and Maintenance",
-        "PCI-DSS,Requirement-6.6",
-        "SOC 2,CC-Application Security"
+        "CIS Benchmark Level 1,Enable Gatekeeper"
       ],
       "description": [
         {
@@ -1097,11 +1066,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
       "severity": 4,
       "scope": "generic",
       "tags": [
-        "CIS Benchmark Level 1,macos_security/sysprefs_install_macos_updates_enforce",
-        "CIS Benchmark Level 1,macos_security/sysprefs_software_update_download_enforce",
-        "ISO 27001/2,Information Systems Acquisition, Development, and Maintenance",
-        "PCI-DSS,Requirement-6.1",
-        "SOC 2,CC-System Maintenance"
+        "CIS Benchmark Level 1,Enable Software Update Automatic Download"
       ],
       "description": [
         {
@@ -1172,10 +1137,9 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
       "severity": 3,
       "scope": "generic",
       "tags": [
-        "CIS Benchmark Level 1,macos_security/sysprefs_screensaver_ask_for_password_delay_enforce",
-        "ISO 27001/2,Access Control",
-        "PCI-DSS,Requirement-8.1.8",
-        "SOC 2,CC-Access Control"
+        "CIS Benchmark Level 1,Set inactivity interval",
+        "ISO 27001/2,A.11.2.8-Unattended User Equipment",
+        "SOC 2,CC6.1-Access Control"
       ],
       "description": [
         {
@@ -1246,9 +1210,8 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
       "severity": 4,
       "scope": "generic",
       "tags": [
-        "ISO 27001/2,Malware Protection",
-        "PCI-DSS,Requirement-5",
-        "SOC 2,CC-Malware Protection"
+        "ISO 27001/2,A.12.2.1-Malware Controls",
+        "SOC 2,CC6.8-Malware Protection"
       ],
       "description": [
         {
@@ -1319,10 +1282,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
       "severity": 5,
       "scope": "macOS",
       "tags": [
-        "CIS Benchmark Level 1,macos_security/os_sip_enable",
-        "ISO 27001/2,System Acquisition, Development and Maintenance",
-        "PCI-DSS,Requirement-6.1",
-        "SOC 2,CC-System Integrity"
+        "CIS Benchmark Level 1,Ensure System Integrity Protection is enabled"
       ],
       "description": [
         {
@@ -1393,10 +1353,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
       "severity": 2,
       "scope": "macOS",
       "tags": [
-        "CIS Benchmark Level 1,macos_security/sysprefs_guest_account_disable",
-        "ISO 27001/2,Access Control",
-        "PCI-DSS,Requirement-8.1.6",
-        "SOC 2,CC-Access Control"
+        "CIS Benchmark Level 1,Disable Guest account"
       ],
       "description": [
         {
@@ -1467,9 +1424,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
       "severity": 3,
       "scope": "macOS",
       "tags": [
-        "ISO 27001/2,Access Control",
-        "PCI-DSS,Requirement-2.3",
-        "SOC 2,CC-Access Control"
+        "CIS Benchmark Level 1,Disable root account"
       ],
       "description": [
         {
@@ -1540,10 +1495,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
       "severity": 3,
       "scope": "macOS",
       "tags": [
-        "CIS Benchmark Level 1,macos_security/sysprefs_system_wide_preferences_configure",
-        "ISO 27001/2,Access Control",
-        "PCI-DSS,Requirement-2.2",
-        "SOC 2,CC-Access Control"
+        "CIS Benchmark Level 1,Enable system wide preferences"
       ],
       "description": [
         {
@@ -1614,9 +1566,6 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
       "severity": 1,
       "scope": "generic",
       "tags": [
-        "ISO 27001/2,Information Security Incident Management",
-        "PCI-DSS,Requirement-12.10",
-        "SOC 2,CC-Incident Response",
         "Personal Posture"
       ],
       "description": [
@@ -1688,9 +1637,6 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
       "severity": 1,
       "scope": "generic",
       "tags": [
-        "ISO 27001/2,Information Security Incident Management",
-        "PCI-DSS,Requirement-12.10",
-        "SOC 2,CC-Incident Response",
         "Personal Posture"
       ],
       "description": [
@@ -1762,9 +1708,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
       "severity": 2,
       "scope": "generic",
       "tags": [
-        "ISO 27001/2,System Acquisition, Development and Maintenance",
-        "PCI-DSS,Requirement-6.2",
-        "SOC 2,CC-System Maintenance"
+        "CIS Benchmark Level 1,Enable Software Update"
       ],
       "description": [
         {
@@ -1834,11 +1778,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
       "dimension": "applications",
       "severity": 3,
       "scope": "generic",
-      "tags": [
-        "ISO 27001/2,Application Security",
-        "PCI-DSS,Requirement-6",
-        "SOC 2,CC-System Operations"
-      ],
+      "tags": [],
       "description": [
         {
           "locale": "EN",

@@ -81,9 +81,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
       "severity": 4,
       "scope": "generic",
       "tags": [
-        "ISO 27001/2,Access Control",
-        "PCI-DSS,Requirement-8.2.3",
-        "SOC 2,CC-Logical Access Controls"
+        "CIS Benchmark Level 1,Interactive logon: Number of previous logons to cache"
       ],
       "description": [
         {
@@ -154,10 +152,9 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
       "severity": 5,
       "scope": "generic",
       "tags": [
-        "CIS Benchmark Level 1,Security Configuration Benchmarks",
-        "ISO 27001/2,Malware Protection",
-        "PCI-DSS,Requirement-5",
-        "SOC 2,CC-Malware Protection"
+        "CIS Benchmark Level 1,Configure Microsoft Defender Antivirus",
+        "ISO 27001/2,A.12.2.1-Malware Controls",
+        "SOC 2,CC6.8-Malware Protection"
       ],
       "description": [
         {
@@ -228,10 +225,9 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
       "severity": 4,
       "scope": "generic",
       "tags": [
-        "CIS Benchmark Level 1,windows_security/bitlocker_enforce",
-        "ISO 27001/2,Information Security Incident Management",
-        "PCI-DSS,Requirement-3.4",
-        "SOC 2,CC-Data Protection"
+        "CIS Benchmark Level 1,Configure BitLocker Drive Encryption",
+        "ISO 27001/2,A.8.3.1-Media Protection",
+        "SOC 2,CC6.7-Data Protection"
       ],
       "description": [
         {
@@ -302,10 +298,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
       "severity": 5,
       "scope": "generic",
       "tags": [
-        "CIS Benchmark Level 2,Section: 1.1.1",
-        "ISO 27001/2,Control: A.9.4.4",
-        "PCI-DSS,Requirement-7.1",
-        "SOC 2,CC-User Access"
+        "CIS Benchmark Level 1,User Account Control: Admin Approval Mode"
       ],
       "description": [
         {
@@ -376,10 +369,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
       "severity": 4,
       "scope": "generic",
       "tags": [
-        "CIS Benchmark Level 2,Section: 2.3.1.1",
-        "ISO 27001/2,Control: A.9.3.1",
-        "PCI-DSS,Requirement-8.1.5",
-        "SOC 2,CC-User Authentication"
+        "CIS Benchmark Level 1,Disable Automatic Logon"
       ],
       "description": [
         {
@@ -450,9 +440,6 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
       "severity": 1,
       "scope": "generic",
       "tags": [
-        "ISO 27001/2,Information Security Incident Management",
-        "PCI-DSS,Requirement-12.10",
-        "SOC 2,CC-Incident Response",
         "Personal Posture"
       ],
       "description": [
@@ -524,9 +511,6 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
       "severity": 1,
       "scope": "generic",
       "tags": [
-        "ISO 27001/2,Information Security Incident Management",
-        "PCI-DSS,Requirement-12.10",
-        "SOC 2,CC-Incident Response",
         "Personal Posture"
       ],
       "description": [
@@ -598,10 +582,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
       "severity": 4,
       "scope": "generic",
       "tags": [
-        "CIS Benchmark Level 1,Section: 9.1.2",
-        "ISO 27001/2,Control: A.12.2.1",
-        "PCI-DSS,Requirement-2.2.2",
-        "SOC 2,CC-Malicious Code Prevention"
+        "CIS Benchmark Level 1,Disable Windows Script Host"
       ],
       "description": [
         {
@@ -672,10 +653,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
       "severity": 4,
       "scope": "generic",
       "tags": [
-        "CIS Benchmark Level 1,Section: 8.1.1",
-        "ISO 27001/2,Control: A.13.7.1",
-        "PCI-DSS,Requirement-2.3",
-        "SOC 2,CC-Network Security"
+        "CIS Benchmark Level 1,Ensure Remote Desktop Protocol is Configured"
       ],
       "description": [
         {
@@ -746,10 +724,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
       "severity": 5,
       "scope": "generic",
       "tags": [
-        "CIS Benchmark Level 1,Section: 2.3.1",
-        "ISO 27001/2,Control: A.12.6.1",
-        "PCI-DSS,Requirement-6.1",
-        "SOC 2,CC-System Monitoring"
+        "CIS Benchmark Level 1,Configure Automatic Updates"
       ],
       "description": [
         {
@@ -820,10 +795,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
       "severity": 4,
       "scope": "generic",
       "tags": [
-        "CIS Benchmark Level 1,Section: 1.1.2",
-        "ISO 27001/2,Control: A.9.2.1",
-        "PCI-DSS,Requirement-8.1.6",
-        "SOC 2,CC-User Access"
+        "CIS Benchmark Level 1,Ensure Guest account status is disabled"
       ],
       "description": [
         {
@@ -894,10 +866,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
       "severity": 5,
       "scope": "generic",
       "tags": [
-        "CIS Benchmark Level 1,Section: 1.1.1",
-        "ISO 27001/2,Control: A.9.4.2",
-        "PCI-DSS,Requirement-2.3",
-        "SOC 2,CC-User Access"
+        "CIS Benchmark Level 1,Built-in Administrator account status"
       ],
       "description": [
         {
@@ -968,10 +937,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
       "severity": 5,
       "scope": "generic",
       "tags": [
-        "CIS Benchmark Level 1,Section: 9.3.1",
-        "ISO 27001/2,Control: A.13.1.1",
-        "PCI-DSS,Requirement-1.4",
-        "SOC 2,CC-Network Security"
+        "CIS Benchmark Level 1,Ensure Windows Firewall is Enabled"
       ],
       "description": [
         {
@@ -1042,10 +1008,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
       "severity": 3,
       "scope": "generic",
       "tags": [
-        "CIS Benchmark Level 1,Section: 2.2.4",
-        "ISO 27001/2,Control: A.9.4.1",
-        "PCI-DSS,Requirement-2.2",
-        "SOC 2,CC-System Configuration and Maintenance"
+        "CIS Benchmark Level 1,Ensure Remote Registry Service is disabled"
       ],
       "description": [
         {
@@ -1116,10 +1079,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
       "severity": 5,
       "scope": "generic",
       "tags": [
-        "CIS Benchmark Level 1,Section: 2.3.11.9",
-        "ISO 27001/2,Control: A.9.2.3",
-        "PCI-DSS,Requirement-8.2.1",
-        "SOC 2,CC-User Authentication"
+        "CIS Benchmark Level 1,Network security: LAN Manager authentication level"
       ],
       "description": [
         {
@@ -1190,10 +1150,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
       "severity": 4,
       "scope": "generic",
       "tags": [
-        "CIS Benchmark Level 1,Section: 2.2.39",
-        "ISO 27001/2,Control: A.12.1.2",
-        "PCI-DSS,Requirement-6.2",
-        "SOC 2,CC-System Integrity"
+        "CIS Benchmark Level 1,Ensure LSASS is configured to run as a Protected Process"
       ],
       "description": [
         {
@@ -1264,10 +1221,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
       "severity": 4,
       "scope": "generic",
       "tags": [
-        "CIS Benchmark Level 1,Section: 1.1.3",
-        "ISO 27001/2,Control: A.12.4.2",
-        "PCI-DSS,Requirement-2.2.4",
-        "SOC 2,CC-System Hardening"
+        "CIS Benchmark Level 1,Ensure PowerShell Execution Policy is set to RemoteSigned"
       ],
       "description": [
         {
@@ -1337,11 +1291,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
       "dimension": "applications",
       "severity": 3,
       "scope": "generic",
-      "tags": [
-        "ISO 27001/2,Application Security",
-        "PCI-DSS,Requirement-6",
-        "SOC 2,CC-System Operations"
-      ],
+      "tags": [],
       "description": [
         {
           "locale": "EN",
@@ -1411,7 +1361,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
       "severity": 5,
       "scope": "generic",
       "tags": [
-        "CIS Benchmark Level 1,windows_security/smb1_protocol_disabled"
+        "CIS Benchmark Level 1,Ensure SMBv1 protocol is disabled"
       ],
       "description": [
         {
@@ -1619,7 +1569,11 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
       "dimension": "system integrity",
       "severity": 4,
       "scope": "generic",
-      "tags": [],
+      "tags": [
+        "CIS Benchmark Level 1,Machine inactivity limit",
+        "ISO 27001/2,A.11.2.8-Unattended User Equipment",
+        "SOC 2,CC6.1-Logical Access"
+      ],
       "description": [
         {
           "locale": "EN",
