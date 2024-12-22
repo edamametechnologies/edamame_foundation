@@ -51,8 +51,7 @@ jobs:
           edamame_user: ${{ vars.EDAMAME_POSTURE_USER }}
           edamame_domain: ${{ vars.EDAMAME_POSTURE_DOMAIN }}
           edamame_pin: ${{ secrets.EDAMAME_POSTURE_PIN }}
-          # Uuidgen is required for matrix jobs
-          edamame_id: ${{ github.run_id }}_$(uuidgen)
+          edamame_id: ${{ github.run_id }}
           auto_remediate: true
           network_scan: true
           checkout: true
