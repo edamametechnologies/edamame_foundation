@@ -83,10 +83,9 @@ pub static THREAT_METRICS_IOS: &str = r#"{
       "severity": 3,
       "scope": "generic",
       "tags": [
-        "CIS Benchmark Level 1,iOS_Screen_Lock",
-        "ISO 27001/2,Access Control",
-        "PCI-DSS,Requirement-8.1.7",
-        "SOC 2,CC-Access Control"
+        "CIS Benchmark Level 1,Set Auto-Lock to 2 Minutes or Less",
+        "ISO 27001/2,A.11.2.8-Unattended User Equipment",
+        "SOC 2,CC6.1-Access Control"
       ],
       "description": [
         {
@@ -157,10 +156,7 @@ pub static THREAT_METRICS_IOS: &str = r#"{
       "severity": 5,
       "scope": "iOS",
       "tags": [
-        "CIS Benchmark Level 1",
-        "ISO 27001/2,Mobile Device Policy",
-        "PCI-DSS,Requirement-5.1",
-        "SOC 2,CC-Mobile Device Management"
+        "CIS Benchmark Level 1,Ensure device is not jailbroken"
       ],
       "description": [
         {
@@ -231,9 +227,6 @@ pub static THREAT_METRICS_IOS: &str = r#"{
       "severity": 4,
       "scope": "generic",
       "tags": [
-        "ISO 27001/2,Information Security Incident Management",
-        "PCI-DSS,Requirement-12.10",
-        "SOC 2,CC-Incident Response",
         "Personal Posture"
       ],
       "description": [
@@ -305,9 +298,6 @@ pub static THREAT_METRICS_IOS: &str = r#"{
       "severity": 1,
       "scope": "generic",
       "tags": [
-        "ISO 27001/2,Information Security Incident Management",
-        "PCI-DSS,Requirement-12.10",
-        "SOC 2,CC-Incident Response",
         "Personal Posture"
       ],
       "description": [
@@ -448,10 +438,7 @@ pub static THREAT_METRICS_IOS: &str = r#"{
       "severity": 3,
       "scope": "generic",
       "tags": [
-        "CIS Benchmark Level 1",
-        "ISO 27001/2,System Update Policy",
-        "PCI-DSS,Requirement-6.2",
-        "SOC 2,CC-System Updates"
+        "CIS Benchmark Level 1,Keep iOS Auto-Update Enabled"
       ],
       "description": [
         {

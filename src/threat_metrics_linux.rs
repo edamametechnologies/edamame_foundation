@@ -65,9 +65,8 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       "severity": 4,
       "scope": "generic",
       "tags": [
-        "ISO 27001/2,Malware Protection",
-        "PCI-DSS,Requirement-5",
-        "SOC 2,CC-Malware Protection"
+        "ISO 27001/2,A.12.2.1-Malware Controls",
+        "SOC 2,CC6.8-Malware Protection"
       ],
       "description": [
         {
@@ -128,10 +127,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       "severity": 4,
       "scope": "generic",
       "tags": [
-        "CIS Benchmark Level 1,ubuntu_security/home_encryption_enforce",
-        "ISO 27001/2,Information Security Incident Management",
-        "PCI-DSS,Requirement-3.4",
-        "SOC 2,CC-Data Protection"
+        "CIS Benchmark Level 2,Configure /home partition encryption"
       ],
       "description": [
         {
@@ -192,10 +188,9 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       "severity": 4,
       "scope": "generic",
       "tags": [
-        "CIS Benchmark Level 1,ubuntu_security/disk_encryption_enforce",
-        "ISO 27001/2,Information Security Incident Management",
-        "PCI-DSS,Requirement-3.4",
-        "SOC 2,CC-Data Protection"
+        "CIS Benchmark Level 2,Configure Disk Encryption",
+        "ISO 27001/2,A.8.3.1-Media Protection",
+        "SOC 2,CC6.7-Data Protection"
       ],
       "description": [
         {
@@ -256,9 +251,6 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       "severity": 1,
       "scope": "generic",
       "tags": [
-        "ISO 27001/2,Information Security Incident Management",
-        "PCI-DSS,Requirement-12.10",
-        "SOC 2,CC-Incident Response",
         "Personal Posture"
       ],
       "description": [
@@ -325,9 +317,6 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       "severity": 1,
       "scope": "generic",
       "tags": [
-        "ISO 27001/2,Information Security Incident Management",
-        "PCI-DSS,Requirement-12.10",
-        "SOC 2,CC-Incident Response",
         "Personal Posture"
       ],
       "description": [
@@ -399,10 +388,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       "severity": 5,
       "scope": "generic",
       "tags": [
-        "CIS Benchmark Level 1,File Permissions",
-        "ISO 27001/2,Communications Security",
-        "PCI-DSS,Requirement-1",
-        "SOC 2,CC-System Operations"
+        "CIS Benchmark Level 1,Verify Password File Permissions"
       ],
       "description": [
         {
@@ -451,10 +437,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       "severity": 5,
       "scope": "generic",
       "tags": [
-        "CIS Benchmark Level 1,File Permissions",
-        "ISO 27001/2,Access Control",
-        "PCI-DSS,Requirement-7",
-        "SOC 2,CC-System Operations"
+        "CIS Benchmark Level 1,Verify Shadow File Permissions"
       ],
       "description": [
         {
@@ -502,12 +485,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       "dimension": "system integrity",
       "severity": 5,
       "scope": "generic",
-      "tags": [
-        "CIS Benchmark Level 1,Filesystem Configuration",
-        "ISO 27001/2,System Acquisition, Development and Maintenance",
-        "PCI-DSS,Requirement-2",
-        "SOC 2,CC-Configuration Management"
-      ],
+      "tags": [],
       "description": [
         {
           "locale": "EN",
@@ -555,10 +533,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       "severity": 5,
       "scope": "generic",
       "tags": [
-        "CIS Benchmark Level 1,User and Group Settings",
-        "ISO 27001/2,Access Control",
-        "PCI-DSS,Requirement-7",
-        "SOC 2,CC-Access Control"
+        "CIS Benchmark Level 1,Verify Group File Permissions"
       ],
       "description": [
         {
@@ -607,10 +582,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       "severity": 5,
       "scope": "generic",
       "tags": [
-        "CIS Benchmark Level 1,File Ownership and Permissions",
-        "ISO 27001/2,Information Security Policies",
-        "PCI-DSS,Requirement-2",
-        "SOC 2,CC-System Operations"
+        "CIS Benchmark Level 1,Verify Group File Ownership"
       ],
       "description": [
         {
@@ -659,10 +631,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       "severity": 5,
       "scope": "generic",
       "tags": [
-        "CIS Benchmark Level 1,File Ownership and Permissions",
-        "ISO 27001/2,Access Control",
-        "PCI-DSS,Requirement-7",
-        "SOC 2,CC-System Operations"
+        "CIS Benchmark Level 1,Verify Shadow File Group Ownership"
       ],
       "description": [
         {
@@ -711,9 +680,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       "severity": 2,
       "scope": "generic",
       "tags": [
-        "ISO 27001/2,System Acquisition, Development and Maintenance",
-        "PCI-DSS,Requirement-6.2",
-        "SOC 2,CC-System Maintenance"
+        "CIS Benchmark Level 1,Ensure package manager repositories are configured"
       ],
       "description": [
         {
@@ -762,10 +729,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       "severity": 3,
       "scope": "generic",
       "tags": [
-        "CIS Benchmark Level 1,Firewall Configuration",
-        "ISO 27001/2,Network Security",
-        "PCI-DSS,Requirement-1",
-        "SOC 2,CC-Network Security"
+        "CIS Benchmark Level 1,Ensure UFW is installed"
       ],
       "description": [
         {
@@ -820,10 +784,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       "severity": 4,
       "scope": "generic",
       "tags": [
-        "CIS Benchmark Level 1,linux_security/sysprefs_ssh_disable",
-        "ISO 27001/2,Access Control",
-        "PCI-DSS,Requirement-8",
-        "SOC 2,CC-System Integrity"
+        "CIS Benchmark Level 1,Ensure SSH Server is configured with appropriate ciphers"
       ],
       "description": [
         {
@@ -894,10 +855,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       "severity": 4,
       "scope": "generic",
       "tags": [
-        "CIS Benchmark Level 1,linux_security/sysprefs_remote_management_disable",
-        "ISO 27001/2,Access Control",
-        "PCI-DSS,Requirement-8",
-        "SOC 2,CC-System Integrity"
+        "CIS Benchmark Level 1,Ensure remote administration tools are not installed"
       ],
       "description": [
         {
@@ -968,10 +926,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       "severity": 4,
       "scope": "generic",
       "tags": [
-        "CIS Benchmark Level 1,linux_security/sysprefs_smbd_disable",
-        "ISO 27001/2,Information Security Policies",
-        "PCI-DSS,Requirement-9",
-        "SOC 2,CC-System Services"
+        "CIS Benchmark Level 1,Ensure NFS and RPC are not enabled"
       ],
       "description": [
         {
@@ -1042,10 +997,9 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       "severity": 3,
       "scope": "generic",
       "tags": [
-        "CIS Benchmark Level 1,linux_security/sysprefs_screensaver_password_enable",
-        "ISO 27001/2,Access Control",
-        "PCI-DSS,Requirement-8",
-        "SOC 2,CC-Logical Access"
+        "CIS Benchmark Level 1,Lock inactive user accounts",
+        "ISO 27001/2,A.11.2.8-Unattended User Equipment",
+        "SOC 2,CC6.1-Logical Access"
       ],
       "description": [
         {
@@ -1116,10 +1070,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       "severity": 5,
       "scope": "generic",
       "tags": [
-        "CIS Benchmark Level 1,linux_security/secure_boot_enable",
-        "ISO 27001/2,System and Information Integrity",
-        "PCI-DSS,Requirement-10",
-        "SOC 2,CC-System Operations"
+        "CIS Benchmark Level 2,Ensure Secure Boot is enabled"
       ],
       "description": [
         {
@@ -1174,16 +1125,13 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       }
     },
     {
-      "name": "password policy is too weak",
+      "name": "password is too weak",
       "metrictype": "bool",
       "dimension": "credentials",
       "severity": 4,
       "scope": "generic",
       "tags": [
-        "CIS Benchmark Level 1,linux_security/password_policy",
-        "ISO 27001/2,Access Control",
-        "PCI-DSS,Requirement-8",
-        "SOC 2,CC-Access Control"
+        "CIS Benchmark Level 1,Configure Password Policy Requirements"
       ],
       "description": [
         {

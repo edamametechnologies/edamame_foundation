@@ -83,10 +83,9 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       "severity": 3,
       "scope": "generic",
       "tags": [
-        "CIS Benchmark Level 1",
-        "ISO 27001/2,Access Control",
-        "PCI-DSS,Requirement-8.1.7",
-        "SOC 2,CC-Access Control"
+        "CIS Benchmark Level 1,Maximum screen lock timeout",
+        "ISO 27001/2,A.11.2.8-Unattended User Equipment",
+        "SOC 2,CC6.1-Access Control"
       ],
       "description": [
         {
@@ -157,10 +156,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       "severity": 5,
       "scope": "Android",
       "tags": [
-        "CIS Benchmark Level 1",
-        "ISO 27001/2,Mobile Device Policy",
-        "PCI-DSS,Requirement-5.1",
-        "SOC 2,CC-Mobile Device Management"
+        "CIS Benchmark Level 1,Ensure device is not rooted"
       ],
       "description": [
         {
@@ -231,9 +227,6 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       "severity": 4,
       "scope": "generic",
       "tags": [
-        "ISO 27001/2,Information Security Incident Management",
-        "PCI-DSS,Requirement-12.10",
-        "SOC 2,CC-Incident Response",
         "Personal Posture"
       ],
       "description": [
@@ -305,9 +298,6 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       "severity": 1,
       "scope": "generic",
       "tags": [
-        "ISO 27001/2,Information Security Incident Management",
-        "PCI-DSS,Requirement-12.10",
-        "SOC 2,CC-Incident Response",
         "Personal Posture"
       ],
       "description": [
@@ -448,10 +438,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       "severity": 3,
       "scope": "generic",
       "tags": [
-        "CIS Benchmark Level 1",
-        "ISO 27001/2,System Update Policy",
-        "PCI-DSS,Requirement-6.2",
-        "SOC 2,CC-System Updates"
+        "CIS Benchmark Level 1,System is up to date"
       ],
       "description": [
         {
@@ -522,9 +509,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       "severity": 4,
       "scope": "generic",
       "tags": [
-        "ISO 27001/2,Access Control",
-        "PCI-DSS,Requirement-8.2.3",
-        "SOC 2,CC-Access Control"
+        "CIS Benchmark Level 1,Ensure minimum password length"
       ],
       "description": [
         {
@@ -594,11 +579,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       "dimension": "credentials",
       "severity": 4,
       "scope": "generic",
-      "tags": [
-        "ISO 27001/2,Access Control",
-        "PCI-DSS,Requirement-8.2.3",
-        "SOC 2,CC-Access Control"
-      ],
+      "tags": [],
       "description": [
         {
           "locale": "EN",
@@ -668,9 +649,7 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       "severity": 4,
       "scope": "generic",
       "tags": [
-        "ISO 27001/2,Access Control",
-        "PCI-DSS,Requirement-8.2.3",
-        "SOC 2,CC-Access Control"
+        "CIS Benchmark Level 1,Enable Google Play Protect"
       ],
       "description": [
         {
@@ -735,15 +714,14 @@ pub static THREAT_METRICS_ANDROID: &str = r#"{
       }
     },
     {
-      "name": "device encryption disabled",
+      "name": "encrypted disk disabled",
       "metrictype": "bool",
       "dimension": "system integrity",
       "severity": 5,
       "scope": "generic",
       "tags": [
-        "ISO 27001/2,Access Control",
-        "PCI-DSS,Requirement-8.2.3",
-        "SOC 2,CC-Access Control"
+        "ISO 27001/2,A.8.3.1-Media Protection",
+        "SOC 2,CC6.7-Encryption"
       ],
       "description": [
         {
