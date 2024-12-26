@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_LINUX: &str = r#"{
   "name": "threat model Linux",
   "extends": "none",
-  "date": "November 25th 2024",
-  "signature": "8049cf06ea8cff91b74bba02fc0d6c1046ab5a23e40f99aea1ede9fb6338cd90",
+  "date": "December 26th 2024",
+  "signature": "13c9d36c297feb46661740c24d8b8950d8e9ce63c49ad767c07b9e81646561ab",
   "metrics": [
     {
       "name": "edamame helper disabled",
@@ -113,9 +113,68 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "target": "",
         "education": [
           {
-            "locale": "EN",
+            "locale": "FR",
             "class": "link",
             "target": "https://help.ubuntu.com/community/Antivirus"
+          }
+        ]
+      }
+    },
+    {
+      "name": "no password manager",
+      "metrictype": "bool",
+      "dimension": "credentials",
+      "severity": 4,
+      "scope": "generic",
+      "tags": [],
+      "description": [
+        {
+          "locale": "EN",
+          "title": "No password manager installed",
+          "summary": "You don't have any password manager installed. It's recommended to install one."
+        },
+        {
+          "locale": "FR",
+          "title": "Pas de gestionnaire de mots de passe installé",
+          "summary": "Vous n'avez pas de gestionnaire de mots de passe installé. Nous vous recommandons d'en installer un."
+        }
+      ],
+      "implementation": {
+        "system": "Linux",
+        "minversion": 3,
+        "maxversion": 0,
+        "class": "cli",
+        "elevation": "admin",
+        "target": "(command -v pass || command -v keepassxc || command -v bw || command -v lpass || command -v gopass) >/dev/null 2>&1 || echo \"No password manager installed\"",
+        "education": []
+      },
+      "remediation": {
+        "system": "Linux",
+        "minversion": 3,
+        "maxversion": 0,
+        "class": "",
+        "elevation": "",
+        "target": "",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "link",
+            "target": "https://en.wikipedia.org/wiki/Password_manager"
+          }
+        ]
+      },
+      "rollback": {
+        "system": "Linux",
+        "minversion": 3,
+        "maxversion": 0,
+        "class": "",
+        "elevation": "",
+        "target": "",
+        "education": [
+          {
+            "locale": "FR",
+            "class": "link",
+            "target": "https://fr.wikipedia.org/wiki/Password_manager"
           }
         ]
       }
@@ -946,7 +1005,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "user",
-        "target": "systemctl is-active nfs-kernel-server 2>/dev/null | grep -q 'inactive' || echo nfs_enabled;  systemctl is-active smbd 2>/dev/null | grep -q 'inactive' || echo smb_enabled",
+        "target": "systemctl is-active nfs-kernel-server 2>/dev/null | grep -q 'inactive' || echo nfs_enabled; systemctl is-active smbd 2>/dev/null | grep -q 'inactive' || echo smb_enabled",
         "education": []
       },
       "remediation": {

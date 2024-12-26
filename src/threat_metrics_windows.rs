@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_WINDOWS: &str = r#"{
   "name": "threat model Windows",
   "extends": "none",
-  "date": "November 03th 2024",
-  "signature": "63f1cf5324a9f1317d2075809f6fcd2e8bd844435563f7447f70331c4e6ca020",
+  "date": "December 26th 2024",
+  "signature": "207807bd311fb090a31271fd5bcd2596c4d8cc997931f9e975739e6f80e21e85",
   "metrics": [
     {
       "name": "edamame helper disabled",
@@ -214,6 +214,65 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
             "locale": "FR",
             "class": "html",
             "target": "Si vous devez annuler les modifications, retournez dans les paramètres de Sécurité Windows et ajustez les paramètres de votre antivirus en conséquence. Assurez-vous de comprendre les implications de sécurité des modifications apportées. Pour plus d'informations, visitez la <a href='https://support.microsoft.com/fr-fr/windows/rester-prot%C3%A9g%C3%A9-avec-s%C3%A9curit%C3%A9-windows-2ae0363d-0ada-c064-8b56-6a39afb6a963'>page de support</a>."
+          }
+        ]
+      }
+    },
+    {
+      "name": "no password manager",
+      "metrictype": "bool",
+      "dimension": "credentials",
+      "severity": 4,
+      "scope": "generic",
+      "tags": [],
+      "description": [
+        {
+          "locale": "EN",
+          "title": "No password manager installed",
+          "summary": "You don't have any password manager installed. It's recommended to install one."
+        },
+        {
+          "locale": "FR",
+          "title": "Pas de gestionnaire de mots de passe installé",
+          "summary": "Vous n'avez pas de gestionnaire de mots de passe installé. Nous vous recommandons d'en installer un."
+        }
+      ],
+      "implementation": {
+        "system": "Windows",
+        "minversion": 10,
+        "maxversion": 0,
+        "class": "cli",
+        "elevation": "admin",
+        "target": "$installed = @(Get-ItemProperty HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*, HKLM:\\Software\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\* -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -match '1Password|LastPass|KeePass|Bitwarden|Dashlane' }).Count; if ($installed -eq 0) { Write-Output 'No password manager installed' }",
+        "education": []
+      },
+      "remediation": {
+        "system": "Windows",
+        "minversion": 10,
+        "maxversion": 0,
+        "class": "",
+        "elevation": "",
+        "target": "",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "link",
+            "target": "https://en.wikipedia.org/wiki/Password_manager"
+          }
+        ]
+      },
+      "rollback": {
+        "system": "Windows",
+        "minversion": 10,
+        "maxversion": 0,
+        "class": "",
+        "elevation": "",
+        "target": "",
+        "education": [
+          {
+            "locale": "FR",
+            "class": "link",
+            "target": "https://fr.wikipedia.org/wiki/Password_manager"
           }
         ]
       }

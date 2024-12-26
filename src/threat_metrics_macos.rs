@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_MACOS: &str = r#"{
   "name": "threat model macOS",
   "extends": "none",
-  "date": "December 04th 2024",
-  "signature": "56976cd284b177eb47fdc654328c041ab10e94b38800c3e38ce130c50f38717c",
+  "date": "December 26th 2024",
+  "signature": "c5f568209c478f500752d9148d57693e003faf90dfd0f3a1533e4e97d5948c1b",
   "metrics": [
     {
       "name": "edamame helper disabled",
@@ -1271,6 +1271,65 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
             "locale": "FR",
             "class": "link",
             "target": "https://www.apple.com/fr/macos/security/"
+          }
+        ]
+      }
+    },
+    {
+      "name": "no password manager",
+      "metrictype": "bool",
+      "dimension": "credentials",
+      "severity": 4,
+      "scope": "generic",
+      "tags": [],
+      "description": [
+        {
+          "locale": "EN",
+          "title": "No password manager installed",
+          "summary": "You don't have any password manager installed. It's recommended to install one."
+        },
+        {
+          "locale": "FR",
+          "title": "Pas de gestionnaire de mots de passe installé",
+          "summary": "Vous n'avez pas de gestionnaire de mots de passe installé. Nous vous recommandons d'en installer un."
+        }
+      ],
+      "implementation": {
+        "system": "macOS",
+        "minversion": 12,
+        "maxversion": 0,
+        "class": "cli",
+        "elevation": "admin",
+        "target": "([ -d \"/Applications/1Password 7.app\" ] || [ -d \"/Applications/LastPass.app\" ] || [ -d \"/Applications/KeePassXC.app\" ] || [ -d \"/Applications/Bitwarden.app\" ] || command -v pass || command -v op || command -v lpass || command -v keepassxc || command -v bw) >/dev/null 2>&1 || echo \"No password manager installed\"",
+        "education": []
+      },
+      "remediation": {
+        "system": "macOS",
+        "minversion": 12,
+        "maxversion": 0,
+        "class": "",
+        "elevation": "",
+        "target": "",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "link",
+            "target": "https://en.wikipedia.org/wiki/Password_manager"
+          }
+        ]
+      },
+      "rollback": {
+        "system": "macOS",
+        "minversion": 12,
+        "maxversion": 0,
+        "class": "",
+        "elevation": "",
+        "target": "",
+        "education": [
+          {
+            "locale": "FR",
+            "class": "link",
+            "target": "https://fr.wikipedia.org/wiki/Password_manager"
           }
         ]
       }
