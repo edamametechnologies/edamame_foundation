@@ -145,6 +145,7 @@ jobs:
           xcode-version: latest-stable
 
       - name: Run tests
+        id: tests
         run: |
           # Get the changed files
           git fetch origin ${{ github.event.before }}
@@ -168,3 +169,13 @@ jobs:
             echo "No relevant changes. Skipping tests."
           fi
         shell: bash
+        continue-on-error: true
+
+      - name: Slack alerts
+        if: steps.tests.outcome != 'success'
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          channel-id: 'C072J0U9TH7'
+          slack-message: "Tests ran in ${{ github.workflow }} for ${{ github.repository }} for ${{ runner.os }} on branch ${{ github.ref }} failed"
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
