@@ -390,10 +390,8 @@ impl DeviceInfo {
             }
         }
 
-        // Update the first seen time, beware of the UNIX_EPOCH
-        if new_device.first_seen < device.first_seen
-            && new_device.first_seen != DateTime::from_timestamp(0, 0).unwrap()
-        {
+        // Update the first seen time
+        if new_device.first_seen < device.first_seen {
             device.first_seen = new_device.first_seen;
         }
 
@@ -418,11 +416,15 @@ impl DeviceInfo {
     }
 
     pub fn clear(&mut self) {
-        // Clear the device, only keep the main IP address
+        // Clear the device, only keep the main IP address, the first_seen timestamp and the last_seen timestamp
         let ip_address = self.ip_address.clone();
+        let first_seen = self.first_seen;
+        let last_seen = self.last_seen;
         *self = DeviceInfo::new();
         self.ip_address = ip_address.clone();
         self.ip_addresses = vec![ip_address];
+        self.first_seen = first_seen;
+        self.last_seen = last_seen;
     }
 
     pub fn delete(&mut self) {
