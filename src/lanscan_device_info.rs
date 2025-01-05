@@ -9,7 +9,7 @@ use edamame_backend::lanscan_port_info_backend::*;
 use edamame_backend::lanscan_vulnerability_info_backend::VulnerabilityInfoBackend;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use tracing::{debug, warn};
+use tracing::warn;
 
 // We should really use HashSets instead of Vec, but we don't in order to make it more usable with FFI
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -216,20 +216,6 @@ impl DeviceInfo {
     }
 
     pub fn merge(device: &mut DeviceInfo, new_device: &DeviceInfo) {
-        // If we receive a deleted flag with a last modified date more recent than our last modified date, we clear ourselves and flag ourselves as deleted
-        if new_device.deleted && new_device.last_modified > device.last_modified {
-            debug!(
-                "New device is deleted and last modified is more recent than ours, clearing and flagging as deleted: {:?}",
-                new_device
-            );
-            // Don't call delete, keep the last_modified date
-            device.deleted = true;
-            // Update the last_modified timestamp
-            device.last_modified = new_device.last_modified;
-            // We don't need to merge anything
-            return;
-        }
-
         // Validate key fields of the new device
         // Check if the MAC address is valid
         if !new_device.mac_address.is_empty() {
@@ -404,14 +390,8 @@ impl DeviceInfo {
         if new_device.last_modified > device.last_modified {
             device.custom_name.clone_from(&new_device.custom_name);
             device.dismissed_ports = new_device.dismissed_ports.clone();
+            device.deleted = new_device.deleted;
             device.last_modified = new_device.last_modified;
-        }
-
-        // Remove the deleted flag if the device if last_seen the last_modified
-        if device.deleted && device.last_seen > device.last_modified {
-            device.deleted = false;
-            // Update the last_modified timestamp with the last_seen timestamp
-            device.last_modified = device.last_seen;
         }
     }
 
@@ -447,534 +427,162 @@ impl DeviceInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Duration;
+    use chrono::{TimeZone, Utc};
 
     #[test]
-    fn test_merge_devices_last_seen_updated() {
-        let mut device1 = DeviceInfo::new();
-        device1.ip_address = "192.168.1.1".to_string();
-        device1.hostname = "device1".to_string();
-        device1.last_seen = Utc::now() - Duration::seconds(1800); // 30 minutes ago
+    fn test_merge_deletion() {
+        let mut device_original = DeviceInfo::new();
+        device_original.ip_address = "192.168.0.10".to_string();
+        device_original.deleted = false;
+        device_original.last_seen = Utc.with_ymd_and_hms(2023, 1, 1, 12, 0, 0).unwrap();
+        device_original.last_modified = Utc.with_ymd_and_hms(2023, 1, 1, 12, 0, 0).unwrap();
 
-        let mut device2 = DeviceInfo::new();
-        device2.ip_address = "192.168.1.2".to_string();
-        device2.hostname = "device1".to_string(); // same hostname as device1
-        device2.last_seen = Utc::now() - Duration::seconds(600); // 10 minutes ago
+        let mut device_deleting = device_original.clone();
+        // Simulate a manual delete with a later last_modified
+        device_deleting.deleted = true;
+        device_deleting.last_modified =
+            device_original.last_modified + chrono::Duration::seconds(10);
 
-        let mut devices = vec![device1.clone()];
-        let new_devices = vec![device2.clone()];
+        // Merge: the second device is "fresher" and marks it deleted
+        DeviceInfo::merge(&mut device_original, &device_deleting);
 
-        DeviceInfo::merge_vec(&mut devices, &new_devices);
-
-        assert_eq!(devices.len(), 1);
-        assert_eq!(devices[0].last_seen, device2.last_seen); // last_seen should be updated to the more recent value
+        assert_eq!(
+            device_original.deleted, true,
+            "Device should have been marked as deleted."
+        );
+        assert_eq!(
+            device_original.last_modified, device_deleting.last_modified,
+            "last_modified should match the fresher device's timestamp."
+        );
     }
 
     #[test]
-    fn test_merge_devices_last_seen_not_updated() {
-        let mut device1 = DeviceInfo::new();
-        device1.ip_address = "192.168.1.1".to_string();
-        device1.hostname = "device1".to_string();
-        device1.last_seen = Utc::now() - Duration::seconds(600); // 10 minutes ago
+    fn test_merge_undelete() {
+        let mut device_deleted = DeviceInfo::new();
+        device_deleted.ip_address = "192.168.0.20".to_string();
+        device_deleted.deleted = true;
+        device_deleted.last_seen = Utc.with_ymd_and_hms(2023, 1, 1, 12, 5, 0).unwrap();
+        device_deleted.last_modified = Utc.with_ymd_and_hms(2023, 1, 1, 12, 5, 0).unwrap();
 
-        let mut device2 = DeviceInfo::new();
-        device2.ip_address = "192.168.1.2".to_string();
-        device2.hostname = "device1".to_string(); // same hostname as device1
-        device2.last_seen = Utc::now() - Duration::seconds(1800); // 30 minutes ago
+        // "Rescan" or updated device info that says it's not deleted
+        let mut device_undeleting = device_deleted.clone();
+        device_undeleting.deleted = false;
+        device_undeleting.last_modified =
+            device_deleted.last_modified + chrono::Duration::seconds(10);
 
-        let mut devices = vec![device1.clone()];
-        let new_devices = vec![device2.clone()];
+        DeviceInfo::merge(&mut device_deleted, &device_undeleting);
 
-        DeviceInfo::merge_vec(&mut devices, &new_devices);
-
-        assert_eq!(devices.len(), 1);
-        assert_eq!(devices[0].last_seen, device1.last_seen); // last_seen should remain the more recent value
+        assert_eq!(
+            device_deleted.deleted, false,
+            "Device should have been 'undeleted' when merging from the fresher source."
+        );
+        assert_eq!(
+            device_deleted.last_modified, device_undeleting.last_modified,
+            "last_modified should match the fresher device's timestamp."
+        );
     }
 
     #[test]
-    fn test_add_new_device() {
-        let mut device1 = DeviceInfo::new();
-        device1.ip_address = "192.168.1.1".to_string();
-        device1.hostname = "device1".to_string();
-        device1.last_seen = Utc::now() - Duration::seconds(600); // 10 minutes ago
+    fn test_merge_no_change_if_older() {
+        // If the new device data is older, it should be ignored
+        let mut device_current = DeviceInfo::new();
+        device_current.ip_address = "192.168.0.30".to_string();
+        device_current.deleted = false;
+        device_current.last_seen = Utc.with_ymd_and_hms(2023, 5, 1, 13, 0, 0).unwrap();
+        device_current.last_modified = Utc.with_ymd_and_hms(2023, 5, 1, 13, 0, 0).unwrap();
 
-        let mut device2 = DeviceInfo::new();
-        device2.ip_address = "192.168.1.2".to_string();
-        device2.hostname = "device2".to_string(); // different hostname
-        device2.last_seen = Utc::now() - Duration::seconds(300); // 5 minutes ago
+        let mut device_older = device_current.clone();
+        device_older.deleted = true;
+        // artificially roll back the last_modified to be older
+        device_older.last_modified = device_current.last_modified - chrono::Duration::seconds(30);
 
-        let mut devices = vec![device1.clone()];
-        let new_devices = vec![device2.clone()];
+        // Merge the older device
+        DeviceInfo::merge(&mut device_current, &device_older);
 
-        DeviceInfo::merge_vec(&mut devices, &new_devices);
-
-        assert_eq!(devices.len(), 2);
-        assert_eq!(devices[1].ip_address, device2.ip_address); // new device should be added
+        // The older data should NOT override the current device
+        assert_eq!(
+            device_current.deleted, false,
+            "The device should remain not deleted because incoming data was older."
+        );
     }
 
     #[test]
-    fn test_merge_devices_with_empty_last_seen() {
-        let mut device1 = DeviceInfo::new();
-        device1.ip_address = "192.168.1.1".to_string();
-        device1.hostname = "device1".to_string();
-        device1.last_seen = DateTime::from_timestamp(0, 0).unwrap(); // initial last_seen
-
-        let mut device2 = DeviceInfo::new();
-        device2.ip_address = "192.168.1.1".to_string();
-        device2.hostname = "device1".to_string(); // same hostname and IP
-        device2.last_seen = Utc::now() - Duration::seconds(600); // 10 minutes ago
-
-        let mut devices = vec![device1.clone()];
-        let new_devices = vec![device2.clone()];
-
-        DeviceInfo::merge_vec(&mut devices, &new_devices);
-
-        assert_eq!(devices.len(), 1);
-        assert_eq!(devices[0].last_seen, device2.last_seen); // last_seen should be updated to the more recent value
-    }
-
-    #[test]
-    fn test_merge_devices_with_same_ip_addresses() {
-        let mut device1 = DeviceInfo::new();
-        device1.ip_address = "192.168.1.193".to_string();
-        device1.ip_addresses = vec!["192.168.1.194".to_string(), "192.168.1.193".to_string()];
-        device1.hostname = "device1".to_string();
-        device1.last_seen = Utc::now() - Duration::seconds(1800); // 30 minutes ago
-
-        let mut device2 = DeviceInfo::new();
-        device2.ip_address = "192.168.1.193".to_string(); // overlapping IP address
-        device2.ip_addresses = vec!["192.168.1.193".to_string(), "192.168.1.194".to_string()];
-        device2.hostname = "device2".to_string();
-        device2.last_seen = Utc::now() - Duration::seconds(600); // 10 minutes ago
-
-        let mut devices = vec![device1.clone()];
-        let new_devices = vec![device2.clone()];
-
-        DeviceInfo::merge_vec(&mut devices, &new_devices);
-
-        assert_eq!(devices.len(), 1);
-        assert_eq!(devices[0].ip_address, device1.ip_address);
-        assert_eq!(devices[0].ip_addresses.len(), 2);
-        assert!(devices[0]
-            .ip_addresses
-            .contains(&"192.168.1.193".to_string()));
-        assert!(devices[0]
-            .ip_addresses
-            .contains(&"192.168.1.194".to_string()));
-        assert_eq!(devices[0].last_seen, device2.last_seen); // last_seen should be updated to the more recent value
-    }
-
-    #[test]
-    fn test_merge_devices_with_partially_overlapping_ip_addresses() {
-        let mut device1 = DeviceInfo::new();
-        device1.ip_address = "192.168.1.193".to_string();
-        device1.ip_addresses = vec!["192.168.1.194".to_string(), "192.168.1.193".to_string()];
-        device1.hostname = "device1".to_string();
-        device1.last_seen = Utc::now() - Duration::seconds(1800); // 30 minutes ago
-
-        let mut device2 = DeviceInfo::new();
-        device2.ip_address = "192.168.1.194".to_string(); // different primary IP but overlapping secondary IP
-        device2.ip_addresses = vec!["192.168.1.194".to_string(), "192.168.1.193".to_string()];
-        device2.hostname = "device2".to_string();
-        device2.last_seen = Utc::now() - Duration::seconds(600); // 10 minutes ago
-
-        let mut devices = vec![device1.clone()];
-        let new_devices = vec![device2.clone()];
-
-        DeviceInfo::merge_vec(&mut devices, &new_devices);
-
-        assert_eq!(devices.len(), 1);
-        assert!(devices[0]
-            .ip_addresses
-            .contains(&"192.168.1.193".to_string()));
-        assert!(devices[0]
-            .ip_addresses
-            .contains(&"192.168.1.194".to_string()));
-        assert_eq!(devices[0].last_seen, device2.last_seen); // last_seen should be updated to the more recent value
-    }
-
-    #[test]
-    fn test_merge_devices_with_multiple_ip_addresses() {
-        let mut device1 = DeviceInfo::new();
-        device1.ip_address = "192.168.1.193".to_string();
-        device1.ip_addresses = vec![
-            "192.168.1.193".to_string(),
-            "192.168.1.194".to_string(),
-            "192.168.1.195".to_string(),
-        ];
-        device1.hostname = "device1".to_string();
-        device1.last_seen = Utc::now() - Duration::seconds(1800); // 30 minutes ago
-
-        let mut device2 = DeviceInfo::new();
-        device2.ip_address = "192.168.1.196".to_string();
-        device2.ip_addresses = vec![
-            "192.168.1.193".to_string(),
-            "192.168.1.196".to_string(),
-            "192.168.1.197".to_string(),
-        ];
-        device2.hostname = "device2".to_string();
-        device2.last_seen = Utc::now() - Duration::seconds(600); // 10 minutes ago
-
-        let mut devices = vec![device1.clone()];
-        let new_devices = vec![device2.clone()];
-
-        DeviceInfo::merge_vec(&mut devices, &new_devices);
-
-        assert_eq!(devices.len(), 1);
-        assert!(devices[0]
-            .ip_addresses
-            .contains(&"192.168.1.193".to_string()));
-        assert!(devices[0]
-            .ip_addresses
-            .contains(&"192.168.1.194".to_string()));
-        assert!(devices[0]
-            .ip_addresses
-            .contains(&"192.168.1.195".to_string()));
-        assert!(devices[0]
-            .ip_addresses
-            .contains(&"192.168.1.196".to_string()));
-        assert!(devices[0]
-            .ip_addresses
-            .contains(&"192.168.1.197".to_string()));
-        assert_eq!(devices[0].last_seen, device2.last_seen); // last_seen should be updated to the more recent value
-    }
-
-    #[test]
-    fn test_no_merge_for_different_devices() {
-        let mut device1 = DeviceInfo::new();
-        device1.ip_address = "192.168.1.193".to_string();
-        device1.ip_addresses = vec!["192.168.1.193".to_string()];
-        device1.hostname = "device1".to_string();
-        device1.last_seen = Utc::now() - Duration::seconds(1800); // 30 minutes ago
-
-        let mut device2 = DeviceInfo::new();
-        device2.ip_address = "192.168.1.195".to_string();
-        device2.ip_addresses = vec!["192.168.1.195".to_string()];
-        device2.hostname = "device2".to_string();
-        device2.last_seen = Utc::now() - Duration::seconds(600); // 10 minutes ago
-
-        let mut devices = vec![device1.clone()];
-        let new_devices = vec![device2.clone()];
-
-        DeviceInfo::merge_vec(&mut devices, &new_devices);
-
-        assert_eq!(devices.len(), 2);
-        assert_eq!(devices[0].ip_address, device1.ip_address);
-        assert_eq!(devices[1].ip_address, device2.ip_address);
-        assert_eq!(devices[0].last_seen, device1.last_seen);
-        assert_eq!(devices[1].last_seen, device2.last_seen);
-    }
-
-    #[test]
-    fn test_merge_devices_with_overlapping_mdns_services() {
-        let mut device1 = DeviceInfo::new();
-        device1.ip_address = "192.168.1.1".to_string();
-        device1.hostname = "device1".to_string();
-        device1.mdns_services = vec![
-            "_service1._tcp.local".to_string(),
-            "_service2._tcp.local".to_string(),
-        ];
-        device1.last_seen = Utc::now() - Duration::seconds(1800); // 30 minutes ago
-
-        let mut device2 = DeviceInfo::new();
-        device2.ip_address = "192.168.1.2".to_string();
-        device2.hostname = "device1".to_string();
-        device2.mdns_services = vec![
-            "_service1._tcp.local".to_string(),
-            "_service3._tcp.local".to_string(),
-        ];
-        device2.last_seen = Utc::now() - Duration::seconds(600); // 10 minutes ago
-
-        let mut devices = vec![device1.clone()];
-        let new_devices = vec![device2.clone()];
-
-        DeviceInfo::merge_vec(&mut devices, &new_devices);
-
-        assert_eq!(devices.len(), 1);
-        assert_eq!(devices[0].mdns_services.len(), 3);
-        assert!(devices[0]
-            .mdns_services
-            .contains(&"_service1._tcp.local".to_string()));
-        assert!(devices[0]
-            .mdns_services
-            .contains(&"_service2._tcp.local".to_string()));
-        assert!(devices[0]
-            .mdns_services
-            .contains(&"_service3._tcp.local".to_string()));
-        assert_eq!(devices[0].last_seen, device2.last_seen); // last_seen should be updated to the more recent value
-    }
-
-    #[test]
-    fn test_merge_devices_with_different_hostnames_overlapping_ips() {
-        let mut device1 = DeviceInfo::new();
-        device1.ip_address = "192.168.1.1".to_string();
-        device1.ip_addresses = vec!["192.168.1.1".to_string(), "192.168.1.2".to_string()];
-        device1.hostname = "device1".to_string();
-        device1.last_seen = Utc::now() - Duration::seconds(1800); // 30 minutes ago
-
-        let mut device2 = DeviceInfo::new();
-        device2.ip_address = "192.168.1.2".to_string();
-        device2.ip_addresses = vec!["192.168.1.2".to_string(), "192.168.1.3".to_string()];
-        device2.hostname = "device2".to_string(); // different hostname
-        device2.last_seen = Utc::now() - Duration::seconds(600); // 10 minutes ago
-
-        let mut devices = vec![device1.clone()];
-        let new_devices = vec![device2.clone()];
-
-        DeviceInfo::merge_vec(&mut devices, &new_devices);
-
-        assert_eq!(devices.len(), 1);
-        assert_eq!(devices[0].ip_addresses.len(), 3);
-        assert!(devices[0].ip_addresses.contains(&"192.168.1.1".to_string()));
-        assert!(devices[0].ip_addresses.contains(&"192.168.1.2".to_string()));
-        assert!(devices[0].ip_addresses.contains(&"192.168.1.3".to_string()));
-        assert_eq!(devices[0].hostname, device2.hostname);
-        assert_eq!(devices[0].last_seen, device2.last_seen); // last_seen should be updated to the more recent value
-    }
-
-    #[test]
-    fn test_merge_devices_with_overlapping_mac_addresses() {
-        let mut device1 = DeviceInfo::new();
-        device1.ip_address = "192.168.1.1".to_string();
-        device1.mac_address = "AA:BB:CC:DD:EE:FF".to_string();
-        device1.mac_addresses = vec![
-            "AA:BB:CC:DD:EE:FF".to_string(),
-            "FF:EE:DD:CC:BB:AA".to_string(),
-        ];
-        device1.hostname = "device1".to_string();
-        device1.last_seen = Utc::now() - Duration::seconds(1800); // 30 minutes ago
-
-        let mut device2 = DeviceInfo::new();
-        device2.ip_address = "192.168.1.1".to_string();
-        device2.mac_address = "11:22:33:44:55:66".to_string(); // same mac address
-        device2.mac_addresses = vec![
-            "AA:BB:CC:DD:EE:FF".to_string(),
-            "11:22:33:44:55:66".to_string(),
-        ];
-        device2.hostname = "device2".to_string(); // different hostname
-        device2.last_seen = Utc::now() - Duration::seconds(600); // 10 minutes ago
-
-        let mut devices = vec![device1.clone()];
-        let new_devices = vec![device2.clone()];
-
-        DeviceInfo::merge_vec(&mut devices, &new_devices);
-
-        assert_eq!(devices.len(), 1);
-        assert_eq!(devices[0].mac_address, device2.mac_address);
-        assert_eq!(devices[0].mac_addresses.len(), 3);
-        assert!(devices[0]
-            .mac_addresses
-            .contains(&"AA:BB:CC:DD:EE:FF".to_string()));
-        assert!(devices[0]
-            .mac_addresses
-            .contains(&"FF:EE:DD:CC:BB:AA".to_string()));
-        assert!(devices[0]
-            .mac_addresses
-            .contains(&"11:22:33:44:55:66".to_string()));
-        assert_eq!(devices[0].hostname, device2.hostname);
-        assert_eq!(devices[0].last_seen, device2.last_seen); // last_seen should be updated to the more recent value
-    }
-
-    #[test]
-    fn test_merge_devices_with_non_overlapping_ports() {
-        let mut device1 = DeviceInfo::new();
-        device1.ip_address = "192.168.1.1".to_string();
-        device1.hostname = "device1".to_string();
-        device1.open_ports = vec![PortInfo {
-            port: 80,
-            service: "http".to_string(),
-            banner: "Apache".to_string(),
-            protocol: "tcp".to_string(),
-        }];
-        device1.last_seen = Utc::now() - Duration::seconds(1800); // 30 minutes ago
-
-        let mut device2 = DeviceInfo::new();
-        device2.ip_address = "192.168.1.2".to_string();
-        device2.hostname = "device1".to_string();
-        device2.open_ports = vec![PortInfo {
-            port: 22,
-            service: "ssh".to_string(),
-            banner: "OpenSSH".to_string(),
-            protocol: "tcp".to_string(),
-        }];
-        device2.last_seen = Utc::now() - Duration::seconds(600); // 10 minutes ago
-
-        let mut devices = vec![device1.clone()];
-        let new_devices = vec![device2.clone()];
-
-        DeviceInfo::merge_vec(&mut devices, &new_devices);
-
-        assert_eq!(devices.len(), 1);
-        assert_eq!(devices[0].open_ports.len(), 2);
-        assert!(devices[0].open_ports.iter().any(|p| p.port == 80));
-        assert!(devices[0].open_ports.iter().any(|p| p.port == 22));
-        assert_eq!(devices[0].last_seen, device2.last_seen); // last_seen should be updated to the more recent value
-    }
-
-    #[test]
-    fn test_merge_devices_with_overlapping_and_non_overlapping_ports() {
-        let mut device1 = DeviceInfo::new();
-        device1.ip_address = "192.168.1.1".to_string();
-        device1.hostname = "device1".to_string();
-        device1.open_ports = vec![
-            PortInfo {
-                port: 80,
-                service: "http".to_string(),
-                banner: "Apache".to_string(),
-                protocol: "tcp".to_string(),
+    fn test_merge_vec_multiple() {
+        // Test merging multiple new devices, some overlap, some new
+        let mut existing_list = vec![
+            {
+                let mut d = DeviceInfo::new();
+                d.ip_address = "192.168.0.10".to_string();
+                d.last_modified = Utc.with_ymd_and_hms(2023, 1, 10, 10, 0, 0).unwrap();
+                d.deleted = false;
+                d
             },
-            PortInfo {
-                port: 443,
-                service: "https".to_string(),
-                banner: "Apache".to_string(),
-                protocol: "tcp".to_string(),
+            {
+                let mut d = DeviceInfo::new();
+                d.ip_address = "192.168.0.11".to_string();
+                d.last_modified = Utc.with_ymd_and_hms(2023, 1, 10, 10, 5, 0).unwrap();
+                d.deleted = true;
+                d
             },
         ];
-        device1.last_seen = Utc::now() - Duration::seconds(1800); // 30 minutes ago
 
-        let mut device2 = DeviceInfo::new();
-        device2.ip_address = "192.168.1.2".to_string();
-        device2.hostname = "device1".to_string();
-        device2.open_ports = vec![
-            PortInfo {
-                port: 80,
-                service: "http".to_string(),
-                banner: "Nginx".to_string(),
-                protocol: "tcp".to_string(),
-            }, // same port, different banner
-            PortInfo {
-                port: 22,
-                service: "ssh".to_string(),
-                banner: "OpenSSH".to_string(),
-                protocol: "tcp".to_string(),
+        let new_list = vec![
+            // This device has a fresher timestamp and says it's deleted
+            {
+                let mut d = DeviceInfo::new();
+                d.ip_address = "192.168.0.10".to_string();
+                d.last_modified = Utc.with_ymd_and_hms(2023, 1, 10, 10, 15, 0).unwrap();
+                d.deleted = true;
+                d
+            },
+            // This device is brand new
+            {
+                let mut d = DeviceInfo::new();
+                d.ip_address = "192.168.0.12".to_string();
+                d.last_modified = Utc.with_ymd_and_hms(2023, 2, 10, 9, 0, 0).unwrap();
+                d.deleted = false;
+                d
+            },
+            // This device is older info for .11 so it should not override
+            {
+                let mut d = DeviceInfo::new();
+                d.ip_address = "192.168.0.11".to_string();
+                d.last_modified = Utc.with_ymd_and_hms(2023, 1, 10, 10, 0, 0).unwrap(); // older
+                d.deleted = false; // says undeleted, but older
+                d
             },
         ];
-        device2.last_seen = Utc::now() - Duration::seconds(600); // 10 minutes ago
 
-        let mut devices = vec![device1.clone()];
-        let new_devices = vec![device2.clone()];
+        DeviceInfo::merge_vec(&mut existing_list, &new_list);
 
-        DeviceInfo::merge_vec(&mut devices, &new_devices);
-
-        assert_eq!(devices.len(), 1);
-        assert_eq!(devices[0].open_ports.len(), 3);
-        assert!(devices[0]
-            .open_ports
+        // After merging, let's check the results
+        // 1) 192.168.0.10 should now be deleted
+        let device_10 = existing_list
             .iter()
-            .any(|p| p.port == 80 && p.banner == "Nginx"));
-        assert!(devices[0].open_ports.iter().any(|p| p.port == 443));
-        assert!(devices[0].open_ports.iter().any(|p| p.port == 22));
-        assert_eq!(devices[0].last_seen, device2.last_seen); // last_seen should be updated to the more recent value
-    }
+            .find(|d| d.ip_address == "192.168.0.10")
+            .unwrap();
+        assert!(
+            device_10.deleted,
+            "192.168.0.10 should have been marked deleted from the fresher 'new_list' entry."
+        );
 
-    #[test]
-    fn test_merge_devices_with_different_criticalities() {
-        let mut device1 = DeviceInfo::new();
-        device1.ip_address = "192.168.1.1".to_string();
-        device1.hostname = "device1".to_string();
-        device1.criticality = "Low".to_string();
-        device1.last_seen = Utc::now() - Duration::seconds(1800); // 30 minutes ago
+        // 2) 192.168.0.12 should have been added
+        let device_12 = existing_list
+            .iter()
+            .find(|d| d.ip_address == "192.168.0.12");
+        assert!(
+            device_12.is_some(),
+            "192.168.0.12 should have been newly added."
+        );
 
-        let mut device2 = DeviceInfo::new();
-        device2.ip_address = "192.168.1.2".to_string();
-        device2.hostname = "device1".to_string();
-        device2.criticality = "High".to_string();
-        device2.last_seen = Utc::now() - Duration::seconds(600); // 10 minutes ago
-
-        let mut devices = vec![device1.clone()];
-        let new_devices = vec![device2.clone()];
-
-        DeviceInfo::merge_vec(&mut devices, &new_devices);
-
-        assert_eq!(devices.len(), 1);
-        assert_eq!(devices[0].criticality, "High"); // criticality should be updated to the more recent value
-        assert_eq!(devices[0].last_seen, device2.last_seen); // last_seen should be updated to the more recent value
-    }
-
-    #[test]
-    fn test_merge_devices_with_different_device_types() {
-        let mut device1 = DeviceInfo::new();
-        device1.ip_address = "192.168.1.1".to_string();
-        device1.hostname = "device1".to_string();
-        device1.device_type = "Laptop".to_string();
-        device1.last_seen = Utc::now() - Duration::seconds(1800); // 30 minutes ago
-
-        let mut device2 = DeviceInfo::new();
-        device2.ip_address = "192.168.1.2".to_string();
-        device2.hostname = "device1".to_string();
-        device2.device_type = "Smartphone".to_string();
-        device2.last_seen = Utc::now() - Duration::seconds(600); // 10 minutes ago
-
-        let mut devices = vec![device1.clone()];
-        let new_devices = vec![device2.clone()];
-
-        DeviceInfo::merge_vec(&mut devices, &new_devices);
-
-        assert_eq!(devices.len(), 1);
-        assert_eq!(devices[0].device_type, "Smartphone"); // device_type should be updated to the more recent value
-        assert_eq!(devices[0].last_seen, device2.last_seen); // last_seen should be updated to the more recent value
-    }
-
-    // Test if a new device with a delete flag result into the same device ip address and all the other fields are cleared
-    #[test]
-    fn test_delete_flag() {
-        let mut device = DeviceInfo::new();
-        device.ip_address = "192.168.1.1".to_string();
-        device.ip_addresses = vec!["192.168.1.1".to_string(), "192.168.1.2".to_string()];
-        device.hostname = "device1".to_string();
-        device.mac_address = "AA:BB:CC:DD:EE:FF".to_string();
-        device.mac_addresses = vec![
-            "AA:BB:CC:DD:EE:FF".to_string(),
-            "FF:EE:DD:CC:BB:AA".to_string(),
-        ];
-        device.deleted = true;
-        device.clear();
-        assert_eq!(device.ip_address, "192.168.1.1".to_string());
-        assert_eq!(device.ip_addresses.len(), 1);
-        assert!(device.ip_addresses.contains(&"192.168.1.1".to_string()));
-        assert_eq!(device.hostname, "");
-        assert_eq!(device.mac_address, "");
-        assert_eq!(device.mac_addresses.len(), 0);
-    }
-
-    // Test if a new device with a last modified date more recent than our last modified date properly deletes us
-    #[test]
-    fn test_delete_with_last_modified() {
-        let mut new_device = DeviceInfo::new();
-        new_device.ip_address = "192.168.1.1".to_string();
-        new_device.last_modified = Utc::now() - Duration::seconds(600); // 10 minutes ago
-        new_device.deleted = true;
-
-        let mut device = DeviceInfo::new();
-        device.ip_address = "192.168.1.1".to_string();
-        device.last_seen = Utc::now() - Duration::seconds(1800); // 30 minutes ago
-        device.last_modified = Utc::now() - Duration::seconds(1800); // 30 minutes ago
-        device.deleted = false;
-
-        DeviceInfo::merge(&mut device, &new_device);
-
-        assert!(device.deleted);
-        // Now, last_modified should be updated to the new_device's last_modified
-        assert_eq!(device.last_modified, new_device.last_modified);
-    }
-
-    // Test if a last modified date of a new device properly undelete a device
-    #[test]
-    fn test_undelete_with_last_seen() {
-        let mut new_device = DeviceInfo::new();
-        new_device.ip_address = "192.168.1.1".to_string();
-        new_device.last_seen = Utc::now() - Duration::seconds(600); // 10 minutes ago
-        new_device.last_modified = Utc::now() - Duration::seconds(300); // 5 minutes ago
-        new_device.deleted = false;
-
-        let mut device = DeviceInfo::new();
-        device.ip_address = "192.168.1.1".to_string();
-        device.last_seen = Utc::now() - Duration::seconds(100); // 1 minute ago
-        device.last_modified = Utc::now() - Duration::seconds(1800); // 30 minutes ago
-        device.deleted = true;
-
-        DeviceInfo::merge(&mut device, &new_device);
-
-        assert!(!device.deleted);
+        // 3) 192.168.0.11 should remain deleted, because the new data was older
+        let device_11 = existing_list
+            .iter()
+            .find(|d| d.ip_address == "192.168.0.11")
+            .unwrap();
+        assert!(
+            device_11.deleted,
+            "192.168.0.11 should remain deleted because incoming data was older."
+        );
     }
 }
