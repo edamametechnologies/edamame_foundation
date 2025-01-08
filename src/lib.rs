@@ -17,6 +17,7 @@ pub mod lanscan_arp;
 pub mod lanscan_asn;
 pub mod lanscan_asn_v4_db;
 pub mod lanscan_asn_v6_db;
+pub mod lanscan_broadcast;
 #[cfg(all(
     any(target_os = "macos", target_os = "linux", target_os = "windows"),
     feature = "packetcapture"

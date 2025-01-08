@@ -1,11 +1,46 @@
 use crate::lanscan_arp::*;
+use crate::lanscan_broadcast::scan_hosts_broadcast;
 use crate::lanscan_mdns::*;
+use anyhow::{anyhow, Result};
 use serde_json;
-use std::error::Error;
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr};
 use tracing::{error, info, warn};
 
-pub async fn arp_resolve(addresses: &str) -> Result<String, Box<dyn Error>> {
+pub async fn broadcast_ping(broadcast_addr: &str) -> Result<String> {
+    let broadcast_addr = match broadcast_addr.parse::<Ipv4Addr>() {
+        Ok(addr) => addr,
+        Err(e) => {
+            error!("Error parsing broadcast address {}: {}", broadcast_addr, e);
+            return Err(anyhow!(
+                "Error parsing broadcast address {}: {}",
+                broadcast_addr,
+                e
+            ));
+        }
+    };
+
+    let result = match scan_hosts_broadcast(
+        broadcast_addr,
+        1000, // 1 second timeout
+        3,    // 3 attempts
+    )
+    .await
+    {
+        Ok(ips) => ips,
+        Err(e) => {
+            error!("Error scanning broadcast address {}: {}", broadcast_addr, e);
+            return Err(anyhow!(
+                "Error scanning broadcast address {}: {}",
+                broadcast_addr,
+                e
+            ));
+        }
+    };
+    info!("Broadcast scan results: {:?}", result);
+    Ok(serde_json::to_string(&result)?)
+}
+
+pub async fn arp_resolve(addresses: &str) -> Result<String> {
     let mut arp_results = Vec::new();
     for address in serde_json::from_str::<Vec<(String, String)>>(addresses)? {
         match address.1.parse::<IpAddr>() {
@@ -26,7 +61,7 @@ pub async fn arp_resolve(addresses: &str) -> Result<String, Box<dyn Error>> {
     Ok(serde_json::to_string(&arp_results)?)
 }
 
-pub async fn mdns_resolve(addresses: &str) -> Result<String, Box<dyn Error>> {
+pub async fn mdns_resolve(addresses: &str) -> Result<String> {
     let mut mdns_results: Vec<(String, String, String, Vec<String>)> = Vec::new();
     for address in serde_json::from_str::<Vec<String>>(addresses)? {
         match address.parse() {

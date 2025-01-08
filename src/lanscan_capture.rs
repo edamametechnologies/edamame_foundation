@@ -496,7 +496,7 @@ impl LANScanCapture {
 
         if !passed_interface_success {
             let mut default_interface = match get_default_interface() {
-                Some((_, _, name)) => name,
+                Some(interface) => interface.name,
                 None => {
                     error!("No default interface detected, aborting capture");
                     return;

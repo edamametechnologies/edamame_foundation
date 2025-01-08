@@ -1,6 +1,6 @@
 [package]
 name = "edamame_foundation"
-version = "0.7.2"
+version = "0.7.3"
 edition = "2021"
 
 [lints.rust]
@@ -75,7 +75,8 @@ dashmap = "6.0.1"
 chrono = { version = "0.4.38", features = ["serde"] }
 
 # Network utils
-ipnet = { version = "2.9.0" }
+socket2 = "0.5.8"
+ipnet = "2.9.0"
 # mdns discovery that works on all platforms and tolerates foreign language characters
 # wez-mdns = "0.1.1"
 # Our own mdns implementation forked from wez-mdns

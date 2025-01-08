@@ -52,7 +52,9 @@ lazy_static! {
     // Current default interface
     pub static ref INTERFACES_NAMES: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     pub static ref INTERFACES_IPS: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    pub static ref INTERFACES_IPS_V6: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     pub static ref INTERFACES_PREFIX: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+    pub static ref INTERFACES_PREFIX_V6: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
     // Last interface check timestamp
     pub static ref INTERFACE_CHECK_TIME: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
 }
@@ -228,17 +230,22 @@ pub async fn check_interfaces_changes() -> bool {
         let interfaces = get_valid_network_interfaces();
         let mut interfaces_changed = false;
 
-        // Make a vector of the interfaces ips
-        let interfaces_ips = interfaces
+        // Make a vector of the interfaces ipv4
+        let interfaces_ipv4 = interfaces
             .iter()
-            .map(|i| i.0.clone())
+            .map(|i| i.ipv4.to_string())
+            .collect::<Vec<String>>();
+        let interfaces_ipv6 = interfaces
+            .iter()
+            .map(|i| i.ipv6.to_string())
             .collect::<Vec<String>>();
         // Make a vector of the interfaces prefixes
-        let interfaces_prefixes = interfaces.iter().map(|i| i.1).collect::<Vec<u8>>();
+        let interfaces_prefixes_v4 = interfaces.iter().map(|i| i.prefixv4).collect::<Vec<u8>>();
+        let interfaces_prefixes_v6 = interfaces.iter().map(|i| i.prefixv6).collect::<Vec<u8>>();
         // Make a vector of the interfaces names
         let interfaces_names = interfaces
             .iter()
-            .map(|i| i.2.clone())
+            .map(|i| i.name.clone())
             .collect::<Vec<String>>();
 
         // Check if the interface name has changed
@@ -253,25 +260,47 @@ pub async fn check_interfaces_changes() -> bool {
         }
 
         // Check if the interface ip has changed
-        let interfaces_ips_old = INTERFACES_IPS.lock().await.clone();
-        if interfaces_ips_old != interfaces_ips {
+        let interfaces_ips_old_v4 = INTERFACES_IPS.lock().await.clone();
+        if interfaces_ips_old_v4 != interfaces_ipv4 {
             info!(
                 "An IP changed has been detected from {:?} to {:?}",
-                interfaces_ips_old, interfaces_ips
+                interfaces_ips_old_v4, interfaces_ipv4
             );
             interfaces_changed = true;
-            *INTERFACES_IPS.lock().await = interfaces_ips;
+            *INTERFACES_IPS.lock().await = interfaces_ipv4;
         }
 
-        // Check if the interface subnet has changed
-        let interfaces_prefixes_old = INTERFACES_PREFIX.lock().await.clone();
-        if interfaces_prefixes_old != interfaces_prefixes {
+        // Check if the interface ipv6 has changed
+        let interfaces_ips_old_v6 = INTERFACES_IPS_V6.lock().await.clone();
+        if interfaces_ips_old_v6 != interfaces_ipv6 {
             info!(
-                "A subnet changed has been detected from {:?} to {:?}",
-                interfaces_prefixes_old, interfaces_prefixes
+                "An IP changed has been detected from {:?} to {:?}",
+                interfaces_ips_old_v6, interfaces_ipv6
             );
             interfaces_changed = true;
-            *INTERFACES_PREFIX.lock().await = interfaces_prefixes;
+            *INTERFACES_IPS_V6.lock().await = interfaces_ipv6;
+        }
+
+        // Check if the interface subnet v4 has changed
+        let interfaces_prefixes_old_v4 = INTERFACES_PREFIX.lock().await.clone();
+        if interfaces_prefixes_old_v4 != interfaces_prefixes_v4 {
+            info!(
+                "A subnet changed has been detected from {:?} to {:?}",
+                interfaces_prefixes_old_v4, interfaces_prefixes_v4
+            );
+            interfaces_changed = true;
+            *INTERFACES_PREFIX.lock().await = interfaces_prefixes_v4;
+        }
+
+        // Check if the interface subnet v6 has changed
+        let interfaces_prefixes_old_v6 = INTERFACES_PREFIX_V6.lock().await.clone();
+        if interfaces_prefixes_old_v6 != interfaces_prefixes_v6 {
+            info!(
+                "A subnet changed has been detected from {:?} to {:?}",
+                interfaces_prefixes_old_v6, interfaces_prefixes_v6
+            );
+            interfaces_changed = true;
+            *INTERFACES_PREFIX_V6.lock().await = interfaces_prefixes_v6;
         }
 
         // Update the interface check time
@@ -465,6 +494,7 @@ pub async fn rpc_run(
                     }
                 }
             }
+            "broadcast_ping" => broadcast_ping(arg1).await,
             "helper_check" => {
                 // Return the current helper version
                 let result = CARGO_PKG_VERSION.to_string();
