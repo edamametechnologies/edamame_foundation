@@ -85,27 +85,40 @@ pub fn get_valid_network_interfaces() -> Vec<LANScanInterface> {
 
         let mut valid_interfaces = Vec::new();
         for iface in iface_list {
-            // We look for an IPv4 with a prefix:
             let ipv4_addr = iface.addr.iter().find_map(|a| {
                 if let network_interface::Addr::V4(ipv4) = a {
-                    Some((ipv4.ip, ipv4.netmask))
+                    let prefixv4 =
+                        ipv4_mask_to_prefix(ipv4.netmask.unwrap_or(Ipv4Addr::new(0, 0, 0, 0)))
+                            .unwrap_or(0);
+                    Some((ipv4.ip, prefixv4))
                 } else {
                     None
                 }
             });
-            if let Some((ipv4, mask_opt)) = ipv4_addr {
-                let prefixv4 = if let Some(mask) = mask_opt {
-                    ipv4_mask_to_prefix(mask).unwrap_or(0)
+            let ipv6_addr = iface.addr.iter().find_map(|a| {
+                if let network_interface::Addr::V6(ipv6) = a {
+                    let prefixv6 =
+                        ipv6_mask_to_prefix(ipv6.netmask.unwrap_or(Ipv6Addr::UNSPECIFIED))
+                            .unwrap_or(0);
+                    Some((ipv6.ip, prefixv6))
                 } else {
-                    0
+                    None
+                }
+            });
+
+            if let Some((ipv4, prefixv4)) = ipv4_addr {
+                let (ipv6, prefixv6) = if let Some((ipv6, prefixv6)) = ipv6_addr {
+                    (ipv6, prefixv6)
+                } else {
+                    (Ipv6Addr::UNSPECIFIED, 0)
                 };
 
                 valid_interfaces.push(LANScanInterface {
                     name: iface.name.clone(),
                     ipv4,
                     prefixv4,
-                    ipv6: Ipv6Addr::UNSPECIFIED,
-                    prefixv6: 0,
+                    ipv6,
+                    prefixv6,
                 });
             }
         }
