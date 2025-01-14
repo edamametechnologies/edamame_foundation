@@ -46,17 +46,16 @@ fn unify_neighbors(neighbors: Vec<(IpAddr, MacAddr6)>) -> Vec<ConsolidatedNeighb
 mod platform_impl {
     use super::*;
     use std::ffi::OsStr;
-    use std::net::{Ipv4Addr, Ipv6Addr};
+    use std::io;
     use std::os::windows::ffi::OsStrExt;
     use std::ptr::null_mut;
     use tokio::task;
-    use winapi::shared::{
-        netioapi::{
-            ConvertInterfaceAliasToLuid, FreeMibTable, GetIpNetTable2, MIB_IPNET_ROW2,
-            PMIB_IPNET_TABLE2,
-        },
-        ws2def::{AF_INET, AF_INET6},
+    use windows::core::Error;
+    use windows::Win32::Foundation::ERROR_SUCCESS;
+    use windows::Win32::NetworkManagement::IpHelper::{
+        ConvertInterfaceAliasToLuid, FreeMibTable, GetIpNetTable2, MIB_IPNET_ROW2, MIB_IPNET_TABLE2,
     };
+    use windows::Win32::Networking::WinSock::{AF_INET, AF_INET6, SOCKADDR_IN, SOCKADDR_IN6};
 
     /// Parse Windows MIB_IPNET_ROW2 into an IP + MAC (+ LUID) tuple (if valid).
     fn parse_address(row: &MIB_IPNET_ROW2) -> Option<(IpAddr, MacAddr6, u64)> {
@@ -72,28 +71,31 @@ mod platform_impl {
             row.PhysicalAddress[5],
         );
 
-        let family = unsafe { *row.Address.si_family() as i32 };
+        // SAFETY: we trust that row.Address.Sockaddr is valid because it is coming from the OS.
+        let family = unsafe { (*row.Address.Sockaddr).sa_family as i32 };
         let ip = match family {
             AF_INET => {
-                let bytes = unsafe { row.Address.Ipv4().sin_addr.S_un.S_un_b() };
-                IpAddr::V4(Ipv4Addr::new(
-                    bytes.s_b1, bytes.s_b2, bytes.s_b3, bytes.s_b4,
-                ))
+                // interpret the address as SOCKADDR_IN
+                let sock_in: SOCKADDR_IN = unsafe { *(row.Address.Sockaddr as *const SOCKADDR_IN) };
+                let octets = sock_in.sin_addr.S_un.S_addr().to_ne_bytes();
+                IpAddr::V4(Ipv4Addr::new(octets[0], octets[1], octets[2], octets[3]))
             }
             AF_INET6 => {
-                let bytes = unsafe { row.Address.Ipv6().sin6_addr.u.Byte() };
-                IpAddr::V6(Ipv6Addr::from(*bytes))
+                // interpret the address as SOCKADDR_IN6
+                let sock_in6: SOCKADDR_IN6 =
+                    unsafe { *(row.Address.Sockaddr as *const SOCKADDR_IN6) };
+                let octets = sock_in6.sin6_addr.u.Byte;
+                IpAddr::V6(Ipv6Addr::from(octets))
             }
             _ => return None,
         };
 
-        let luid_val = unsafe { row.InterfaceLuid.Value };
-        Some((ip, mac, luid_val))
+        Some((ip, mac, row.InterfaceLuid.Value))
     }
 
-    /// Collect neighbor table using Win32 IP helper APIs, optionally filtering by interface alias.
+    /// Collect neighbor table using the Windows crate, optionally filtering by interface alias.
     ///
-    /// This is wrapped in a blocking task, because the Windows IP helper calls are synchronous.
+    /// This is wrapped in a blocking task, because the relevant Windows APIs are synchronous.
     pub async fn scan_neighbors(
         interface_name: Option<&str>,
     ) -> Result<Vec<super::ConsolidatedNeighbor>> {
@@ -102,15 +104,15 @@ mod platform_impl {
 
             unsafe {
                 let mut filter_luid = None;
-                if let Some(iface_alias) = interface {
-                    let wide: Vec<u16> = OsStr::new(iface_alias)
+                if let Some(iface_name) = interface_name {
+                    let wide: Vec<u16> = OsStr::new(iface_name)
                         .encode_wide()
                         .chain(std::iter::once(0))
                         .collect();
 
                     let mut luid: u64 = 0;
                     let ret = ConvertInterfaceAliasToLuid(wide.as_ptr(), &mut luid);
-                    if ret != 0 {
+                    if ret != ERROR_SUCCESS.0 {
                         return Err(io::Error::new(
                             io::ErrorKind::Other,
                             format!("ConvertInterfaceAliasToLuid failed with code {ret}"),
@@ -120,9 +122,9 @@ mod platform_impl {
                     filter_luid = Some(luid);
                 }
 
-                let mut table_ptr: PMIB_IPNET_TABLE2 = null_mut();
+                let mut table_ptr: *mut MIB_IPNET_TABLE2 = null_mut();
                 let res = GetIpNetTable2(0, &mut table_ptr);
-                if res != 0 {
+                if res != ERROR_SUCCESS.0 {
                     return Err(io::Error::new(
                         io::ErrorKind::Other,
                         format!("GetIpNetTable2 failed with code {res}"),
@@ -137,10 +139,14 @@ mod platform_impl {
                     .into());
                 }
 
-                let table_entries = (*table_ptr).Table.as_ptr();
-                for i in 0..(*table_ptr).NumEntries as isize {
-                    let row = *table_entries.offset(i);
-                    if let Some((ip, mac, luid_val)) = parse_address(&row) {
+                // Convert the table pointer to a slice of MIB_IPNET_ROW2
+                let row_slice = std::slice::from_raw_parts(
+                    (*table_ptr).Table.as_ptr(),
+                    (*table_ptr).NumEntries as usize,
+                );
+
+                for row in row_slice {
+                    if let Some((ip, mac, luid_val)) = parse_address(row) {
                         if let Some(fluid) = filter_luid {
                             if luid_val != fluid {
                                 continue;
@@ -149,7 +155,7 @@ mod platform_impl {
                         pairs.push((ip, mac));
                     }
                 }
-                FreeMibTable(table_ptr as *mut _);
+                FreeMibTable(table_ptr as *const _);
             }
 
             Ok(pairs)
