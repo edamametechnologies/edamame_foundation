@@ -185,7 +185,7 @@ mod platform_impl {
         cmd.arg("neigh");
 
         if let Some(iface_name) = interface_name {
-            cmd.arg("show").arg("dev").arg(iface);
+            cmd.arg("show").arg("dev").arg(iface_name);
         }
 
         let output = cmd.output().await.map_err(|e| {
