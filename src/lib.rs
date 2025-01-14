@@ -2,8 +2,6 @@
 pub mod admin;
 pub mod asn_db;
 pub mod backend;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-pub mod client;
 pub mod cloud_model;
 pub mod health;
 pub mod helper_proto;
@@ -14,8 +12,6 @@ pub mod helper_rx_utility;
 pub mod helper_state;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub mod helper_tx;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-pub mod helper_tx_utility;
 pub mod history;
 pub mod lanscan_arp;
 pub mod lanscan_asn;

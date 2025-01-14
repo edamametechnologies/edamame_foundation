@@ -1,5 +1,4 @@
-use crate::client::*;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 use crate::helper_proto::*;
 use crate::order_type::*;
 use anyhow::{anyhow, Result};
@@ -178,39 +177,6 @@ async fn helper_run(
     let output = response.into_inner().output;
     trace!("Helper response: {:?}", output);
     Ok(output)
-}
-
-pub async fn helper_utility_order(order: &str, arg: &str) -> Result<String> {
-    match order {
-        #[cfg(target_os = "macos")]
-        "getappleid_email"
-        | "arp_resolve"
-        | "mdns_resolve"
-        | "helper_check"
-        | "helper_flags"
-        | "get_logs"
-        | "start_capture"
-        | "stop_capture"
-        | "restart_capture"
-        | "is_capturing"
-        | "set_whitelist"
-        | "get_whitelist"
-        | "get_whitelist_conformance"
-        | "get_whitelist_exceptions"
-        | "get_sessions"
-        | "get_current_sessions"
-        | "broadcast_ping"
-        | "get_neighbors"
-        | "set_filter"
-        | "get_filter" => match helper_run_utility_secured(order, arg, "").await {
-            Ok(result) => Ok(result),
-            Err(e) => {
-                tracing::warn!("Error executing utility order: {}", e);
-                Err(e)
-            }
-        },
-        _ => Err(anyhow!("Unknown or unimplemented utility order")),
-    }
 }
 
 #[cfg(test)]
