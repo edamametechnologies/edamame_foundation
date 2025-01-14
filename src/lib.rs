@@ -2,6 +2,8 @@
 pub mod admin;
 pub mod asn_db;
 pub mod backend;
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+pub mod client;
 pub mod cloud_model;
 pub mod health;
 pub mod helper_proto;
@@ -12,6 +14,8 @@ pub mod helper_rx_utility;
 pub mod helper_state;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub mod helper_tx;
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+pub mod helper_tx_utility;
 pub mod history;
 pub mod lanscan_arp;
 pub mod lanscan_asn;
@@ -30,13 +34,14 @@ pub mod lanscan_device_info;
 ))]
 pub mod lanscan_dns;
 pub mod lanscan_interface;
-pub mod lanscan_ip;
 #[cfg(all(
     any(target_os = "macos", target_os = "linux", target_os = "windows"),
     feature = "packetcapture"
 ))]
 pub mod lanscan_l7;
 pub mod lanscan_mdns;
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+pub mod lanscan_neighbors;
 pub mod lanscan_oui;
 pub mod lanscan_oui_db;
 #[cfg(all(
@@ -66,6 +71,8 @@ pub mod runner_cli;
 pub mod runtime;
 pub mod rwlock;
 pub mod score;
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+pub mod server;
 pub mod threat;
 pub mod threat_factory;
 pub mod threat_metrics_android;
@@ -74,5 +81,13 @@ pub mod threat_metrics_linux;
 pub mod threat_metrics_macos;
 pub mod threat_metrics_windows;
 pub mod version;
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux", target_os = "windows"),
+    feature = "packetcapture"
+))]
 pub mod whitelists;
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux", target_os = "windows"),
+    feature = "packetcapture"
+))]
 pub mod whitelists_db;

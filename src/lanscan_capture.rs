@@ -53,7 +53,7 @@ static CONNECTION_RETENTION_TIMEOUT: ChronoDuration = ChronoDuration::seconds(60
 static WHITELIST_EXCEPTION_TIMEOUT: ChronoDuration = CONNECTION_RETENTION_TIMEOUT;
 
 pub struct LANScanCapture {
-    interface: Arc<CustomRwLock<String>>,
+    interface_name: Arc<CustomRwLock<String>>,
     capture_task_handles: Arc<DashMap<String, TaskHandle>>,
     sessions: Arc<DashMap<Session, SessionInfo>>,
     current_sessions: Arc<CustomRwLock<Vec<Session>>>,
@@ -75,7 +75,7 @@ impl LANScanCapture {
     pub fn new() -> Self {
         debug!("Creating new LANScanCapture");
         Self {
-            interface: Arc::new(CustomRwLock::new("".to_string())),
+            interface_name: Arc::new(CustomRwLock::new("".to_string())),
             capture_task_handles: Arc::new(DashMap::new()),
             sessions: Arc::new(DashMap::new()),
             current_sessions: Arc::new(CustomRwLock::new(Vec::new())),
@@ -123,14 +123,14 @@ impl LANScanCapture {
         *self.filter.write().await = filter;
     }
 
-    pub async fn start(&mut self, interface: &str) {
+    pub async fn start(&mut self, interface_name: &str) {
         info!("Starting LANScanCapture");
 
         // Start mDNS task
         mdns_start().await;
 
         // Set the interface
-        *self.interface.write().await = interface.to_string();
+        *self.interface_name.write().await = interface_name.to_string();
 
         // Start tasks
         // If the capture task is already running, return
@@ -177,9 +177,9 @@ impl LANScanCapture {
         // Don't stop the mDNS task as it's shared with other modules
     }
 
-    pub async fn restart(&mut self, interface: &str) {
+    pub async fn restart(&mut self, interface_name: &str) {
         // Only restart if capturing and if the interface string has changed
-        if !self.is_capturing().await || self.interface.read().await.eq(interface) {
+        if !self.is_capturing().await || self.interface_name.read().await.eq(interface_name) {
             info!("Not restarting capture as it's not capturing or interface has not changed");
             return;
         };
@@ -426,20 +426,21 @@ impl LANScanCapture {
         }
     }
 
-    async fn get_device_from_interface(&self, interface: &str) -> Result<pcap::Device> {
+    async fn get_device_from_interface(&self, interface_name: &str) -> Result<pcap::Device> {
         let device_list = match pcap::Device::list() {
             Ok(list) => list,
             Err(e) => return Err(anyhow!(e)),
         };
 
-        let device = if let Some(device_in_list) =
-            device_list.iter().find(|dev| dev.name.contains(&interface))
+        let device = if let Some(device_in_list) = device_list
+            .iter()
+            .find(|dev| dev.name.contains(&interface_name))
         {
             device_in_list.clone()
         } else {
             return Err(anyhow!(format!(
                 "Interface {} not found in device list",
-                interface
+                interface_name
             )));
         };
         Ok(device)
@@ -467,7 +468,7 @@ impl LANScanCapture {
 
     async fn start_capture_task(&mut self) {
         // Read and split the interfaces by comma, trimming whitespace
-        let interfaces_str = self.interface.read().await.clone();
+        let interfaces_str = self.interface_name.read().await.clone();
         let interfaces: Vec<String> = interfaces_str
             .split(',')
             .map(|s| s.trim().to_string())
@@ -528,7 +529,7 @@ impl LANScanCapture {
         }
     }
 
-    async fn start_capture_task_for_device(&mut self, device: &pcap::Device, interface: &str) {
+    async fn start_capture_task_for_device(&mut self, device: &pcap::Device, interface_name: &str) {
         // Clone shared resources for each capture task
         let sessions = self.sessions.clone();
         let current_sessions = self.current_sessions.clone();
@@ -539,7 +540,7 @@ impl LANScanCapture {
         let stop_flag_clone = stop_flag.clone();
 
         // Clone the interface name for the async move block
-        let interface_clone = interface.to_string();
+        let interface_clone = interface_name.to_string();
 
         // Clone the device for the async move block
         let device_clone = device.clone();
@@ -716,7 +717,7 @@ impl LANScanCapture {
         });
         // Store the task handle and its stop flag
         self.capture_task_handles
-            .insert(interface.to_string(), TaskHandle { handle, stop_flag });
+            .insert(interface_name.to_string(), TaskHandle { handle, stop_flag });
     }
 
     async fn stop_capture_tasks(&mut self) {
