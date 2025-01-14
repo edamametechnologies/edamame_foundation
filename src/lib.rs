@@ -71,8 +71,6 @@ pub mod runner_cli;
 pub mod runtime;
 pub mod rwlock;
 pub mod score;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-pub mod server;
 pub mod threat;
 pub mod threat_factory;
 pub mod threat_metrics_android;
