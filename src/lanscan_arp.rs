@@ -1,32 +1,20 @@
 use anyhow::{anyhow, Result};
-use std::net::IpAddr;
-
-/// Checks if a MAC address string is valid.  
-/// Syntax: xx:xx:xx:xx:xx:xx, and not all zeros.
-pub fn is_valid_mac_address(mac_address: &str) -> bool {
-    mac_address.len() == 17
-        && mac_address
-            .chars()
-            .all(|c| c.is_ascii_hexdigit() || c == ':')
-        && mac_address != "00:00:00:00:00:00"
-}
-
-// ---------------------------------------------------------------------------
-// Platform-specific implementations
-// ---------------------------------------------------------------------------
+use macaddr::MacAddr6;
+use std::net::Ipv4Addr;
 
 #[cfg(target_os = "windows")]
 mod platform_impl {
     use super::*;
     use powershell_script::PsScriptBuilder;
     use regex::Regex;
+    use std::str::FromStr;
     use tracing::trace;
 
     /// On Windows, use PowerShell's Get-NetNeighbor to retrieve the MAC.
     pub async fn get_mac_address_from_ip(
         _interface_name: &str,
-        ip_addr: &IpAddr,
-    ) -> Result<String> {
+        ip_addr: &Ipv4Addr,
+    ) -> Result<MacAddr6> {
         trace!("Starting ARP query for {} on Windows", ip_addr);
 
         // Example command: Get-NetNeighbor -IPAddress 192.168.1.42
@@ -68,35 +56,40 @@ mod platform_impl {
         // Convert to lowercase and replace '-' with ':'
         let formatted_mac = mac.to_lowercase().replace('-', ":");
 
-        if !is_valid_mac_address(&formatted_mac) {
+        // Check if the MAC address is valid (not all zeros)
+        if formatted_mac == "00:00:00:00:00:00" || formatted_mac == "0:0:0:0:0:0:0:0" {
             return Err(anyhow!("Invalid MAC address: {}", formatted_mac));
         }
 
-        Ok(formatted_mac)
+        // Convert to MacAddr6
+        let mac = match MacAddr6::from_str(&formatted_mac) {
+            Ok(mac) => mac,
+            Err(e) => return Err(anyhow!("Invalid MAC address: {}", e)),
+        };
+
+        Ok(mac)
     }
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod platform_impl {
     use super::*;
-    use libarp::{client::ArpClient, interfaces::Interface};
+    use libarp::{client::ArpClient, interfaces::Interface, interfaces::MacAddr};
     use std::time::Duration;
     use tracing::trace;
 
     /// On Unix-like platforms, use libarp to send an ARP query directly.
-    pub async fn get_mac_address_from_ip(interface_name: &str, ip_addr: &IpAddr) -> Result<String> {
+    pub async fn get_mac_address_from_ip(
+        interface_name: &str,
+        ipv4_addr: &Ipv4Addr,
+    ) -> Result<MacAddr6> {
         trace!(
             "Starting ARP query for {} on interface {} (Unix-like)",
-            ip_addr,
+            ipv4_addr,
             interface_name
         );
 
-        // Only IPv4 addresses are supported
-        let ipv4_addr = match ip_addr {
-            IpAddr::V4(v4) => v4,
-            _ => return Err(anyhow!("Only IPv4 addresses are supported")),
-        };
-
+        // Create interface
         let iface = match Interface::new_by_name(interface_name) {
             Some(iface) => iface,
             None => {
@@ -105,6 +98,7 @@ mod platform_impl {
             }
         };
 
+        // Create ARP client
         let mut client = match ArpClient::new_with_iface(&iface) {
             Ok(c) => c,
             Err(e) => {
@@ -114,16 +108,28 @@ mod platform_impl {
         };
 
         trace!("Created ARP client");
-        let mac_str = client
+
+        // Attempt ARP resolution
+        let formatted_mac = client
             .ip_to_mac(*ipv4_addr, Some(Duration::from_millis(8000)))
             .await?;
-        trace!("Ending ARP scan");
 
-        if !is_valid_mac_address(&mac_str.to_string()) {
-            return Err(anyhow!("Invalid MAC address: {}", mac_str));
+        // Check if the MAC address is valid (not all zeros)
+        if formatted_mac == MacAddr::new(0, 0, 0, 0, 0, 0) {
+            return Err(anyhow!("Invalid MAC address: {}", formatted_mac));
         }
 
-        Ok(mac_str.to_string())
+        let mac = MacAddr6::new(
+            formatted_mac.0,
+            formatted_mac.1,
+            formatted_mac.2,
+            formatted_mac.3,
+            formatted_mac.4,
+            formatted_mac.5,
+        );
+
+        // Return the MAC address
+        Ok(mac)
     }
 }
 
@@ -134,8 +140,8 @@ mod platform_impl {
     /// On iOS/Android, ARP is not supported in this library's approach.
     pub async fn get_mac_address_from_ip(
         _interface_name: &str,
-        ip_addr: &IpAddr,
-    ) -> Result<String> {
+        ip_addr: &Ipv4Addr,
+    ) -> Result<MacAddr6> {
         return Err(anyhow!(
             "MAC address lookup not supported on mobile devices (iOS/Android). IP: {}",
             ip_addr

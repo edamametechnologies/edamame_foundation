@@ -1,5 +1,3 @@
-use crate::lanscan_arp::is_valid_mac_address;
-use crate::lanscan_ip::is_valid_ip_address;
 use crate::lanscan_port_info::*;
 use crate::lanscan_port_vulns::*;
 use crate::lanscan_vendor_vulns::*;
@@ -7,18 +5,22 @@ use chrono::{DateTime, Utc};
 use edamame_backend::lanscan_device_info_backend::*;
 use edamame_backend::lanscan_port_info_backend::*;
 use edamame_backend::lanscan_vulnerability_info_backend::VulnerabilityInfoBackend;
+use macaddr::MacAddr6;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use tracing::warn;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use tracing::{info, warn};
 
 // We should really use HashSets instead of Vec, but we don't in order to make it more usable with FFI
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DeviceInfo {
     // PII
-    pub ip_address: String,
-    pub ip_addresses: Vec<String>,
-    pub mac_address: String,
-    pub mac_addresses: Vec<String>,
+    // Main address is IPv4 or IPv6
+    ip_address: IpAddr,
+    pub ip_addresses_v4: Vec<Ipv4Addr>,
+    pub ip_addresses_v6: Vec<Ipv6Addr>,
+    mac_address: Option<MacAddr6>,
+    pub mac_addresses: Vec<MacAddr6>,
     pub hostname: String,
     pub mdns_services: Vec<String>,
     // Non-PII
@@ -47,11 +49,21 @@ pub struct DeviceInfo {
 }
 
 impl DeviceInfo {
-    pub fn new() -> DeviceInfo {
+    pub fn new(ip_address: Option<IpAddr>) -> DeviceInfo {
+        let ip_address = ip_address.unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+        let ip_addresses_v4 = match ip_address {
+            IpAddr::V4(ip) => vec![ip],
+            IpAddr::V6(_) => vec![],
+        };
+        let ip_addresses_v6 = match ip_address {
+            IpAddr::V4(_) => vec![],
+            IpAddr::V6(ip) => vec![ip],
+        };
         DeviceInfo {
-            ip_address: "".to_string(),
-            ip_addresses: Vec::new(),
-            mac_address: "".to_string(),
+            ip_address: ip_address,
+            ip_addresses_v4: ip_addresses_v4,
+            ip_addresses_v6: ip_addresses_v6,
+            mac_address: None,
             mac_addresses: Vec::new(),
             hostname: "".to_string(),
             mdns_services: Vec::new(),
@@ -69,16 +81,76 @@ impl DeviceInfo {
             criticality: "Unknown".to_string(),
             device_type: "Unknown".to_string(),
             // Initialize the times to UNIX_EPOCH
-            first_seen: DateTime::from_timestamp(0, 0).unwrap(),
-            last_seen: DateTime::from_timestamp(0, 0).unwrap(),
+            first_seen: DateTime::<Utc>::from(std::time::UNIX_EPOCH),
+            last_seen: DateTime::<Utc>::from(std::time::UNIX_EPOCH),
             // Below are user properties
             dismissed_ports: Vec::new(),
             custom_name: "".to_string(),
             // Not deleted by default
             deleted: false,
             // Initialize the last time to UNIX_EPOCH
-            last_modified: DateTime::from_timestamp(0, 0).unwrap(),
+            last_modified: DateTime::<Utc>::from(std::time::UNIX_EPOCH),
         }
+    }
+
+    pub fn get_ip_address(&self) -> IpAddr {
+        self.ip_address
+    }
+
+    pub fn set_ip_address(
+        &mut self,
+        ip_address: IpAddr,
+        ip_addresses_v4: Vec<Ipv4Addr>,
+        ip_addresses_v6: Vec<Ipv6Addr>,
+    ) {
+        // Ignore unspecified ip addresses
+        if ip_address.is_unspecified() {
+            return;
+        }
+        // Add the IP address
+        match self.ip_address {
+            IpAddr::V4(ip) => {
+                self.ip_addresses_v4.push(ip);
+            }
+            IpAddr::V6(ip) => {
+                self.ip_addresses_v6.push(ip);
+            }
+        }
+        self.add_ip_addresses(ip_addresses_v4, ip_addresses_v6);
+    }
+
+    pub fn add_ip_addresses(
+        &mut self,
+        ip_addresses_v4: Vec<Ipv4Addr>,
+        ip_addresses_v6: Vec<Ipv6Addr>,
+    ) {
+        // Add the provided vectors
+        self.ip_addresses_v4.extend(ip_addresses_v4);
+        // Sort and deduplicate
+        self.ip_addresses_v4.sort();
+        self.ip_addresses_v4.dedup();
+
+        self.ip_addresses_v6.extend(ip_addresses_v6);
+        // Sort and deduplicate
+        self.ip_addresses_v6.sort();
+        self.ip_addresses_v6.dedup();
+    }
+
+    pub fn get_mac_address(&self) -> Option<MacAddr6> {
+        self.mac_address
+    }
+
+    pub fn set_mac_address(&mut self, mac_address: MacAddr6, mac_addresses: Vec<MacAddr6>) {
+        // Ignore nil mac addresses
+        if mac_address.is_nil() {
+            return;
+        }
+        self.mac_address = Some(mac_address);
+        self.mac_addresses.push(mac_address);
+        self.mac_addresses.extend(mac_addresses);
+        // Sort and deduplicate
+        self.mac_addresses.sort();
+        self.mac_addresses.dedup();
     }
 
     // Used before any query to AI assistance
@@ -139,7 +211,10 @@ impl DeviceInfo {
         )
     }
 
-    // Check if devices in the device list shall be merged
+    // Check if devices in the device list shall be merged based on
+    //  (1) same (non empty) hostname
+    //  (2) same (non empty) IP v4
+    //  (3) same (non empty) IP v6
     fn dedup_vec(devices: &mut Vec<DeviceInfo>) {
         let mut i = 0;
         while i < devices.len() {
@@ -147,19 +222,33 @@ impl DeviceInfo {
             while j < devices.len() {
                 let (left, right) = devices.split_at_mut(j); // Split the vector at j
                 let device1 = &mut left[i]; // Mutable reference to device1 from left side
-                let device2 = &right[0]; // Immutable reference to device2 from right side
-                let is_duplicate = (!device1.hostname.is_empty()
+                let device2 = &mut right[0]; // Mutable reference to device2 from right side
+
+                let same_hostname = !device1.hostname.is_empty()
                     && !device2.hostname.is_empty()
-                    && device1.hostname == device2.hostname)
-                    || (!device1.ip_address.is_empty()
-                        && !device2.ip_address.is_empty()
-                        && device1.ip_address == device2.ip_address)
-                    || (!device1.ip_addresses.is_empty()
-                        && !device2.ip_addresses.is_empty()
+                    && device1.hostname == device2.hostname;
+
+                let same_ip = (matches!(device1.ip_address, IpAddr::V4(_))
+                    && matches!(device2.ip_address, IpAddr::V4(_))
+                    && device1.ip_address == device2.ip_address)
+                    || (matches!(device1.ip_address, IpAddr::V6(_))
+                        && matches!(device2.ip_address, IpAddr::V6(_))
+                        && device1.ip_address == device2.ip_address);
+
+                let overlaping_ips = (!device1.ip_addresses_v4.is_empty()
+                    && !device2.ip_addresses_v4.is_empty()
+                    && device1
+                        .ip_addresses_v4
+                        .iter()
+                        .any(|ip| device2.ip_addresses_v4.contains(ip)))
+                    || (!device1.ip_addresses_v6.is_empty()
+                        && !device2.ip_addresses_v6.is_empty()
                         && device1
-                            .ip_addresses
+                            .ip_addresses_v6
                             .iter()
-                            .any(|ip| device2.ip_addresses.contains(ip)));
+                            .any(|ip| device2.ip_addresses_v6.contains(ip)));
+
+                let is_duplicate = same_hostname || same_ip || overlaping_ips;
 
                 if is_duplicate {
                     // Merge device2 into device1
@@ -174,32 +263,48 @@ impl DeviceInfo {
         }
     }
 
-    // Combine the devices based on the hostname or IP address
+    // Combine the devices based on the same criteria as above
     pub fn merge_vec(devices: &mut Vec<DeviceInfo>, new_devices: &Vec<DeviceInfo>) {
         // Always deduplicate the devices before merging
         DeviceInfo::dedup_vec(devices);
         let mut new_devices = new_devices.clone();
         DeviceInfo::dedup_vec(&mut new_devices);
 
+        info!(
+            "Merging {} devices into {} devices",
+            new_devices.len(),
+            devices.len()
+        );
+
         for new_device in new_devices {
             let mut found = false;
 
             for device in devices.iter_mut() {
-                // If the hostname matches => device has been seen before and possibly has a different IP address
-                // or if the IP address matches => device has been seen before and possibly has a different hostname
+                // If the hostname matches => device has been seen before and possibly has different IPs
+                // If one IP v4 matches => device has been seen before
+                // If one IP v6 matches => device has been seen before
                 // Note that devices can have multiple IP addresses and one unique hostname
                 if (!new_device.hostname.is_empty()
                     && !device.hostname.is_empty()
                     && device.hostname == new_device.hostname)
-                    || (!new_device.ip_address.is_empty()
-                        && !device.ip_address.is_empty()
-                        && (new_device.ip_address == device.ip_address))
-                    || (!new_device.ip_addresses.is_empty()
-                        && !device.ip_addresses.is_empty()
+                    || (matches!(new_device.ip_address, IpAddr::V4(_))
+                        && matches!(device.ip_address, IpAddr::V4(_))
+                        && new_device.ip_address == device.ip_address)
+                    || (!new_device.ip_addresses_v4.is_empty()
+                        && !device.ip_addresses_v4.is_empty()
                         && new_device
-                            .ip_addresses
+                            .ip_addresses_v4
                             .iter()
-                            .any(|ip| device.ip_addresses.contains(ip)))
+                            .any(|ip| device.ip_addresses_v4.contains(ip)))
+                    || (matches!(new_device.ip_address, IpAddr::V6(_))
+                        && matches!(device.ip_address, IpAddr::V6(_))
+                        && new_device.ip_address == device.ip_address)
+                    || (!new_device.ip_addresses_v6.is_empty()
+                        && !device.ip_addresses_v6.is_empty()
+                        && new_device
+                            .ip_addresses_v6
+                            .iter()
+                            .any(|ip| device.ip_addresses_v6.contains(ip)))
                 {
                     // Merge the devices
                     DeviceInfo::merge(device, &new_device);
@@ -213,53 +318,65 @@ impl DeviceInfo {
                 devices.push(new_device.clone());
             }
         }
+
+        info!("Total devices after merge: {}", devices.len());
     }
 
     pub fn merge(device: &mut DeviceInfo, new_device: &DeviceInfo) {
         // Validate key fields of the new device
-        // Check if the MAC address is valid
-        if !new_device.mac_address.is_empty() {
-            if !is_valid_mac_address(&new_device.mac_address) {
-                warn!(
-                    "Invalid MAC address: {}, ignoring new device: {:?}",
-                    new_device.mac_address, new_device
+        // Check if there is a valid IPv4 or IPv6 address
+        if new_device.ip_address.is_unspecified() {
+            warn!(
+                "No valid IPv4 or IPv6 address found, ignoring new device: {:?}",
+                new_device
+            );
+            return;
+        }
+
+        // Now we merge based on the hostname or IPv4 or IPv6 address(es)
+        // At that stage the new_device.ip_address is guaranteed to be valid
+
+        // IPv4 takes precedence over IPv6: always use the new_device.ip_address if it's IPv4
+        if let IpAddr::V4(_) = new_device.ip_address {
+            if new_device.last_seen > device.last_seen {
+                device.set_ip_address(
+                    new_device.ip_address,
+                    new_device.ip_addresses_v4.clone(),
+                    new_device.ip_addresses_v6.clone(),
                 );
-                return;
             }
-        }
-
-        // Check if the IP address is valid
-        if !new_device.ip_address.is_empty() {
-            if !is_valid_ip_address(&new_device.ip_address) {
-                warn!(
-                    "Invalid IP address: {}, ignoring new device: {:?}",
-                    new_device.ip_address, new_device
+        // The new device is IPv6 and the device is IPv4, we keep the device's IPv4 and we merge the IP addresses
+        } else if matches!(new_device.ip_address, IpAddr::V6(_))
+            && matches!(device.ip_address, IpAddr::V4(_))
+        {
+            if new_device.last_seen > device.last_seen {
+                device.add_ip_addresses(
+                    new_device.ip_addresses_v4.clone(),
+                    new_device.ip_addresses_v6.clone(),
                 );
-                return;
             }
-        }
-
-        // Now we merge based on the hostname or IP address(es)
-
-        // Use the most recent non empty ip address
-        if !new_device.ip_address.is_empty() {
-            if new_device.last_seen > device.last_seen || device.ip_address.is_empty() {
-                device.ip_address.clone_from(&new_device.ip_address);
+        } else {
+            // The new device is IPv6 and the device is IPv6
+            // We set the device's ip_address to the new IPv6 if it's fresher
+            if new_device.last_seen > device.last_seen {
+                device.set_ip_address(
+                    new_device.ip_address,
+                    new_device.ip_addresses_v4.clone(),
+                    new_device.ip_addresses_v6.clone(),
+                );
+            // Else we merge the IP addresses
+            } else {
+                device.add_ip_addresses(
+                    new_device.ip_addresses_v4.clone(),
+                    new_device.ip_addresses_v6.clone(),
+                );
             }
-        }
-
-        // Merge the ip addresses
-        if !new_device.ip_addresses.is_empty() {
-            device.ip_addresses.extend(new_device.ip_addresses.clone());
-            // Deduplicate
-            device.ip_addresses.sort();
-            device.ip_addresses.dedup();
         }
 
         // Use the most recent non empty mac address
-        if !new_device.mac_address.is_empty() {
-            if new_device.last_seen > device.last_seen || device.mac_address.is_empty() {
-                device.mac_address.clone_from(&new_device.mac_address);
+        if new_device.mac_address.is_some() {
+            if new_device.last_seen > device.last_seen || device.mac_address.is_none() {
+                device.mac_address = new_device.mac_address.clone();
             }
         }
 
@@ -398,11 +515,22 @@ impl DeviceInfo {
     pub fn clear(&mut self) {
         // Clear the device, only keep the main IP address, the first_seen timestamp and the last_seen timestamp
         let ip_address = self.ip_address.clone();
+        let ip_addresses_v4 = if let IpAddr::V4(ipv4) = ip_address {
+            vec![ipv4]
+        } else {
+            vec![]
+        };
+        let ip_addresses_v6 = if let IpAddr::V6(ipv6) = ip_address {
+            vec![ipv6]
+        } else {
+            vec![]
+        };
         let first_seen = self.first_seen;
         let last_seen = self.last_seen;
-        *self = DeviceInfo::new();
-        self.ip_address = ip_address.clone();
-        self.ip_addresses = vec![ip_address];
+        *self = DeviceInfo::new(None);
+        self.ip_address = ip_address;
+        self.ip_addresses_v4 = ip_addresses_v4;
+        self.ip_addresses_v6 = ip_addresses_v6;
         self.first_seen = first_seen;
         self.last_seen = last_seen;
     }
@@ -431,8 +559,7 @@ mod tests {
 
     #[test]
     fn test_merge_deletion() {
-        let mut device_original = DeviceInfo::new();
-        device_original.ip_address = "192.168.0.10".to_string();
+        let mut device_original = DeviceInfo::new(Some(IpAddr::V4(Ipv4Addr::new(192, 168, 0, 10))));
         device_original.deleted = false;
         device_original.last_seen = Utc.with_ymd_and_hms(2023, 1, 1, 12, 0, 0).unwrap();
         device_original.last_modified = Utc.with_ymd_and_hms(2023, 1, 1, 12, 0, 0).unwrap();
@@ -458,8 +585,7 @@ mod tests {
 
     #[test]
     fn test_merge_undelete() {
-        let mut device_deleted = DeviceInfo::new();
-        device_deleted.ip_address = "192.168.0.20".to_string();
+        let mut device_deleted = DeviceInfo::new(Some(IpAddr::V4(Ipv4Addr::new(192, 168, 0, 20))));
         device_deleted.deleted = true;
         device_deleted.last_seen = Utc.with_ymd_and_hms(2023, 1, 1, 12, 5, 0).unwrap();
         device_deleted.last_modified = Utc.with_ymd_and_hms(2023, 1, 1, 12, 5, 0).unwrap();
@@ -485,8 +611,7 @@ mod tests {
     #[test]
     fn test_merge_no_change_if_older() {
         // If the new device data is older, it should be ignored
-        let mut device_current = DeviceInfo::new();
-        device_current.ip_address = "192.168.0.30".to_string();
+        let mut device_current = DeviceInfo::new(Some(IpAddr::V4(Ipv4Addr::new(192, 168, 0, 30))));
         device_current.deleted = false;
         device_current.last_seen = Utc.with_ymd_and_hms(2023, 5, 1, 13, 0, 0).unwrap();
         device_current.last_modified = Utc.with_ymd_and_hms(2023, 5, 1, 13, 0, 0).unwrap();
@@ -511,15 +636,13 @@ mod tests {
         // Test merging multiple new devices, some overlap, some new
         let mut existing_list = vec![
             {
-                let mut d = DeviceInfo::new();
-                d.ip_address = "192.168.0.10".to_string();
+                let mut d = DeviceInfo::new(Some(IpAddr::V4(Ipv4Addr::new(192, 168, 0, 10))));
                 d.last_modified = Utc.with_ymd_and_hms(2023, 1, 10, 10, 0, 0).unwrap();
                 d.deleted = false;
                 d
             },
             {
-                let mut d = DeviceInfo::new();
-                d.ip_address = "192.168.0.11".to_string();
+                let mut d = DeviceInfo::new(Some(IpAddr::V4(Ipv4Addr::new(192, 168, 0, 11))));
                 d.last_modified = Utc.with_ymd_and_hms(2023, 1, 10, 10, 5, 0).unwrap();
                 d.deleted = true;
                 d
@@ -529,24 +652,23 @@ mod tests {
         let new_list = vec![
             // This device has a fresher timestamp and says it's deleted
             {
-                let mut d = DeviceInfo::new();
-                d.ip_address = "192.168.0.10".to_string();
+                let mut d = DeviceInfo::new(Some(IpAddr::V4(Ipv4Addr::new(192, 168, 0, 10))));
+                d.set_ip_address(IpAddr::V4(Ipv4Addr::new(192, 168, 0, 10)), vec![], vec![]);
                 d.last_modified = Utc.with_ymd_and_hms(2023, 1, 10, 10, 15, 0).unwrap();
                 d.deleted = true;
                 d
             },
             // This device is brand new
             {
-                let mut d = DeviceInfo::new();
-                d.ip_address = "192.168.0.12".to_string();
+                let mut d = DeviceInfo::new(Some(IpAddr::V4(Ipv4Addr::new(192, 168, 0, 12))));
                 d.last_modified = Utc.with_ymd_and_hms(2023, 2, 10, 9, 0, 0).unwrap();
                 d.deleted = false;
                 d
             },
             // This device is older info for .11 so it should not override
             {
-                let mut d = DeviceInfo::new();
-                d.ip_address = "192.168.0.11".to_string();
+                let mut d = DeviceInfo::new(Some(IpAddr::V4(Ipv4Addr::new(192, 168, 0, 11))));
+                d.set_ip_address(IpAddr::V4(Ipv4Addr::new(192, 168, 0, 11)), vec![], vec![]);
                 d.last_modified = Utc.with_ymd_and_hms(2023, 1, 10, 10, 0, 0).unwrap(); // older
                 d.deleted = false; // says undeleted, but older
                 d
@@ -559,7 +681,7 @@ mod tests {
         // 1) 192.168.0.10 should now be deleted
         let device_10 = existing_list
             .iter()
-            .find(|d| d.ip_address == "192.168.0.10")
+            .find(|d| d.get_ip_address() == IpAddr::V4(Ipv4Addr::new(192, 168, 0, 10)))
             .unwrap();
         assert!(
             device_10.deleted,
@@ -569,7 +691,7 @@ mod tests {
         // 2) 192.168.0.12 should have been added
         let device_12 = existing_list
             .iter()
-            .find(|d| d.ip_address == "192.168.0.12");
+            .find(|d| d.get_ip_address() == IpAddr::V4(Ipv4Addr::new(192, 168, 0, 12)));
         assert!(
             device_12.is_some(),
             "192.168.0.12 should have been newly added."
@@ -578,11 +700,47 @@ mod tests {
         // 3) 192.168.0.11 should remain deleted, because the new data was older
         let device_11 = existing_list
             .iter()
-            .find(|d| d.ip_address == "192.168.0.11")
+            .find(|d| d.get_ip_address() == IpAddr::V4(Ipv4Addr::new(192, 168, 0, 11)))
             .unwrap();
         assert!(
             device_11.deleted,
             "192.168.0.11 should remain deleted because incoming data was older."
+        );
+    }
+
+    #[test]
+    fn test_merge_ipv6() {
+        // Check that merges also occur when IPv6 matches
+        let mut device1 = DeviceInfo::new(Some(IpAddr::V6(Ipv6Addr::LOCALHOST)));
+        device1.hostname = "device1".to_string();
+        device1.last_seen = Utc.with_ymd_and_hms(2023, 6, 1, 8, 0, 0).unwrap();
+
+        let mut device2 = DeviceInfo::new(Some(IpAddr::V6(Ipv6Addr::LOCALHOST)));
+        device2.hostname = "device1-new".to_string(); // different hostname
+        device2.last_seen = Utc.with_ymd_and_hms(2023, 6, 1, 9, 0, 0).unwrap();
+
+        let mut devices = vec![device1.clone()];
+        DeviceInfo::merge_vec(&mut devices, &vec![device2.clone()]);
+        assert_eq!(
+            devices.len(),
+            1,
+            "They should merge since they share the same IPv6 address."
+        );
+
+        // device1 was older, so we expect device2's info to override fields as needed
+        let merged = &devices[0];
+        assert_eq!(
+            merged.hostname, "device1-new",
+            "Hostname from device1 remains since there's no explicit preference if different hostnames conflict. But the logic for merging is triggered because IPv6 matched."
+        );
+        assert_eq!(
+            merged.get_ip_address(),
+            IpAddr::V6(Ipv6Addr::LOCALHOST),
+            "IPv6 is still localhost."
+        );
+        assert_eq!(
+            merged.last_seen, device2.last_seen,
+            "Since device2 was fresher, last_seen should be updated."
         );
     }
 }

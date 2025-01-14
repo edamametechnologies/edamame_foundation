@@ -1,33 +1,13 @@
 use crate::helper_proto::*;
 use crate::helper_rx_utility::*;
-#[cfg(all(
-    any(target_os = "macos", target_os = "linux", target_os = "windows"),
-    feature = "packetcapture"
-))]
-use crate::lanscan_capture::LANScanCapture;
-use crate::lanscan_interface::*;
-use crate::lanscan_mdns::mdns_flush;
-#[cfg(all(
-    any(target_os = "macos", target_os = "linux", target_os = "windows"),
-    feature = "packetcapture"
-))]
-use crate::lanscan_sessions::SessionFilter;
-use crate::logger::get_all_logs;
 use crate::runner_cli::*;
 use crate::threat_factory::*;
 use anyhow::{anyhow, Error, Result};
 use base64::engine::general_purpose;
 use base64::Engine;
-use chrono::Utc;
 use edamame_proto::edamame_helper_server::{EdamameHelper, EdamameHelperServer};
 use edamame_proto::{HelperRequest, HelperResponse};
 use lazy_static::lazy_static;
-#[cfg(target_os = "macos")]
-use libc::EACCES;
-#[cfg(target_os = "macos")]
-use std::fs::File;
-#[cfg(target_os = "macos")]
-use std::io::ErrorKind;
 use std::net::SocketAddr;
 use std::str;
 use std::sync::Arc;
@@ -37,26 +17,9 @@ use tonic::transport::{Certificate, Identity, Server, ServerTlsConfig};
 use tonic::{Code, Request, Response, Status};
 use tracing::{error, info, trace, warn};
 
-#[cfg(all(
-    any(target_os = "macos", target_os = "linux", target_os = "windows"),
-    feature = "packetcapture"
-))]
-lazy_static! {
-    pub static ref CAPTURE: Arc<Mutex<LANScanCapture>> =
-        Arc::new(Mutex::new(LANScanCapture::new()));
-}
-
 lazy_static! {
     // Branch name
     pub static ref BRANCH: Arc<Mutex<String>> = Arc::new(Mutex::new("".to_string()));
-    // Current default interface
-    pub static ref INTERFACES_NAMES: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-    pub static ref INTERFACES_IPS: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-    pub static ref INTERFACES_IPS_V6: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-    pub static ref INTERFACES_PREFIX: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
-    pub static ref INTERFACES_PREFIX_V6: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
-    // Last interface check timestamp
-    pub static ref INTERFACE_CHECK_TIME: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
 }
 
 // Version
@@ -223,92 +186,14 @@ impl ServerControl {
     }
 }
 
-// Detect and check interface changes
-pub async fn check_interfaces_changes() -> bool {
-    // Detect the interface name and ip if not done for 10 seconds, detect changes
-    if chrono::Utc::now().timestamp() - *INTERFACE_CHECK_TIME.lock().await as i64 > 10 {
-        let interfaces = get_valid_network_interfaces();
-        let mut interfaces_changed = false;
-
-        // Make a vector of the interfaces ipv4
-        let interfaces_ipv4 = interfaces
-            .iter()
-            .map(|i| i.ipv4.to_string())
-            .collect::<Vec<String>>();
-        let interfaces_ipv6 = interfaces
-            .iter()
-            .map(|i| i.ipv6.to_string())
-            .collect::<Vec<String>>();
-        // Make a vector of the interfaces prefixes
-        let interfaces_prefixes_v4 = interfaces.iter().map(|i| i.prefixv4).collect::<Vec<u8>>();
-        let interfaces_prefixes_v6 = interfaces.iter().map(|i| i.prefixv6).collect::<Vec<u8>>();
-        // Make a vector of the interfaces names
-        let interfaces_names = interfaces
-            .iter()
-            .map(|i| i.name.clone())
-            .collect::<Vec<String>>();
-
-        // Check if the interface name has changed
-        let interfaces_names_old = INTERFACES_NAMES.lock().await.clone();
-        if interfaces_names_old != interfaces_names {
-            info!(
-                "A name changed has been detected from {:?} to {:?}",
-                interfaces_names_old, interfaces_names
-            );
-            interfaces_changed = true;
-            *INTERFACES_NAMES.lock().await = interfaces_names;
-        }
-
-        // Check if the interface ip has changed
-        let interfaces_ips_old_v4 = INTERFACES_IPS.lock().await.clone();
-        if interfaces_ips_old_v4 != interfaces_ipv4 {
-            info!(
-                "An IP changed has been detected from {:?} to {:?}",
-                interfaces_ips_old_v4, interfaces_ipv4
-            );
-            interfaces_changed = true;
-            *INTERFACES_IPS.lock().await = interfaces_ipv4;
-        }
-
-        // Check if the interface ipv6 has changed
-        let interfaces_ips_old_v6 = INTERFACES_IPS_V6.lock().await.clone();
-        if interfaces_ips_old_v6 != interfaces_ipv6 {
-            info!(
-                "An IP changed has been detected from {:?} to {:?}",
-                interfaces_ips_old_v6, interfaces_ipv6
-            );
-            interfaces_changed = true;
-            *INTERFACES_IPS_V6.lock().await = interfaces_ipv6;
-        }
-
-        // Check if the interface subnet v4 has changed
-        let interfaces_prefixes_old_v4 = INTERFACES_PREFIX.lock().await.clone();
-        if interfaces_prefixes_old_v4 != interfaces_prefixes_v4 {
-            info!(
-                "A subnet changed has been detected from {:?} to {:?}",
-                interfaces_prefixes_old_v4, interfaces_prefixes_v4
-            );
-            interfaces_changed = true;
-            *INTERFACES_PREFIX.lock().await = interfaces_prefixes_v4;
-        }
-
-        // Check if the interface subnet v6 has changed
-        let interfaces_prefixes_old_v6 = INTERFACES_PREFIX_V6.lock().await.clone();
-        if interfaces_prefixes_old_v6 != interfaces_prefixes_v6 {
-            info!(
-                "A subnet changed has been detected from {:?} to {:?}",
-                interfaces_prefixes_old_v6, interfaces_prefixes_v6
-            );
-            interfaces_changed = true;
-            *INTERFACES_PREFIX_V6.lock().await = interfaces_prefixes_v6;
-        }
-
-        // Update the interface check time
-        *INTERFACE_CHECK_TIME.lock().await = Utc::now().timestamp() as u64;
-
-        return interfaces_changed;
-    }
-    false
+pub fn order_error(comment: &str, fatal: bool) -> Result<String> {
+    let msg = if fatal {
+        format!("Fatal order error : {}", comment)
+    } else {
+        format!("Order error : {}", comment)
+    };
+    error!("{}", msg);
+    Err(Error::msg(msg))
 }
 
 // Receiving end of the order - the RPC server error handling requires Send + Sync...
@@ -466,274 +351,75 @@ pub async fn rpc_run(
             };
         }
         "utilityorder" => match subordertype {
-            "getappleid_email" => {
-                let username = arg2;
-                run_cli("defaults read MobileMeAccounts Accounts | grep AccountID | grep -o \"\\\".*\\\"\" | sed \"s/\\\"//g\" | tr -d \"\\n\"", username, true).await
-            }
-            "mdns_resolve" => {
-                if check_interfaces_changes().await {
-                    mdns_flush().await;
-                }
-                let json_addresses = arg1;
-                match mdns_resolve(json_addresses).await {
-                    Ok(output) => Ok(output),
-                    Err(e) => {
-                        error!("Error performing mdns_resolve: {}", e);
-                        order_error(&format!("error performing mdns_resolve: {}", e), false)
-                    }
-                }
-            }
-            "arp_resolve" => {
-                let json_addresses = arg1;
-                match arp_resolve(json_addresses).await {
-                    Ok(output) => Ok(output),
-                    Err(e) => {
-                        // Only warn
-                        warn!("Error performing arp_resolve: {}", e);
-                        order_error(&format!("error performing arp_resolve: {}", e), false)
-                    }
-                }
-            }
-            "broadcast_ping" => broadcast_ping(arg1).await,
-            "helper_check" => {
-                // Return the current helper version
-                let result = CARGO_PKG_VERSION.to_string();
-                Ok(result)
-            }
-            "helper_flags" => {
-                // Return additional information in the form flag=value,...
-                #[cfg(target_os = "macos")]
-                {
-                    let path = "/Library/Application Support/com.apple.TCC/TCC.db";
+            "getappleid_email" => utility_getappleid_email(arg1).await,
+            "mdns_resolve" => utility_mdns_resolve(arg1).await,
+            "arp_resolve" => utility_arp_resolve(arg1).await,
+            "broadcast_ping" => utility_broadcast_ping(arg1).await,
+            "get_neighbors" => utility_get_neighbors(arg1).await,
+            "helper_check" => utility_helper_check().await,
+            "helper_flags" => utility_helper_flags().await,
+            "get_logs" => utility_get_logs().await,
 
-                    let file_result = File::open(path);
-
-                    let full_disk_access = match file_result {
-                        Ok(_) => true,
-                        Err(ref e) if e.kind() == ErrorKind::PermissionDenied => false,
-                        Err(ref e) if e.raw_os_error() == Some(EACCES) => false,
-                        Err(e) => {
-                            // Handle other errors
-                            error!("Failed to check full disk access: {}", e);
-                            false
-                        }
-                    };
-                    let result = format!("full_disk_access={}", full_disk_access);
-                    Ok(result)
-                }
-
-                #[cfg(not(target_os = "macos"))]
-                {
-                    Ok("".to_string())
-                }
-            }
-            "get_logs" => {
-                let logs = get_all_logs();
-                Ok(logs)
-            }
             #[cfg(all(
                 any(target_os = "macos", target_os = "linux", target_os = "windows"),
                 feature = "packetcapture"
             ))]
-            "start_capture" => {
-                // Check if already capturing
-                if CAPTURE.lock().await.is_capturing().await {
-                    return order_error("capture already started", false);
-                }
-                // Get latest interfaces
-                let _ = check_interfaces_changes().await;
-                let interfaces = INTERFACES_NAMES.lock().await.clone();
-                // Convert the vec into a comma separated string
-                let interfaces_string = interfaces.join(",");
-                CAPTURE.lock().await.start(&interfaces_string).await;
-                Ok("".to_string())
-            }
+            "start_capture" => utility_start_capture().await,
             #[cfg(all(
                 any(target_os = "macos", target_os = "linux", target_os = "windows"),
                 feature = "packetcapture"
             ))]
-            "stop_capture" => {
-                CAPTURE.lock().await.stop().await;
-                Ok("".to_string())
-            }
+            "stop_capture" => utility_stop_capture().await,
             #[cfg(all(
                 any(target_os = "macos", target_os = "linux", target_os = "windows"),
                 feature = "packetcapture"
             ))]
-            "restart_capture" => {
-                // Check if already capturing
-                if !CAPTURE.lock().await.is_capturing().await {
-                    return order_error("capture not running", false);
-                }
-                // Only restart if interfaces have changed
-                if check_interfaces_changes().await {
-                    let interfaces = INTERFACES_NAMES.lock().await.clone();
-                    // Convert the vec into a comma separated string
-                    let interfaces_string = interfaces.join(",");
-                    CAPTURE.lock().await.restart(&interfaces_string).await;
-                }
-                Ok("".to_string())
-            }
+            "restart_capture" => utility_restart_capture().await,
             #[cfg(all(
                 any(target_os = "macos", target_os = "linux", target_os = "windows"),
                 feature = "packetcapture"
             ))]
-            "is_capturing" => {
-                let is_capturing = CAPTURE.lock().await.is_capturing().await;
-                let result = is_capturing.to_string();
-                info!("Returning is_capturing: {}", result);
-                Ok(result)
-            }
+            "is_capturing" => utility_is_capturing().await,
             #[cfg(all(
                 any(target_os = "macos", target_os = "linux", target_os = "windows"),
                 feature = "packetcapture"
             ))]
-            "set_whitelist" => {
-                let whitelist_name = arg1;
-                CAPTURE.lock().await.set_whitelist(whitelist_name).await;
-                Ok("".to_string())
-            }
+            "set_whitelist" => utility_set_whitelist(arg1).await,
             #[cfg(all(
                 any(target_os = "macos", target_os = "linux", target_os = "windows"),
                 feature = "packetcapture"
             ))]
-            "get_whitelist" => {
-                let whitelist = CAPTURE.lock().await.get_whitelist().await;
-                info!("Returning whitelist: {}", whitelist);
-                Ok(whitelist)
-            }
+            "get_whitelist" => utility_get_whitelist().await,
             #[cfg(all(
                 any(target_os = "macos", target_os = "linux", target_os = "windows"),
                 feature = "packetcapture"
             ))]
-            "set_filter" => {
-                match serde_json::from_str::<SessionFilter>(arg1) {
-                    Ok(filter) => CAPTURE.lock().await.set_filter(filter).await,
-                    Err(e) => {
-                        error!("Invalid argument for set_filter {} : {}", arg1, e);
-                        return order_error(
-                            &format!("invalid argument for set_filter: {}", arg1),
-                            false,
-                        );
-                    }
-                };
-                Ok("".to_string())
-            }
+            "set_filter" => utility_set_filter(arg1).await,
             #[cfg(all(
                 any(target_os = "macos", target_os = "linux", target_os = "windows"),
                 feature = "packetcapture"
             ))]
-            "get_filter" => {
-                let filter = CAPTURE.lock().await.get_filter().await;
-                let json_filter = match serde_json::to_string(&filter) {
-                    Ok(json) => json,
-                    Err(e) => {
-                        error!("Error serializing filter to JSON: {}", e);
-                        return order_error(
-                            &format!("error serializing filter to JSON: {}", e),
-                            false,
-                        );
-                    }
-                };
-                info!("Returning filter: {}", json_filter);
-                Ok(json_filter)
-            }
+            "get_filter" => utility_get_filter().await,
             #[cfg(all(
                 any(target_os = "macos", target_os = "linux", target_os = "windows"),
                 feature = "packetcapture"
             ))]
-            "get_sessions" => {
-                if check_interfaces_changes().await && CAPTURE.lock().await.is_capturing().await {
-                    CAPTURE.lock().await.stop().await;
-                    // Get the new interfaces
-                    let interfaces = INTERFACES_NAMES.lock().await.clone();
-                    // Convert the vec into a comma separated string
-                    let interfaces_string = interfaces.join(",");
-                    info!(
-                        "Interfaces have changed, restarting capture on {:?}",
-                        interfaces_string
-                    );
-                    CAPTURE.lock().await.start(&interfaces_string).await;
-                }
-                let sessions = CAPTURE.lock().await.get_sessions().await;
-                let json_sessions = match serde_json::to_string(&sessions) {
-                    Ok(json) => json,
-                    Err(e) => {
-                        error!("Error serializing sessions to JSON: {}", e);
-                        return order_error(
-                            &format!("error serializing sessions to JSON: {}", e),
-                            false,
-                        );
-                    }
-                };
-                info!("Returning {} sessions", sessions.len());
-                Ok(json_sessions)
-            }
+            "get_sessions" => utility_get_sessions().await,
             #[cfg(all(
                 any(target_os = "macos", target_os = "linux", target_os = "windows"),
                 feature = "packetcapture"
             ))]
-            "get_current_sessions" => {
-                if check_interfaces_changes().await && CAPTURE.lock().await.is_capturing().await {
-                    CAPTURE.lock().await.stop().await;
-                    // Get the new interfaces
-                    let interfaces = INTERFACES_NAMES.lock().await.clone();
-                    // Convert the vec into a comma separated string
-                    let interfaces_string = interfaces.join(",");
-                    info!(
-                        "Interfaces have changed, restarting capture on {:?}",
-                        interfaces_string
-                    );
-                    CAPTURE.lock().await.start(&interfaces_string).await;
-                }
-                let active_sessions = CAPTURE.lock().await.get_current_sessions().await;
-                let json_active_sessions = match serde_json::to_string(&active_sessions) {
-                    Ok(json) => json,
-                    Err(e) => {
-                        error!("Error serializing current sessions to JSON: {}", e);
-                        return order_error(
-                            &format!("error serializing current sessions to JSON: {}", e),
-                            false,
-                        );
-                    }
-                };
-                info!("Returning {} current sessions", active_sessions.len());
-                Ok(json_active_sessions)
-            }
+            "get_current_sessions" => utility_get_current_sessions().await,
             #[cfg(all(
                 any(target_os = "macos", target_os = "linux", target_os = "windows"),
                 feature = "packetcapture"
             ))]
-            "get_whitelist_conformance" => {
-                let conformance = CAPTURE
-                    .lock()
-                    .await
-                    .get_whitelist_conformance()
-                    .await
-                    .to_string();
-                let result = conformance.to_string();
-                info!("Returning whitelist conformance: {}", result);
-                Ok(result)
-            }
+            "get_whitelist_conformance" => utility_get_whitelist_conformance().await,
             #[cfg(all(
                 any(target_os = "macos", target_os = "linux", target_os = "windows"),
                 feature = "packetcapture"
             ))]
-            "get_whitelist_exceptions" => {
-                let exceptions = CAPTURE.lock().await.get_whitelist_exceptions().await;
-                let json_exceptions = match serde_json::to_string(&exceptions) {
-                    Ok(json) => json,
-                    Err(e) => {
-                        error!("Error serializing whitelist exceptions to JSON: {}", e);
-                        return order_error(
-                            &format!("error serializing whitelist exceptions to JSON: {}", e),
-                            false,
-                        );
-                    }
-                };
-                info!("Returning {} whitelist exceptions", exceptions.len());
-                Ok(json_exceptions)
-            }
+            "get_whitelist_exceptions" => utility_get_whitelist_exceptions().await,
             _ => order_error(
                 &format!("unknown or unimplemented utilityorder {}", subordertype),
                 false,
@@ -744,16 +430,6 @@ pub async fn rpc_run(
             false,
         ),
     }
-}
-
-fn order_error(comment: &str, fatal: bool) -> Result<String> {
-    let msg = if fatal {
-        format!("Fatal order error : {}", comment)
-    } else {
-        format!("Order error : {}", comment)
-    };
-    error!("{}", msg);
-    Err(Error::msg(msg))
 }
 
 #[cfg(test)]

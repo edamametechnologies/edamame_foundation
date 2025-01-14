@@ -1,7 +1,7 @@
-use crate::lanscan_arp::is_valid_mac_address;
 use crate::runtime::async_spawn;
 use chrono::{DateTime, Utc};
 use lazy_static::lazy_static;
+use macaddr::MacAddr6;
 use regex::Regex;
 use sorted_vec::SortedVec;
 use std::collections::HashMap;
@@ -26,7 +26,7 @@ lazy_static! {
 pub struct mDNSInfo {
     pub ip_addr: Option<IpAddr>,
     pub ipv6_addr: Vec<IpAddr>,
-    pub mac_address: String,
+    pub mac_address: MacAddr6,
     pub services: SortedVec<String>,
     pub hostname: String,
     pub instances: SortedVec<String>,
@@ -56,12 +56,12 @@ pub async fn mdns_flush() {
     locked_devices.clear();
 }
 
-pub async fn mdns_get_by_ipv4(ipv4: &IpAddr) -> Option<mDNSInfo> {
+pub async fn mdns_get_by_ip(ip: &IpAddr) -> Option<mDNSInfo> {
     let locked_devices = DEVICES.lock().await;
     locked_devices.iter().find_map(|(_hostname, mdns_info)| {
         if let Some(ip_addr) = &mdns_info.ip_addr {
-            if ip_addr == ipv4 {
-                trace!("Found mDNS entry for {}: {:?}", ipv4, mdns_info);
+            if ip_addr == ip {
+                trace!("Found mDNS entry for {}: {:?}", ip, mdns_info);
                 Some(mdns_info.clone())
             } else {
                 None
@@ -145,22 +145,13 @@ fn v6_to_mac(ipv6: &str) -> Option<String> {
         mac
     );
 
-    // Check if the MAC address is valid
-    if is_valid_mac_address(&mac) {
-        Some(mac)
-    } else {
-        None
-    }
+    Some(mac)
 }
 
 fn extract_mac_address(input: &str) -> Option<String> {
     let re = Regex::new(r"([0-9a-fA-F]{2}[:-]){5}([0-9a-fA-F]{2})").unwrap();
     if let Some(mac) = re.find(input).map(|mat| mat.as_str().to_string()) {
-        if is_valid_mac_address(&mac) {
-            Some(mac)
-        } else {
-            None
-        }
+        Some(mac)
     } else {
         None
     }
@@ -183,7 +174,7 @@ async fn process_host(host: Host, service_name: String) {
             let mdns_info = locked_devices.entry(hostname.clone()).or_insert(mDNSInfo {
                 ip_addr: None,
                 ipv6_addr: Vec::new(),
-                mac_address: "".to_string(),
+                mac_address: MacAddr6::nil(),
                 services: SortedVec::new(),
                 hostname: hostname.clone(),
                 instances: SortedVec::new(),
@@ -205,10 +196,10 @@ async fn process_host(host: Host, service_name: String) {
                 if ip.is_ipv6() && !mdns_info.ipv6_addr.contains(&ip) {
                     mdns_info.ipv6_addr.push(ip);
                     // Convert the IPv6 address to a MAC address
-                    if mdns_info.mac_address.is_empty() {
+                    if mdns_info.mac_address.is_nil() {
                         if let Some(mac) = v6_to_mac(&ip.to_string()) {
                             info!("Found MAC address {} for IPv6 address {}", mac, ip);
-                            mdns_info.mac_address = mac;
+                            mdns_info.mac_address = mac.parse().unwrap_or(MacAddr6::nil());
                             // Don't push in instances to keep them clean of PII
                         }
                     }
@@ -233,7 +224,8 @@ async fn process_host(host: Host, service_name: String) {
                         "Extracted MAC Address {} from instance {}",
                         mac_address, instance
                     );
-                    if mdns_info.mac_address.is_empty() {
+                    let mac_address = mac_address.parse().unwrap_or(MacAddr6::nil());
+                    if mdns_info.mac_address.is_nil() {
                         mdns_info.mac_address = mac_address;
                     } else if mdns_info.mac_address != mac_address {
                         warn!("MAC Address {} from instance {} is different from the one already found {}, using the one from instance", mac_address, instance, mdns_info.mac_address);

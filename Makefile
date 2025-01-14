@@ -1,4 +1,4 @@
-.PHONY: upgrade unused_dependencies format clean test
+.PHONY: upgrade unused_dependencies format clean test ios android
 
 upgrade:
 	rustup update
@@ -16,6 +16,14 @@ clean:
 	cargo clean
 	rm -rf ./build/
 	rm -rf ./target/
+
+ios:
+	# To test building for iOS
+	cargo build --target=aarch64-apple-ios
+
+android:
+	# To test building for Android
+	cargo build --target=arm-linux-androideabi
 
 test:
 	cargo test

@@ -1,6 +1,6 @@
 [package]
 name = "edamame_foundation"
-version = "0.7.3"
+version = "0.9.1"
 edition = "2021"
 
 [lints.rust]
@@ -22,8 +22,8 @@ edamame_backend = { git = "https://github.com/edamametechnologies/edamame_backen
 
 # Sentry
 # Beware it will use reqwest with native-tls by default, not rustls
-sentry = { version = "0.35.0", default-features = false, features = ["reqwest", "rustls"] }
-sentry-tracing = "0.35.0"
+sentry = { version = "0.36.0", default-features = false, features = ["reqwest", "rustls"] }
+sentry-tracing = "0.36.0"
 
 # Global statics w/ mutex
 lazy_static = "1.5.0"
@@ -91,9 +91,8 @@ encoding_rs = "0.8.34"
 thiserror = "2.0.1"
 serial_test = "3.1.1"
 
-# Default network interface (not for mobile)
-[target.'cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))'.dependencies]
-netdev = "0.31.0"
+# Encrypted env (weak)
+envcrypt = "0.5.0"
 
 # Not WASI/WASIX/WASM
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -101,6 +100,7 @@ netdev = "0.31.0"
 # Network utils
 # See https://github.com/abaumhauer/eui48/issues/29 - warning should be suppressed, but it's not...
 eui48 = { version = "1.1.0", features = ["disp_hexstring", "serde"] }
+macaddr = { version = "1.0.1", features = ["serde"] }
 oui = "0.8.1"
 ipnet = "2.9.0"
 csv = "1.0.10"
@@ -112,11 +112,10 @@ reqwest = { version = "0.12.5", default-features = false, features = ["gzip", "r
 # Native Android tracing
 tracing-android = "0.2.0"
 
-# Not supported on iOS an Android (only implemented in Flutter for those platforms)
 [target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
+# Not supported on iOS an Android (only implemented in Flutter for those platforms)
 network-interface = "2.0.0"
 
-[target.'cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))'.dependencies]
 # Capture on macOS, Linux, Windows
 # pcap requires libpcap-devel on Linux, and Npcap on Windows
 pcap = { version = "2.2.0" , optional = true, features = ["capture-stream"] }
@@ -135,11 +134,6 @@ arp-toolkit = "0.3.2"
 # Windows
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.59.0", features = [ "Data_Xml_Dom", "Win32_Foundation", "Win32_Security", "Win32_System_Threading", "Win32_System_SystemServices", "Win32_UI_WindowsAndMessaging", "Win32_NetworkManagement", "Win32_NetworkManagement_IpHelper", "Win32_Networking", "Win32_Networking_WinSock" ] }
-
-# macOS - system-configuration-sys is including a symbol that is rejected by the App Store
-[patch.crates-io]
-system-configuration = { git = "https://github.com/edamametechnologies/system-configuration-rs", branch = "main" }
-system-configuration-sys = { git = "https://github.com/edamametechnologies/system-configuration-rs", branch = "main" }
 
 # iOS or macOS
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]

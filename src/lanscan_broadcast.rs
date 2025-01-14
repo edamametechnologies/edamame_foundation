@@ -306,9 +306,11 @@ pub use platform_impl::scan_hosts_broadcast;
 mod tests {
     use super::*;
     use crate::admin::get_admin_status;
+    use crate::lanscan_interface::get_default_interface;
     use std::net::Ipv4Addr;
     use std::str::FromStr;
 
+    /// Test the broadcast ping on a default non-loopback interface that has IPv4 configured.
     #[tokio::test]
     async fn test_broadcast() {
         // On Windows, a broadcast ping can be blocked or require special privileges.
@@ -316,12 +318,27 @@ mod tests {
 
         // Skip the test if admin_status is false
         if !get_admin_status() {
-            println!("Skipping test due to admin status");
+            println!("Skipping broadcast test because admin privileges are not detected.");
             return;
         }
 
-        // Adjust the address to match your local LAN broadcast or a test address.
-        let broadcast = Ipv4Addr::new(192, 168, 1, 255);
+        // Find a non-loopback interface with IPv4
+        let interface = get_default_interface();
+
+        let Some(interface) = interface else {
+            println!("No suitable interface found for broadcast test");
+            return;
+        };
+
+        println!("Detected interface for broadcast test: {}", interface.name);
+
+        // Get the IPv4 address
+        let ipv4 = interface.ipv4;
+
+        // Very rough approach: we just set the last octet = 255
+        // for a likely broadcast on many typical home/office subnets
+        let broadcast = Ipv4Addr::new(ipv4.octets()[0], ipv4.octets()[1], ipv4.octets()[2], 255);
+
         let timeout = 1000;
         let attempts = 3;
 

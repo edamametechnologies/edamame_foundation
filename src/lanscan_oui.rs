@@ -1,6 +1,7 @@
 use crate::lanscan_oui_db::*;
 use crate::rwlock::CustomRwLock;
 use lazy_static::lazy_static;
+use macaddr::MacAddr6;
 use oui::OuiDatabase;
 use std::sync::Arc;
 use tracing::{error, warn};
@@ -15,10 +16,12 @@ lazy_static! {
     };
 }
 
-pub async fn get_mac_address_vendor(mac_address: &str) -> String {
+pub async fn get_mac_address_vendor(mac_address: &MacAddr6) -> String {
     let oui = OUI.read().await;
 
-    match oui.query_by_str(mac_address) {
+    let mac_address = mac_address.to_string();
+
+    match oui.query_by_str(&mac_address) {
         Ok(Some(res)) => {
             if let Some(name_long) = res.name_long {
                 name_long
