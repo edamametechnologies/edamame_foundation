@@ -184,7 +184,7 @@ mod platform_impl {
         let mut cmd = Command::new("ip");
         cmd.arg("neigh");
 
-        if let Some(iface) = interface {
+        if let Some(iface_name) = interface_name {
             cmd.arg("show").arg("dev").arg(iface);
         }
 
