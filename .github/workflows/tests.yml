@@ -154,13 +154,13 @@ jobs:
             if [ "${{ matrix.platform }}" = "android" ]; then
               # Run Android-specific tests
               echo "Running Android tests"
-              # Add your Android test command here, e.g.:
-              # ./gradlew test
+              # Just try to build the project
+              make android
             elif [ "${{ matrix.platform }}" = "ios" ]; then
               # Run iOS-specific tests
               echo "Running iOS tests"
-              # Add your iOS test command here, e.g.:
-              # xcodebuild test -scheme YourScheme -destination 'platform=iOS Simulator,name=iPhone 12'
+              # Just try to build the project
+              make ios
             else
               # Run default tests for other platforms
               make test
@@ -176,6 +176,6 @@ jobs:
         uses: slackapi/slack-github-action@v1.26.0
         with:
           channel-id: 'C072J0U9TH7'
-          slack-message: "Tests ran in ${{ github.workflow }} for ${{ github.repository }} for ${{ runner.os }} on branch ${{ github.ref }} failed"
+          slack-message: "Tests ran in ${{ github.workflow }} for ${{ github.repository }} for ${{ runner.os }} on branch ${{ github.ref }} failed: see https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
