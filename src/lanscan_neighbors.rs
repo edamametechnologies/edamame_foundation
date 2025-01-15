@@ -1,4 +1,3 @@
-use crate::lanscan_interface::get_own_ips;
 use macaddr::MacAddr6;
 use std::collections::{HashMap, HashSet};
 use std::io;
@@ -13,14 +12,9 @@ pub use platform_impl::scan_neighbors;
 pub type ConsolidatedNeighbor = (MacAddr6, Vec<Ipv4Addr>, Vec<Ipv6Addr>);
 
 /// Helper to unify multiple (IpAddr, MacAddr6) pairs per MAC into a single
-/// (Vec<Ipv4Addr>, Vec<Ipv6Addr>, MacAddr6) entry. Also filter out our own IPs.
+/// (Vec<Ipv4Addr>, Vec<Ipv6Addr>, MacAddr6) entry.
 fn unify_neighbors(neighbors: Vec<(IpAddr, MacAddr6)>) -> Vec<ConsolidatedNeighbor> {
-    // Filter out our own IPs
-    let own_ips = get_own_ips();
-    let neighbors: Vec<(IpAddr, MacAddr6)> = neighbors
-        .into_iter()
-        .filter(|(ip, _)| !own_ips.contains(ip))
-        .collect();
+
     // Filter out entries with nil MacAddr6
     let neighbors: Vec<(IpAddr, MacAddr6)> = neighbors
         .into_iter()
