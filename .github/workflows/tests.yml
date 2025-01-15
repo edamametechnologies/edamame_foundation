@@ -132,18 +132,13 @@ jobs:
           fi
         shell: bash
 
+      # Install Cross for Linux
+      - name: Install Cross for Linux
+        if: matrix.platform == 'android'
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
       - name: Install protobuf
         run: ${{ matrix.protobuf_install }}
-
-      - name: Setup Android SDK
-        if: matrix.platform == 'android'
-        uses: android-actions/setup-android@v2
-
-      - name: Setup Xcode
-        if: matrix.platform == 'ios'
-        uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: latest-stable
 
       - name: Run tests
         id: tests
@@ -155,9 +150,8 @@ jobs:
             if [ "${{ matrix.platform }}" = "android" ]; then
               # Run Android-specific tests
               echo "Running Android tests"
-              # Just try to build the project
-              rustup target add x86_64-linux-android
-              cargo build --target x86_64-linux-android
+              # Just try to build the project using cross
+              cargo cross --target x86_64-linux-android
             elif [ "${{ matrix.platform }}" = "ios" ]; then
               # Run iOS-specific tests
               echo "Running iOS tests"
