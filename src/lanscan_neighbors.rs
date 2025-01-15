@@ -14,7 +14,6 @@ pub type ConsolidatedNeighbor = (MacAddr6, Vec<Ipv4Addr>, Vec<Ipv6Addr>);
 /// Helper to unify multiple (IpAddr, MacAddr6) pairs per MAC into a single
 /// (Vec<Ipv4Addr>, Vec<Ipv6Addr>, MacAddr6) entry.
 fn unify_neighbors(neighbors: Vec<(IpAddr, MacAddr6)>) -> Vec<ConsolidatedNeighbor> {
-
     // Filter out entries with nil MacAddr6
     let neighbors: Vec<(IpAddr, MacAddr6)> = neighbors
         .into_iter()
