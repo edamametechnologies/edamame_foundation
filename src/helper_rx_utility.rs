@@ -91,7 +91,7 @@ pub async fn check_interfaces_changes() -> bool {
         let interfaces_ips_old_v4 = INTERFACES_IPS.lock().await.clone();
         if interfaces_ips_old_v4 != interfaces_ipv4 {
             info!(
-                "An IP changed has been detected from {:?} to {:?}",
+                "An IPv4 change has been detected from {:?} to {:?}",
                 interfaces_ips_old_v4, interfaces_ipv4
             );
             interfaces_changed = true;
@@ -102,7 +102,7 @@ pub async fn check_interfaces_changes() -> bool {
         let interfaces_ips_old_v6 = INTERFACES_IPS_V6.lock().await.clone();
         if interfaces_ips_old_v6 != interfaces_ipv6 {
             info!(
-                "An IP changed has been detected from {:?} to {:?}",
+                "An IPv6 change has been detected from {:?} to {:?}",
                 interfaces_ips_old_v6, interfaces_ipv6
             );
             interfaces_changed = true;
