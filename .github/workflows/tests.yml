@@ -151,7 +151,7 @@ jobs:
               # Run Android-specific tests
               echo "Running Android tests"
               # Just try to build the project using cross
-              cargo cross --target x86_64-linux-android
+              cross --target x86_64-linux-android
             elif [ "${{ matrix.platform }}" = "ios" ]; then
               # Run iOS-specific tests
               echo "Running iOS tests"
