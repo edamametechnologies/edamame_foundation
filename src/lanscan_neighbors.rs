@@ -22,6 +22,18 @@ fn unify_neighbors(neighbors: Vec<(IpAddr, MacAddr6)>) -> Vec<ConsolidatedNeighb
         .filter(|(ip, _)| !own_ips.contains(ip))
         .collect();
 
+    // Filter out entries with nil MacAddr6
+    let neighbors: Vec<(IpAddr, MacAddr6)> = neighbors
+        .into_iter()
+        .filter(|(_, mac)| !mac.is_nil())
+        .collect();
+
+    // Filter out IPv6 multicast addresses
+    let neighbors: Vec<(IpAddr, MacAddr6)> = neighbors
+        .into_iter()
+        .filter(|(ip, _)| !ip.is_multicast())
+        .collect();
+
     let mut map: HashMap<MacAddr6, (HashSet<Ipv4Addr>, HashSet<Ipv6Addr>)> = HashMap::new();
     for (ip, mac) in neighbors {
         let (v4set, v6set) = map
@@ -46,16 +58,14 @@ fn unify_neighbors(neighbors: Vec<(IpAddr, MacAddr6)>) -> Vec<ConsolidatedNeighb
 mod platform_impl {
     use super::*;
     use std::ffi::OsStr;
-    use std::io;
     use std::os::windows::ffi::OsStrExt;
-    use std::ptr::null_mut;
-    use tokio::task;
-    use windows::core::Error;
+    use windows::core::PCWSTR;
     use windows::Win32::Foundation::ERROR_SUCCESS;
     use windows::Win32::NetworkManagement::IpHelper::{
-        ConvertInterfaceAliasToLuid, FreeMibTable, GetIpNetTable2, MIB_IPNET_ROW2, MIB_IPNET_TABLE2,
+        FreeMibTable, GetIpNetTable2, MIB_IPNET_ROW2,
     };
-    use windows::Win32::Networking::WinSock::{AF_INET, AF_INET6, SOCKADDR_IN, SOCKADDR_IN6};
+    use windows::Win32::NetworkManagement::Ndis::NET_LUID_LH;
+    use windows::Win32::Networking::WinSock::{AF_INET, AF_INET6, AF_UNSPEC};
 
     /// Parse Windows MIB_IPNET_ROW2 into an IP + MAC (+ LUID) tuple (if valid).
     fn parse_address(row: &MIB_IPNET_ROW2) -> Option<(IpAddr, MacAddr6, u64)> {
@@ -70,100 +80,93 @@ mod platform_impl {
             row.PhysicalAddress[4],
             row.PhysicalAddress[5],
         );
-
-        // SAFETY: we trust that row.Address.Sockaddr is valid because it is coming from the OS.
-        let family = unsafe { (*row.Address.Sockaddr).sa_family as i32 };
+        // SAFETY: we trust that row.Address is valid because it is coming from the OS.
+        let family = unsafe { row.Address.si_family };
         let ip = match family {
             AF_INET => {
                 // interpret the address as SOCKADDR_IN
-                let sock_in: SOCKADDR_IN = unsafe { *(row.Address.Sockaddr as *const SOCKADDR_IN) };
-                let octets = sock_in.sin_addr.S_un.S_addr().to_ne_bytes();
+                let sock_in = unsafe { row.Address.Ipv4 };
+                let octets = unsafe { sock_in.sin_addr.S_un.S_addr.to_ne_bytes() };
                 IpAddr::V4(Ipv4Addr::new(octets[0], octets[1], octets[2], octets[3]))
             }
             AF_INET6 => {
                 // interpret the address as SOCKADDR_IN6
-                let sock_in6: SOCKADDR_IN6 =
-                    unsafe { *(row.Address.Sockaddr as *const SOCKADDR_IN6) };
-                let octets = sock_in6.sin6_addr.u.Byte;
+                let sock_in6 = unsafe { row.Address.Ipv6 };
+                let octets = unsafe { sock_in6.sin6_addr.u.Byte };
                 IpAddr::V6(Ipv6Addr::from(octets))
             }
             _ => return None,
         };
 
-        Some((ip, mac, row.InterfaceLuid.Value))
+        // SAFETY: InterfaceLuid is a union field but we trust the OS to provide valid data
+        unsafe { Some((ip, mac, row.InterfaceLuid.Value)) }
     }
 
     /// Collect neighbor table using the Windows crate, optionally filtering by interface alias.
-    ///
-    /// This is wrapped in a blocking task, because the relevant Windows APIs are synchronous.
     pub async fn scan_neighbors(
         interface_name: Option<&str>,
     ) -> Result<Vec<super::ConsolidatedNeighbor>> {
-        let raw_neighbors = task::spawn_blocking(move || {
-            let mut pairs = vec![];
+        let mut pairs = vec![];
 
-            unsafe {
-                let mut filter_luid = None;
-                if let Some(iface_name) = interface_name {
-                    let wide: Vec<u16> = OsStr::new(iface_name)
-                        .encode_wide()
-                        .chain(std::iter::once(0))
-                        .collect();
-
-                    let mut luid: u64 = 0;
-                    let ret = ConvertInterfaceAliasToLuid(wide.as_ptr(), &mut luid);
-                    if ret != ERROR_SUCCESS.0 {
-                        return Err(io::Error::new(
-                            io::ErrorKind::Other,
-                            format!("ConvertInterfaceAliasToLuid failed with code {ret}"),
-                        )
-                        .into());
-                    }
-                    filter_luid = Some(luid);
-                }
-
-                let mut table_ptr: *mut MIB_IPNET_TABLE2 = null_mut();
-                let res = GetIpNetTable2(0, &mut table_ptr);
-                if res != ERROR_SUCCESS.0 {
-                    return Err(io::Error::new(
-                        io::ErrorKind::Other,
-                        format!("GetIpNetTable2 failed with code {res}"),
-                    )
-                    .into());
-                }
-                if table_ptr.is_null() {
-                    return Err(io::Error::new(
-                        io::ErrorKind::Other,
-                        "GetIpNetTable2 returned a null pointer",
-                    )
-                    .into());
-                }
-
-                // Convert the table pointer to a slice of MIB_IPNET_ROW2
-                let row_slice = std::slice::from_raw_parts(
-                    (*table_ptr).Table.as_ptr(),
-                    (*table_ptr).NumEntries as usize,
+        unsafe {
+            let mut filter_luid = None;
+            if let Some(iface_name) = interface_name {
+                let wide: Vec<u16> = OsStr::new(iface_name)
+                    .encode_wide()
+                    .chain(std::iter::once(0))
+                    .collect();
+                let mut luid = NET_LUID_LH::default();
+                let ret = windows::Win32::NetworkManagement::IpHelper::ConvertInterfaceAliasToLuid(
+                    PCWSTR::from_raw(wide.as_ptr()),
+                    &mut luid,
                 );
-
-                for row in row_slice {
-                    if let Some((ip, mac, luid_val)) = parse_address(row) {
-                        if let Some(fluid) = filter_luid {
-                            if luid_val != fluid {
-                                continue;
-                            }
-                        }
-                        pairs.push((ip, mac));
-                    }
+                if ret != windows::Win32::Foundation::ERROR_SUCCESS {
+                    return Err(io::Error::new(
+                        io::ErrorKind::Other,
+                        format!("ConvertInterfaceAliasToLuid failed with code {ret:?}"),
+                    )
+                    .into());
                 }
-                FreeMibTable(table_ptr as *const _);
+                filter_luid = Some(luid.Value);
             }
 
-            Ok(pairs)
-        })
-        .await??;
+            let mut table_ptr = std::ptr::null_mut();
+            let res = GetIpNetTable2(AF_UNSPEC, &mut table_ptr);
+            if res != ERROR_SUCCESS {
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("GetIpNetTable2 failed with code {res:?}"),
+                )
+                .into());
+            }
+            if table_ptr.is_null() {
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "GetIpNetTable2 returned a null pointer",
+                )
+                .into());
+            }
+
+            let table = &*table_ptr;
+            let row_slice =
+                std::slice::from_raw_parts(table.Table.as_ptr(), table.NumEntries as usize);
+
+            for row in row_slice {
+                if let Some((ip, mac, luid_val)) = parse_address(row) {
+                    if let Some(filter_luid) = filter_luid {
+                        if luid_val != filter_luid {
+                            continue;
+                        }
+                    }
+                    pairs.push((ip, mac));
+                }
+            }
+
+            FreeMibTable(table_ptr.cast());
+        }
 
         // Consolidate multiple IPs per MAC:
-        Ok(super::unify_neighbors(raw_neighbors))
+        Ok(super::unify_neighbors(pairs))
     }
 }
 
