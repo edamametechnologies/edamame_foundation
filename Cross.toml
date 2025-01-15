@@ -1,0 +1,21 @@
+[target.x86_64-linux-android]
+pre-build = [
+    "dpkg --add-architecture $CROSS_DEB_ARCH",
+    "apt update -y && apt install -y protobuf-compiler libpcap-dev:$CROSS_DEB_ARCH"
+]
+
+[build.env]
+passthrough = [
+    "EDAMAME_APP_SENTRY",
+    "PWNED_API_KEY",
+    "EDAMAME_TARGET",
+    "EDAMAME_CORE_TARGET",
+    "EDAMAME_CORE_SERVER",
+    "EDAMAME_CA_PEM",
+    "EDAMAME_CLIENT_PEM",
+    "EDAMAME_CLIENT_KEY",
+    "EDAMAME_SERVER_PEM",
+    "EDAMAME_SERVER_KEY",
+    "EDAMAME_CLIENT_CA_PEM",
+    "LAMBDA_SIGNATURE",
+]

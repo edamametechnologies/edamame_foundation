@@ -4,6 +4,7 @@ use ipnet::{ipv4_mask_to_prefix, ipv6_mask_to_prefix};
 use network_interface::{Addr, NetworkInterface, NetworkInterfaceConfig};
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 use std::net::UdpSocket;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
@@ -154,21 +155,27 @@ pub fn get_valid_network_interfaces() -> Vec<LANScanInterface> {
 
 /// Returns all our own IPs
 pub fn get_own_ips() -> Vec<IpAddr> {
-    let interfaces = match NetworkInterface::show() {
-        Ok(ifaces) => ifaces,
-        Err(e) => {
-            error!("Failed to fetch interfaces: {}", e);
-            return Vec::new();
-        }
-    };
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+    {
+        let interfaces = match NetworkInterface::show() {
+            Ok(ifaces) => ifaces,
+            Err(e) => {
+                error!("Failed to fetch interfaces: {}", e);
+                return Vec::new();
+            }
+        };
 
-    // Flatten out the interfaces' addresses, extracting the IpAddr from each Addr.
-    let own_ips: Vec<IpAddr> = interfaces
-        .iter()
-        .flat_map(|iface| iface.addr.iter().map(|addr| addr.ip()))
-        .collect();
-
-    own_ips
+        // Flatten out the interfaces' addresses, extracting the IpAddr from each Addr.
+        let own_ips: Vec<IpAddr> = interfaces
+            .iter()
+            .flat_map(|iface| iface.addr.iter().map(|addr| addr.ip()))
+            .collect();
+        own_ips
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    {
+        Vec::new()
+    }
 }
 
 /// Fetches what we consider to be the "default" interface on MacOS, Windows, and Linux.  
