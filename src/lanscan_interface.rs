@@ -154,16 +154,20 @@ pub fn get_valid_network_interfaces() -> Vec<LANScanInterface> {
 
 /// Returns all our own IPs
 pub fn get_own_ips() -> Vec<IpAddr> {
-    // Return all IPv4 and IPv6 addresses
-    let own_ips_v4: Vec<IpAddr> = get_valid_network_interfaces()
-        .into_iter()
-        .filter_map(|iface| Some(IpAddr::V4(iface.ipv4)))
+    let interfaces = match NetworkInterface::show() {
+        Ok(ifaces) => ifaces,
+        Err(e) => {
+            error!("Failed to fetch interfaces: {}", e);
+            return Vec::new();
+        }
+    };
+
+    // Flatten out the interfaces' addresses, extracting the IpAddr from each Addr.
+    let own_ips: Vec<IpAddr> = interfaces
+        .iter()
+        .flat_map(|iface| iface.addr.iter().map(|addr| addr.ip()))
         .collect();
-    let own_ips_v6: Vec<IpAddr> = get_valid_network_interfaces()
-        .into_iter()
-        .filter_map(|iface| Some(IpAddr::V6(iface.ipv6)))
-        .collect();
-    let own_ips = [own_ips_v4, own_ips_v6].concat();
+
     own_ips
 }
 

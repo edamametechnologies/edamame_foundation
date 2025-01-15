@@ -21,7 +21,6 @@ fn unify_neighbors(neighbors: Vec<(IpAddr, MacAddr6)>) -> Vec<ConsolidatedNeighb
         .into_iter()
         .filter(|(ip, _)| !own_ips.contains(ip))
         .collect();
-
     // Filter out entries with nil MacAddr6
     let neighbors: Vec<(IpAddr, MacAddr6)> = neighbors
         .into_iter()
