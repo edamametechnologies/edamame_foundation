@@ -28,6 +28,7 @@ env:
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
@@ -155,14 +156,14 @@ jobs:
               # Run Android-specific tests
               echo "Running Android tests"
               # Just try to build the project
-              rustup target add arm-linux-androideabi
-              make android
+              rustup target add x86_64-linux-android
+              cargo build --target x86_64-linux-android
             elif [ "${{ matrix.platform }}" = "ios" ]; then
               # Run iOS-specific tests
               echo "Running iOS tests"
               # Just try to build the project
               rustup target add aarch64-apple-ios
-              make ios
+              cargo build --target aarch64-apple-ios
             else
               # Run default tests for other platforms
               make test
