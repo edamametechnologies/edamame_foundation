@@ -23,7 +23,7 @@ ios:
 
 android:
 	# To test building for Android
-	cargo build --target=arm-linux-androideabi
+	cross build --release --target x86_64-linux-android
 
 test:
 	cargo test
