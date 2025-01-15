@@ -4,6 +4,7 @@ use ipnet::{ipv4_mask_to_prefix, ipv6_mask_to_prefix};
 use network_interface::{Addr, NetworkInterface, NetworkInterfaceConfig};
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
+use std::net::UdpSocket;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 use tracing::error;
@@ -178,42 +179,75 @@ pub fn get_default_interface() -> Option<LANScanInterface> {
         }
     };
 
-    // Choose an interface that actually has IPv4 addresses, and take the one with the smallest index and that is not loopback.
-    let default_iface = interfaces
-        .into_iter()
-        .filter(|iface| iface.addr.iter().any(|addr| matches!(addr, Addr::V4(_))))
-        .filter(|iface| !iface.name.starts_with("lo"))
-        .min_by_key(|iface| iface.index)?;
+    // A commonly used “external” address to force the OS to pick a route
+    let google_dns = "8.8.8.8:80";
 
-    // Dig through addresses to pull out first IPv4 and (potentially) an IPv6.
-    let mut found_ipv4 = Ipv4Addr::new(0, 0, 0, 0);
-    let mut found_netmaskv4 = Ipv4Addr::new(0, 0, 0, 0);
-    let mut found_ipv6 = Ipv6Addr::UNSPECIFIED;
-    let mut found_netmaskv6 = Ipv6Addr::UNSPECIFIED;
+    // 1) Bind a local UDP socket
+    let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
 
-    for addr in default_iface.addr.iter() {
-        match addr {
-            Addr::V4(ipv4) => {
-                found_ipv4 = ipv4.ip;
-                found_netmaskv4 = ipv4.netmask.unwrap_or(Ipv4Addr::new(0, 0, 0, 0));
-            }
-            Addr::V6(ipv6) => {
-                // Optionally skip link-local addresses.
-                if !ipv6.ip.to_string().starts_with("fe80:") {
-                    found_ipv6 = ipv6.ip;
-                    found_netmaskv6 = ipv6.netmask.unwrap_or(Ipv6Addr::UNSPECIFIED);
-                }
-            }
+    // 2) "Connect" to external address so OS picks a default route
+    socket.connect(google_dns).ok()?;
+
+    // 3) Ask the socket for the local IP it chose
+    let local_addr = match socket.local_addr() {
+        Ok(addr) => addr,
+        Err(_) => {
+            error!("Failed to get local address");
+            return None;
+        }
+    };
+
+    let mut default_iface = None;
+
+    // 4) Compare that IP against the IPs of all known interfaces
+    for iface in interfaces.iter() {
+        if iface
+            .addr
+            .iter()
+            .any(|addr| addr.ip().to_string() == local_addr.ip().to_string())
+        {
+            default_iface = Some(iface.name.clone());
         }
     }
 
-    Some(LANScanInterface {
-        name: default_iface.name,
-        ipv4: found_ipv4,
-        prefixv4: ipv4_mask_to_prefix(found_netmaskv4).unwrap_or(0),
-        ipv6: found_ipv6,
-        prefixv6: ipv6_mask_to_prefix(found_netmaskv6).unwrap_or(0),
-    })
+    if let Some(name) = default_iface {
+        // Find the interface with the name
+        let interface = interfaces.iter().find(|iface| iface.name == name).unwrap();
+        let ipv4 = interface
+            .addr
+            .iter()
+            .find(|addr| matches!(addr.ip(), IpAddr::V4(_)))
+            .unwrap();
+        let ipv6 = interface
+            .addr
+            .iter()
+            .find(|addr| matches!(addr.ip(), IpAddr::V6(_)))
+            .unwrap();
+        let netmaskv4 = match ipv4 {
+            network_interface::Addr::V4(addr) => addr.netmask.unwrap_or(Ipv4Addr::new(0, 0, 0, 0)),
+            _ => unreachable!(),
+        };
+        let netmaskv6 = match ipv6 {
+            network_interface::Addr::V6(addr) => addr.netmask.unwrap_or(Ipv6Addr::UNSPECIFIED),
+            _ => unreachable!(),
+        };
+
+        Some(LANScanInterface {
+            name: name,
+            ipv4: match ipv4.ip() {
+                IpAddr::V4(addr) => addr,
+                _ => unreachable!(),
+            },
+            prefixv4: ipv4_mask_to_prefix(netmaskv4).unwrap_or(0),
+            ipv6: match ipv6.ip() {
+                IpAddr::V6(addr) => addr,
+                _ => unreachable!(),
+            },
+            prefixv6: ipv6_mask_to_prefix(netmaskv6).unwrap_or(0),
+        })
+    } else {
+        None
+    }
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
