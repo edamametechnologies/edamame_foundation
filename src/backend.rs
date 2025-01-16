@@ -68,6 +68,13 @@ pub trait Backend {
         pin: &str,
         score: &DetailedScoreBackend,
         disconnect: bool,
+    ) -> Result<String>;
+
+    async fn request_report_from_signature(
+        &self,
+        email: &str,
+        signature: &str,
+        format: &str,
     ) -> Result<()>;
 
     async fn get_remediation_lanscan(
@@ -92,12 +99,5 @@ pub trait Backend {
     async fn send_dislike_device_type_info(
         &self,
         dislike_device_info_backend: &DislikeDeviceInfoBackend,
-    ) -> Result<()>;
-
-    async fn request_report_from_signature(
-        &self,
-        email: &str,
-        signature: &str,
-        format: &str,
     ) -> Result<()>;
 }
