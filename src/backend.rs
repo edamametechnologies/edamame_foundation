@@ -93,4 +93,11 @@ pub trait Backend {
         &self,
         dislike_device_info_backend: &DislikeDeviceInfoBackend,
     ) -> Result<()>;
+
+    async fn request_report_from_signature(
+        &self,
+        email: &str,
+        signature: &str,
+        format: &str,
+    ) -> Result<()>;
 }
