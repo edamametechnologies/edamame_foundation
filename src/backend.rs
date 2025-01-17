@@ -20,6 +20,7 @@ pub enum BackendErrorCode {
     DisabledUser,
     BadVersion,
     Unknown,
+    InvalidSignature,
     None,
 }
 
@@ -38,6 +39,7 @@ impl fmt::Display for BackendErrorCode {
             BackendErrorCode::NonExistentUser => write!(f, "NonExistentUser"),
             BackendErrorCode::DisabledUser => write!(f, "DisabledUser"),
             BackendErrorCode::BadVersion => write!(f, "BadVersion"),
+            BackendErrorCode::InvalidSignature => write!(f, "InvalidSignature"),
             BackendErrorCode::Unknown => write!(f, "Unknown"),
             BackendErrorCode::None => write!(f, "None"),
         }
