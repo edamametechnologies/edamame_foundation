@@ -493,8 +493,10 @@ impl DeviceInfo {
             }
         }
 
-        // Update the first seen time
-        if new_device.first_seen < device.first_seen {
+        // Update the first seen time, but do not overwrite if new_device.first_seen is just the default epoch
+        if new_device.first_seen < device.first_seen
+            && new_device.first_seen > DateTime::<Utc>::from(std::time::UNIX_EPOCH)
+        {
             device.first_seen = new_device.first_seen;
         }
 
@@ -741,6 +743,111 @@ mod tests {
         assert_eq!(
             merged.last_seen, device2.last_seen,
             "Since device2 was fresher, last_seen should be updated."
+        );
+    }
+
+    #[test]
+    fn test_merge_first_seen_older_valid() {
+        let mut device_current = DeviceInfo::new(Some(IpAddr::V4(Ipv4Addr::new(10, 1, 1, 1))));
+        // Current device was first seen at 2023-05-01 13:00:00
+        device_current.first_seen = Utc.with_ymd_and_hms(2023, 5, 1, 13, 0, 0).unwrap();
+
+        let mut device_new = device_current.clone();
+        // The new device has an older (earlier) first_seen of 2023-05-01 12:00:00
+        device_new.first_seen = Utc.with_ymd_and_hms(2023, 5, 1, 12, 0, 0).unwrap();
+
+        // Merge them
+        DeviceInfo::merge(&mut device_current, &device_new);
+
+        // We expect the device_current.first_seen to be the older date (12:00:00).
+        assert_eq!(
+            device_current.first_seen,
+            Utc.with_ymd_and_hms(2023, 5, 1, 12, 0, 0).unwrap(),
+            "The existing device's first_seen should take the older timestamp from new_device if it is valid."
+        );
+    }
+
+    #[test]
+    fn test_merge_first_seen_newer_does_not_override() {
+        let mut device_current = DeviceInfo::new(Some(IpAddr::V4(Ipv4Addr::new(10, 1, 1, 2))));
+        // Current device was first seen at 2023-05-01 10:00:00
+        device_current.first_seen = Utc.with_ymd_and_hms(2023, 5, 1, 10, 0, 0).unwrap();
+
+        let mut device_new = device_current.clone();
+        // The new device has a later first_seen (2023-05-01 11:00:00),
+        // but we do NOT want to override with a "newer" first_seen.
+        // Because the code sets first_seen to the older of the two.
+        device_new.first_seen = Utc.with_ymd_and_hms(2023, 5, 1, 11, 0, 0).unwrap();
+
+        // Merge them
+        DeviceInfo::merge(&mut device_current, &device_new);
+
+        // Expect that we still have the same older first_seen (10:00:00).
+        assert_eq!(
+            device_current.first_seen,
+            Utc.with_ymd_and_hms(2023, 5, 1, 10, 0, 0).unwrap(),
+            "We should keep the older existing first_seen when merging."
+        );
+    }
+
+    #[test]
+    fn test_merge_first_seen_ignore_default_epoch() {
+        let mut device_current = DeviceInfo::new(Some(IpAddr::V4(Ipv4Addr::new(10, 1, 1, 3))));
+        // Current device was first seen at 2023-05-01 10:30:00
+        device_current.first_seen = Utc.with_ymd_and_hms(2023, 5, 1, 10, 30, 0).unwrap();
+
+        let mut device_new = device_current.clone();
+        // The new device has the default epoch (1970-01-01) as first_seen
+        device_new.first_seen = DateTime::<Utc>::from(std::time::UNIX_EPOCH);
+
+        // Merge them
+        DeviceInfo::merge(&mut device_current, &device_new);
+
+        // The existing device's first_seen is valid, so it should NOT be overridden by epoch.
+        assert_eq!(
+            device_current.first_seen,
+            Utc.with_ymd_and_hms(2023, 5, 1, 10, 30, 0).unwrap(),
+            "We should ignore default (UNIX epoch) first_seen from the new device."
+        );
+    }
+
+    #[test]
+    fn test_merge_last_seen_newer_overrides() {
+        // If the new device has a more recent last_seen, it should override the existing device
+        let mut device_current = DeviceInfo::new(Some(IpAddr::V4(Ipv4Addr::new(192, 168, 10, 1))));
+        device_current.last_seen = Utc.with_ymd_and_hms(2023, 5, 1, 13, 0, 0).unwrap();
+
+        let mut device_new = device_current.clone();
+        // Give the new device a more recent last_seen
+        device_new.last_seen = Utc.with_ymd_and_hms(2023, 5, 1, 14, 0, 0).unwrap();
+
+        DeviceInfo::merge(&mut device_current, &device_new);
+
+        // The device_current should be updated to the newer last_seen
+        assert_eq!(
+            device_current.last_seen,
+            Utc.with_ymd_and_hms(2023, 5, 1, 14, 0, 0).unwrap(),
+            "A more recent last_seen should override the existing device's last_seen"
+        );
+    }
+
+    #[test]
+    fn test_merge_last_seen_older_no_update() {
+        // If the new device has an older last_seen, we do not change the existing device
+        let mut device_current = DeviceInfo::new(Some(IpAddr::V4(Ipv4Addr::new(192, 168, 10, 2))));
+        device_current.last_seen = Utc.with_ymd_and_hms(2023, 5, 1, 13, 30, 0).unwrap();
+
+        let mut device_older = device_current.clone();
+        // Make the new device's last_seen older than the current
+        device_older.last_seen = Utc.with_ymd_and_hms(2023, 5, 1, 12, 30, 0).unwrap();
+
+        DeviceInfo::merge(&mut device_current, &device_older);
+
+        // The device_current's last_seen should not be updated
+        assert_eq!(
+            device_current.last_seen,
+            Utc.with_ymd_and_hms(2023, 5, 1, 13, 30, 0).unwrap(),
+            "An older last_seen should NOT override the existing device's last_seen"
         );
     }
 }
