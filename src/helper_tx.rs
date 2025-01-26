@@ -157,8 +157,8 @@ async fn helper_run(
 
     let mut client = EdamameHelperClient::new(connection)
         // For session data, the messages can be large, so we need to increase the limits
-        .max_decoding_message_size(100 * 1024 * 1024)
-        .max_encoding_message_size(100 * 1024 * 1024);
+        .max_decoding_message_size(200 * 1024 * 1024)
+        .max_encoding_message_size(200 * 1024 * 1024);
 
     trace!("Sending request to helper server");
     let request = tonic::Request::new(HelperRequest {
