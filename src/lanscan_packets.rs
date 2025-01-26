@@ -1,4 +1,5 @@
 use crate::lanscan_asn::*;
+use crate::lanscan_ip::is_local_ip;
 use crate::lanscan_port_vulns::get_name_from_port;
 use crate::lanscan_sessions::session_macros::*;
 use crate::lanscan_sessions::*;

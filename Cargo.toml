@@ -1,6 +1,6 @@
 [package]
 name = "edamame_foundation"
-version = "0.9.5"
+version = "0.9.7"
 edition = "2021"
 
 [lints.rust]
@@ -44,6 +44,9 @@ uuid = { version = "1.10.0", features = [
     "macro-diagnostics",
 ]}
 
+# Hashing
+sha2 = "0.10.8"
+hex = "0.4.3"
 # Logging
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter", "fmt"] }

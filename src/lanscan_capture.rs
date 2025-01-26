@@ -924,7 +924,7 @@ impl LANScanCapture {
                 new_src_domain = Some(domain.clone());
             } else {
                 // If not in dns_resolutions, use the resolver (only for eligible IPs)
-                if !is_local_ip(&session_info.session.src_ip) {
+                if !crate::lanscan_ip::is_local_ip(&session_info.session.src_ip) {
                     if let Some(resolver) = resolver.as_ref() {
                         let domain = resolver.get_resolved_ip(&session_info.session.src_ip).await;
                         if let Some(domain) = domain {
@@ -956,7 +956,7 @@ impl LANScanCapture {
                 new_dst_domain = Some(domain.clone());
                 dst_dns_resolution_count += 1;
             } else {
-                if !is_local_ip(&session_info.session.dst_ip) {
+                if !crate::lanscan_ip::is_local_ip(&session_info.session.dst_ip) {
                     if let Some(resolver) = resolver.as_ref() {
                         let domain = resolver.get_resolved_ip(&session_info.session.dst_ip).await;
                         if let Some(domain) = domain {

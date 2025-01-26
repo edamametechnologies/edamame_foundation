@@ -337,7 +337,16 @@ mod tests {
 
         // Very rough approach: we just set the last octet = 255
         // for a likely broadcast on many typical home/office subnets
-        let broadcast = Ipv4Addr::new(ipv4.octets()[0], ipv4.octets()[1], ipv4.octets()[2], 255);
+        let Some(ipv4) = ipv4 else {
+            println!("No IPv4 address found for broadcast test");
+            return;
+        };
+        let broadcast = Ipv4Addr::new(
+            ipv4.ip.octets()[0],
+            ipv4.ip.octets()[1],
+            ipv4.ip.octets()[2],
+            255,
+        );
 
         let timeout = 1000;
         let attempts = 3;

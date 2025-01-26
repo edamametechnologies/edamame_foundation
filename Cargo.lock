@@ -885,7 +885,7 @@ dependencies = [
 
 [[package]]
 name = "edamame_foundation"
-version = "0.9.5"
+version = "0.9.7"
 dependencies = [
  "anyhow",
  "arp-toolkit",
@@ -901,6 +901,7 @@ dependencies = [
  "eui48",
  "futures",
  "futures-util",
+ "hex",
  "hickory-resolver",
  "humantime",
  "ipnet",
@@ -926,6 +927,7 @@ dependencies = [
  "serde_json",
  "serde_with",
  "serial_test",
+ "sha2",
  "socket2 0.5.8",
  "sorted-vec",
  "strum",
