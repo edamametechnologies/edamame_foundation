@@ -8,7 +8,7 @@ use std::cmp::Ordering;
 use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::iter::FromIterator;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use tracing::info;
+use tracing::{debug, info};
 
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 use std::net::UdpSocket;
@@ -537,7 +537,7 @@ pub fn get_valid_network_interfaces() -> LANScanInterfaces {
         let mut valid_ifaces = validate_interfaces(all_interfaces);
         // Sort by name (or by Ord) again, just to be sure
         valid_ifaces.sort();
-        info!("Valid interfaces: {:#?}", valid_ifaces);
+        debug!("Valid interfaces: {:#?}", valid_ifaces);
         valid_ifaces
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]

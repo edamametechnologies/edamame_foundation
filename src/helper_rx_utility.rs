@@ -372,40 +372,42 @@ pub async fn utility_get_whitelist_exceptions() -> Result<String> {
     Ok(json_exceptions)
 }
 
+#[cfg(
+    any(target_os = "macos", target_os = "linux", target_os = "windows")
+)]
 pub fn start_interface_monitor() {
-    {
-        #[cfg(all(
-            any(target_os = "macos", target_os = "linux", target_os = "windows"),
-            feature = "packetcapture"
-        ))]
-        let capture = CAPTURE.clone();
-        async_spawn(async move {
-            loop {
-                if check_interfaces_changes().await {
-                    // Handle capture restart
-                    #[cfg(all(
-                        any(target_os = "macos", target_os = "linux", target_os = "windows"),
-                        feature = "packetcapture"
-                    ))]
-                    {
-                        let is_capturing = capture.lock().await.is_capturing().await;
-                        if is_capturing {
-                            capture.lock().await.stop().await;
-                            let interfaces = INTERFACES_NAMES.lock().await.clone();
-                            let interfaces_string = interfaces.join(",");
-                            info!(
-                                "Interfaces changed, restarting capture on {}",
-                                interfaces_string
-                            );
-                            capture.lock().await.start(&interfaces_string).await;
-                        }
+
+    #[cfg(all(
+        any(target_os = "macos", target_os = "linux", target_os = "windows"),
+        feature = "packetcapture"
+    ))]
+    let capture = CAPTURE.clone();
+    async_spawn(async move {
+        loop {
+            if check_interfaces_changes().await {
+                // Handle capture restart
+                #[cfg(all(
+                    any(target_os = "macos", target_os = "linux", target_os = "windows"),
+                    feature = "packetcapture"
+                ))]
+                {
+                    let is_capturing = capture.lock().await.is_capturing().await;
+                    if is_capturing {
+                        capture.lock().await.stop().await;
+                        let interfaces = INTERFACES_NAMES.lock().await.clone();
+                        let interfaces_string = interfaces.join(",");
+                        info!(
+                            "Interfaces changed, restarting capture on {}",
+                            interfaces_string
+                        );
+                        capture.lock().await.start(&interfaces_string).await;
                     }
-                    // mDNS flush
-                    info!("Interfaces changed, flushing mDNS cache");
-                    mdns_flush().await;
                 }
-                sleep(Duration::from_secs(10)).await;
+                // mDNS flush
+                info!("Interfaces changed, flushing mDNS cache");
+                mdns_flush().await;
             }
-        });
-    }
+            sleep(Duration::from_secs(10)).await;
+        }
+    });
 }
