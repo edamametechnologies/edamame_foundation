@@ -217,11 +217,11 @@ mod tests {
 
         // Add IPs concurrently
         let resolver_clone = Arc::clone(&resolver);
-        let handle1 = tokio::spawn(async move {
+        let handle1 = async_spawn(async move {
             resolver_clone.add_ip_to_resolver(&ip_addr1).await;
         });
         let resolver_clone = Arc::clone(&resolver);
-        let handle2 = tokio::spawn(async move {
+        let handle2 = async_spawn(async move {
             resolver_clone.add_ip_to_resolver(&ip_addr2).await;
         });
 

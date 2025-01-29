@@ -435,6 +435,7 @@ pub async fn rpc_run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::async_spawn;
     use edamame_proto::edamame_helper_client::EdamameHelperClient;
     use edamame_proto::edamame_helper_server::{EdamameHelper, EdamameHelperServer};
     use std::str;
@@ -572,7 +573,7 @@ mod tests {
             });
 
         // Start server in a separate task
-        tokio::spawn(async move {
+        async_spawn(async move {
             info!("Starting server on {:?}", addr);
             if let Err(e) = server_future.await {
                 error!("Server error: {:?}", e);

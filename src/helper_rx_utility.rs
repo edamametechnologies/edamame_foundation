@@ -10,6 +10,7 @@ use crate::lanscan_mdns::*;
 use crate::lanscan_neighbors::scan_neighbors;
 use crate::logger::get_all_logs;
 use crate::runner_cli::run_cli;
+use crate::runtime::async_spawn;
 use anyhow::Result;
 use lazy_static::lazy_static;
 #[cfg(target_os = "macos")]
@@ -23,6 +24,7 @@ use std::io::ErrorKind;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tokio::time::{sleep, Duration};
 use tracing::{error, info, warn};
 #[cfg(all(
     any(target_os = "macos", target_os = "linux", target_os = "windows"),
@@ -38,40 +40,29 @@ use crate::lanscan_interface::*;
     feature = "packetcapture"
 ))]
 use crate::lanscan_sessions::SessionFilter;
-use chrono::Utc;
 
 lazy_static! {
     // Current default interface
     pub static ref INTERFACES_NAMES: Arc<Mutex<Vec<String>>> =
         Arc::new(Mutex::new(Vec::new()));
     pub static ref INTERFACES_SIGNATURE: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
-    // Last interface check timestamp
-    pub static ref INTERFACE_CHECK_TIME: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
 }
 
 // Detect and check interface changes
 pub async fn check_interfaces_changes() -> bool {
-    // Detect the interface name and ip if not done for 10 seconds, detect changes
-    if chrono::Utc::now().timestamp() - *INTERFACE_CHECK_TIME.lock().await as i64 > 10 {
-        let interfaces = get_valid_network_interfaces();
-        let mut interfaces_changed = false;
-        *INTERFACES_NAMES.lock().await = interfaces
-            .interfaces
-            .iter()
-            .map(|iface| iface.name.clone())
-            .collect::<Vec<_>>();
-        let interfaces_signature = interfaces.signature();
-        if *INTERFACES_SIGNATURE.lock().await != interfaces_signature {
-            *INTERFACES_SIGNATURE.lock().await = interfaces_signature;
-            interfaces_changed = true;
-        }
-
-        // Update the interface check time
-        *INTERFACE_CHECK_TIME.lock().await = Utc::now().timestamp() as u64;
-
-        return interfaces_changed;
+    let interfaces = get_valid_network_interfaces();
+    let mut interfaces_changed = false;
+    *INTERFACES_NAMES.lock().await = interfaces
+        .interfaces
+        .iter()
+        .map(|iface| iface.name.clone())
+        .collect::<Vec<_>>();
+    let interfaces_signature = interfaces.signature();
+    if *INTERFACES_SIGNATURE.lock().await != interfaces_signature {
+        *INTERFACES_SIGNATURE.lock().await = interfaces_signature;
+        interfaces_changed = true;
     }
-    false
+    return interfaces_changed;
 }
 
 pub async fn utility_broadcast_ping(broadcast_addr: &str) -> Result<String> {
@@ -215,8 +206,6 @@ pub async fn utility_start_capture() -> Result<String> {
     if CAPTURE.lock().await.is_capturing().await {
         return order_error("capture already started", false);
     }
-    // Refresh interfaces
-    let _ = check_interfaces_changes().await;
     let interfaces = INTERFACES_NAMES.lock().await.clone();
     let interfaces_string = interfaces.join(",");
     CAPTURE.lock().await.start(&interfaces_string).await;
@@ -240,11 +229,9 @@ pub async fn utility_restart_capture() -> Result<String> {
     if !CAPTURE.lock().await.is_capturing().await {
         return order_error("capture not running", false);
     }
-    if check_interfaces_changes().await {
-        let interfaces = INTERFACES_NAMES.lock().await.clone();
-        let interfaces_string = interfaces.join(",");
-        CAPTURE.lock().await.restart(&interfaces_string).await;
-    }
+    let interfaces = INTERFACES_NAMES.lock().await.clone();
+    let interfaces_string = interfaces.join(",");
+    CAPTURE.lock().await.restart(&interfaces_string).await;
     Ok("".to_string())
 }
 
@@ -318,16 +305,6 @@ pub async fn utility_get_filter() -> Result<String> {
     feature = "packetcapture"
 ))]
 pub async fn utility_get_sessions() -> Result<String> {
-    if check_interfaces_changes().await && CAPTURE.lock().await.is_capturing().await {
-        CAPTURE.lock().await.stop().await;
-        let interfaces = INTERFACES_NAMES.lock().await.clone();
-        let interfaces_string = interfaces.join(",");
-        info!(
-            "Interfaces have changed, restarting capture on {:?}",
-            interfaces_string
-        );
-        CAPTURE.lock().await.start(&interfaces_string).await;
-    }
     let sessions = CAPTURE.lock().await.get_sessions().await;
     let json_sessions = match serde_json::to_string(&sessions) {
         Ok(json) => json,
@@ -345,16 +322,6 @@ pub async fn utility_get_sessions() -> Result<String> {
     feature = "packetcapture"
 ))]
 pub async fn utility_get_current_sessions() -> Result<String> {
-    if check_interfaces_changes().await && CAPTURE.lock().await.is_capturing().await {
-        CAPTURE.lock().await.stop().await;
-        let interfaces = INTERFACES_NAMES.lock().await.clone();
-        let interfaces_string = interfaces.join(",");
-        info!(
-            "Interfaces have changed, restarting capture on {:?}",
-            interfaces_string
-        );
-        CAPTURE.lock().await.start(&interfaces_string).await;
-    }
     let active_sessions = CAPTURE.lock().await.get_current_sessions().await;
     let json_active_sessions = match serde_json::to_string(&active_sessions) {
         Ok(json) => json,
@@ -403,4 +370,42 @@ pub async fn utility_get_whitelist_exceptions() -> Result<String> {
     };
     info!("Returning {} whitelist exceptions", exceptions.len());
     Ok(json_exceptions)
+}
+
+pub fn start_interface_monitor() {
+    {
+        #[cfg(all(
+            any(target_os = "macos", target_os = "linux", target_os = "windows"),
+            feature = "packetcapture"
+        ))]
+        let capture = CAPTURE.clone();
+        async_spawn(async move {
+            loop {
+                if check_interfaces_changes().await {
+                    // Handle capture restart
+                    #[cfg(all(
+                        any(target_os = "macos", target_os = "linux", target_os = "windows"),
+                        feature = "packetcapture"
+                    ))]
+                    {
+                        let is_capturing = capture.lock().await.is_capturing().await;
+                        if is_capturing {
+                            capture.lock().await.stop().await;
+                            let interfaces = INTERFACES_NAMES.lock().await.clone();
+                            let interfaces_string = interfaces.join(",");
+                            info!(
+                                "Interfaces changed, restarting capture on {}",
+                                interfaces_string
+                            );
+                            capture.lock().await.start(&interfaces_string).await;
+                        }
+                    }
+                    // mDNS flush
+                    info!("Interfaces changed, flushing mDNS cache");
+                    mdns_flush().await;
+                }
+                sleep(Duration::from_secs(10)).await;
+            }
+        });
+    }
 }
