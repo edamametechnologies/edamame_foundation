@@ -248,7 +248,11 @@ impl LANScanCapture {
 
         // Start the resolver if it exists
         if let Some(resolver) = &mut self.resolver {
-            Arc::get_mut(resolver).unwrap().start().await;
+            if let Some(resolver) = Arc::get_mut(resolver) {
+                resolver.start().await;
+            } else {
+                error!("Failed to get mutable reference to resolver");
+            }
         }
 
         let resolver = self.resolver.clone();
@@ -297,6 +301,8 @@ impl LANScanCapture {
         if let Some(resolver) = &mut self.resolver {
             if let Some(resolver) = Arc::get_mut(resolver) {
                 resolver.stop().await;
+            } else {
+                error!("Failed to get mutable reference to resolver");
             }
         }
     }
@@ -311,6 +317,8 @@ impl LANScanCapture {
         if let Some(dns_processor) = &mut self.dns_packet_processor {
             if let Some(dns_processor) = Arc::get_mut(dns_processor) {
                 dns_processor.start_dns_query_cleanup_task().await;
+            } else {
+                error!("Failed to get mutable reference to DNS packet processor");
             }
         }
     }
@@ -319,6 +327,8 @@ impl LANScanCapture {
         if let Some(dns_processor) = &mut self.dns_packet_processor {
             if let Some(dns_processor) = Arc::get_mut(dns_processor) {
                 dns_processor.stop_dns_query_cleanup_task().await;
+            } else {
+                error!("Failed to get mutable reference to DNS packet processor");
             }
         }
     }
@@ -333,6 +343,8 @@ impl LANScanCapture {
         if let Some(l7) = &mut self.l7 {
             if let Some(l7) = Arc::get_mut(l7) {
                 l7.start().await;
+            } else {
+                error!("Failed to get mutable reference to L7 resolver");
             }
         }
 
@@ -373,6 +385,8 @@ impl LANScanCapture {
         if let Some(l7) = &mut self.l7 {
             if let Some(l7) = Arc::get_mut(l7) {
                 l7.stop().await;
+            } else {
+                error!("Failed to get mutable reference to L7 resolver");
             }
         }
     }

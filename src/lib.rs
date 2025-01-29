@@ -1,9 +1,10 @@
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub mod admin;
 pub mod asn_db;
 pub mod backend;
 pub mod cloud_model;
 pub mod health;
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub mod helper_proto;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub mod helper_rx;

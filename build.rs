@@ -11,7 +11,12 @@ use zip;
 
 fn main() {
     // Tonic/proto
-    tonic_build::compile_protos("./proto/edamame.proto").unwrap();
+    match tonic_build::compile_protos("./proto/edamame.proto") {
+        Ok(_) => println!("Tonic/proto compiled successfully."),
+        Err(e) => {
+            panic!("Failed to compile Tonic/proto: {}", e);
+        }
+    }
 
     // For Windows, download and extract the Npcap SDK
     #[cfg(all(target_os = "windows", feature = "packetcapture"))]
