@@ -372,11 +372,8 @@ pub async fn utility_get_whitelist_exceptions() -> Result<String> {
     Ok(json_exceptions)
 }
 
-#[cfg(
-    any(target_os = "macos", target_os = "linux", target_os = "windows")
-)]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub fn start_interface_monitor() {
-
     #[cfg(all(
         any(target_os = "macos", target_os = "linux", target_os = "windows"),
         feature = "packetcapture"
