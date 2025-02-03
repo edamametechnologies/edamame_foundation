@@ -2,6 +2,7 @@ use crate::helper_proto::*;
 use crate::helper_rx_utility::*;
 use crate::runner_cli::*;
 use crate::threat_factory::*;
+use crate::version::Version;
 use anyhow::{anyhow, Error, Result};
 use base64::engine::general_purpose;
 use base64::Engine;
@@ -211,17 +212,26 @@ pub async fn rpc_run(
     }
 
     // Check the version (major.minor)
-    let major_version = version.split('.').take(2).collect::<Vec<&str>>().join(".");
-    let major_cargo_version = CARGO_PKG_VERSION
-        .split('.')
-        .take(2)
-        .collect::<Vec<&str>>()
-        .join(".");
-    if major_version > major_cargo_version {
+    let version_semver = match Version::parse(&version) {
+        Ok(semver) => semver,
+        Err(e) => {
+            return order_error(&format!("invalid version format: {}", e), true);
+        }
+    };
+    let cargo_semver = match Version::parse(&CARGO_PKG_VERSION) {
+        Ok(semver) => semver,
+        Err(e) => {
+            return order_error(&format!("invalid version format: {}", e), true);
+        }
+    };
+    // Don't account for patch versions (set them to 0)
+    let version_semver = Version::new(version_semver.major, version_semver.minor, 0);
+    let cargo_semver = Version::new(cargo_semver.major, cargo_semver.minor, 0);
+    if version_semver > cargo_semver {
         return order_error(
             &format!(
-                "order received with foundation major version mismatch - received {} > {}",
-                major_version, major_cargo_version
+                "order received with foundation major/minor version mismatch - received {} > {}",
+                version, CARGO_PKG_VERSION
             ),
             true,
         );
