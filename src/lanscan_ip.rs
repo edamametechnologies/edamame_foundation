@@ -3,7 +3,11 @@ use tracing::trace;
 
 pub fn is_link_local_ipv6(ip: &IpAddr) -> bool {
     match ip {
-        IpAddr::V6(ipv6) => ipv6.to_string().starts_with("fe80"),
+        IpAddr::V6(ipv6) => {
+            let segments = ipv6.segments();
+            // Check that the address is fe80::/10.
+            (segments[0] & 0xffc0) == 0xfe80
+        }
         _ => false,
     }
 }
@@ -12,7 +16,8 @@ pub fn is_private_ipv6(ip: &IpAddr) -> bool {
     match ip {
         // fc00::/7
         IpAddr::V6(ipv6) => {
-            ipv6.to_string().starts_with("fc00") || ipv6.to_string().starts_with("fd00")
+            let segments = ipv6.segments();
+            segments[0] == 0xfc00 || segments[0] == 0xfd00
         }
         _ => false,
     }

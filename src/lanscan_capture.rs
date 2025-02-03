@@ -45,10 +45,10 @@ use tracing::{debug, error, info, trace, warn};
 
 // A session is considered active if it has had activity in the last 60 seconds
 static CONNECTION_ACTIVITY_TIMEOUT: ChronoDuration = ChronoDuration::seconds(60);
-// A session is considered current if it has been active in the last 300 seconds
-static CONNECTION_CURRENT_TIMEOUT: ChronoDuration = ChronoDuration::seconds(300);
-// Keep 2 hours of history
-static CONNECTION_RETENTION_TIMEOUT: ChronoDuration = ChronoDuration::seconds(60 * 60 * 2);
+// A session is considered current if it has been active in the last 180 seconds
+static CONNECTION_CURRENT_TIMEOUT: ChronoDuration = ChronoDuration::seconds(180);
+// Keep 1 hour of history
+static CONNECTION_RETENTION_TIMEOUT: ChronoDuration = ChronoDuration::seconds(60 * 60 * 1);
 // Current whitelist exceptions
 static WHITELIST_EXCEPTION_TIMEOUT: ChronoDuration = CONNECTION_RETENTION_TIMEOUT;
 
@@ -1505,9 +1505,9 @@ mod tests {
 
         let stats = SessionStats {
             // Old start time
-            start_time: now - ChronoDuration::seconds(3600),
+            start_time: now - ChronoDuration::seconds(1800),
             end_time: None,
-            last_activity: now - ChronoDuration::seconds(3600),
+            last_activity: now - ChronoDuration::seconds(1800),
             inbound_bytes: 5000,
             outbound_bytes: 5000,
             orig_pkts: 50,
