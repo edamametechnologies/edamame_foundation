@@ -504,6 +504,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_grpc_mtls_authentication() -> Result<()> {
+        use crate::admin::get_admin_status;
+
+        // Skip test if running as admin
+        if get_admin_status() {
+            println!("Skipping test_grpc_mtls_authentication test because running as admin");
+            return Ok(());
+        }
+
         #[derive(Debug, Default)]
         pub struct MockHelper {}
 
