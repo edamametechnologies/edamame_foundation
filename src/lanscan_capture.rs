@@ -452,6 +452,7 @@ impl LANScanCapture {
         {
             device_in_list.clone()
         } else {
+            warn!("Interface {} not found in device list {:?}", interface_name, device_list);
             return Err(anyhow!(format!(
                 "Interface {} not found in device list",
                 interface_name
