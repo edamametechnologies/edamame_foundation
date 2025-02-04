@@ -22,20 +22,20 @@ fn unify_neighbors(neighbors: Vec<(IpAddr, MacAddr6)>) -> Vec<ConsolidatedNeighb
 
     // Filter out link-local, broadcast, or multicast addresses, etc.
     let neighbors: Vec<(IpAddr, MacAddr6)> = neighbors
-    .into_iter()
-    .filter(|(ip, _)| match ip {
-        IpAddr::V4(v4) => {
-            !(v4.is_link_local()
+        .into_iter()
+        .filter(|(ip, _)| match ip {
+            IpAddr::V4(v4) => {
+                !(v4.is_link_local()
                 // is_broadcast() is true only for 255.255.255.255
                 // || v4.is_broadcast()
                 || v4.octets()[3] == 255 // Check if last octet is 255
                 || v4.is_multicast()
                 || v4.is_unspecified()
                 || v4.is_loopback())
-        }
-        IpAddr::V6(v6) => !(v6.is_multicast() || v6.is_unspecified() || v6.is_loopback()),
-    })
-    .collect();
+            }
+            IpAddr::V6(v6) => !(v6.is_multicast() || v6.is_unspecified() || v6.is_loopback()),
+        })
+        .collect();
 
     let mut map: HashMap<MacAddr6, (HashSet<Ipv4Addr>, HashSet<Ipv6Addr>)> = HashMap::new();
     for (ip, mac) in neighbors {
