@@ -56,8 +56,11 @@ mod platform_impl {
         // Convert to lowercase and replace '-' with ':'
         let formatted_mac = mac.to_lowercase().replace('-', ":");
 
-        // Check if the MAC address is valid (not all zeros)
-        if formatted_mac == "00:00:00:00:00:00" || formatted_mac == "0:0:0:0:0:0:0:0" {
+        // Check if the MAC address is valid (not all zeros or all FF:FF:FF:FF:FF:FF)
+        if formatted_mac == "00:00:00:00:00:00"
+            || formatted_mac == "0:0:0:0:0:0:0:0"
+            || formatted_mac == "ff:ff:ff:ff:ff:ff"
+        {
             return Err(anyhow!("Invalid MAC address: {}", formatted_mac));
         }
 
