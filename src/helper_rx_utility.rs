@@ -43,8 +43,8 @@ use crate::lanscan_sessions::SessionFilter;
 
 lazy_static! {
     // Current default interface
-    pub static ref INTERFACES_NAMES: Arc<Mutex<Vec<String>>> =
-        Arc::new(Mutex::new(Vec::new()));
+    pub static ref INTERFACES: Arc<Mutex<LANScanInterfaces>> =
+        Arc::new(Mutex::new(LANScanInterfaces::new()));
     pub static ref INTERFACES_SIGNATURE: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
 }
 
@@ -52,11 +52,7 @@ lazy_static! {
 pub async fn check_interfaces_changes() -> bool {
     let interfaces = get_valid_network_interfaces();
     let mut interfaces_changed = false;
-    *INTERFACES_NAMES.lock().await = interfaces
-        .interfaces
-        .iter()
-        .map(|iface| iface.name.clone())
-        .collect::<Vec<_>>();
+    *INTERFACES.lock().await = interfaces.clone();
     let interfaces_signature = interfaces.signature();
     if *INTERFACES_SIGNATURE.lock().await != interfaces_signature {
         *INTERFACES_SIGNATURE.lock().await = interfaces_signature;
@@ -206,9 +202,8 @@ pub async fn utility_start_capture() -> Result<String> {
     if CAPTURE.lock().await.is_capturing().await {
         return order_error("capture already started", false);
     }
-    let interfaces = INTERFACES_NAMES.lock().await.clone();
-    let interfaces_string = interfaces.join(",");
-    CAPTURE.lock().await.start(&interfaces_string).await;
+    let interfaces = INTERFACES.lock().await.clone();
+    CAPTURE.lock().await.start(&interfaces).await;
     Ok("".to_string())
 }
 
@@ -229,9 +224,8 @@ pub async fn utility_restart_capture() -> Result<String> {
     if !CAPTURE.lock().await.is_capturing().await {
         return order_error("capture not running", false);
     }
-    let interfaces = INTERFACES_NAMES.lock().await.clone();
-    let interfaces_string = interfaces.join(",");
-    CAPTURE.lock().await.restart(&interfaces_string).await;
+    let interfaces = INTERFACES.lock().await.clone();
+    CAPTURE.lock().await.restart(&interfaces).await;
     Ok("".to_string())
 }
 
@@ -391,13 +385,9 @@ pub fn start_interface_monitor() {
                     let is_capturing = capture.lock().await.is_capturing().await;
                     if is_capturing {
                         capture.lock().await.stop().await;
-                        let interfaces = INTERFACES_NAMES.lock().await.clone();
-                        let interfaces_string = interfaces.join(",");
-                        info!(
-                            "Interfaces changed, restarting capture on {}",
-                            interfaces_string
-                        );
-                        capture.lock().await.start(&interfaces_string).await;
+                        let interfaces = INTERFACES.lock().await.clone();
+                        info!("Interfaces changed, restarting capture on {:?}", interfaces);
+                        capture.lock().await.start(&interfaces).await;
                     }
                 }
                 // mDNS flush

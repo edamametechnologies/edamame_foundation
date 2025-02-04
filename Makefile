@@ -26,6 +26,6 @@ android:
 	cross build --release --target x86_64-linux-android
 
 test:
-	cargo test -- --nocapture
-	cargo test --features packetcapture -- --nocapture
 	cargo test --features packetcapture,asyncpacketcapture -- --nocapture
+	cargo test --features packetcapture -- --nocapture
+	cargo test -- --nocapture

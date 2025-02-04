@@ -58,6 +58,16 @@ impl PartialOrd for LANScanInterfaceAddrV4 {
     }
 }
 
+impl Default for LANScanInterfaceAddrV4 {
+    fn default() -> Self {
+        // Adjust the default values as needed.
+        Self {
+            ip: Ipv4Addr::new(0, 0, 0, 0),
+            prefix: 0,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub enum LANScanInterfaceAddrTypeV6 {
     Temporary(LANScanInterfaceAddrV6),
