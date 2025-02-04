@@ -448,7 +448,7 @@ impl LANScanCapture {
 
         let device = if let Some(device_in_list) = device_list
             .iter()
-            .find(|dev| dev.name.contains(&interface_name))
+            .find(|dev| dev.name.to_lowercase() == interface_name.to_lowercase())
         {
             device_in_list.clone()
         } else {
@@ -510,6 +510,7 @@ impl LANScanCapture {
         };
 
         if !passed_interface_success {
+            warn!("No passed interfaces found, using default interface");
             let mut default_interface = match get_default_interface() {
                 Some(interface) => interface.name,
                 None => {
@@ -1195,6 +1196,8 @@ impl LANScanCapture {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::admin::*;
+    use crate::lanscan_interface::get_valid_network_interfaces;
     use pnet_packet::tcp::TcpFlags;
     use serial_test::serial;
     use std::net::{IpAddr, Ipv4Addr};
@@ -1777,5 +1780,36 @@ mod tests {
         // Assert that exceptions are recorded
         let exceptions = capture.get_whitelist_exceptions().await;
         assert_eq!(exceptions.len(), 5);
+    }
+
+    #[tokio::test]
+    async fn test_valid_interfaces_have_devices() {
+        // Only if admin
+        if !get_admin_status() {
+            return;
+        }
+
+        // Get the valid network interfaces (LANScanInterfaces)
+        let valid_interfaces = get_valid_network_interfaces();
+        assert!(
+            !valid_interfaces.interfaces.is_empty(),
+            "No valid network interfaces found"
+        );
+
+        // Create a new capture instance to use its get_device_from_interface method
+        let capture = LANScanCapture::new();
+
+        // For each valid interface, try to fetch a pcap::Device.
+        // The call must succeed for every interface.
+        for iface in valid_interfaces.interfaces.iter() {
+            let device_result = capture.get_device_from_interface(&iface.name).await;
+            assert!(
+                device_result.is_ok(),
+                "Device not found for interface: {}",
+                iface.name
+            );
+            let device = device_result.unwrap();
+            println!("Found device for interface {}: {}", iface.name, device.name);
+        }
     }
 }
