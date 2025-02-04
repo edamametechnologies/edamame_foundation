@@ -1,5 +1,6 @@
 use crate::lanscan_dns::DnsPacketProcessor;
 use crate::lanscan_interface::get_default_interface;
+use crate::lanscan_interface::*;
 use crate::lanscan_l7::LANScanL7;
 use crate::lanscan_mdns::*;
 use crate::lanscan_packets::*;
@@ -53,7 +54,7 @@ static CONNECTION_RETENTION_TIMEOUT: ChronoDuration = ChronoDuration::seconds(60
 static WHITELIST_EXCEPTION_TIMEOUT: ChronoDuration = CONNECTION_RETENTION_TIMEOUT;
 
 pub struct LANScanCapture {
-    interface_name: Arc<CustomRwLock<String>>,
+    interfaces: Arc<CustomRwLock<LANScanInterfaces>>,
     capture_task_handles: Arc<DashMap<String, TaskHandle>>,
     sessions: Arc<DashMap<Session, SessionInfo>>,
     current_sessions: Arc<CustomRwLock<Vec<Session>>>,
@@ -75,7 +76,7 @@ impl LANScanCapture {
     pub fn new() -> Self {
         debug!("Creating new LANScanCapture");
         Self {
-            interface_name: Arc::new(CustomRwLock::new("".to_string())),
+            interfaces: Arc::new(CustomRwLock::new(LANScanInterfaces::new())),
             capture_task_handles: Arc::new(DashMap::new()),
             sessions: Arc::new(DashMap::new()),
             current_sessions: Arc::new(CustomRwLock::new(Vec::new())),
@@ -123,14 +124,14 @@ impl LANScanCapture {
         *self.filter.write().await = filter;
     }
 
-    pub async fn start(&mut self, interface_name: &str) {
+    pub async fn start(&mut self, interfaces: &LANScanInterfaces) {
         info!("Starting LANScanCapture");
 
         // Start mDNS task
         mdns_start().await;
 
         // Set the interface
-        *self.interface_name.write().await = interface_name.to_string();
+        *self.interfaces.write().await = interfaces.clone();
 
         // Start tasks
         // If the capture task is already running, return
@@ -177,9 +178,9 @@ impl LANScanCapture {
         // Don't stop the mDNS task as it's shared with other modules
     }
 
-    pub async fn restart(&mut self, interface_name: &str) {
+    pub async fn restart(&mut self, interfaces: &LANScanInterfaces) {
         // Only restart if capturing and if the interface string has changed
-        if !self.is_capturing().await || self.interface_name.read().await.eq(interface_name) {
+        if !self.is_capturing().await || self.interfaces.read().await.eq(interfaces) {
             info!("Not restarting capture as it's not capturing or interface has not changed");
             return;
         };
@@ -440,25 +441,41 @@ impl LANScanCapture {
         }
     }
 
-    async fn get_device_from_interface(&self, interface_name: &str) -> Result<pcap::Device> {
+    async fn get_device_from_interface(
+        &self,
+        interface: &LANScanInterface,
+    ) -> Result<pcap::Device> {
         let device_list = match pcap::Device::list() {
             Ok(list) => list,
             Err(e) => return Err(anyhow!(e)),
         };
 
+        // Attempt to find the device in the list by name then by ipv4 address
         let device = if let Some(device_in_list) = device_list
             .iter()
-            .find(|dev| dev.name.to_lowercase() == interface_name.to_lowercase())
+            .find(|dev| dev.name.to_lowercase() == interface.name.to_lowercase())
         {
+            device_in_list.clone()
+        } else if let Some(device_in_list) = device_list.iter().find(|dev| {
+            dev.addresses.iter().any(|addr| {
+                addr.addr.to_string()
+                    == interface
+                        .ipv4
+                        .as_ref()
+                        .unwrap_or(&LANScanInterfaceAddrV4::default())
+                        .ip
+                        .to_string()
+            })
+        }) {
             device_in_list.clone()
         } else {
             warn!(
                 "Interface {} not found in device list {:?}",
-                interface_name, device_list
+                interface.name, device_list
             );
             return Err(anyhow!(format!(
                 "Interface {} not found in device list",
-                interface_name
+                interface.name
             )));
         };
         Ok(device)
@@ -485,26 +502,27 @@ impl LANScanCapture {
     }
 
     async fn start_capture_task(&mut self) {
-        // Read and split the interfaces by comma, trimming whitespace
-        let interfaces_str = self.interface_name.read().await.clone();
-        let interfaces: Vec<String> = interfaces_str
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
-
-        let passed_interface_success = if !interfaces.is_empty() {
+        // Retrieve the configured interfaces from our stored LANScanInterfaces
+        let interfaces = self.interfaces.read().await;
+        let passed_interface_success = if !interfaces.interfaces.is_empty() {
             let mut at_least_one_success = false;
-            for interface in interfaces {
-                info!("Initializing capture task for {}", interface);
-                let device = match self.get_device_from_interface(&interface).await {
+            for interface in &interfaces.interfaces {
+                info!(
+                    "Initializing capture task for interface: {}",
+                    interface.name
+                );
+                let device = match self.get_device_from_interface(interface).await {
                     Ok(device) => device,
                     Err(e) => {
-                        warn!("Failed to get device from interface: {}", e);
+                        warn!(
+                            "Failed to get device from interface {}: {}",
+                            interface.name, e
+                        );
                         continue;
                     }
                 };
-                self.start_capture_task_for_device(&device, &interface)
+                // Use the interface name (or any other unique identifier) as the key
+                self.start_capture_task_for_device(&device, &interface.name)
                     .await;
                 at_least_one_success = true;
             }
@@ -513,10 +531,14 @@ impl LANScanCapture {
             false
         };
 
+        // Release the read lock
+        drop(interfaces);
+
+        // If no passed interfaces were found, use a default interface.
         if !passed_interface_success {
             warn!("No passed interfaces found, using default interface");
             let mut default_interface = match get_default_interface() {
-                Some(interface) => interface.name,
+                Some(interface) => interface,
                 None => {
                     error!("No default interface detected, aborting capture");
                     return;
@@ -532,7 +554,8 @@ impl LANScanCapture {
                     );
                     match Self::get_default_device().await {
                         Ok(device) => {
-                            default_interface = device.name.clone();
+                            // Update default_interface name from the resolved device.
+                            default_interface.name = device.name.clone();
                             device
                         }
                         Err(e) => {
@@ -543,12 +566,16 @@ impl LANScanCapture {
                 }
             };
 
-            self.start_capture_task_for_device(&default_device, &default_interface)
+            self.start_capture_task_for_device(&default_device, &default_interface.name)
                 .await;
         }
     }
 
-    async fn start_capture_task_for_device(&mut self, device: &pcap::Device, interface_name: &str) {
+    async fn start_capture_task_for_device(
+        &self,
+        device: &pcap::Device,
+        interfaces_ipv4_addresses: &str,
+    ) {
         // Clone shared resources for each capture task
         let sessions = self.sessions.clone();
         let current_sessions = self.current_sessions.clone();
@@ -559,7 +586,7 @@ impl LANScanCapture {
         let stop_flag_clone = stop_flag.clone();
 
         // Clone the interface name for the async move block
-        let interface_clone = interface_name.to_string();
+        let interface_clone = interfaces_ipv4_addresses.to_string();
 
         // Clone the device for the async move block
         let device_clone = device.clone();
@@ -735,8 +762,10 @@ impl LANScanCapture {
             info!("Capture task for {} terminated", interface_clone);
         });
         // Store the task handle and its stop flag
-        self.capture_task_handles
-            .insert(interface_name.to_string(), TaskHandle { handle, stop_flag });
+        self.capture_task_handles.insert(
+            interfaces_ipv4_addresses.to_string(),
+            TaskHandle { handle, stop_flag },
+        );
     }
 
     async fn stop_capture_tasks(&mut self) {
@@ -1806,7 +1835,7 @@ mod tests {
         // For each valid interface, try to fetch a pcap::Device.
         // The call must succeed for every interface.
         for iface in valid_interfaces.interfaces.iter() {
-            let device_result = capture.get_device_from_interface(&iface.name).await;
+            let device_result = capture.get_device_from_interface(&iface).await;
             assert!(
                 device_result.is_ok(),
                 "Device not found for interface: {} in {:?}",
