@@ -403,7 +403,7 @@ impl Signature for LANScanInterfaces {
 }
 
 // Exclusions and filtering
-const EXCLUDED_IFACE_NAMES: [&str; 22] = [
+const EXCLUDED_IFACE_NAMES_PREFIXES: [&str; 23] = [
     "feth",
     "zt",
     "utun",
@@ -426,7 +426,10 @@ const EXCLUDED_IFACE_NAMES: [&str; 22] = [
     "vboxnet",
     "virbr",
     "vEthernet",
+    "ZeroTier",
 ];
+
+const EXCLUDED_IFACE_NAMES_CONTAINS: [&str; 2] = ["vpn", "virtual"];
 
 pub fn validate_interfaces(interfaces: LANScanInterfaces) -> LANScanInterfaces {
     // Filter out undesired interfaces, then collect into LANScanInterfaces
@@ -434,12 +437,22 @@ pub fn validate_interfaces(interfaces: LANScanInterfaces) -> LANScanInterfaces {
         .into_iter()
         .filter(|iface| {
             // Exclude if interface name starts with a known pattern
-            if EXCLUDED_IFACE_NAMES
+            if EXCLUDED_IFACE_NAMES_PREFIXES.iter().any(|&prefix| {
+                iface
+                    .name
+                    .to_lowercase()
+                    .starts_with(&prefix.to_lowercase())
+            }) {
+                return false;
+            }
+            // Exclude if interface name contains a known pattern
+            if EXCLUDED_IFACE_NAMES_CONTAINS
                 .iter()
-                .any(|&prefix| iface.name.starts_with(prefix))
+                .any(|&contains| iface.name.to_lowercase().contains(&contains.to_lowercase()))
             {
                 return false;
             }
+
             // Exclude None, loopback, local, and unspecified addresses for IPv4
             if iface.ipv4.is_none()
                 || iface.ipv4.as_ref().map_or(false, |addr| {
