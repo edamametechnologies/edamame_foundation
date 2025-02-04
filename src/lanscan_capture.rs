@@ -452,7 +452,10 @@ impl LANScanCapture {
         {
             device_in_list.clone()
         } else {
-            warn!("Interface {} not found in device list {:?}", interface_name, device_list);
+            warn!(
+                "Interface {} not found in device list {:?}",
+                interface_name, device_list
+            );
             return Err(anyhow!(format!(
                 "Interface {} not found in device list",
                 interface_name
@@ -1806,8 +1809,9 @@ mod tests {
             let device_result = capture.get_device_from_interface(&iface.name).await;
             assert!(
                 device_result.is_ok(),
-                "Device not found for interface: {}",
-                iface.name
+                "Device not found for interface: {} in {:?}",
+                iface.name,
+                pcap::Device::list()
             );
             let device = device_result.unwrap();
             println!("Found device for interface {}: {}", iface.name, device.name);
