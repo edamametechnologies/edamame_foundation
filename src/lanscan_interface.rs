@@ -1,3 +1,4 @@
+use crate::lanscan_ip::apply_mask;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 use ipnet::{ipv4_mask_to_prefix, ipv6_mask_to_prefix};
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
@@ -87,21 +88,6 @@ impl Display for LANScanInterfaceAddrV6 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> FmtResult {
         write!(f, "{}", self.ip)
     }
-}
-
-/// Convert an IPv4 netmask to a CIDR prefix
-pub fn mask_to_prefix(mask: Ipv4Addr) -> u8 {
-    u32::from(mask).count_ones() as u8
-}
-
-/// Utility to apply a prefix (CIDR) as a subnet mask on an IPv4
-pub fn apply_mask(ip_addr: Ipv4Addr, prefix: u8) -> Ipv4Addr {
-    let mask: u32 = if prefix == 0 {
-        0
-    } else {
-        !0u32 << (32 - prefix)
-    };
-    Ipv4Addr::from(u32::from(ip_addr) & mask)
 }
 
 /// Decide if interface a is contained by interface b, meaning:
@@ -483,7 +469,8 @@ pub fn type_of_ipv6(ipv6: Ipv6Addr, prefix: u8) -> LANScanInterfaceAddrTypeV6 {
         // Link-local
         return LANScanInterfaceAddrTypeV6::LinkLocal(LANScanInterfaceAddrV6 { ip: ipv6, prefix });
     }
-    if is_local_ip(&IpAddr::V6(ipv6)) {
+    // Don't pass the interfaces, we want to know if the address is local, not in the LAN
+    if is_local_ip(&IpAddr::V6(ipv6), None) {
         // Non-public (ULA, etc.)
         return LANScanInterfaceAddrTypeV6::Local(LANScanInterfaceAddrV6 { ip: ipv6, prefix });
     }
