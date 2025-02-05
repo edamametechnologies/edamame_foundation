@@ -1,4 +1,5 @@
 use crate::lanscan_asn::*;
+use crate::lanscan_interface::*;
 use crate::lanscan_ip::is_local_ip;
 use crate::lanscan_port_vulns::get_name_from_port;
 use crate::lanscan_sessions::session_macros::*;
@@ -43,10 +44,12 @@ pub async fn process_parsed_packet(
     current_sessions: &Arc<CustomRwLock<Vec<Session>>>,
     self_ips: &Vec<IpAddr>,
     filter: &Arc<CustomRwLock<SessionFilter>>,
+    interfaces: &Arc<CustomRwLock<LANScanInterfaces>>,
 ) {
     let now = Utc::now();
     let is_self_src = self_ips.contains(&parsed_packet.session.src_ip);
     let is_self_dst = self_ips.contains(&parsed_packet.session.dst_ip);
+    let interfaces = interfaces.read().await;
 
     // Determine if the packet is from the originator (our local machine) or the responder
     let (key, is_originator) = if is_self_src {
@@ -70,9 +73,9 @@ pub async fn process_parsed_packet(
 
     // Apply filter before processing
     let filter = filter.read().await.clone();
-    if filter == SessionFilter::LocalOnly && is_global_session!(parsed_packet) {
+    if filter == SessionFilter::LocalOnly && is_global_session!(parsed_packet, &interfaces) {
         return;
-    } else if filter == SessionFilter::GlobalOnly && is_local_session!(parsed_packet) {
+    } else if filter == SessionFilter::GlobalOnly && is_local_session!(parsed_packet, &interfaces) {
         return;
     }
 
@@ -138,18 +141,18 @@ pub async fn process_parsed_packet(
         }
 
         // Determine if the session is local
-        let is_local_src = is_local_ip(&key.src_ip);
-        let is_local_dst = is_local_ip(&key.dst_ip);
+        let is_local_src = is_local_ip(&key.src_ip, Some(&interfaces));
+        let is_local_dst = is_local_ip(&key.dst_ip, Some(&interfaces));
 
         trace!("New session: {:?}", key);
 
         // Query the ASN database for non-local addresses
-        let src_asn = if !is_local_ip(&key.src_ip) {
+        let src_asn = if !is_local_ip(&key.src_ip, Some(&interfaces)) {
             get_asn(key.src_ip).await
         } else {
             None
         };
-        let dst_asn = if !is_local_ip(&key.dst_ip) {
+        let dst_asn = if !is_local_ip(&key.dst_ip, Some(&interfaces)) {
             get_asn(key.dst_ip).await
         } else {
             None
