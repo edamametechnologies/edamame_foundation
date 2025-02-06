@@ -30,6 +30,7 @@ pub struct mDNSInfo {
     pub services: SortedVec<String>,
     pub hostname: String,
     pub instances: SortedVec<String>,
+    pub first_seen: DateTime<Utc>,
     pub last_seen: DateTime<Utc>,
 }
 
@@ -178,7 +179,9 @@ async fn process_host(host: Host, service_name: String) {
                 services: SortedVec::new(),
                 hostname: hostname.clone(),
                 instances: SortedVec::new(),
-                // Initialize the last time to UNIX_EPOCH
+                // Initialize the first seen to now
+                first_seen: Utc::now(),
+                // Initialize the last seen to UNIX_EPOCH (will be updated later)
                 last_seen: DateTime::from_timestamp(0, 0).unwrap(),
             });
 

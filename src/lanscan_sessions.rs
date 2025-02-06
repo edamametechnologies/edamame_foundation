@@ -98,15 +98,15 @@ pub mod session_macros {
 
     macro_rules! is_local_session {
         ($entry:expr) => {
-            crate::lanscan_ip::is_local_ip(&$entry.session.src_ip)
-                && crate::lanscan_ip::is_local_ip(&$entry.session.dst_ip)
+            crate::lanscan_ip::is_lan_ip(&$entry.session.src_ip)
+                && crate::lanscan_ip::is_lan_ip(&$entry.session.dst_ip)
         };
     }
 
     macro_rules! is_global_session {
         ($entry:expr) => {
-            !crate::lanscan_ip::is_local_ip(&$entry.session.src_ip)
-                || !crate::lanscan_ip::is_local_ip(&$entry.session.dst_ip)
+            !crate::lanscan_ip::is_lan_ip(&$entry.session.src_ip)
+                || !crate::lanscan_ip::is_lan_ip(&$entry.session.dst_ip)
         };
     }
 
@@ -294,27 +294,27 @@ pub fn format_sessions_log(sessions: &Vec<SessionInfo>) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lanscan_ip::is_local_ip;
+    use crate::lanscan_ip::is_lan_ip;
     use chrono::{TimeZone, Utc};
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
     #[test]
-    fn test_is_local_ip() {
+    fn test_is_lan_ip() {
         // IPv4 local addresses
         let local_ipv4 = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1));
-        assert!(is_local_ip(&local_ipv4));
+        assert!(is_lan_ip(&local_ipv4));
 
         let global_ipv4 = IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8));
-        assert!(!is_local_ip(&global_ipv4));
+        assert!(!is_lan_ip(&global_ipv4));
 
         // IPv6 local addresses
         let local_ipv6 = IpAddr::V6(Ipv6Addr::LOCALHOST);
-        assert!(is_local_ip(&local_ipv6));
+        assert!(is_lan_ip(&local_ipv6));
 
         let global_ipv6 = IpAddr::V6(Ipv6Addr::new(
             0x2001, 0x4860, 0x4860, 0x0, 0x0, 0x0, 0x0, 0x8888,
         ));
-        assert!(!is_local_ip(&global_ipv6));
+        assert!(!is_lan_ip(&global_ipv6));
     }
 
     #[test]
