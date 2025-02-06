@@ -1,3 +1,4 @@
+use crate::lanscan_ip::{apply_mask, is_local_ip};
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 use ipnet::{ipv4_mask_to_prefix, ipv6_mask_to_prefix};
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
@@ -7,16 +8,12 @@ use sha2::{Digest, Sha256};
 use std::cmp::Ordering;
 use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::iter::FromIterator;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use tracing::{debug, info};
-
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 use std::net::UdpSocket;
-
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 use tracing::error;
-
-use crate::lanscan_ip::is_local_ip;
+use tracing::{debug, info};
 
 // Define the signature trait
 pub trait Signature {
@@ -87,21 +84,6 @@ impl Display for LANScanInterfaceAddrV6 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> FmtResult {
         write!(f, "{}", self.ip)
     }
-}
-
-/// Convert an IPv4 netmask to a CIDR prefix
-pub fn mask_to_prefix(mask: Ipv4Addr) -> u8 {
-    u32::from(mask).count_ones() as u8
-}
-
-/// Utility to apply a prefix (CIDR) as a subnet mask on an IPv4
-pub fn apply_mask(ip_addr: Ipv4Addr, prefix: u8) -> Ipv4Addr {
-    let mask: u32 = if prefix == 0 {
-        0
-    } else {
-        !0u32 << (32 - prefix)
-    };
-    Ipv4Addr::from(u32::from(ip_addr) & mask)
 }
 
 /// Decide if interface a is contained by interface b, meaning:
