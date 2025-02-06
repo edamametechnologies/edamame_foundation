@@ -1,9 +1,9 @@
 use crate::asn_db::Record;
-use crate::lanscan_interface::*;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
 use strum_macros::Display;
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Display, Serialize, Deserialize, Ord, PartialOrd)]
 pub enum Protocol {
     TCP,
@@ -86,33 +86,27 @@ pub enum SessionFilter {
     All,
 }
 
-pub fn filter_local_sessions(
-    sessions: &Vec<SessionInfo>,
-    interfaces: &LANScanInterfaces,
-) -> Vec<SessionInfo> {
-    filter_sessions(sessions, SessionFilter::LocalOnly, interfaces)
+pub fn filter_local_sessions(sessions: &Vec<SessionInfo>) -> Vec<SessionInfo> {
+    filter_sessions(sessions, SessionFilter::LocalOnly)
 }
 
-pub fn filter_global_sessions(
-    sessions: &Vec<SessionInfo>,
-    interfaces: &LANScanInterfaces,
-) -> Vec<SessionInfo> {
-    filter_sessions(sessions, SessionFilter::GlobalOnly, interfaces)
+pub fn filter_global_sessions(sessions: &Vec<SessionInfo>) -> Vec<SessionInfo> {
+    filter_sessions(sessions, SessionFilter::GlobalOnly)
 }
 
 pub mod session_macros {
 
     macro_rules! is_local_session {
-        ($entry:expr, $interfaces:expr) => {
-            crate::lanscan_ip::is_local_ip(&$entry.session.src_ip, Some($interfaces))
-                && crate::lanscan_ip::is_local_ip(&$entry.session.dst_ip, Some($interfaces))
+        ($entry:expr) => {
+            crate::lanscan_ip::is_local_ip(&$entry.session.src_ip)
+                && crate::lanscan_ip::is_local_ip(&$entry.session.dst_ip)
         };
     }
 
     macro_rules! is_global_session {
-        ($entry:expr, $interfaces:expr) => {
-            !crate::lanscan_ip::is_local_ip(&$entry.session.src_ip, Some($interfaces))
-                || !crate::lanscan_ip::is_local_ip(&$entry.session.dst_ip, Some($interfaces))
+        ($entry:expr) => {
+            !crate::lanscan_ip::is_local_ip(&$entry.session.src_ip)
+                || !crate::lanscan_ip::is_local_ip(&$entry.session.dst_ip)
         };
     }
 
@@ -120,20 +114,16 @@ pub mod session_macros {
     pub(crate) use is_local_session;
 }
 
-pub fn filter_sessions(
-    sessions: &Vec<SessionInfo>,
-    filter: SessionFilter,
-    interfaces: &LANScanInterfaces,
-) -> Vec<SessionInfo> {
+pub fn filter_sessions(sessions: &Vec<SessionInfo>, filter: SessionFilter) -> Vec<SessionInfo> {
     match filter {
         SessionFilter::LocalOnly => sessions
             .iter()
-            .filter(|c| session_macros::is_local_session!(c, interfaces))
+            .filter(|c| session_macros::is_local_session!(c))
             .cloned()
             .collect(),
         SessionFilter::GlobalOnly => sessions
             .iter()
-            .filter(|c| session_macros::is_global_session!(c, interfaces))
+            .filter(|c| session_macros::is_global_session!(c))
             .cloned()
             .collect(),
         SessionFilter::All => sessions.clone(),
@@ -310,39 +300,21 @@ mod tests {
 
     #[test]
     fn test_is_local_ip() {
-        // Set an interface with a specific IPv6 /64 prefix.
-        let interfaces = LANScanInterfaces {
-            interfaces: vec![LANScanInterface {
-                name: "test".to_string(),
-                ipv4: None,
-                ipv6: vec![LANScanInterfaceAddrTypeV6::Local(LANScanInterfaceAddrV6 {
-                    ip: Ipv6Addr::new(0x2001, 0x4860, 0x4860, 0x0, 0, 0, 0, 0x8888),
-                    prefix: 64,
-                })],
-            }],
-        };
-
-        // Test an IPv6 address within the same LAN prefix.
-        // This address shares the first 64 bits with the interface (its fourth segment is 0).
-        let local_ipv6 = IpAddr::V6(Ipv6Addr::new(0x2001, 0x4860, 0x4860, 0x0, 0, 0, 0, 0xabcd));
-        assert!(is_local_ip(&local_ipv6, Some(&interfaces)));
-
-        // IPv4 local addresses: should be classified as local.
+        // IPv4 local addresses
         let local_ipv4 = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1));
-        assert!(is_local_ip(&local_ipv4, Some(&interfaces)));
+        assert!(is_local_ip(&local_ipv4));
 
-        // IPv4 global address: should not be classified as local.
         let global_ipv4 = IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8));
-        assert!(!is_local_ip(&global_ipv4, Some(&interfaces)));
+        assert!(!is_local_ip(&global_ipv4));
 
-        // Loopback IPv6 is inherently local.
-        let loopback_ipv6 = IpAddr::V6(Ipv6Addr::LOCALHOST);
-        assert!(is_local_ip(&loopback_ipv6, Some(&interfaces)));
+        // IPv6 local addresses
+        let local_ipv6 = IpAddr::V6(Ipv6Addr::LOCALHOST);
+        assert!(is_local_ip(&local_ipv6));
 
-        // Test an IPv6 address outside the LAN prefix.
-        // Here, the fourth segment is different (non-zero), so it is in a different /64 subnet.
-        let global_ipv6 = IpAddr::V6(Ipv6Addr::new(0x2001, 0x4860, 0x4860, 0x1, 0, 0, 0, 0xabcd));
-        assert!(!is_local_ip(&global_ipv6, Some(&interfaces)));
+        let global_ipv6 = IpAddr::V6(Ipv6Addr::new(
+            0x2001, 0x4860, 0x4860, 0x0, 0x0, 0x0, 0x0, 0x8888,
+        ));
+        assert!(!is_local_ip(&global_ipv6));
     }
 
     #[test]
@@ -350,14 +322,6 @@ mod tests {
         let local_ip1 = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1));
         let local_ip2 = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
         let global_ip = IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8));
-
-        let interfaces = LANScanInterfaces {
-            interfaces: vec![LANScanInterface {
-                name: "test".to_string(),
-                ipv4: None,
-                ipv6: vec![],
-            }],
-        };
 
         let session_local = SessionInfo {
             session: Session {
@@ -450,17 +414,17 @@ mod tests {
         let sessions = vec![session_local.clone(), session_global.clone()];
 
         // Test LocalOnly filter
-        let local_sessions = filter_sessions(&sessions, SessionFilter::LocalOnly, &interfaces);
+        let local_sessions = filter_sessions(&sessions, SessionFilter::LocalOnly);
         assert_eq!(local_sessions.len(), 1);
         assert_eq!(local_sessions[0], session_local);
 
         // Test GlobalOnly filter
-        let global_sessions = filter_sessions(&sessions, SessionFilter::GlobalOnly, &interfaces);
+        let global_sessions = filter_sessions(&sessions, SessionFilter::GlobalOnly);
         assert_eq!(global_sessions.len(), 1);
         assert_eq!(global_sessions[0], session_global);
 
         // Test All filter
-        let all_sessions = filter_sessions(&sessions, SessionFilter::All, &interfaces);
+        let all_sessions = filter_sessions(&sessions, SessionFilter::All);
         assert_eq!(all_sessions.len(), 2);
     }
 
