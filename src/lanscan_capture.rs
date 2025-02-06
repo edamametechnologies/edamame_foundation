@@ -261,7 +261,7 @@ impl LANScanCapture {
         let sessions = self.sessions.clone();
         let current_sessions = self.current_sessions.clone();
         let dns_packet_processor = self.dns_packet_processor.clone();
-        let interfaces = self.interfaces.clone();
+
         let stop_flag_clone = stop_flag.clone();
         let handle = async_spawn(async move {
             loop {
@@ -272,7 +272,6 @@ impl LANScanCapture {
                         &resolver,
                         &dns_packet_processor.get_dns_resolutions(),
                         &current_sessions,
-                        &interfaces,
                     )
                     .await;
                 }
@@ -595,9 +594,6 @@ impl LANScanCapture {
         // Clone the DNS packet processor for the async move block
         let dns_packet_processor = self.dns_packet_processor.clone();
 
-        // Clone the interfaces for the async move block
-        let interfaces = self.interfaces.clone();
-
         // Spawn the capture task
         let handle = async_spawn(async move {
             let mut cap = match Capture::from_device(device_clone.clone()) {
@@ -647,7 +643,6 @@ impl LANScanCapture {
                                             &current_sessions,
                                             &self_ips,
                                             &filter,
-                                            &interfaces,
                                         )
                                         .await;
                                     }
@@ -741,7 +736,6 @@ impl LANScanCapture {
                                             &current_sessions,
                                             &self_ips,
                                             &filter,
-                                            &interfaces,
                                         )
                                         .await;
                                     }
@@ -954,12 +948,10 @@ impl LANScanCapture {
         resolver: &Option<Arc<LANScanResolver>>,
         dns_resolutions: &Arc<DashMap<IpAddr, String>>,
         current_sessions: &Arc<CustomRwLock<Vec<Session>>>,
-        interfaces: &Arc<CustomRwLock<LANScanInterfaces>>,
     ) {
         let current_sessions_clone = current_sessions.read().await.clone();
         let mut dst_dns_resolution_count = 0;
         let mut dst_resolver_resolution_count = 0;
-        let interfaces = interfaces.read().await;
 
         for key in current_sessions_clone.iter() {
             // Clone necessary data to avoid holding lock across await
@@ -980,8 +972,7 @@ impl LANScanCapture {
                 new_src_domain = Some(domain.clone());
             } else {
                 // If not in dns_resolutions, use the resolver (only for eligible IPs)
-                if !crate::lanscan_ip::is_local_ip(&session_info.session.src_ip, Some(&interfaces))
-                {
+                if !crate::lanscan_ip::is_local_ip(&session_info.session.src_ip) {
                     if let Some(resolver) = resolver.as_ref() {
                         let domain = resolver.get_resolved_ip(&session_info.session.src_ip).await;
                         if let Some(domain) = domain {
@@ -1013,8 +1004,7 @@ impl LANScanCapture {
                 new_dst_domain = Some(domain.clone());
                 dst_dns_resolution_count += 1;
             } else {
-                if !crate::lanscan_ip::is_local_ip(&session_info.session.dst_ip, Some(&interfaces))
-                {
+                if !crate::lanscan_ip::is_local_ip(&session_info.session.dst_ip) {
                     if let Some(resolver) = resolver.as_ref() {
                         let domain = resolver.get_resolved_ip(&session_info.session.dst_ip).await;
                         if let Some(domain) = domain {
@@ -1168,7 +1158,6 @@ impl LANScanCapture {
     pub async fn get_sessions(&self) -> Vec<SessionInfo> {
         let mut sessions_vec = Vec::new();
         let filter = self.filter.read().await.clone();
-        let interfaces = self.interfaces.read().await;
         for entry in self.sessions.iter() {
             let session_info = entry.value();
             // Remove the "Unknown" flag from the domain
@@ -1180,11 +1169,11 @@ impl LANScanCapture {
             if filter == SessionFilter::All {
                 sessions_vec.push(session_info_clone);
             } else if filter == SessionFilter::LocalOnly {
-                if is_local_session!(session_info_clone, &interfaces) {
+                if is_local_session!(session_info_clone) {
                     sessions_vec.push(session_info_clone);
                 }
             } else if filter == SessionFilter::GlobalOnly {
-                if is_global_session!(session_info_clone, &interfaces) {
+                if is_global_session!(session_info_clone) {
                     sessions_vec.push(session_info_clone);
                 }
             }
@@ -1197,7 +1186,6 @@ impl LANScanCapture {
         // Get the sessions from the DashMap that match the keys in the current_sessions Vec
         let filter = self.filter.read().await.clone();
         let mut current_sessions_vec = Vec::new();
-        let interfaces = self.interfaces.read().await;
         for key in self.current_sessions.read().await.iter() {
             if let Some(entry) = self.sessions.get(key) {
                 let session_info = entry.value();
@@ -1210,11 +1198,11 @@ impl LANScanCapture {
                 if filter == SessionFilter::All {
                     current_sessions_vec.push(session_info_clone);
                 } else if filter == SessionFilter::LocalOnly {
-                    if is_local_session!(session_info_clone, &interfaces) {
+                    if is_local_session!(session_info_clone) {
                         current_sessions_vec.push(session_info_clone);
                     }
                 } else if filter == SessionFilter::GlobalOnly {
-                    if is_global_session!(session_info_clone, &interfaces) {
+                    if is_global_session!(session_info_clone) {
                         current_sessions_vec.push(session_info_clone);
                     }
                 }
@@ -1291,7 +1279,6 @@ mod tests {
             &capture.current_sessions,
             &self_ips,
             &capture.filter,
-            &capture.interfaces,
         )
         .await;
 
@@ -1301,7 +1288,6 @@ mod tests {
             &capture.current_sessions,
             &self_ips,
             &capture.filter,
-            &capture.interfaces,
         )
         .await;
 
@@ -1347,7 +1333,6 @@ mod tests {
             &capture.current_sessions,
             &self_ips,
             &capture.filter,
-            &capture.interfaces,
         )
         .await;
 
@@ -1447,7 +1432,6 @@ mod tests {
             &capture.resolver,
             &dns_processor.get_dns_resolutions(),
             &capture.current_sessions,
-            &capture.interfaces,
         )
         .await;
 
