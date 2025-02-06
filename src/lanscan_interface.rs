@@ -1,4 +1,4 @@
-use crate::lanscan_ip::{apply_mask, is_local_ip};
+use crate::lanscan_ip::{apply_mask, is_local_ipv6};
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 use ipnet::{ipv4_mask_to_prefix, ipv6_mask_to_prefix};
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
@@ -465,8 +465,8 @@ pub fn type_of_ipv6(ipv6: Ipv6Addr, prefix: u8) -> LANScanInterfaceAddrTypeV6 {
         // Link-local
         return LANScanInterfaceAddrTypeV6::LinkLocal(LANScanInterfaceAddrV6 { ip: ipv6, prefix });
     }
-    if is_local_ip(&IpAddr::V6(ipv6)) {
-        // Non-public (ULA, etc.)
+
+    if is_local_ipv6(&ipv6) {
         return LANScanInterfaceAddrTypeV6::Local(LANScanInterfaceAddrV6 { ip: ipv6, prefix });
     }
 

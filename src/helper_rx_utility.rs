@@ -6,10 +6,6 @@ use crate::lanscan_broadcast::scan_hosts_broadcast;
     feature = "packetcapture"
 ))]
 use crate::lanscan_capture::LANScanCapture;
-#[cfg(all(
-    any(target_os = "macos", target_os = "linux", target_os = "windows"),
-    feature = "packetcapture"
-))]
 use crate::lanscan_ip::*;
 use crate::lanscan_mdns::*;
 use crate::lanscan_neighbors::scan_neighbors;
@@ -381,6 +377,7 @@ pub fn start_interface_monitor() {
     async_spawn(async move {
         loop {
             if check_interfaces_changes().await {
+                let interfaces = INTERFACES.lock().await.clone();
                 // Handle capture restart
                 #[cfg(all(
                     any(target_os = "macos", target_os = "linux", target_os = "windows"),
@@ -390,15 +387,14 @@ pub fn start_interface_monitor() {
                     let is_capturing = capture.lock().await.is_capturing().await;
                     if is_capturing {
                         capture.lock().await.stop().await;
-                        let interfaces = INTERFACES.lock().await.clone();
+
                         info!("Interfaces changed, restarting capture on {:?}", interfaces);
                         capture.lock().await.start(&interfaces).await;
-
-                        // Local cache
-                        info!("Interfaces changed, initializing local IP cache");
-                        init_local_cache(&interfaces);
                     }
                 }
+                // Local cache
+                info!("Interfaces changed, initializing local IP cache");
+                init_local_cache(&interfaces);
                 // mDNS flush
                 info!("Interfaces changed, flushing mDNS cache");
                 mdns_flush().await;

@@ -1,5 +1,5 @@
 use crate::lanscan_asn::*;
-use crate::lanscan_ip::is_local_ip;
+use crate::lanscan_ip::is_lan_ip;
 use crate::lanscan_port_vulns::get_name_from_port;
 use crate::lanscan_sessions::session_macros::*;
 use crate::lanscan_sessions::*;
@@ -138,18 +138,18 @@ pub async fn process_parsed_packet(
         }
 
         // Determine if the session is local
-        let is_local_src = is_local_ip(&key.src_ip);
-        let is_local_dst = is_local_ip(&key.dst_ip);
+        let is_local_src = is_lan_ip(&key.src_ip);
+        let is_local_dst = is_lan_ip(&key.dst_ip);
 
         trace!("New session: {:?}", key);
 
         // Query the ASN database for non-local addresses
-        let src_asn = if !is_local_ip(&key.src_ip) {
+        let src_asn = if !is_lan_ip(&key.src_ip) {
             get_asn(key.src_ip).await
         } else {
             None
         };
-        let dst_asn = if !is_local_ip(&key.dst_ip) {
+        let dst_asn = if !is_lan_ip(&key.dst_ip) {
             get_asn(key.dst_ip).await
         } else {
             None

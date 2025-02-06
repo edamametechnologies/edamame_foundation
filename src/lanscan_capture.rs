@@ -966,13 +966,13 @@ impl LANScanCapture {
             let mut new_src_domain = session_info.src_domain.clone();
             let mut new_dst_domain = session_info.dst_domain.clone();
 
-            // Check DNS resolution for source IP
-            if let Some(domain) = dns_resolutions.get(&session_info.session.src_ip) {
-                trace!("Using DNS resolution for src_ip: {:?}", domain);
-                new_src_domain = Some(domain.clone());
-            } else {
-                // If not in dns_resolutions, use the resolver (only for eligible IPs)
-                if !crate::lanscan_ip::is_local_ip(&session_info.session.src_ip) {
+            // Check DNS resolution for source IP only if it's not a local IP
+            if !crate::lanscan_ip::is_lan_ip(&session_info.session.src_ip) {
+                if let Some(domain) = dns_resolutions.get(&session_info.session.src_ip) {
+                    trace!("Using DNS resolution for src_ip: {:?}", domain);
+                    new_src_domain = Some(domain.clone());
+                } else {
+                    // If not in dns_resolutions, use the resolver
                     if let Some(resolver) = resolver.as_ref() {
                         let domain = resolver.get_resolved_ip(&session_info.session.src_ip).await;
                         if let Some(domain) = domain {
@@ -987,24 +987,25 @@ impl LANScanCapture {
                                 .await;
                         }
                     }
-                } else {
-                    // Use mDNS for local IPs
-                    if let Some(src_domain) =
-                        mdns_get_hostname_by_ip(&session_info.session.src_ip).await
-                    {
-                        trace!("Using mDNS for src_ip: {:?}", src_domain);
-                        new_src_domain = Some(src_domain);
-                    }
+                }
+            } else {
+                // Use mDNS for local IPs
+                if let Some(src_domain) =
+                    mdns_get_hostname_by_ip(&session_info.session.src_ip).await
+                {
+                    trace!("Using mDNS for src_ip: {:?}", src_domain);
+                    new_src_domain = Some(src_domain);
                 }
             }
 
-            // Check DNS resolution for destination IP
-            if let Some(domain) = dns_resolutions.get(&session_info.session.dst_ip) {
-                trace!("Using DNS resolution for dst_ip: {:?}", domain);
-                new_dst_domain = Some(domain.clone());
-                dst_dns_resolution_count += 1;
-            } else {
-                if !crate::lanscan_ip::is_local_ip(&session_info.session.dst_ip) {
+            // Check DNS resolution for destination IP only if it's not a local IP
+            if !crate::lanscan_ip::is_lan_ip(&session_info.session.dst_ip) {
+                if let Some(domain) = dns_resolutions.get(&session_info.session.dst_ip) {
+                    trace!("Using DNS resolution for dst_ip: {:?}", domain);
+                    new_dst_domain = Some(domain.clone());
+                    dst_dns_resolution_count += 1;
+                } else {
+                    // If not in dns_resolutions, use the resolver
                     if let Some(resolver) = resolver.as_ref() {
                         let domain = resolver.get_resolved_ip(&session_info.session.dst_ip).await;
                         if let Some(domain) = domain {
@@ -1020,14 +1021,14 @@ impl LANScanCapture {
                                 .await;
                         }
                     }
-                } else {
-                    // Use mDNS for local IPs
-                    if let Some(dst_domain) =
-                        mdns_get_hostname_by_ip(&session_info.session.dst_ip).await
-                    {
-                        trace!("Using mDNS for dst_ip: {:?}", dst_domain);
-                        new_dst_domain = Some(dst_domain);
-                    }
+                }
+            } else {
+                // Use mDNS for local IPs
+                if let Some(dst_domain) =
+                    mdns_get_hostname_by_ip(&session_info.session.dst_ip).await
+                {
+                    trace!("Using mDNS for dst_ip: {:?}", dst_domain);
+                    new_dst_domain = Some(dst_domain);
                 }
             }
 

@@ -3,17 +3,25 @@ use dashmap::DashMap;
 use lazy_static::lazy_static;
 use std::collections::HashSet;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use tracing::trace;
+use std::sync::atomic::{AtomicBool, Ordering};
+use tracing::{error, trace};
 
 lazy_static! {
     /// A concurrent cache of IP addresses that are known to be local.
-    static ref KNOWN_LOCAL_IP_CACHE: DashMap<IpAddr, ()> = DashMap::new();
+    /// Limited to MAX_CACHE_SIZE entries
+    static ref KNOWN_LOCAL_IP_CACHE: DashMap<IpAddr, std::time::Instant> = DashMap::new();
 
     /// A cache for LAN IPv6 network ranges.
     /// The key is the IPv6 prefix (u8) and the value is a set of network addresses (stored as a u128)
     /// computed by applying that prefix to each LAN IPv6 interface.
     static ref LAN_IPV6_LOCAL_NETS: DashMap<u8, HashSet<u128>> = DashMap::new();
+
+    /// Flag indicating if the local cache was initialized.
+    static ref CACHE_INITIALIZED: AtomicBool = AtomicBool::new(false);
 }
+
+const MAX_CACHE_SIZE: usize = 10000;
+const CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(3600); // 1 hour
 
 /// --------------------------------------------------------------------
 /// Helper functions
@@ -43,7 +51,7 @@ pub fn apply_mask_v6(ip_addr: Ipv6Addr, prefix: u8) -> Ipv6Addr {
 
 /// Fast IPv4 local IP check using bit‑wise comparisons.
 #[inline(always)]
-fn is_local_ipv4_fast(ip: &Ipv4Addr) -> bool {
+fn is_lan_ipv4_fast(ip: &Ipv4Addr) -> bool {
     let val = ipv4_to_u32(ip);
 
     // Check unspecified (0.0.0.0) and broadcast (255.255.255.255)
@@ -81,9 +89,26 @@ fn is_local_ipv4_fast(ip: &Ipv4Addr) -> bool {
     false
 }
 
-/// Fast basic IPv6 local IP check (unspecified, loopback, multicast, link‑local, unique local).
 #[inline(always)]
-fn is_local_ipv6_basic(ip: &Ipv6Addr) -> bool {
+pub fn is_link_local_ipv6(ip: &Ipv6Addr) -> bool {
+    // Link-local (fe80::/10)
+    let segs = ip.segments();
+    (segs[0] & 0xffc0) == 0xfe80
+}
+
+pub fn is_private_ipv6(ip: &IpAddr) -> bool {
+    match ip {
+        // fc00::/7
+        IpAddr::V6(ipv6) => {
+            let segments = ipv6.segments();
+            segments[0] == 0xfc00 || segments[0] == 0xfd00
+        }
+        _ => false,
+    }
+}
+
+#[inline(always)]
+pub fn is_local_ipv6(ip: &Ipv6Addr) -> bool {
     let segs = ip.segments();
     // Check unspecified (::)
     if ip.is_unspecified() {
@@ -95,10 +120,6 @@ fn is_local_ipv6_basic(ip: &Ipv6Addr) -> bool {
     }
     // Multicast (ff00::/8)
     if (segs[0] & 0xff00) == 0xff00 {
-        return true;
-    }
-    // Link-local (fe80::/10)
-    if (segs[0] & 0xffc0) == 0xfe80 {
         return true;
     }
     // Unique local (fc00::/7)
@@ -144,11 +165,11 @@ pub fn init_local_cache(interfaces: &LANScanInterfaces) {
     // and store the network number in the LAN IPv6 cache.
     for interface in interfaces.iter() {
         for addr in &interface.ipv6 {
-            // No need to use the LinkLocal or Local addresses, as they will be filtered out by the basic IPv6 check.
             let (ip, prefix) = match addr {
                 LANScanInterfaceAddrTypeV6::Temporary(info)
                 | LANScanInterfaceAddrTypeV6::Secured(info)
                 | LANScanInterfaceAddrTypeV6::Unspecified(info) => (info.ip, info.prefix),
+                // No need to use the LinkLocal or Local addresses, as they will be filtered out by the basic IPv6 check.
                 LANScanInterfaceAddrTypeV6::LinkLocal(_info)
                 | LANScanInterfaceAddrTypeV6::Local(_info) => continue,
             };
@@ -161,6 +182,7 @@ pub fn init_local_cache(interfaces: &LANScanInterfaces) {
         "Local cache initialized with {} LAN IPv6 prefixes",
         LAN_IPV6_LOCAL_NETS.len()
     );
+    CACHE_INITIALIZED.store(true, Ordering::Relaxed);
 }
 
 /// --------------------------------------------------------------------
@@ -168,9 +190,17 @@ pub fn init_local_cache(interfaces: &LANScanInterfaces) {
 ///
 /// This function uses fast numeric checks for IPv4 and IPv6,
 /// and consults the precomputed LAN cache for IPv6.  
-/// It no longer requires an interface parameter (the cache is built separately).
 /// --------------------------------------------------------------------
-pub fn is_local_ip(ip: &IpAddr) -> bool {
+pub fn is_lan_ip(ip: &IpAddr) -> bool {
+    if KNOWN_LOCAL_IP_CACHE.len() > MAX_CACHE_SIZE {
+        cleanup_cache();
+    }
+    if !CACHE_INITIALIZED.load(Ordering::Relaxed) {
+        error!(
+            "is_local_ip called without an initialized cache. Please run init_local_cache first."
+        );
+    }
+
     // First, check if the IP is already in our known-local cache.
     if KNOWN_LOCAL_IP_CACHE.contains_key(ip) {
         trace!("IP address {:?} found in known-local cache", ip);
@@ -178,10 +208,10 @@ pub fn is_local_ip(ip: &IpAddr) -> bool {
     }
 
     let local = match ip {
-        IpAddr::V4(ipv4) => is_local_ipv4_fast(ipv4),
+        IpAddr::V4(ipv4) => is_lan_ipv4_fast(ipv4),
         IpAddr::V6(ipv6) => {
             // Do basic IPv6 local checks.
-            if is_local_ipv6_basic(ipv6) {
+            if is_local_ipv6(ipv6) {
                 true
             } else {
                 // Otherwise, check against the precomputed LAN IPv6 networks.
@@ -192,34 +222,12 @@ pub fn is_local_ip(ip: &IpAddr) -> bool {
 
     // Cache the result for faster future lookups.
     if local {
-        KNOWN_LOCAL_IP_CACHE.insert(ip.clone(), ());
+        KNOWN_LOCAL_IP_CACHE.insert(ip.clone(), std::time::Instant::now());
         trace!("IP address {:?} determined local and cached", ip);
     } else {
         trace!("IP address {:?} determined not local", ip);
     }
     local
-}
-
-pub fn is_link_local_ipv6(ip: &IpAddr) -> bool {
-    match ip {
-        IpAddr::V6(ipv6) => {
-            let segments = ipv6.segments();
-            // Check that the address is fe80::/10.
-            (segments[0] & 0xffc0) == 0xfe80
-        }
-        _ => false,
-    }
-}
-
-pub fn is_private_ipv6(ip: &IpAddr) -> bool {
-    match ip {
-        // fc00::/7
-        IpAddr::V6(ipv6) => {
-            let segments = ipv6.segments();
-            segments[0] == 0xfc00 || segments[0] == 0xfd00
-        }
-        _ => false,
-    }
 }
 
 /// Convert an IPv4 netmask to a CIDR prefix
@@ -235,6 +243,11 @@ pub fn apply_mask(ip_addr: Ipv4Addr, prefix: u8) -> Ipv4Addr {
         !0u32 << (32 - prefix)
     };
     Ipv4Addr::from(u32::from(ip_addr) & mask)
+}
+
+fn cleanup_cache() {
+    let now = std::time::Instant::now();
+    KNOWN_LOCAL_IP_CACHE.retain(|_, v| now.duration_since(*v) < CACHE_TTL);
 }
 
 #[cfg(test)]
@@ -279,57 +292,57 @@ mod tests {
     fn test_is_local_ipv4() {
         // Check well‑known local IPv4 addresses
         let loopback: IpAddr = "127.0.0.1".parse().unwrap();
-        assert!(is_local_ip(&loopback));
+        assert!(is_lan_ip(&loopback));
 
         let unspecified: IpAddr = "0.0.0.0".parse().unwrap();
-        assert!(is_local_ip(&unspecified));
+        assert!(is_lan_ip(&unspecified));
 
         let broadcast: IpAddr = "255.255.255.255".parse().unwrap();
-        assert!(is_local_ip(&broadcast));
+        assert!(is_lan_ip(&broadcast));
 
         // Private IPv4 addresses
         let private1: IpAddr = "10.0.0.1".parse().unwrap();
-        assert!(is_local_ip(&private1));
+        assert!(is_lan_ip(&private1));
 
         let private2: IpAddr = "192.168.1.100".parse().unwrap();
-        assert!(is_local_ip(&private2));
+        assert!(is_lan_ip(&private2));
 
         let private3: IpAddr = "172.16.5.9".parse().unwrap();
-        assert!(is_local_ip(&private3));
+        assert!(is_lan_ip(&private3));
 
         // Public IPv4 address should not be considered local.
         let public: IpAddr = "8.8.8.8".parse().unwrap();
-        assert!(!is_local_ip(&public));
+        assert!(!is_lan_ip(&public));
     }
 
     #[test]
     fn test_is_local_ipv6() {
         // IPv6 loopback and unspecified should be local.
         let loopback: IpAddr = "::1".parse().unwrap();
-        assert!(is_local_ip(&loopback));
+        assert!(is_lan_ip(&loopback));
 
         let unspecified: IpAddr = "::".parse().unwrap();
-        assert!(is_local_ip(&unspecified));
+        assert!(is_lan_ip(&unspecified));
 
         // Multicast address (ff00::/8 format) is caught by the basic IPv6 check.
         let multicast: IpAddr = "ff02::1".parse().unwrap();
-        assert!(is_local_ip(&multicast));
+        assert!(is_lan_ip(&multicast));
 
         // Link-local check.
         let link_local: IpAddr = "fe80::1".parse().unwrap();
-        assert!(is_local_ip(&link_local));
+        assert!(is_lan_ip(&link_local));
 
         // Global unicast address not matching any special criteria is not local.
         let global: IpAddr = "2001:db8::1".parse().unwrap();
-        assert!(!is_local_ip(&global));
+        assert!(!is_lan_ip(&global));
     }
 
     #[test]
     fn test_is_link_local_ipv6() {
-        let link_local: IpAddr = "fe80::1234".parse().unwrap();
+        let link_local: Ipv6Addr = "fe80::1234".parse().unwrap();
         assert!(is_link_local_ipv6(&link_local));
 
-        let non_link_local: IpAddr = "2001:db8::1".parse().unwrap();
+        let non_link_local: Ipv6Addr = "2001:db8::1".parse().unwrap();
         assert!(!is_link_local_ipv6(&non_link_local));
     }
 
@@ -383,7 +396,7 @@ mod tests {
         let ip: IpAddr = "10.0.0.1".parse().unwrap();
 
         // The first call should determine the IP as local and cache it.
-        assert!(is_local_ip(&ip));
+        assert!(is_lan_ip(&ip));
         // The IP should now appear in the KNOWN_LOCAL_IP_CACHE.
         assert!(KNOWN_LOCAL_IP_CACHE.contains_key(&ip));
     }
@@ -407,10 +420,10 @@ mod tests {
 
         // An IP within the same LAN (matching the network portion) should now be local.
         let local_ip: IpAddr = "2001:db8:abcd:12::1234".parse().unwrap();
-        assert!(is_local_ip(&local_ip));
+        assert!(is_lan_ip(&local_ip));
 
         // An IP outside the LAN should not be local.
         let non_local_ip: IpAddr = "2001:db8:abcd:13::1234".parse().unwrap();
-        assert!(!is_local_ip(&non_local_ip));
+        assert!(!is_lan_ip(&non_local_ip));
     }
 }
