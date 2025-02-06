@@ -6,6 +6,11 @@ use crate::lanscan_broadcast::scan_hosts_broadcast;
     feature = "packetcapture"
 ))]
 use crate::lanscan_capture::LANScanCapture;
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux", target_os = "windows"),
+    feature = "packetcapture"
+))]
+use crate::lanscan_ip::*;
 use crate::lanscan_mdns::*;
 use crate::lanscan_neighbors::scan_neighbors;
 use crate::logger::get_all_logs;
@@ -388,6 +393,10 @@ pub fn start_interface_monitor() {
                         let interfaces = INTERFACES.lock().await.clone();
                         info!("Interfaces changed, restarting capture on {:?}", interfaces);
                         capture.lock().await.start(&interfaces).await;
+
+                        // Local cache
+                        info!("Interfaces changed, initializing local IP cache");
+                        init_local_cache(&interfaces);
                     }
                 }
                 // mDNS flush
