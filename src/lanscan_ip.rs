@@ -118,6 +118,10 @@ pub fn is_local_ipv6(ip: &Ipv6Addr) -> bool {
     if ip.is_loopback() {
         return true;
     }
+    // Check link-local (fe80::/10)
+    if is_link_local_ipv6(ip) {
+        return true;
+    }
     // Multicast (ff00::/8)
     if (segs[0] & 0xff00) == 0xff00 {
         return true;
