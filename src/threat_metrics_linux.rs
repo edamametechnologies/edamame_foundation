@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_LINUX: &str = r#"{
   "name": "threat model Linux",
   "extends": "none",
-  "date": "December 26th 2024",
-  "signature": "13c9d36c297feb46661740c24d8b8950d8e9ce63c49ad767c07b9e81646561ab",
+  "date": "February 07th 2025",
+  "signature": "60b6853daf0b66e00f170013d4121bccbdf4c16c7bd1ae49734915a63995d0d5",
   "metrics": [
     {
       "name": "edamame helper disabled",
@@ -206,7 +206,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "user",
-        "target": "ecryptfs-setup-private 2>&1 | grep -q 'wrapped-passphrase file already exists' || echo encryption_inactive",
+        "target": "[ -f ~/.ecryptfs/wrapped-passphrase ] || echo encryption_inactive",
         "education": []
       },
       "remediation": {
@@ -269,7 +269,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
-        "target": "apt install virt-what -y > /dev/null 2>&1 && output=$(virt-what) && [ -z \"$output\" ] && { lsblk -o MOUNTPOINT,FSTYPE | grep \"/ \" | grep -q 'crypt' || echo encryption_disabled; lsblk -o MOUNTPOINT,FSTYPE | grep '/swap' | grep -q 'crypt' || echo encryption_disabled; }",
+        "target": "apt update -qq > /dev/null 2>&1 || true && apt install virt-what -y > /dev/null 2>&1 && output=$(virt-what) && [ -z \"$output\" ] && { lsblk -o MOUNTPOINT,FSTYPE | grep \"/ \" | grep -q 'crypt' || echo encryption_disabled; lsblk -o MOUNTPOINT,FSTYPE | grep '/swap' | grep -q 'crypt' || echo encryption_disabled; }",
         "education": []
       },
       "remediation": {
@@ -467,7 +467,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "user",
-        "target": "stat /etc/passwd | grep '(0644/-rw-r--r--)' | grep -v grep > /dev/null || echo bad_permissions",
+        "target": "stat /etc/passwd | grep -q '(0644/-rw-r--r--)' || echo bad_permissions",
         "education": []
       },
       "remediation": {
@@ -516,7 +516,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "user",
-        "target": "stat /etc/shadow | grep '(0600/-rw-------)' | grep -v grep > /dev/null || echo bad_permissions",
+        "target": "stat /etc/shadow | grep -q '(0600/-rw-------)' || echo bad_permissions",
         "education": []
       },
       "remediation": {
@@ -563,7 +563,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "user",
-        "target": "stat /etc/fstab | grep '(0644/-rw-r--r--)' | grep -v grep > /dev/null || echo bad_permissions",
+        "target": "stat /etc/fstab | grep -q '(0644/-rw-r--r--)' || echo bad_permissions",
         "education": []
       },
       "remediation": {
@@ -612,7 +612,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "user",
-        "target": "stat /etc/group | grep '(0644/-rw-r--r--)' | grep -v grep > /dev/null || echo bad_permissions",
+        "target": "stat /etc/group | grep -q '(0644/-rw-r--r--)' || echo bad_permissions",
         "education": []
       },
       "remediation": {
@@ -661,7 +661,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "user",
-        "target": "ls -l /etc/group | grep 'root root' | grep -v grep > /dev/null || echo bad_group",
+        "target": "ls -l /etc/group | grep -q 'root root' || echo bad_group",
         "education": []
       },
       "remediation": {
@@ -710,7 +710,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "user",
-        "target": "ls -l /etc/shadow | grep 'root shadow' | grep -v grep > /dev/null || echo bad_group",
+        "target": "ls -l /etc/shadow | grep -q 'root shadow' || echo bad_group",
         "education": []
       },
       "remediation": {
@@ -759,7 +759,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
-        "target": "apt list --upgradeable 2>/dev/null | grep 'upgradable'",
+        "target": "apt update -qq > /dev/null 2>&1 || true && apt list --upgradeable 2>/dev/null | grep -q 'upgradable' && echo os_outdated",
         "education": []
       },
       "remediation": {
@@ -768,7 +768,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
-        "target": "apt update && apt upgrade -y",
+        "target": "apt update -qq > /dev/null 2>&1 || true && apt upgrade -y",
         "education": []
       },
       "rollback": {
@@ -817,7 +817,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
-        "target": "apt install ufw -y > /dev/null 2>&1 && ufw enable",
+        "target": "apt update -qq > /dev/null 2>&1 || true && apt install ufw -y > /dev/null 2>&1 && ufw enable",
         "education": [
           {
             "locale": "EN",
@@ -963,7 +963,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
-        "target": "apt install xrdp -y > /dev/null 2>&1 && systemctl start xrdp && systemctl enable xrdp",
+        "target": "apt update -qq > /dev/null 2>&1 || true && apt install xrdp -y > /dev/null 2>&1 && systemctl start xrdp && systemctl enable xrdp",
         "education": [
           {
             "locale": "EN",
@@ -1034,7 +1034,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
-        "target": "apt install samba -y > /dev/null 2>&1 && systemctl start smbd && systemctl enable smbd; apt install nfs-kernel-server -y > /dev/null 2>&1 && systemctl start nfs-kernel-server && systemctl enable nfs-kernel-server",
+        "target": "apt update -qq > /dev/null 2>&1 || true && apt install samba -y > /dev/null 2>&1 && systemctl start smbd && systemctl enable smbd && apt install nfs-kernel-server -y > /dev/null 2>&1 && systemctl start nfs-kernel-server && systemctl enable nfs-kernel-server",
         "education": [
           {
             "locale": "EN",
@@ -1078,7 +1078,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "user",
-        "target": "gsettings get org.gnome.desktop.screensaver lock-enabled",
+        "target": "gsettings get org.gnome.desktop.screensaver lock-enabled | grep -q 'true' || echo screensaver_lock_disabled",
         "education": []
       },
       "remediation": {
@@ -1149,7 +1149,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "user",
-        "target": "mokutil --sb-state | grep 'SecureBoot enabled' || echo secure_boot_disabled",
+        "target": "mokutil --sb-state | grep -q 'SecureBoot enabled' || echo secure_boot_disabled",
         "education": []
       },
       "remediation": {
@@ -1210,7 +1210,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "user",
-        "target": "[ -f /etc/security/pwquality.conf ] && grep -E 'minlen|dcredit|ucredit|ocredit|lcredit' /etc/security/pwquality.conf || echo weak_password_policy",
+        "target": "[ -f /etc/security/pwquality.conf ] && grep -qE 'minlen|dcredit|ucredit|ocredit|lcredit' /etc/security/pwquality.conf || echo weak_password_policy",
         "education": []
       },
       "remediation": {
