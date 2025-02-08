@@ -312,7 +312,7 @@ pub fn init_logger(
     };
 
     // Duplicate to stdout except for posture when installed in /usr/bin or /usr/local/bin
-    let stdout_writer = if (matches!(executable_type, "posture") && is_installed) {
+    let stdout_writer = if !(matches!(executable_type, "posture") && is_installed) {
         NonBlocking::new(io::sink())
     } else {
         NonBlocking::new(io::stdout())
