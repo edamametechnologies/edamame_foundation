@@ -270,9 +270,15 @@ pub fn init_logger(
     // Set filter
     let filter_layer = EnvFilter::try_new(env_log_spec).unwrap();
 
+    // Are we installed in /usr/bin or /usr/local/bin?
+    let exe_path = current_exe().unwrap_or_else(|_| PathBuf::from(""));
+    let exe_path_str = exe_path.to_str().unwrap_or("");
+    let is_installed =
+        exe_path_str.starts_with("/usr/bin/") || exe_path_str.starts_with("/usr/local/bin/");
+
     // Optional file writer
-    // Duplicate to file on Windows for the app and helper, or for the posture
-    let file_writer = if matches!(executable_type, "posture")
+    // Duplicate to file on Windows for the app and helper, or for the posture when not installed in /usr/bin or /usr/local/bin
+    let file_writer = if (matches!(executable_type, "posture") && !is_installed)
         || (cfg!(target_os = "windows") && !matches!(executable_type, "cli"))
     {
         let log_dir = if matches!(executable_type, "helper") || matches!(executable_type, "posture")
@@ -300,17 +306,13 @@ pub fn init_logger(
         let pid = std::process::id();
         let basename = format!("{}_{}", basename, pid);
         let file_appender = RollingFileAppender::new(Rotation::DAILY, log_dir.clone(), basename);
-        //println!(
-        //    "Logging to rolling file with basename {} in directory {:?}",
-        //    basename, log_dir
-        //);
         tracing_appender::non_blocking(file_appender)
     } else {
         NonBlocking::new(io::sink())
     };
 
-    // Duplicate to stdout except for posture
-    let stdout_writer = if matches!(executable_type, "posture") {
+    // Duplicate to stdout except for posture when installed in /usr/bin or /usr/local/bin
+    let stdout_writer = if (matches!(executable_type, "posture") && is_installed) {
         NonBlocking::new(io::sink())
     } else {
         NonBlocking::new(io::stdout())
@@ -326,7 +328,6 @@ pub fn init_logger(
                     .iter()
                     .any(|s| md.target().contains(s) || md.name().contains(s))
                 {
-                    //println!("Filtering out error for Sentry: {:?}", md);
                     EventFilter::Ignore
                 } else {
                     EventFilter::Event
@@ -356,7 +357,7 @@ pub fn init_logger(
                         //.with(console_layer)
                         .try_init()
                     {
-                        Ok(_) => {} //println!("Apple logger initialized with Sentry and Console"),
+                        Ok(_) => {}
                         Err(e) => eprintln!("Logger initialization failed: {}", e),
                     }
                 } else {
@@ -369,7 +370,7 @@ pub fn init_logger(
                         .with(fmt::layer().with_writer(stdout_writer.0))
                         .try_init()
                     {
-                        Ok(_) => {} //println!("Standard logger initialized with Sentry"),
+                        Ok(_) => {}
                         Err(e) => eprintln!("Logger initialization failed: {}", e),
                     }
                 }
@@ -387,7 +388,7 @@ pub fn init_logger(
                     .with(android_layer)
                     .try_init()
                 {
-                    Ok(_) => {} //println!("Android logger initialized with Sentry"),
+                    Ok(_) => {}
                     Err(e) => eprintln!("Logger initialization failed: {}", e),
                 }
             }
@@ -402,7 +403,7 @@ pub fn init_logger(
                 .with(fmt::layer().with_writer(stdout_writer.0))
                 .try_init()
             {
-                Ok(_) => {} //println!("Windows logger initialized with Sentry"),
+                Ok(_) => {}
                 Err(e) => eprintln!("Logger initialization failed: {}", e),
             }
         } else {
@@ -416,7 +417,7 @@ pub fn init_logger(
                 .with(fmt::layer().with_writer(stdout_writer.0))
                 .try_init()
             {
-                Ok(_) => {} //println!("Generic logger initialized with Sentry"),
+                Ok(_) => {}
                 Err(e) => eprintln!("Logger initialization failed: {}", e),
             }
         }
@@ -437,7 +438,7 @@ pub fn init_logger(
                         .with(os_logger)
                         .try_init()
                     {
-                        Ok(_) => {} //println!("Apple logger initialized"),
+                        Ok(_) => {}
                         Err(e) => eprintln!("Logger initialization failed: {}", e),
                     }
                 } else {
@@ -448,7 +449,7 @@ pub fn init_logger(
                         .with(fmt::layer().with_writer(logger.memory_writer.clone()))
                         .try_init()
                     {
-                        Ok(_) => {} //println!("Standard logger initialized"),
+                        Ok(_) => {}
                         Err(e) => eprintln!("Logger initialization failed: {}", e),
                     }
                 }
@@ -465,7 +466,7 @@ pub fn init_logger(
                     .with(android_layer)
                     .try_init()
                 {
-                    Ok(_) => {} //println!("Android logger initialized"),
+                    Ok(_) => {}
                     Err(e) => eprintln!("Logger initialization failed: {}", e),
                 }
             }
@@ -478,7 +479,7 @@ pub fn init_logger(
                 .with(fmt::layer().with_writer(logger.memory_writer.clone()))
                 .try_init()
             {
-                Ok(_) => {} //println!("Windows logger initialized"),
+                Ok(_) => {}
                 Err(e) => eprintln!("Logger initialization failed: {}", e),
             }
         } else {
@@ -490,7 +491,7 @@ pub fn init_logger(
                 .with(fmt::layer().with_writer(logger.memory_writer.clone()))
                 .try_init()
             {
-                Ok(_) => {} //println!("Generic logger initialized"),
+                Ok(_) => {}
                 Err(e) => eprintln!("Logger initialization failed: {}", e),
             }
         }
