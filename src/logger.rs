@@ -277,7 +277,8 @@ pub fn init_logger(
         exe_path_str.starts_with("/usr/bin/") || exe_path_str.starts_with("/usr/local/bin/");
 
     // Optional file writer
-    // Duplicate to file on Windows for the app and helper, or for the posture when not installed in /usr/bin or /usr/local/bin
+    // Duplicate to file on Windows for the app and helper,
+    // Or for posture for all platforms when not installed in /usr/bin or /usr/local/bin
     let file_writer = if (matches!(executable_type, "posture") && !is_installed)
         || (cfg!(target_os = "windows") && !matches!(executable_type, "cli"))
     {
@@ -311,8 +312,8 @@ pub fn init_logger(
         NonBlocking::new(io::sink())
     };
 
-    // Duplicate to stdout except for posture when installed in /usr/bin or /usr/local/bin
-    let stdout_writer = if !(matches!(executable_type, "posture") && is_installed) {
+    // Duplicate to stdout except for posture
+    let stdout_writer = if !matches!(executable_type, "posture") {
         NonBlocking::new(io::sink())
     } else {
         NonBlocking::new(io::stdout())
