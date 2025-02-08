@@ -233,8 +233,6 @@ pub fn init_logger(
     provided_env_log_spec: &str,
     sentry_error_filter: &[&str],
 ) {
-    println!("Initializing logger with executable_type: {}, url: {}, release: {}, provided_env_log_spec: {}, sentry_error_filter: {:?}", executable_type, url, release, provided_env_log_spec, sentry_error_filter);
-
     // Force backtrace
     set_var("RUST_BACKTRACE", "1");
 
