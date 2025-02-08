@@ -233,6 +233,8 @@ pub fn init_logger(
     provided_env_log_spec: &str,
     sentry_error_filter: &[&str],
 ) {
+    println!("Initializing logger with executable_type: {}, url: {}, release: {}, provided_env_log_spec: {}, sentry_error_filter: {:?}", executable_type, url, release, provided_env_log_spec, sentry_error_filter);
+
     // Force backtrace
     set_var("RUST_BACKTRACE", "1");
 
@@ -270,16 +272,10 @@ pub fn init_logger(
     // Set filter
     let filter_layer = EnvFilter::try_new(env_log_spec).unwrap();
 
-    // Are we installed in /usr/bin or /usr/local/bin?
-    let exe_path = current_exe().unwrap_or_else(|_| PathBuf::from(""));
-    let exe_path_str = exe_path.to_str().unwrap_or("");
-    let is_installed =
-        exe_path_str.starts_with("/usr/bin/") || exe_path_str.starts_with("/usr/local/bin/");
-
     // Optional file writer
     // Duplicate to file on Windows for the app and helper,
-    // Or for posture for all platforms when not installed in /usr/bin or /usr/local/bin
-    let file_writer = if (matches!(executable_type, "posture") && !is_installed)
+    // Or for posture for all platforms
+    let file_writer = if matches!(executable_type, "posture")
         || (cfg!(target_os = "windows") && !matches!(executable_type, "cli"))
     {
         let log_dir = if matches!(executable_type, "helper") || matches!(executable_type, "posture")
@@ -313,7 +309,7 @@ pub fn init_logger(
     };
 
     // Duplicate to stdout except for posture
-    let stdout_writer = if !matches!(executable_type, "posture") {
+    let stdout_writer = if matches!(executable_type, "posture") {
         NonBlocking::new(io::sink())
     } else {
         NonBlocking::new(io::stdout())
