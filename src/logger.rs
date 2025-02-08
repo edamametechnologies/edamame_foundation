@@ -272,10 +272,15 @@ pub fn init_logger(
     // Set filter
     let filter_layer = EnvFilter::try_new(env_log_spec).unwrap();
 
+    // Check if we are installed in /usr or /opt
+    let exe_path = current_exe().unwrap_or_else(|_| PathBuf::from(""));
+    let exe_path_str = exe_path.to_str().unwrap_or("");
+    let is_installed = exe_path_str.starts_with("/usr") || exe_path_str.starts_with("/opt/");
+
     // Optional file writer
     // Duplicate to file on Windows for the app and helper,
-    // Or for posture for all platforms
-    let file_writer = if matches!(executable_type, "posture")
+    // Or for posture for all platforms, except if installed in /usr or /opt
+    let file_writer = if (matches!(executable_type, "posture") && !is_installed)
         || (cfg!(target_os = "windows") && !matches!(executable_type, "cli"))
     {
         let log_dir = if matches!(executable_type, "helper") || matches!(executable_type, "posture")
