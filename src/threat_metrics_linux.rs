@@ -1210,7 +1210,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "user",
-        "target": "[ -f /etc/security/pwquality.conf ] && grep -qE 'minlen|dcredit|ucredit|ocredit|lcredit' /etc/security/pwquality.conf || echo weak_password_policy",
+        "target": "[ ! -f /etc/security/pwquality.conf ] && echo 'weak password_policy: pwquality is not in use' || ! grep -qvE '^\\s*#|^\\s*$' /etc/security/pwquality.conf && echo 'weak password policy: conf file uses defaults'",
         "education": []
       },
       "remediation": {
