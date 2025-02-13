@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_LINUX: &str = r#"{
   "name": "threat model Linux",
   "extends": "none",
-  "date": "February 07th 2025",
-  "signature": "60b6853daf0b66e00f170013d4121bccbdf4c16c7bd1ae49734915a63995d0d5",
+  "date": "February 12th 2025",
+  "signature": "0e239f22bb4a47a690444b38994d3277a0aab2e3e7600d469b5c87107393fa1d",
   "metrics": [
     {
       "name": "edamame helper disabled",
@@ -86,7 +86,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
-        "target": "sentinelctl version 2>/dev/null | grep -q 'Agent version' || echo epp_disabled",
+        "target": "LANG=C sentinelctl version 2>/dev/null | grep -q 'Agent version' || echo epp_disabled",
         "education": []
       },
       "remediation": {
@@ -180,67 +180,6 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       }
     },
     {
-      "name": "encrypted private folder disabled",
-      "metrictype": "bool",
-      "dimension": "system services",
-      "severity": 4,
-      "scope": "generic",
-      "tags": [
-        "CIS Benchmark Level 2,Configure /home partition encryption"
-      ],
-      "description": [
-        {
-          "locale": "EN",
-          "title": "Private directory disabled",
-          "summary": "Your home folder private encrypted directory is not enabled. Enabling home folder encryption helps protect your personal data from unauthorized access."
-        },
-        {
-          "locale": "FR",
-          "title": "Dossier privé désactivé",
-          "summary": "Le dossier privé de votre dossier personnel n'est pas crypté. Activer le cryptage du dossier personnel aide à protéger vos données personnelles contre tout accès non autorisé."
-        }
-      ],
-      "implementation": {
-        "system": "Linux",
-        "minversion": 3,
-        "maxversion": 0,
-        "class": "cli",
-        "elevation": "user",
-        "target": "[ -f ~/.ecryptfs/wrapped-passphrase ] || echo encryption_inactive",
-        "education": []
-      },
-      "remediation": {
-        "system": "Linux",
-        "minversion": 3,
-        "maxversion": 0,
-        "class": "",
-        "elevation": "",
-        "target": "",
-        "education": [
-          {
-            "locale": "EN",
-            "class": "link",
-            "target": "https://help.ubuntu.com/community/EncryptedHome"
-          }
-        ]
-      },
-      "rollback": {
-        "system": "Linux",
-        "minversion": 3,
-        "maxversion": 0,
-        "class": "",
-        "elevation": "",
-        "target": "",
-        "education": [
-          {
-            "locale": "EN",
-            "class": "link",
-            "target": "https://help.ubuntu.com/community/EncryptedHome"
-          }
-        ]
-      }
-    },
-    {
       "name": "encrypted disk disabled",
       "metrictype": "bool",
       "dimension": "system services",
@@ -260,7 +199,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         {
           "locale": "FR",
           "title": "Cryptage du disque désactivé",
-          "summary": "Votre disque principal et votre swap ne sont pas crypté. Activer le cryptage du disque aide à protéger vos données contre tout accès non autorisé."
+          "summary": "Votre disque principal et votre swap ne sont pas cryptés. Activer le cryptage du disque aide à protéger vos données contre tout accès non autorisé."
         }
       ],
       "implementation": {
@@ -269,7 +208,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
-        "target": "apt update -qq > /dev/null 2>&1 || true && apt install virt-what -y > /dev/null 2>&1 && output=$(virt-what) && [ -z \"$output\" ] && { lsblk -o MOUNTPOINT,FSTYPE | grep \"/ \" | grep -q 'crypt' || echo encryption_disabled; lsblk -o MOUNTPOINT,FSTYPE | grep '/swap' | grep -q 'crypt' || echo encryption_disabled; }",
+        "target": "apt update -qq > /dev/null 2>&1 || true && apt install virt-what -y > /dev/null 2>&1 && [ -z \"$(virt-what)\" ] && { root_dev=$(findmnt -n -o SOURCE /); swap_dev=$(findmnt -n -o SOURCE /swap 2>/dev/null); lsblk -n -o TYPE \"$(readlink -f \"$root_dev\")\" -p -l -i | grep -q crypt || echo encryption_disabled; [ -n \"$swap_dev\" ] && (lsblk -n -o TYPE \"$(readlink -f \"$swap_dev\")\" -p -l -i | grep -q crypt || echo encryption_disabled); }",
         "education": []
       },
       "remediation": {
@@ -502,12 +441,12 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         {
           "locale": "EN",
           "title": "File permissions /etc/shadow",
-          "summary": "The /etc/shadow file in Unix and Linux systems stores encrypted password data for each user and has stricter permissions than /etc/passwd. This is because /etc/shadow contains sensitive data.\nThe recommended permissions for the /etc/shadow file are 600:\n6 (read and write) for the owner, who should be the root or superuser. This allows the system to modify the file when passwords are changed.\n0 for the group and others. This means no permissions are given to the group or others, meaning they cannot read, write, or execute the file."
+          "summary": "The /etc/shadow file in Unix and Linux systems stores encrypted password data for each user and has stricter permissions than /etc/passwd. This is because /etc/shadow contains sensitive data.\nThe recommended permissions for the /etc/shadow file are 640:\n6 (read and write) for the owner, who should be the root or superuser. This allows the system to modify the file when passwords are changed.\n0 for the group and others. This means no permissions are given to the group or others, meaning they cannot read, write, or execute the file."
         },
         {
           "locale": "FR",
           "title": "Permissions du fichier /etc/shadow",
-          "summary": "Le fichier `/etc/shadow` dans les systèmes Unix et Linux stocke les données de mot de passe cryptées pour chaque utilisateur et a des permissions plus strictes que `/etc/passwd`. Cela est dû au fait que `/etc/shadow` contient des données sensibles.\nLes permissions recommandées pour le fichier `/etc/shadow` sont `600` :\n- `6` (lecture et écriture) pour le propriétaire, qui devrait être l'utilisateur root ou superutilisateur. Cela permet au système de modifier le fichier lorsque les mots de passe sont changés.\n- `0` pour le groupe et les autres. Cela signifie qu'aucune permission n'est donnée au groupe ou aux autres, ce qui signifie qu'ils ne peuvent pas lire, écrire ou exécuter le fichier."
+          "summary": "Le fichier `/etc/shadow` dans les systèmes Unix et Linux stocke les données de mot de passe cryptées pour chaque utilisateur et a des permissions plus strictes que `/etc/passwd`. Cela est dû au fait que `/etc/shadow` contient des données sensibles.\nLes permissions recommandées pour le fichier `/etc/shadow` sont `640` :\n- `6` (lecture et écriture) pour le propriétaire, qui devrait être l'utilisateur root ou superutilisateur. Cela permet au système de modifier le fichier lorsque les mots de passe sont changés.\n- `0` pour le groupe et les autres. Cela signifie qu'aucune permission n'est donnée au groupe ou aux autres, ce qui signifie qu'ils ne peuvent pas lire, écrire ou exécuter le fichier."
         }
       ],
       "implementation": {
@@ -516,7 +455,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "user",
-        "target": "stat /etc/shadow | grep -q '(0600/-rw-------)' || echo bad_permissions",
+        "target": "stat /etc/shadow | grep -q '(0640/-rw-r-----)' || echo bad_permissions",
         "education": []
       },
       "remediation": {
@@ -525,7 +464,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
-        "target": "chmod 600 /etc/shadow",
+        "target": "chmod 640 /etc/shadow",
         "education": []
       },
       "rollback": {
@@ -759,7 +698,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
-        "target": "apt update -qq > /dev/null 2>&1 || true && apt list --upgradeable 2>/dev/null | grep -q 'upgradable' && echo os_outdated",
+        "target": "LANG=C apt update -qq > /dev/null 2>&1 || true && apt list --upgradeable 2>/dev/null | grep -q 'upgradable' && echo os_outdated",
         "education": []
       },
       "remediation": {
@@ -808,7 +747,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
-        "target": "ufw status | grep -q 'Status: active' || echo firewall_disabled",
+        "target": "LANG=C ufw status | grep -qi 'Status: active' || echo firewall_disabled",
         "education": []
       },
       "remediation": {
@@ -863,7 +802,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
-        "target": "systemctl is-active ssh | grep -q 'inactive' || echo remote_login_enabled",
+        "target": "LANG=C systemctl is-active ssh | grep -q 'inactive' || echo remote_login_enabled",
         "education": []
       },
       "remediation": {
@@ -934,7 +873,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "user",
-        "target": "systemctl is-active xrdp 2>/dev/null | grep -q 'inactive' || echo rdp_enabled",
+        "target": "LANG=C systemctl is-active xrdp 2>/dev/null | grep -q 'inactive' || echo rdp_enabled",
         "education": []
       },
       "remediation": {
@@ -1005,7 +944,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "user",
-        "target": "systemctl is-active nfs-kernel-server 2>/dev/null | grep -q 'inactive' || echo nfs_enabled; systemctl is-active smbd 2>/dev/null | grep -q 'inactive' || echo smb_enabled",
+        "target": "LANG=C systemctl is-active nfs-kernel-server 2>/dev/null | grep -q 'inactive' || echo nfs_enabled; LANG=C systemctl is-active smbd 2>/dev/null | grep -q 'inactive' || echo smb_enabled",
         "education": []
       },
       "remediation": {
@@ -1078,7 +1017,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "user",
-        "target": "gsettings get org.gnome.desktop.screensaver lock-enabled | grep -q 'true' || echo screensaver_lock_disabled",
+        "target": "LANG=C gsettings get org.gnome.desktop.screensaver lock-enabled | grep -q 'true' || echo screensaver_lock_disabled",
         "education": []
       },
       "remediation": {
@@ -1149,7 +1088,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "user",
-        "target": "mokutil --sb-state | grep -q 'SecureBoot enabled' || echo secure_boot_disabled",
+        "target": "LANG=C mokutil --sb-state | grep -q 'SecureBoot enabled' || echo secure_boot_disabled",
         "education": []
       },
       "remediation": {
