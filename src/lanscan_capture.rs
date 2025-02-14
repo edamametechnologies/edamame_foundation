@@ -74,7 +74,6 @@ pub struct LANScanCapture {
 
 impl LANScanCapture {
     pub fn new() -> Self {
-        debug!("Creating new LANScanCapture");
         Self {
             interfaces: Arc::new(CustomRwLock::new(LANScanInterfaces::new())),
             capture_task_handles: Arc::new(DashMap::new()),
