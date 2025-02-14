@@ -1836,6 +1836,11 @@ mod tests {
             return;
         }
 
+        // This test is not valid on Windows (for now)
+        if cfg!(target_os = "windows") {
+            return;
+        }
+
         // Get the valid network interfaces (LANScanInterfaces)
         let valid_interfaces = get_valid_network_interfaces();
         assert!(
