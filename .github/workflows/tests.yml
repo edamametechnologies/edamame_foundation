@@ -45,6 +45,7 @@ jobs:
             protobuf_install: sudo apt-get update && sudo apt-get install -y protobuf-compiler libpcap-dev
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
+    
     steps:
       - name: Setup EDAMAME Posture
         uses: edamametechnologies/edamame_posture_action@v0
