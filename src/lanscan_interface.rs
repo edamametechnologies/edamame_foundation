@@ -617,6 +617,13 @@ pub fn get_default_interface() -> Option<LANScanInterface> {
     }
 }
 
+pub fn get_interface_from_name(name: &str) -> Option<LANScanInterface> {
+    get_valid_network_interfaces()
+        .interfaces
+        .into_iter()
+        .find(|iface| iface.name == name)
+}
+
 // Tests
 #[cfg(test)]
 mod tests {

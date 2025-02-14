@@ -1,6 +1,6 @@
 use crate::lanscan_dns::DnsPacketProcessor;
-use crate::lanscan_interface::get_default_interface;
 use crate::lanscan_interface::*;
+use crate::lanscan_ip::*;
 use crate::lanscan_l7::LANScanL7;
 use crate::lanscan_mdns::*;
 use crate::lanscan_packets::*;
@@ -565,6 +565,20 @@ impl LANScanCapture {
                     }
                 }
             };
+
+            // Find back the interface from name
+            let default_interface = match get_interface_from_name(&default_device.name.clone()) {
+                Some(interface) => interface,
+                None => {
+                    error!("Failed to get interface from name: {}", default_device.name);
+                    return;
+                }
+            };
+            // Initialize the local IP cache with the default interface
+            let interfaces = LANScanInterfaces {
+                interfaces: vec![default_interface.clone()],
+            };
+            init_local_cache(&interfaces);
 
             self.start_capture_task_for_device(&default_device, &default_interface.name)
                 .await;
