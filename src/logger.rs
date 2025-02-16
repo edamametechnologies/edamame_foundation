@@ -256,12 +256,7 @@ pub fn init_logger(
         init_sentry(url, release);
     }
 
-    // Keep the default log level to error for the posture
-    let default_log_spec = if executable_type == "cli" {
-        "error"
-    } else {
-        "info"
-    };
+    let default_log_spec = "info";
     // Set the default log level from the environment variable if provided
     let mut env_log_spec = var("EDAMAME_LOG_LEVEL").unwrap_or(default_log_spec.to_string());
     // Add the provided log level to the env variable log level
@@ -278,11 +273,10 @@ pub fn init_logger(
     // Optional file writer
     // Duplicate to file on Windows for the app and helper,
     // Or for posture for all platforms, except if installed in /usr or /opt
-    let file_writer = if (matches!(executable_type, "posture") && !is_installed)
-        || (cfg!(target_os = "windows") && !matches!(executable_type, "cli"))
+    let file_writer = if (matches!(executable_type, "cli") && !is_installed)
+        || (cfg!(target_os = "windows"))
     {
-        let log_dir = if matches!(executable_type, "helper") || matches!(executable_type, "posture")
-        {
+        let log_dir = if matches!(executable_type, "helper") || matches!(executable_type, "cli") {
             let exe_path: PathBuf = current_exe().expect("Failed to get current exe");
             exe_path
                 .parent()
@@ -297,7 +291,7 @@ pub fn init_logger(
         };
         let basename = if matches!(executable_type, "helper") {
             "edamame_helper"
-        } else if matches!(executable_type, "posture") {
+        } else if matches!(executable_type, "cli") {
             "edamame_posture"
         } else {
             "edamame"
@@ -312,7 +306,7 @@ pub fn init_logger(
     };
 
     // Duplicate to stdout except for posture
-    let stdout_writer = if matches!(executable_type, "posture") {
+    let stdout_writer = if matches!(executable_type, "cli") {
         NonBlocking::new(io::sink())
     } else {
         NonBlocking::new(io::stdout())
@@ -342,7 +336,7 @@ pub fn init_logger(
                 // Add Tokio Console Layer
                 //let console_layer = console_subscriber::spawn();
 
-                if !matches!(executable_type, "helper") && !matches!(executable_type, "posture") {
+                if !matches!(executable_type, "helper") && !matches!(executable_type, "cli") {
                     // OsLogger if not an helper or a posture
                     let os_logger = OsLogger::new("com.edamametech.edamame", "");
                     match tracing_subscriber::registry()
@@ -426,7 +420,7 @@ pub fn init_logger(
         if cfg!(target_os = "macos") || cfg!(target_os = "ios") {
             #[cfg(any(target_os = "ios", target_os = "macos"))]
             {
-                if !matches!(executable_type, "helper") && !matches!(executable_type, "posture") {
+                if !matches!(executable_type, "helper") && !matches!(executable_type, "cli") {
                     // OsLogger if not an helper or a posture
                     let os_logger = OsLogger::new("com.edamametech.edamame", "default");
 
@@ -527,7 +521,7 @@ mod tests {
     #[test]
     fn test_logger_functionality() {
         // Initialize logger
-        init_logger("posture", "", "", "", &[]);
+        init_logger("cli", "", "", "", &[]);
 
         // Test MemoryWriter initialization
         let writer = MemoryWriter::new();
