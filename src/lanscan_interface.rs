@@ -386,7 +386,7 @@ impl Signature for LANScanInterfaces {
             .map(|iface| iface.signature())
             .collect::<Vec<String>>()
             .join("");
-        info!("Interface string for signature is: {}", interfaces_str);
+        debug!("Interface string for signature is: {}", interfaces_str);
         let mut hasher = Sha256::new();
         hasher.update(interfaces_str.as_bytes());
         let result = hasher.finalize();
