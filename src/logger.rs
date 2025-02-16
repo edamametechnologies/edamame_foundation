@@ -292,7 +292,7 @@ pub fn init_logger(
         let basename = if matches!(executable_type, "helper") {
             "edamame_helper"
         } else if matches!(executable_type, "cli") {
-            "edamame_posture"
+            "edamame_cli"
         } else {
             "edamame"
         };
