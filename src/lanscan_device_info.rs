@@ -9,7 +9,7 @@ use macaddr::MacAddr6;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use tracing::{info, warn};
+use tracing::{debug, warn};
 
 // We should really use HashSets instead of Vec, but we don't in order to make it more usable with FFI
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -270,7 +270,7 @@ impl DeviceInfo {
         let mut new_devices = new_devices.clone();
         DeviceInfo::dedup_vec(&mut new_devices);
 
-        info!(
+        debug!(
             "Merging {} devices into {} devices",
             new_devices.len(),
             devices.len()
@@ -319,7 +319,7 @@ impl DeviceInfo {
             }
         }
 
-        info!("Total devices after merge: {}", devices.len());
+        debug!("Total devices after merge: {}", devices.len());
     }
 
     pub fn merge(device: &mut DeviceInfo, new_device: &DeviceInfo) {
