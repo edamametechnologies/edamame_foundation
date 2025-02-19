@@ -12,8 +12,7 @@ use std::iter::FromIterator;
 use std::net::UdpSocket;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-use tracing::error;
-use tracing::{debug, info};
+use tracing::{debug, error};
 
 // Define the signature trait
 pub trait Signature {
@@ -80,6 +79,14 @@ pub struct LANScanInterfaceAddrV6 {
     pub prefix: u8,
 }
 
+impl Default for LANScanInterfaceAddrV6 {
+    fn default() -> Self {
+        Self {
+            ip: Ipv6Addr::UNSPECIFIED,
+            prefix: 0,
+        }
+    }
+}
 impl Display for LANScanInterfaceAddrV6 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> FmtResult {
         write!(f, "{}", self.ip)
