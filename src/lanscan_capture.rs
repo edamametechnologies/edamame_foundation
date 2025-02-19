@@ -1924,6 +1924,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_default_interface_has_device() {
+        // Not working on windows in the CI/CD pipeline yet (no pcap support)
+        if cfg!(windows) {
+            return;
+        }
+
         // Only if admin
         if !get_admin_status() {
             return;
@@ -1948,6 +1953,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_default_device_has_interface() {
+        // Not working on windows in the CI/CD pipeline yet (no pcap support)
+        if cfg!(windows) {
+            return;
+        }
+
         // Only if admin
         if !get_admin_status() {
             return;
