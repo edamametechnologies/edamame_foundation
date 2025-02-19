@@ -440,49 +440,102 @@ impl LANScanCapture {
         }
     }
 
-    async fn get_device_from_interface(
-        &self,
-        interface: &LANScanInterface,
-    ) -> Result<pcap::Device> {
-        let device_list = match pcap::Device::list() {
-            Ok(list) => list,
-            Err(e) => return Err(anyhow!(e)),
+    pub fn get_interface_from_device(device: &pcap::Device) -> Result<LANScanInterface> {
+        info!("Attempting to find interface from device: {}", device.name);
+        let interface_list = get_valid_network_interfaces();
+
+        // Check for name match.
+        if let Some(intf) = interface_list
+            .interfaces
+            .iter()
+            .find(|iface| iface.name == device.name)
+        {
+            info!("Interface found in list by name {}", intf.name);
+            return Ok(intf.clone());
+        }
+
+        // Check if the device has no address - this can happen on Windows with the default device (WAN Miniport monitor)
+        let device_addr = match device.addresses.get(0) {
+            Some(device_addr) => device_addr.addr,
+            None => {
+                warn!(
+                    "Device {} has no address, creating a dummy interface",
+                    device.name
+                );
+                let new_interface = LANScanInterface {
+                    name: device.name.clone(),
+                    ipv4: None,
+                    ipv6: Vec::new(),
+                };
+                return Ok(new_interface);
+            }
         };
 
-        // Attempt to find the device in the list by name, then by IP address.
-        let device = if let Some(device_in_list) = device_list
+        // Check for IPv4 match (if available).
+        if let Some(intf) = interface_list.interfaces.iter().find(|iface| {
+            iface
+                .ipv4
+                .as_ref()
+                .map_or(false, |ipv4| ipv4.ip == device_addr)
+        }) {
+            info!("Interface found in list by IPv4 address {}", intf.name);
+            return Ok(intf.clone());
+        }
+
+        // Check for IPv6 match.
+        if let Some(intf) = interface_list
+            .interfaces
             .iter()
-            .find(|dev| dev.name.to_lowercase() == interface.name.to_lowercase())
+            .find(|iface| iface.ipv6.iter().any(|ipv6| ipv6.ip() == device_addr))
+        {
+            info!("Interface found in list by IPv6 address {}", intf.name);
+            return Ok(intf.clone());
+        }
+
+        // If no matching interface is found.
+        warn!("No matching interface found for device: {}", device.name);
+        Err(anyhow!(
+            "No matching interface found for device: {}",
+            device.name
+        ))
+    }
+
+    async fn get_device_from_interface(interface: &LANScanInterface) -> Result<pcap::Device> {
+        info!(
+            "Attempting to find device from interface: {}",
+            interface.name
+        );
+        let device_list = pcap::Device::list().map_err(|e| anyhow!(e))?;
+
+        // Check for a device with a matching name (case-insensitive).
+        if let Some(dev) = device_list
+            .iter()
+            .find(|dev| dev.name.eq_ignore_ascii_case(&interface.name))
         {
             info!(
                 "Device {:?} found in list by name {}",
-                device_in_list.name, interface.name
+                dev.name, interface.name
             );
-            device_in_list.clone()
-        } else if let Some(device_in_list) = device_list.iter().find(|dev| {
-            dev.addresses.iter().any(|addr| {
-                addr.addr
-                    == interface
-                        .ipv4
-                        .as_ref()
-                        .unwrap_or(&LANScanInterfaceAddrV4::default())
-                        .ip
-            })
-        }) {
-            info!(
-                "Device {:?} found in list by IPv4 address {}",
-                device_in_list.name,
-                interface
-                    .ipv4
-                    .as_ref()
-                    .unwrap_or(&LANScanInterfaceAddrV4::default())
-                    .ip
-                    .to_string()
-            );
-            device_in_list.clone()
-        // For IPv6, check if the vector is non-empty and iterate over all its addresses to find a match.
-        } else if !interface.ipv6.is_empty() {
-            if let Some(device_in_list) = device_list.iter().find(|dev| {
+            return Ok(dev.clone());
+        }
+
+        // Check for IPv4 match if available.
+        if let Some(ipv4) = &interface.ipv4 {
+            if let Some(dev) = device_list
+                .iter()
+                .find(|dev| dev.addresses.iter().any(|addr| addr.addr == ipv4.ip))
+            {
+                info!(
+                    "Device {:?} found in list by IPv4 address {}",
+                    dev.name, ipv4.ip
+                );
+                return Ok(dev.clone());
+            }
+        }
+
+        // If IPv6 addresses exist, check for IPv6 match.
+        if !interface.ipv6.is_empty() {
+            if let Some(dev) = device_list.iter().find(|dev| {
                 interface
                     .ipv6
                     .iter()
@@ -490,9 +543,9 @@ impl LANScanCapture {
             }) {
                 info!(
                     "Device {:?} found in list by IPv6 addresses {:?}",
-                    device_in_list.name, interface.ipv6
+                    dev.name, interface.ipv6
                 );
-                device_in_list.clone()
+                return Ok(dev.clone());
             } else {
                 warn!(
                     "No matching device found by IPv6 addresses for interface {:?}",
@@ -503,18 +556,17 @@ impl LANScanCapture {
                     interface
                 )));
             }
-        } else {
-            warn!(
-                "Interface {:?} not found in device list {:?}",
-                interface, device_list
-            );
-            return Err(anyhow!(format!(
-                "Interface {:?} not found in device list {:?}",
-                interface, device_list
-            )));
-        };
+        }
 
-        Ok(device)
+        // If no matching device is found.
+        warn!(
+            "Interface {:?} not found in device list {:?}",
+            interface, device_list
+        );
+        Err(anyhow!(format!(
+            "Interface {:?} not found in device list",
+            interface
+        )))
     }
 
     async fn get_default_device() -> Result<pcap::Device> {
@@ -547,7 +599,7 @@ impl LANScanCapture {
                     "Initializing capture task for interface: {}",
                     interface.name
                 );
-                let device = match self.get_device_from_interface(interface).await {
+                let device = match Self::get_device_from_interface(interface).await {
                     Ok(device) => device,
                     Err(e) => {
                         warn!(
@@ -564,6 +616,10 @@ impl LANScanCapture {
             }
             at_least_one_success
         } else {
+            warn!(
+                "Passed interfaces {:?} did not return any capture devices",
+                interfaces
+            );
             false
         };
 
@@ -572,20 +628,22 @@ impl LANScanCapture {
 
         // If no passed interfaces were found, use a default interface.
         if !passed_interface_success {
-            warn!("No passed interfaces found, using default interface");
             let mut default_interface = match get_default_interface() {
-                Some(interface) => interface,
+                Some(interface) => {
+                    info!("Using default interface: {}", interface.name);
+                    interface
+                }
                 None => {
                     error!("No default interface detected, aborting capture");
                     return;
                 }
             };
 
-            let default_device = match self.get_device_from_interface(&default_interface).await {
+            let default_device = match Self::get_device_from_interface(&default_interface).await {
                 Ok(device) => device,
                 Err(e) => {
                     warn!(
-                        "Failed to get device from default interface, using lookup: {}",
+                        "Failed to get device from default interface, using pcap devicelookup: {}",
                         e
                     );
                     match Self::get_default_device().await {
@@ -603,10 +661,10 @@ impl LANScanCapture {
             };
 
             // Find back the interface from name
-            let default_interface = match get_interface_from_name(&default_device.name.clone()) {
-                Some(interface) => interface,
-                None => {
-                    error!("Failed to get interface from name: {}", default_device.name);
+            let default_interface = match Self::get_interface_from_device(&default_device.clone()) {
+                Ok(interface) => interface,
+                Err(e) => {
+                    error!("Failed to get interface from name: {}", e);
                     return;
                 }
             };
@@ -1281,7 +1339,7 @@ impl LANScanCapture {
 mod tests {
     use super::*;
     use crate::admin::*;
-    use crate::lanscan_interface::get_valid_network_interfaces;
+    use chrono::Utc;
     use pnet_packet::tcp::TcpFlags;
     use serial_test::serial;
     use std::net::{IpAddr, Ipv4Addr};
@@ -1411,8 +1469,6 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_populate_domain_names() {
-        // Updated to reflect the new dns_packet_processor
-
         let mut capture = LANScanCapture::new();
         capture.set_whitelist("github").await;
 
@@ -1867,45 +1923,49 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_valid_interfaces_have_devices() {
+    async fn test_default_interface_has_device() {
         // Only if admin
         if !get_admin_status() {
             return;
         }
 
-        // This test is not valid on Windows (for now)
-        //if cfg!(target_os = "windows") {
-        //    return;
-        //}
+        // Get the default network interface (LANScanInterfaces)
+        let default_interface = match get_default_interface() {
+            Some(interface) => interface,
+            None => {
+                println!("No default interface found");
+                return;
+            }
+        };
 
-        // Get the valid network interfaces (LANScanInterfaces)
-        let valid_interfaces = get_valid_network_interfaces();
+        let device_result = LANScanCapture::get_device_from_interface(&default_interface).await;
         assert!(
-            !valid_interfaces.interfaces.is_empty(),
-            "No valid network interfaces found"
+            device_result.is_ok(),
+            "Failed to get device from default interface {:?}",
+            default_interface
         );
+    }
 
-        // Create a new capture instance to use its get_device_from_interface method
-        let capture = LANScanCapture::new();
-
-        // For each valid interface, try to fetch a pcap::Device.
-        let mut device_count = 0;
-        for iface in valid_interfaces.interfaces.iter() {
-            println!("Testing interface: {}", iface.name);
-            let device_result = capture.get_device_from_interface(&iface).await;
-            let device = match device_result {
-                Ok(device) => device,
-                Err(e) => {
-                    println!("Error getting device for interface {}: {}", iface.name, e);
-                    continue;
-                }
-            };
-            println!("Found device for interface {}: {}", iface.name, device.name);
-            device_count += 1;
+    #[tokio::test]
+    async fn test_default_device_has_interface() {
+        // Only if admin
+        if !get_admin_status() {
+            return;
         }
+
+        let default_device = match LANScanCapture::get_default_device().await {
+            Ok(device) => device,
+            Err(e) => {
+                println!("Failed to get default device: {}", e);
+                return;
+            }
+        };
+
+        let interface_result = LANScanCapture::get_interface_from_device(&default_device);
         assert!(
-            device_count > 0,
-            "No devices found for any valid interfaces"
+            interface_result.is_ok(),
+            "Failed to get interface from default device {:?}",
+            default_device
         );
     }
 }
