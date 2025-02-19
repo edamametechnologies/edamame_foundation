@@ -12,7 +12,8 @@ use std::iter::FromIterator;
 use std::net::UdpSocket;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-use tracing::{debug, error};
+use tracing::error;
+use tracing::debug;
 
 // Define the signature trait
 pub trait Signature {
