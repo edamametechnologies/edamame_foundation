@@ -208,7 +208,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
-        "target": "apt update -qq > /dev/null 2>&1 || true && apt install virt-what -y > /dev/null 2>&1 && [ -z \"$(virt-what)\" ] && { root_dev=$(findmnt -n -o SOURCE /); swap_dev=$(findmnt -n -o SOURCE /swap 2>/dev/null); lsblk -n -o TYPE \"$(readlink -f \"$root_dev\")\" -p -l -i | grep -q crypt || echo encryption_disabled; [ -n \"$swap_dev\" ] && (lsblk -n -o TYPE \"$(readlink -f \"$swap_dev\")\" -p -l -i | grep -q crypt || echo encryption_disabled); }",
+        "target": "apt update -qq > /dev/null 2>&1 || true && apt install virt-what -y > /dev/null 2>&1 && [ -z \"$(virt-what)\" ] && { root_dev=$(findmnt -n -o SOURCE /) swap_dev=$(swapon --show=NAME --noheadings 2>/dev/null | head -n1) root_parent=$(lsblk -n -o NAME,TYPE,MOUNTPOINT -p | grep \" $(readlink -f \"$root_dev\")$\" | awk '{print $1}') lsblk -n -o NAME,TYPE -p | grep -q \"^$root_parent.*crypt$\" || echo \"root_encryption_disabled\" if [ -n \"$swap_dev\" ]; then swap_parent=$(lsblk -n -o NAME,TYPE,MOUNTPOINT -p | grep \" $(readlink -f \"$swap_dev\")$\" | awk '{print $1}') lsblk -n -o NAME,TYPE -p | grep -q \"^$swap_parent.*crypt$\" || echo \"swap_encryption_disabled\" fi }",
         "education": []
       },
       "remediation": {
