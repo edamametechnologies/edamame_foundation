@@ -150,11 +150,9 @@ impl Score {
         self.stars = self.overall as f64 * 5.0 / 100.0;
     }
 
-    // Compliance computation
-    pub async fn compute_compliance(&mut self) {
-        // List all tags in metrics, retain only their comma separated prefix
+    // List all tags in metrics, retain only their comma separated prefix
+    pub async fn get_tag_prefixes(&self) -> HashSet<String> {
         let mut tags: HashSet<String> = HashSet::new();
-
         for m in &self.metrics.metrics {
             for tag in &m.metric.tags {
                 if let Some(index) = tag.find(',') {
@@ -165,6 +163,12 @@ impl Score {
                 }
             }
         }
+        tags
+    }
+
+    // Compliance computation
+    pub async fn compute_compliance(&mut self) {
+        let tags: HashSet<String> = self.get_tag_prefixes().await;
 
         trace!("Compliance tags: {:?}", tags);
 
@@ -198,6 +202,91 @@ impl Score {
         }
         // Write the compliance
         self.compliance = compliance;
+    }
+
+    pub async fn check_policy(
+        &self,
+        minimum_score: f32,
+        threat_ids: HashSet<String>,
+        tag_prefixes: HashSet<String>,
+    ) -> Result<bool> {
+        // Start with the assumption that the policy check will pass
+        let mut passed = true;
+
+        // Check if the score meets the minimum requirement
+        if self.stars < minimum_score as f64 {
+            trace!(
+                "Policy check failed: score {:.1} < minimum {:.1}",
+                self.stars,
+                minimum_score
+            );
+            passed = false;
+        } else {
+            trace!(
+                "Policy check passed: score {:.1} >= minimum {:.1}",
+                self.stars,
+                minimum_score
+            );
+        }
+
+        // Check if all specified threats are fixed
+        for threat_id in threat_ids {
+            match self
+                .metrics
+                .metrics
+                .iter()
+                .find(|m| m.metric.name == threat_id)
+            {
+                Some(metric) => {
+                    if matches!(metric.status, ThreatStatus::Active) {
+                        trace!("Policy check failed: threat '{}' is active", threat_id);
+                        passed = false;
+                    } else {
+                        trace!("Policy check passed: threat '{}' is not active", threat_id);
+                    }
+                }
+                None => {
+                    trace!("Policy check failed: threat '{}' not found", threat_id);
+                    passed = false;
+                }
+            }
+        }
+
+        // Check compliance for each tag prefix
+        for tag in tag_prefixes {
+            if let Some(compliance_value) = self.compliance.get(&tag) {
+                // Consider compliance below 100% as a failure
+                if *compliance_value < 100.0 {
+                    trace!(
+                        "Policy check failed: tag '{}' compliance is {:.1}%",
+                        tag,
+                        compliance_value
+                    );
+                    passed = false;
+                } else {
+                    trace!(
+                        "Policy check passed: tag '{}' compliance is {:.1}%",
+                        tag,
+                        compliance_value
+                    );
+                }
+            } else {
+                // If the tag is not found in compliance data, consider it a failure
+                trace!(
+                    "Policy check failed: tag '{}' not found in compliance data",
+                    tag
+                );
+                passed = false;
+            }
+        }
+
+        if passed {
+            trace!("Overall policy check: PASSED");
+        } else {
+            trace!("Overall policy check: FAILED");
+        }
+
+        Ok(passed)
     }
 }
 

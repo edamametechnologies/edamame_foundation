@@ -79,6 +79,8 @@ pub trait Backend {
         format: &str,
     ) -> Result<()>;
 
+    async fn check_policy_for_domain(&self, domain: &str, policy_name: &str) -> Result<bool>;
+
     async fn get_remediation_lanscan(
         &self,
         language: &str,
