@@ -303,7 +303,7 @@ pub trait ScoreTrait {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[tokio::test]
     async fn test_score_check_policy() {
         let mut score = Score::new();
@@ -315,16 +315,21 @@ mod tests {
 
         let stars = score.stars as f32;
         // Check policy with minimum score
-        let result = score.check_policy(stars, HashSet::new(), HashSet::new()).await;
+        let result = score
+            .check_policy(stars, HashSet::new(), HashSet::new())
+            .await;
         assert!(result.is_ok() && result.unwrap());
 
         // Check policy with minimum score
-        let result = score.check_policy(stars + 1.0, HashSet::new(), HashSet::new()).await;
+        let result = score
+            .check_policy(stars + 1.0, HashSet::new(), HashSet::new())
+            .await;
         assert!(result.is_ok() && !result.unwrap());
 
         // Check policy with minimum score
-        let result = score.check_policy(stars - 1.0, HashSet::new(), HashSet::new()).await;
+        let result = score
+            .check_policy(stars - 1.0, HashSet::new(), HashSet::new())
+            .await;
         assert!(result.is_ok() && result.unwrap());
     }
 }
-
