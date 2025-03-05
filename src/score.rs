@@ -214,7 +214,7 @@ impl Score {
         let mut passed = true;
 
         // Check if the score meets the minimum requirement
-        if self.stars < minimum_score as f64 {
+        if self.stars < (minimum_score as f64) {
             trace!(
                 "Policy check failed: score {:.1} < minimum {:.1}",
                 self.stars,
@@ -299,3 +299,32 @@ pub trait ScoreTrait {
     async fn threat_active(&self, name: &str) -> Result<bool>;
     async fn get_threats_url(&self, platform: &str, branch: &str) -> String;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[tokio::test]
+    async fn test_score_check_policy() {
+        let mut score = Score::new();
+        let metrics = get_threat_metrics().await;
+        score.metrics = metrics;
+
+        // Mock the score computation
+        score.stars = 4.0;
+
+        let stars = score.stars as f32;
+        // Check policy with minimum score
+        let result = score.check_policy(stars, HashSet::new(), HashSet::new()).await;
+        assert!(result.is_ok() && result.unwrap());
+
+        // Check policy with minimum score
+        let result = score.check_policy(stars + 1.0, HashSet::new(), HashSet::new()).await;
+        assert!(result.is_ok() && !result.unwrap());
+
+        // Check policy with minimum score
+        let result = score.check_policy(stars - 1.0, HashSet::new(), HashSet::new()).await;
+        assert!(result.is_ok() && result.unwrap());
+    }
+}
+
