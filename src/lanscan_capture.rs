@@ -42,7 +42,7 @@ use tokio::select;
 ))]
 use tokio::time::interval;
 use tokio::time::{sleep, Duration};
-use tracing::{debug, error, info, trace, warn};
+use tracing::{error, info, trace, warn};
 
 // A session is considered active if it has had activity in the last 60 seconds
 static CONNECTION_ACTIVITY_TIMEOUT: ChronoDuration = ChronoDuration::seconds(60);
@@ -824,7 +824,7 @@ impl LANScanCapture {
 
                 let mut interval = interval(Duration::from_millis(100));
 
-                debug!("Starting async capture task for {}", interface_clone);
+                tracing::debug!("Starting async capture task for {}", interface_clone);
                 loop {
                     select! {
                         _ = interval.tick() => {
