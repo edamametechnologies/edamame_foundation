@@ -40,6 +40,9 @@ pub struct DeviceInfo {
     pub device_type: String,
     pub first_seen: DateTime<Utc>,
     pub last_seen: DateTime<Utc>,
+    // Origin tracking for community sharing
+    pub origin_ip: String, // IP of the device that first discovered this device
+    pub origin_network: String, // Network identifier of where the device was first discovered
     // Below are user properties
     // Sorted Vec would be better but had trouble with the bridge once...
     pub dismissed_ports: Vec<u16>,
@@ -90,6 +93,9 @@ impl DeviceInfo {
             deleted: false,
             // Initialize the last time to UNIX_EPOCH
             last_modified: DateTime::<Utc>::from(std::time::UNIX_EPOCH),
+            // Origin tracking for community sharing
+            origin_ip: "".to_string(), // IP of the device that first discovered this device
+            origin_network: "".to_string(), // Network identifier of where the device was first discovered
         }
     }
 
@@ -503,6 +509,15 @@ impl DeviceInfo {
         // Update the last seen time (no need to check for UNIX_EPOCH)
         if new_device.last_seen > device.last_seen {
             device.last_seen = new_device.last_seen;
+        }
+
+        // Preserve origin information - only set it if the target doesn't have it
+        if device.origin_ip.is_empty() && !new_device.origin_ip.is_empty() {
+            device.origin_ip.clone_from(&new_device.origin_ip);
+        }
+
+        if device.origin_network.is_empty() && !new_device.origin_network.is_empty() {
+            device.origin_network.clone_from(&new_device.origin_network);
         }
 
         // Merge user properties based on the last modified date
