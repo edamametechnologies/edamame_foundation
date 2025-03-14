@@ -344,7 +344,11 @@ impl DeviceInfo {
 
         // IPv4 takes precedence over IPv6: always use the new_device.ip_address if it's IPv4
         if let IpAddr::V4(_) = new_device.ip_address {
-            if new_device.last_seen > device.last_seen {
+            if new_device.last_seen > device.last_seen
+                && ((device.origin_ip == new_device.origin_ip && !device.origin_ip.is_empty())
+                    || (device.origin_network == new_device.origin_network
+                        && !device.origin_network.is_empty()))
+            {
                 device.set_ip_address(
                     new_device.ip_address,
                     new_device.ip_addresses_v4.clone(),
@@ -355,7 +359,11 @@ impl DeviceInfo {
         } else if matches!(new_device.ip_address, IpAddr::V6(_))
             && matches!(device.ip_address, IpAddr::V4(_))
         {
-            if new_device.last_seen > device.last_seen {
+            if new_device.last_seen > device.last_seen
+                && ((device.origin_ip == new_device.origin_ip && !device.origin_ip.is_empty())
+                    || (device.origin_network == new_device.origin_network
+                        && !device.origin_network.is_empty()))
+            {
                 device.add_ip_addresses(
                     new_device.ip_addresses_v4.clone(),
                     new_device.ip_addresses_v6.clone(),
@@ -364,15 +372,13 @@ impl DeviceInfo {
         } else {
             // The new device is IPv6 and the device is IPv6
             // We set the device's ip_address to the new IPv6 if it's fresher
-            if new_device.last_seen > device.last_seen {
+            if new_device.last_seen > device.last_seen
+                && ((device.origin_ip == new_device.origin_ip && !device.origin_ip.is_empty())
+                    || (device.origin_network == new_device.origin_network
+                        && !device.origin_network.is_empty()))
+            {
                 device.set_ip_address(
                     new_device.ip_address,
-                    new_device.ip_addresses_v4.clone(),
-                    new_device.ip_addresses_v6.clone(),
-                );
-            // Else we merge the IP addresses
-            } else {
-                device.add_ip_addresses(
                     new_device.ip_addresses_v4.clone(),
                     new_device.ip_addresses_v6.clone(),
                 );
@@ -506,8 +512,15 @@ impl DeviceInfo {
             device.first_seen = new_device.first_seen;
         }
 
-        // Update the last seen time (no need to check for UNIX_EPOCH)
-        if new_device.last_seen > device.last_seen {
+        // Update the last seen time, but only if:
+        // 1. The new timestamp is more recent, AND
+        // 2. The device shares the same origin (discovered by the same node)
+        // This prevents devices received from different peers from updating timestamps
+        if new_device.last_seen > device.last_seen
+            && ((device.origin_ip == new_device.origin_ip && !device.origin_ip.is_empty())
+                || (device.origin_network == new_device.origin_network
+                    && !device.origin_network.is_empty()))
+        {
             device.last_seen = new_device.last_seen;
         }
 
@@ -731,10 +744,14 @@ mod tests {
         let mut device1 = DeviceInfo::new(Some(IpAddr::V6(Ipv6Addr::LOCALHOST)));
         device1.hostname = "device1".to_string();
         device1.last_seen = Utc.with_ymd_and_hms(2023, 6, 1, 8, 0, 0).unwrap();
+        device1.origin_ip = "127.0.0.1".to_string();
+        device1.origin_network = "local-network".to_string();
 
         let mut device2 = DeviceInfo::new(Some(IpAddr::V6(Ipv6Addr::LOCALHOST)));
         device2.hostname = "device1-new".to_string(); // different hostname
         device2.last_seen = Utc.with_ymd_and_hms(2023, 6, 1, 9, 0, 0).unwrap();
+        device2.origin_ip = "127.0.0.1".to_string();
+        device2.origin_network = "local-network".to_string();
 
         let mut devices = vec![device1.clone()];
         DeviceInfo::merge_vec(&mut devices, &vec![device2.clone()]);
@@ -748,7 +765,7 @@ mod tests {
         let merged = &devices[0];
         assert_eq!(
             merged.hostname, "device1-new",
-            "Hostname from device1 remains since there's no explicit preference if different hostnames conflict. But the logic for merging is triggered because IPv6 matched."
+            "Hostname from device2 should be used since device2 is newer and they have the same origin."
         );
         assert_eq!(
             merged.get_ip_address(),
@@ -831,10 +848,15 @@ mod tests {
         // If the new device has a more recent last_seen, it should override the existing device
         let mut device_current = DeviceInfo::new(Some(IpAddr::V4(Ipv4Addr::new(192, 168, 10, 1))));
         device_current.last_seen = Utc.with_ymd_and_hms(2023, 5, 1, 13, 0, 0).unwrap();
+        device_current.origin_ip = "192.168.1.100".to_string();
+        device_current.origin_network = "test-network".to_string();
 
         let mut device_new = device_current.clone();
         // Give the new device a more recent last_seen
         device_new.last_seen = Utc.with_ymd_and_hms(2023, 5, 1, 14, 0, 0).unwrap();
+        // Keep the same origin info
+        device_new.origin_ip = "192.168.1.100".to_string();
+        device_new.origin_network = "test-network".to_string();
 
         DeviceInfo::merge(&mut device_current, &device_new);
 
@@ -863,6 +885,24 @@ mod tests {
             device_current.last_seen,
             Utc.with_ymd_and_hms(2023, 5, 1, 13, 30, 0).unwrap(),
             "An older last_seen should NOT override the existing device's last_seen"
+        );
+    }
+
+    // Test that the active state is not overridden by the new device with diferent origin
+    #[test]
+    fn test_merge_active_state() {
+        let mut device_current = DeviceInfo::new(Some(IpAddr::V4(Ipv4Addr::new(192, 168, 10, 3))));
+        device_current.active = true;
+
+        let mut device_new = device_current.clone();
+        device_new.active = false;
+        device_new.origin_ip = "192.168.10.4".to_string();
+
+        DeviceInfo::merge(&mut device_current, &device_new);
+
+        assert_eq!(
+            device_current.active, true,
+            "Active state should not be overridden by the new device"
         );
     }
 }
