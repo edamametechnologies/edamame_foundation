@@ -512,15 +512,8 @@ impl DeviceInfo {
             device.first_seen = new_device.first_seen;
         }
 
-        // Update the last seen time, but only if:
-        // 1. The new timestamp is more recent, AND
-        // 2. The device shares the same origin (discovered by the same node)
-        // This prevents devices received from different peers from updating timestamps
-        if new_device.last_seen > device.last_seen
-            && ((device.origin_ip == new_device.origin_ip && !device.origin_ip.is_empty())
-                || (device.origin_network == new_device.origin_network
-                    && !device.origin_network.is_empty()))
-        {
+        // Update the last seen time
+        if new_device.last_seen > device.last_seen {
             device.last_seen = new_device.last_seen;
         }
 

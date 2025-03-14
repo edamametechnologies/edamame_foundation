@@ -1519,6 +1519,7 @@ mod tests {
             src_asn: None,
             dst_asn: None,
             is_whitelisted: WhitelistState::Unknown,
+            criticality: "".to_string(),
         };
 
         capture.sessions.insert(session.clone(), session_info);
@@ -1604,6 +1605,7 @@ mod tests {
             src_asn: None,
             dst_asn: None,
             is_whitelisted: WhitelistState::Unknown,
+            criticality: "".to_string(),
         };
 
         capture.sessions.insert(session.clone(), session_info);
@@ -1683,6 +1685,7 @@ mod tests {
             src_asn: None,
             dst_asn: None,
             is_whitelisted: WhitelistState::Unknown,
+            criticality: "".to_string(),
         };
 
         capture.sessions.insert(session.clone(), session_info);
@@ -1897,6 +1900,7 @@ mod tests {
                 src_asn: None,
                 dst_asn: None,
                 is_whitelisted: WhitelistState::Unknown,
+                criticality: "".to_string(),
             };
 
             capture.sessions.insert(session.clone(), session_info);
