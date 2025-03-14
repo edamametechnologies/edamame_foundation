@@ -50,6 +50,7 @@ pub struct SessionInfo {
     pub src_asn: Option<Record>,
     pub dst_asn: Option<Record>,
     pub is_whitelisted: WhitelistState,
+    pub criticality: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Ord, PartialOrd)]
@@ -363,6 +364,7 @@ mod tests {
             src_asn: None,
             dst_asn: None,
             is_whitelisted: WhitelistState::Conforming,
+            criticality: "".to_string(),
         };
 
         let session_global = SessionInfo {
@@ -409,6 +411,7 @@ mod tests {
                 country: "US".to_string(),
             }),
             is_whitelisted: WhitelistState::NonConforming,
+            criticality: "".to_string(),
         };
 
         let sessions = vec![session_local.clone(), session_global.clone()];
@@ -474,6 +477,7 @@ mod tests {
                 country: "US".to_string(),
             }),
             is_whitelisted: WhitelistState::Unknown,
+            criticality: "".to_string(),
         };
 
         let sessions = vec![session];
@@ -552,6 +556,7 @@ mod tests {
                 country: "US".to_string(),
             }),
             is_whitelisted: WhitelistState::Unknown,
+            criticality: "".to_string(),
         };
 
         let sessions = vec![session];
