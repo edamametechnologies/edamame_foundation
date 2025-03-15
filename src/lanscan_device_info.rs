@@ -344,11 +344,7 @@ impl DeviceInfo {
 
         // IPv4 takes precedence over IPv6: always use the new_device.ip_address if it's IPv4
         if let IpAddr::V4(_) = new_device.ip_address {
-            if new_device.last_seen > device.last_seen
-                && ((device.origin_ip == new_device.origin_ip && !device.origin_ip.is_empty())
-                    || (device.origin_network == new_device.origin_network
-                        && !device.origin_network.is_empty()))
-            {
+            if new_device.last_seen > device.last_seen {
                 device.set_ip_address(
                     new_device.ip_address,
                     new_device.ip_addresses_v4.clone(),
@@ -359,11 +355,7 @@ impl DeviceInfo {
         } else if matches!(new_device.ip_address, IpAddr::V6(_))
             && matches!(device.ip_address, IpAddr::V4(_))
         {
-            if new_device.last_seen > device.last_seen
-                && ((device.origin_ip == new_device.origin_ip && !device.origin_ip.is_empty())
-                    || (device.origin_network == new_device.origin_network
-                        && !device.origin_network.is_empty()))
-            {
+            if new_device.last_seen > device.last_seen {
                 device.add_ip_addresses(
                     new_device.ip_addresses_v4.clone(),
                     new_device.ip_addresses_v6.clone(),
@@ -372,11 +364,7 @@ impl DeviceInfo {
         } else {
             // The new device is IPv6 and the device is IPv6
             // We set the device's ip_address to the new IPv6 if it's fresher
-            if new_device.last_seen > device.last_seen
-                && ((device.origin_ip == new_device.origin_ip && !device.origin_ip.is_empty())
-                    || (device.origin_network == new_device.origin_network
-                        && !device.origin_network.is_empty()))
-            {
+            if new_device.last_seen > device.last_seen {
                 device.set_ip_address(
                     new_device.ip_address,
                     new_device.ip_addresses_v4.clone(),
