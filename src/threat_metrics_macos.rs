@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_MACOS: &str = r#"{
   "name": "threat model macOS",
   "extends": "none",
-  "date": "December 26th 2024",
-  "signature": "c5f568209c478f500752d9148d57693e003faf90dfd0f3a1533e4e97d5948c1b",
+  "date": "March 16th 2025",
+  "signature": "7d465a0f845c0e0e74c692bb1e9769b4dffeefd2d5fc501bd484b3090c663c89",
   "metrics": [
     {
       "name": "edamame helper disabled",
@@ -1329,7 +1329,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
           {
             "locale": "FR",
             "class": "link",
-            "target": "https://fr.wikipedia.org/wiki/Password_manager"
+            "target": "https://fr.wikipedia.org/wiki/Gestionnaire_de_mots_de_passe"
           }
         ]
       }
@@ -1896,6 +1896,75 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
             "locale": "FR",
             "class": "link",
             "target": "https://support.google.com/chrome/a/answer/6350036?hl=fr"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Business rule not respected",
+      "metrictype": "bool",
+      "dimension": "applications",
+      "severity": 1,
+      "scope": "generic",
+      "tags": [],
+      "description": [
+        {
+          "locale": "EN",
+          "title": "Business rule not respected",
+          "summary": "One or more business rules are not respected. Please check the command output for more details."
+        },
+        {
+          "locale": "FR",
+          "title": "Règle métier non respectée",
+          "summary": "Une ou plusieurs règles métier ne sont pas respectées. Veuillez vérifier la sortie de la commande pour plus de détails."
+        }
+      ],
+      "implementation": {
+        "system": "macOS",
+        "minversion": 12,
+        "maxversion": 0,
+        "class": "internal",
+        "elevation": "user",
+        "target": "business_rules",
+        "education": []
+      },
+      "remediation": {
+        "system": "macOS",
+        "minversion": 12,
+        "maxversion": 0,
+        "class": "",
+        "elevation": "",
+        "target": "",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "html",
+            "target": "Refer to the business rules documentation for more details."
+          },
+          {
+            "locale": "FR",
+            "class": "html",
+            "target": "Consultez la documentation des règles métier pour plus de détails."
+          }
+        ]
+      },
+      "rollback": {
+        "system": "macOS",
+        "minversion": 12,
+        "maxversion": 0,
+        "class": "",
+        "elevation": "",
+        "target": "",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "html",
+            "target": "Refer to the business rules documentation for more details."
+          },
+          {
+            "locale": "FR",
+            "class": "html",
+            "target": "Consultez la documentation des règles métier pour plus de détails."
           }
         ]
       }

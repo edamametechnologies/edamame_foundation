@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_LINUX: &str = r#"{
   "name": "threat model Linux",
   "extends": "none",
-  "date": "February 12th 2025",
-  "signature": "0e239f22bb4a47a690444b38994d3277a0aab2e3e7600d469b5c87107393fa1d",
+  "date": "March 16th 2025",
+  "signature": "7288001f1d8355d7be1f79f459530794d35400c22ddedb6972fd13907fd849fa",
   "metrics": [
     {
       "name": "edamame helper disabled",
@@ -30,7 +30,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "internal",
         "elevation": "user",
-        "target": "helper_check",
+        "target": "https://github.com/edamametechnologies/edamame_helper",
         "education": [
           {
             "locale": "EN",
@@ -86,7 +86,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
-        "target": "LANG=C sentinelctl version 2>/dev/null | grep -q 'Agent version' || echo epp_disabled",
+        "target": "LANG=C sentinelctl version 2>/dev/null | grep -q 'Agent version' || pgrep -f FortiEDRAvScanner >/dev/null 2>&1 || echo epp_disabled",
         "education": []
       },
       "remediation": {
@@ -115,7 +115,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
           {
             "locale": "FR",
             "class": "link",
-            "target": "https://help.ubuntu.com/community/Antivirus"
+            "target": "https://fr.wikipedia.org/wiki/Antivirus"
           }
         ]
       }
@@ -145,7 +145,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
-        "target": "(command -v pass || command -v keepassxc || command -v bw || command -v lpass || command -v gopass) >/dev/null 2>&1 || echo \"No password manager installed\"",
+        "target": "(command -v pass || command -v keepassxc || command -v bw || command -v lpass || command -v gopass || command -v 1password) >/dev/null 2>&1 || echo \"No password manager installed\"",
         "education": []
       },
       "remediation": {
@@ -174,7 +174,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
           {
             "locale": "FR",
             "class": "link",
-            "target": "https://fr.wikipedia.org/wiki/Password_manager"
+            "target": "https://fr.wikipedia.org/wiki/Gestionnaire_de_mots_de_passe"
           }
         ]
       }
@@ -208,7 +208,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "cli",
         "elevation": "admin",
-        "target": "apt update -qq > /dev/null 2>&1 || true && apt install virt-what -y > /dev/null 2>&1 && [ -z \"$(virt-what)\" ] && { root_dev=$(findmnt -n -o SOURCE /); swap_dev=$(swapon --show=NAME --noheadings 2>/dev/null | head -n1); root_parent=$(lsblk -n -o NAME,TYPE,MOUNTPOINT -p | grep \" $(readlink -f \"$root_dev\")$\" | awk '{print $1}'); lsblk -n -o NAME,TYPE -p | grep -q \"^$root_parent.*crypt$\" || echo \"root_encryption_disabled\"; if [ -n \"$swap_dev\" ]; then swap_parent=$(lsblk -n -o NAME,TYPE,MOUNTPOINT -p | grep \" $(readlink -f \"$swap_dev\")$\" | awk '{print $1}'); lsblk -n -o NAME,TYPE -p | grep -q \"^$swap_parent.*crypt$\" || echo \"swap_encryption_disabled\"; fi; }",
+        "target": "apt update -qq > /dev/null 2>&1 || true && apt install virt-what -y > /dev/null 2>&1 && [ -z \"$(virt-what)\" ] && { root_dev=$(findmnt -n -o SOURCE /); swap_dev=$(swapon --show=NAME --noheadings 2>/dev/null | head -n1); root_parent=$(lsblk -n -o NAME,TYPE,MOUNTPOINT -p | grep \" $(readlink -f \"$root_dev\")$\" | cut -d\" \" -f1); lsblk -n -o NAME,TYPE -p | grep -q \"^$root_parent.*crypt$\" || echo \"root_encryption_disabled\"; if [ -n \"$swap_dev\" ]; then swap_parent=$(lsblk -n -o NAME,TYPE,MOUNTPOINT -p | grep \" $(readlink -f \"$swap_dev\")$\" | cut -d\" \" -f1); lsblk -n -o NAME,TYPE -p | grep -q \"^$swap_parent.*crypt$\" || echo \"swap_encryption_disabled\"; fi; }",
         "education": []
       },
       "remediation": {
@@ -1179,6 +1179,75 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
             "locale": "EN",
             "class": "link",
             "target": "https://manpages.ubuntu.com/manpages/oracular/en/man3/pwquality.3.html"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Business rule not respected",
+      "metrictype": "bool",
+      "dimension": "applications",
+      "severity": 1,
+      "scope": "generic",
+      "tags": [],
+      "description": [
+        {
+          "locale": "EN",
+          "title": "Business rule not respected",
+          "summary": "One or more business rules are not respected. Please check the command output for more details."
+        },
+        {
+          "locale": "FR",
+          "title": "Règle métier non respectée",
+          "summary": "Une ou plusieurs règles métier ne sont pas respectées. Veuillez vérifier la sortie de la commande pour plus de détails."
+        }
+      ],
+      "implementation": {
+        "system": "Linux",
+        "minversion": 3,
+        "maxversion": 0,
+        "class": "internal",
+        "elevation": "user",
+        "target": "business_rules",
+        "education": []
+      },
+      "remediation": {
+        "system": "Linux",
+        "minversion": 3,
+        "maxversion": 0,
+        "class": "",
+        "elevation": "",
+        "target": "",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "html",
+            "target": "Refer to the business rules documentation for more details."
+          },
+          {
+            "locale": "FR",
+            "class": "html",
+            "target": "Consultez la documentation des règles métier pour plus de détails."
+          }
+        ]
+      },
+      "rollback": {
+        "system": "Linux",
+        "minversion": 3,
+        "maxversion": 0,
+        "class": "",
+        "elevation": "",
+        "target": "",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "html",
+            "target": "Refer to the business rules documentation for more details."
+          },
+          {
+            "locale": "FR",
+            "class": "html",
+            "target": "Consultez la documentation des règles métier pour plus de détails."
           }
         ]
       }

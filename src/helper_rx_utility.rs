@@ -264,6 +264,35 @@ pub async fn utility_get_whitelist() -> Result<String> {
     any(target_os = "macos", target_os = "linux", target_os = "windows"),
     feature = "packetcapture"
 ))]
+pub async fn utility_set_custom_whitelists(whitelist_json: &str) -> Result<String> {
+    CAPTURE
+        .lock()
+        .await
+        .set_custom_whitelists(whitelist_json)
+        .await;
+    Ok("".to_string())
+}
+
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux", target_os = "windows"),
+    feature = "packetcapture"
+))]
+pub async fn utility_create_custom_whitelists() -> Result<String> {
+    let whitelist = match CAPTURE.lock().await.create_custom_whitelists().await {
+        Ok(whitelist) => whitelist,
+        Err(e) => {
+            error!("Error creating custom whitelists: {}", e);
+            return order_error(&format!("error creating custom whitelists: {}", e), false);
+        }
+    };
+    tracing::debug!("Returning whitelist: {}", whitelist);
+    Ok(whitelist)
+}
+
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux", target_os = "windows"),
+    feature = "packetcapture"
+))]
 pub async fn utility_set_filter(filter: &str) -> Result<String> {
     match serde_json::from_str::<SessionFilter>(filter) {
         Ok(filter) => CAPTURE.lock().await.set_filter(filter).await,

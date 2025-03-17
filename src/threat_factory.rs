@@ -108,7 +108,7 @@ impl ThreatMetrics {
                 metric: metric_json.clone(),
                 timestamp: "".to_string(),
                 status: ThreatStatus::Unknown,
-                // internal_metrics: None, // Uncomment if needed
+                output: "".to_string(),
             };
             metrics.push(metric);
         }

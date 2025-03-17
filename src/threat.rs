@@ -158,6 +158,8 @@ pub struct ThreatMetric {
     // Can be empty
     pub timestamp: String,
     pub status: ThreatStatus,
+    // Track the output of the order (not exported to the backend)
+    pub output: String,
 }
 
 impl ThreatMetric {
@@ -166,6 +168,7 @@ impl ThreatMetric {
             metric: ThreatMetricJSON::new(),
             timestamp: "".to_string(),
             status: ThreatStatus::Unknown,
+            output: "".to_string(),
         }
     }
 }

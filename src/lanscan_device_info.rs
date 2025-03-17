@@ -886,4 +886,424 @@ mod tests {
             "Active state should not be overridden by the new device"
         );
     }
+
+    #[test]
+    fn test_merge_cross_origin_devices() {
+        // Test that devices from different origins can be merged properly
+        // after removing the origin IP restriction
+        use chrono::{TimeZone, Utc};
+        use std::net::{IpAddr, Ipv4Addr};
+
+        // Create a device representing a local detection
+        let mut local_device = DeviceInfo::new(Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100))));
+        local_device.hostname = "test-device".to_string();
+        local_device.origin_ip = "192.168.1.1".to_string();
+        local_device.origin_network = "home-network".to_string();
+        local_device.last_seen = Utc.with_ymd_and_hms(2023, 1, 1, 12, 0, 0).unwrap();
+
+        // Create a device representing a community detection
+        let mut community_device =
+            DeviceInfo::new(Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100))));
+        community_device.hostname = "test-device".to_string();
+        community_device.os_name = "Community OS".to_string(); // Additional info from community
+        community_device.device_vendor = "Community Vendor".to_string();
+        community_device.origin_ip = "10.0.0.1".to_string(); // Different origin IP
+        community_device.origin_network = "friend-network".to_string(); // Different origin network
+        community_device.last_seen = Utc.with_ymd_and_hms(2023, 1, 1, 13, 0, 0).unwrap(); // Newer timestamp
+
+        // Merge the community device into the local device
+        DeviceInfo::merge(&mut local_device, &community_device);
+
+        // Verify that the community device updated the local device
+        assert_eq!(local_device.os_name, "Community OS");
+        assert_eq!(local_device.device_vendor, "Community Vendor");
+        assert_eq!(
+            local_device.last_seen,
+            Utc.with_ymd_and_hms(2023, 1, 1, 13, 0, 0).unwrap()
+        );
+
+        // Verify origin info remains unchanged
+        assert_eq!(local_device.origin_ip, "192.168.1.1");
+        assert_eq!(local_device.origin_network, "home-network");
+    }
+
+    #[test]
+    fn test_merge_older_community_device() {
+        // Test that older community devices don't update newer local devices
+        use chrono::{TimeZone, Utc};
+        use std::net::{IpAddr, Ipv4Addr};
+
+        // Create a device representing a local detection with newer timestamp
+        let mut local_device = DeviceInfo::new(Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100))));
+        local_device.hostname = "test-device".to_string();
+        local_device.os_name = "Local OS".to_string();
+        local_device.origin_ip = "192.168.1.1".to_string();
+        local_device.origin_network = "home-network".to_string();
+        local_device.last_seen = Utc.with_ymd_and_hms(2023, 1, 1, 14, 0, 0).unwrap(); // Newer timestamp
+
+        // Create a device representing an older community detection
+        let mut community_device =
+            DeviceInfo::new(Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100))));
+        community_device.hostname = "test-device".to_string();
+        community_device.os_name = "Community OS".to_string();
+        community_device.origin_ip = "10.0.0.1".to_string(); // Different origin IP
+        community_device.origin_network = "friend-network".to_string();
+        community_device.last_seen = Utc.with_ymd_and_hms(2023, 1, 1, 12, 0, 0).unwrap(); // Older timestamp
+
+        // Merge the community device into the local device
+        DeviceInfo::merge(&mut local_device, &community_device);
+
+        // Verify that the community device did NOT update the local device
+        assert_eq!(local_device.os_name, "Local OS");
+        assert_eq!(
+            local_device.last_seen,
+            Utc.with_ymd_and_hms(2023, 1, 1, 14, 0, 0).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_merge_open_ports_from_community() {
+        // Test that open ports are merged correctly from community devices
+        use chrono::{TimeZone, Utc};
+        use std::net::{IpAddr, Ipv4Addr};
+
+        // Create a device representing a local detection
+        let mut local_device = DeviceInfo::new(Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100))));
+        local_device.hostname = "test-device".to_string();
+        local_device.origin_ip = "192.168.1.1".to_string();
+        local_device.origin_network = "home-network".to_string();
+        local_device.last_seen = Utc.with_ymd_and_hms(2023, 1, 1, 12, 0, 0).unwrap();
+
+        // Add some open ports to the local device
+        local_device.open_ports.push(PortInfo {
+            port: 80,
+            protocol: "tcp".to_string(),
+            service: "http".to_string(),
+            banner: "".to_string(),
+        });
+
+        // Create a device representing a community detection with additional ports
+        let mut community_device =
+            DeviceInfo::new(Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100))));
+        community_device.hostname = "test-device".to_string();
+        community_device.origin_ip = "10.0.0.1".to_string(); // Different origin IP
+        community_device.origin_network = "friend-network".to_string();
+        community_device.last_seen = Utc.with_ymd_and_hms(2023, 1, 1, 13, 0, 0).unwrap(); // Newer timestamp
+
+        // Add different open ports to the community device
+        community_device.open_ports.push(PortInfo {
+            port: 443,
+            protocol: "tcp".to_string(),
+            service: "https".to_string(),
+            banner: "".to_string(),
+        });
+
+        // Merge the community device into the local device
+        DeviceInfo::merge(&mut local_device, &community_device);
+
+        // Verify that both ports are now in the local device
+        assert_eq!(local_device.open_ports.len(), 2);
+
+        // Sort by port number for consistent testing
+        local_device.open_ports.sort_by(|a, b| a.port.cmp(&b.port));
+
+        assert_eq!(local_device.open_ports[0].port, 80);
+        assert_eq!(local_device.open_ports[0].service, "http");
+        assert_eq!(local_device.open_ports[1].port, 443);
+        assert_eq!(local_device.open_ports[1].service, "https");
+
+        // Verify timestamp updated
+        assert_eq!(
+            local_device.last_seen,
+            Utc.with_ymd_and_hms(2023, 1, 1, 13, 0, 0).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_merge_vec_preserves_user_customizations() {
+        // Test that merge_vec preserves user customizations when merging community devices
+        use chrono::{TimeZone, Utc};
+        use std::net::{IpAddr, Ipv4Addr};
+
+        // Create a local device with user customizations
+        let mut local_device = DeviceInfo::new(Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100))));
+        local_device.hostname = "test-device".to_string();
+        local_device.custom_name = "My Custom Device".to_string(); // User customization
+        local_device.origin_ip = "192.168.1.1".to_string();
+        local_device.origin_network = "home-network".to_string();
+        local_device.last_seen = Utc.with_ymd_and_hms(2023, 1, 1, 12, 0, 0).unwrap();
+
+        // Add a dismissed port
+        local_device.dismissed_ports.push(8080);
+
+        // Create a vector of local devices
+        let mut local_devices = vec![local_device];
+
+        // Create a community device with newer information
+        let mut community_device =
+            DeviceInfo::new(Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100))));
+        community_device.hostname = "community-name-for-device".to_string(); // Different hostname
+        community_device.origin_ip = "10.0.0.1".to_string();
+        community_device.origin_network = "friend-network".to_string();
+        community_device.last_seen = Utc.with_ymd_and_hms(2023, 1, 1, 13, 0, 0).unwrap(); // Newer timestamp
+
+        // Add some new ports
+        community_device.open_ports.push(PortInfo {
+            port: 8080, // This port was dismissed by the user
+            protocol: "tcp".to_string(),
+            service: "http-alt".to_string(),
+            banner: "".to_string(),
+        });
+
+        // Create a vector of community devices
+        let community_devices = vec![community_device];
+
+        // Merge the community devices into the local devices
+        DeviceInfo::merge_vec(&mut local_devices, &community_devices);
+
+        // Verify that user customizations are preserved
+        assert_eq!(local_devices[0].custom_name, "My Custom Device");
+        assert_eq!(local_devices[0].dismissed_ports, vec![8080]);
+
+        // Verify timestamp is updated
+        assert_eq!(
+            local_devices[0].last_seen,
+            Utc.with_ymd_and_hms(2023, 1, 1, 13, 0, 0).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_merge_multiple_community_devices() {
+        // Test merging multiple community devices with a local device
+        use chrono::{TimeZone, Utc};
+        use std::net::{IpAddr, Ipv4Addr};
+
+        // Create a local device
+        let mut local_device = DeviceInfo::new(Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100))));
+        local_device.hostname = "test-device".to_string();
+        local_device.origin_ip = "192.168.1.1".to_string();
+        local_device.origin_network = "home-network".to_string();
+        local_device.last_seen = Utc.with_ymd_and_hms(2023, 1, 1, 12, 0, 0).unwrap();
+
+        // Add a local device to the vector
+        let mut local_devices = vec![local_device];
+
+        // Create a community device #1 with OS info
+        let mut community_device1 =
+            DeviceInfo::new(Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100))));
+        community_device1.hostname = "test-device".to_string();
+        community_device1.os_name = "Community OS".to_string();
+        community_device1.origin_ip = "10.0.0.1".to_string();
+        community_device1.origin_network = "friend-network-1".to_string();
+        community_device1.last_seen = Utc.with_ymd_and_hms(2023, 1, 1, 13, 0, 0).unwrap();
+
+        // Create a community device #2 with vendor info and a later timestamp
+        let mut community_device2 =
+            DeviceInfo::new(Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100))));
+        community_device2.hostname = "test-device".to_string();
+        community_device2.device_vendor = "Community Vendor".to_string();
+        community_device2.origin_ip = "10.0.0.2".to_string();
+        community_device2.origin_network = "friend-network-2".to_string();
+        community_device2.last_seen = Utc.with_ymd_and_hms(2023, 1, 1, 14, 0, 0).unwrap();
+
+        // Create a vector of community devices
+        let community_devices = vec![community_device1, community_device2];
+
+        // Merge the community devices into the local devices
+        DeviceInfo::merge_vec(&mut local_devices, &community_devices);
+
+        // Verify that information from both community devices was merged
+        assert_eq!(local_devices[0].os_name, "Community OS");
+        assert_eq!(local_devices[0].device_vendor, "Community Vendor");
+
+        // Verify the timestamp is from the most recent device
+        assert_eq!(
+            local_devices[0].last_seen,
+            Utc.with_ymd_and_hms(2023, 1, 1, 14, 0, 0).unwrap()
+        );
+
+        // Verify origin info remains unchanged
+        assert_eq!(local_devices[0].origin_ip, "192.168.1.1");
+        assert_eq!(local_devices[0].origin_network, "home-network");
+    }
+
+    #[test]
+    fn test_last_seen_during_scanning_and_mdns() {
+        // Test that last_seen updates correctly during various detection methods
+        use chrono::{TimeZone, Utc};
+        use std::net::{IpAddr, Ipv4Addr};
+
+        // Step 1: Initial discovery via scanning
+        let mut device = DeviceInfo::new(Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100))));
+        device.hostname = "test-device".to_string();
+        device.origin_ip = "192.168.1.1".to_string();
+        device.origin_network = "home-network".to_string();
+        // Override the default timestamp for testing
+        device.last_seen = Utc.with_ymd_and_hms(2023, 1, 1, 12, 0, 0).unwrap();
+        device.first_seen = Utc.with_ymd_and_hms(2023, 1, 1, 12, 0, 0).unwrap();
+
+        // Add a port from scanning
+        device.open_ports.push(PortInfo {
+            port: 80,
+            protocol: "tcp".to_string(),
+            service: "http".to_string(),
+            banner: "".to_string(),
+        });
+
+        // Step 2: Simulate mDNS discovery (happens after initial scan)
+        // In LANScanFactory::populate_mdns, a new device is created and merged
+        let mut mdns_device = DeviceInfo::new(Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100))));
+        mdns_device.hostname = "mdns-hostname".to_string(); // Better hostname from mDNS
+        mdns_device.origin_ip = "192.168.1.1".to_string(); // Same origin
+        mdns_device.origin_network = "home-network".to_string();
+
+        // In real code, mDNS sets both timestamps to mdns_info.first_seen
+        let mdns_timestamp = Utc.with_ymd_and_hms(2023, 1, 1, 12, 15, 0).unwrap();
+        mdns_device.first_seen = mdns_timestamp;
+        mdns_device.last_seen = mdns_timestamp; // Same as first_seen for mDNS
+
+        // Add mDNS services
+        mdns_device.mdns_services.push("_http._tcp".to_string());
+
+        // Merge the mDNS device into our device
+        DeviceInfo::merge(&mut device, &mdns_device);
+
+        // Verify mDNS update
+        assert_eq!(device.hostname, "mdns-hostname"); // Got better hostname
+        assert_eq!(device.mdns_services, vec!["_http._tcp"]);
+        assert_eq!(device.last_seen, mdns_timestamp); // Timestamp updated to mDNS detection time
+
+        // Step 3: Simulate a re-scan 30 minutes later (creates a new device instance)
+        let mut rescan_device = DeviceInfo::new(Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100))));
+        rescan_device.origin_ip = "192.168.1.1".to_string();
+        rescan_device.origin_network = "home-network".to_string();
+
+        // In real code this is Utc::now() at scan time
+        let rescan_timestamp = Utc.with_ymd_and_hms(2023, 1, 1, 12, 30, 0).unwrap();
+        rescan_device.last_seen = rescan_timestamp;
+        rescan_device.first_seen = rescan_timestamp; // New device gets current time for both
+
+        // Found new port during rescan
+        rescan_device.open_ports.push(PortInfo {
+            port: 443,
+            protocol: "tcp".to_string(),
+            service: "https".to_string(),
+            banner: "".to_string(),
+        });
+
+        // Merge the rescan device
+        DeviceInfo::merge(&mut device, &rescan_device);
+
+        // Verify rescan updates
+        assert_eq!(device.open_ports.len(), 2); // Now has both ports
+        assert_eq!(device.last_seen, rescan_timestamp); // Timestamp updated to scan time
+        assert_eq!(
+            device.first_seen,
+            Utc.with_ymd_and_hms(2023, 1, 1, 12, 0, 0).unwrap()
+        ); // First seen preserved
+
+        // Step 4: Simulate community device received later
+        let mut community_device =
+            DeviceInfo::new(Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100))));
+        community_device.hostname = "mdns-hostname".to_string(); // Same for matching
+        community_device.os_name = "Ubuntu 22.04".to_string(); // OS info from community
+        community_device.origin_ip = "10.0.0.1".to_string(); // Different origin
+        community_device.origin_network = "friend-network".to_string();
+
+        // Community detected this 15 minutes after our rescan
+        let community_timestamp = Utc.with_ymd_and_hms(2023, 1, 1, 12, 45, 0).unwrap();
+        community_device.last_seen = community_timestamp;
+
+        // Merge the community device
+        DeviceInfo::merge(&mut device, &community_device);
+
+        // Verify community updates
+        assert_eq!(device.os_name, "Ubuntu 22.04");
+        assert_eq!(device.last_seen, community_timestamp); // Updated to community timestamp
+
+        // Step 5: Receive older community information (shouldn't update timestamp)
+        let mut older_community_device =
+            DeviceInfo::new(Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100))));
+        older_community_device.hostname = "mdns-hostname".to_string();
+        older_community_device.device_vendor = "Old Vendor".to_string();
+        older_community_device.origin_ip = "10.0.0.2".to_string();
+        older_community_device.origin_network = "another-network".to_string();
+
+        // This community detection is older
+        let older_timestamp = Utc.with_ymd_and_hms(2023, 1, 1, 12, 10, 0).unwrap();
+        older_community_device.last_seen = older_timestamp;
+
+        // Merge the older community device
+        DeviceInfo::merge(&mut device, &older_community_device);
+
+        // Verify older info behavior
+        assert_eq!(device.device_vendor, "Old Vendor"); // Vendor info applied since our device had no vendor
+        assert_eq!(device.last_seen, community_timestamp); // Timestamp not changed (still has newest)
+    }
+
+    #[test]
+    fn test_last_seen_handling_in_community_lan() {
+        // This test simulates the complete flow of device discovery, sharing and merging
+        use chrono::{TimeZone, Utc};
+        use std::net::{IpAddr, Ipv4Addr};
+
+        // 1. Create a local device as if detected by scanning
+        let mut local_device = DeviceInfo::new(Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100))));
+        local_device.hostname = "local-discovery".to_string();
+        local_device.origin_ip = "192.168.1.1".to_string();
+        local_device.origin_network = "home-network".to_string();
+        local_device.last_seen = Utc.with_ymd_and_hms(2023, 1, 1, 12, 0, 0).unwrap();
+        local_device.open_ports.push(PortInfo {
+            port: 80,
+            protocol: "tcp".to_string(),
+            service: "http".to_string(),
+            banner: "".to_string(),
+        });
+
+        // 2. Create a device as if detected by another community member
+        let mut community_device =
+            DeviceInfo::new(Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100))));
+        community_device.hostname = "local-discovery".to_string(); // Same hostname for matching
+        community_device.os_name = "Linux".to_string(); // OS detected by community member
+        community_device.origin_ip = "10.0.0.1".to_string(); // Different origin
+        community_device.origin_network = "friend-network".to_string();
+        community_device.last_seen = Utc.with_ymd_and_hms(2023, 1, 1, 13, 0, 0).unwrap(); // Later detection
+        community_device.open_ports.push(PortInfo {
+            port: 443,
+            protocol: "tcp".to_string(),
+            service: "https".to_string(),
+            banner: "".to_string(),
+        });
+
+        // 3. Simulate the process in community_lan.rs's LanDeviceShared event
+        let mut devices_vec = vec![local_device.clone()];
+        let community_device_vec = vec![community_device.clone()];
+
+        // 4. Merge the community device (this is what happens after reception)
+        DeviceInfo::merge_vec(&mut devices_vec, &community_device_vec);
+
+        // 5. Verify that the merge preserved timestamps correctly
+        assert_eq!(devices_vec.len(), 1); // Still just one device
+
+        // The device should have info from both sources
+        assert_eq!(devices_vec[0].os_name, "Linux"); // Got OS from community
+
+        // Ports from both sources should be present
+        assert_eq!(devices_vec[0].open_ports.len(), 2);
+        devices_vec[0]
+            .open_ports
+            .sort_by(|a, b| a.port.cmp(&b.port));
+        assert_eq!(devices_vec[0].open_ports[0].port, 80); // Local port
+        assert_eq!(devices_vec[0].open_ports[1].port, 443); // Community port
+
+        // The timestamp should be from the most recent discovery (community device)
+        assert_eq!(
+            devices_vec[0].last_seen,
+            Utc.with_ymd_and_hms(2023, 1, 1, 13, 0, 0).unwrap()
+        );
+
+        // Origin should still be from the local device
+        assert_eq!(devices_vec[0].origin_ip, "192.168.1.1");
+        assert_eq!(devices_vec[0].origin_network, "home-network");
+    }
 }
