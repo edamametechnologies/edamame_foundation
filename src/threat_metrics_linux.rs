@@ -30,14 +30,8 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "class": "internal",
         "elevation": "user",
-        "target": "https://github.com/edamametechnologies/edamame_helper",
-        "education": [
-          {
-            "locale": "EN",
-            "class": "link",
-            "target": "https://github.com/edamametechnologies/edamame_helper"
-          }
-        ]
+        "target": "helper_check",
+        "education": []
       },
       "remediation": {
         "system": "Linux",
@@ -46,16 +40,38 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "class": "installer",
         "elevation": "user",
         "target": "https://github.com/edamametechnologies/edamame_helper/releases/download",
-        "education": []
+        "education": [
+          {
+            "locale": "EN",
+            "class": "link",
+            "target": "https://github.com/edamametechnologies/edamame_helper"
+          },
+          {
+            "locale": "FR",
+            "class": "link",
+            "target": "https://github.com/edamametechnologies/edamame_helper"
+          }
+        ]
       },
       "rollback": {
         "system": "Linux",
         "minversion": 3,
         "maxversion": 0,
         "class": "cli",
-        "elevation": "admin",
-        "target": "apt remove edamame_helper",
-        "education": []
+        "elevation": "system",
+        "target": "apt remove edamame-helper",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "html",
+            "target": "If you need to uninstall the EDAMAME Helper software for any reason, you can use the provided shell script command. Note that uninstalling may affect the Security Score analysis of your system."
+          },
+          {
+            "locale": "FR",
+            "class": "html",
+            "target": "Si vous devez désinstaller le logiciel d'assistance EDAMAME pour une raison quelconque, vous pouvez utiliser la commande de script shell fournie. Notez que la désinstallation peut affecter l'analyse du score de sécurité de votre système."
+          }
+        ]
       }
     },
     {
