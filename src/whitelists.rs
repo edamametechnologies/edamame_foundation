@@ -1,13 +1,16 @@
 use crate::cloud_model::*;
+use crate::lanscan_sessions::SessionInfo;
 use crate::rwlock::CustomRwLock;
 use crate::whitelists_db::WHITELISTS;
 use anyhow::{anyhow, Context, Result};
+use chrono;
 use dashmap::DashMap;
 use ipnet::IpNet;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::net::IpAddr;
+use std::sync::Arc;
 use tracing::{info, trace, warn};
 
 // Constants
@@ -49,6 +52,20 @@ pub struct Whitelists {
     pub whitelists: DashMap<String, WhitelistInfo>,
 }
 
+impl From<Whitelists> for WhitelistsJSON {
+    fn from(whitelists: Whitelists) -> Self {
+        WhitelistsJSON {
+            date: whitelists.date,
+            signature: whitelists.signature,
+            whitelists: whitelists
+                .whitelists
+                .iter()
+                .map(|r| r.value().clone())
+                .collect(),
+        }
+    }
+}
+
 impl CloudSignature for Whitelists {
     fn get_signature(&self) -> String {
         self.signature.clone().unwrap_or_default()
@@ -74,6 +91,83 @@ impl Whitelists {
         Whitelists {
             date: whitelist_info.date,
             signature: whitelist_info.signature,
+            whitelists,
+        }
+    }
+
+    // Create a whitelist from a list of sessions
+    pub fn new_from_sessions(sessions: &Vec<SessionInfo>) -> Self {
+        let whitelists = DashMap::new();
+
+        // Create a whitelist with the current sessions
+        let mut endpoints = Vec::new();
+        // HashSet to track unique endpoint fingerprints for deduplication
+        let mut unique_fingerprints = std::collections::HashSet::new();
+
+        for session in sessions {
+            let endpoint = WhitelistEndpoint {
+                // Do not include the domain if set to "Unknown" or "Resolving"
+                domain: if session.dst_domain == Some("Unknown".to_string())
+                    || session.dst_domain == Some("Resolving".to_string())
+                {
+                    None
+                } else {
+                    session.dst_domain.clone()
+                },
+                // Always include the IP address as a fallback to when the domain is set but not resolved
+                ip: Some(session.session.dst_ip.to_string()),
+                // Always include the port
+                port: Some(session.session.dst_port),
+                // Always include the protocol
+                protocol: Some(session.session.protocol.to_string()),
+                // Don't include AS info
+                as_number: None, // Session doesn't have AS info
+                as_country: None,
+                as_owner: None,
+                // Include the process info if available
+                process: session.l7.as_ref().map(|l7| l7.process_name.clone()),
+                description: Some(format!(
+                    "Auto-generated from session: {}:{} -> {}:{}",
+                    session.session.src_ip,
+                    session.session.src_port,
+                    session.session.dst_ip,
+                    session.session.dst_port
+                )),
+            };
+
+            // Create a fingerprint tuple that uniquely identifies this endpoint
+            // (excluding description which doesn't affect deduplication)
+            let fingerprint = (
+                endpoint.domain.clone(),
+                endpoint.ip.clone(),
+                endpoint.port,
+                endpoint.protocol.clone(),
+                endpoint.as_number,
+                endpoint.as_country.clone(),
+                endpoint.as_owner.clone(),
+                endpoint.process.clone(),
+            );
+
+            // Only add the endpoint if we haven't seen this fingerprint before
+            if unique_fingerprints.insert(fingerprint) {
+                endpoints.push(endpoint);
+            }
+        }
+
+        let whitelist_info = WhitelistInfo {
+            name: "custom_whitelist".to_string(),
+            extends: None,
+            endpoints,
+        };
+
+        whitelists.insert(whitelist_info.name.clone(), whitelist_info);
+
+        // Use "Month DDth YYYY" format as seen in whitelists-db.json
+        let today = chrono::Local::now().format("%B %dth %Y").to_string();
+
+        Whitelists {
+            date: today,
+            signature: None, // No signature for auto-generated whitelists
             whitelists,
         }
     }
@@ -143,6 +237,7 @@ pub async fn is_session_in_whitelist(
     session_ip: Option<&str>,
     port: u16,
     protocol: &str,
+    custom_whitelists: &Arc<CustomRwLock<Option<Whitelists>>>,
     whitelist_name: &str,
     as_number: Option<u32>,
     as_country: Option<&str>,
@@ -161,26 +256,50 @@ pub async fn is_session_in_whitelist(
         as_owner,
         process
     );
+
     let mut visited = HashSet::new();
     visited.insert(whitelist_name.to_string());
 
-    // Acquire lock on LISTS
-    let model = LISTS.read().await;
-    let lists = &model.data;
+    // Decide which whitelist to use (custom or global)
+    let custom_guard = custom_whitelists.read().await;
+    let endpoints = if let Some(whitelists) = custom_guard.as_ref() {
+        // We have a custom whitelist, use it
+        let custom_endpoints = whitelists.get_all_endpoints(whitelist_name, &mut visited);
 
-    let endpoints = match lists
-        .read()
-        .await
-        .get_all_endpoints(whitelist_name, &mut visited)
-    {
-        Ok(endpoints) => endpoints,
-        Err(err) => {
-            warn!("Error retrieving endpoints: {}", err);
-            // Whitelist not found, return false to deny by default
-            return false;
+        // Drop the guard to avoid holding it longer than needed
+        drop(custom_guard);
+
+        match custom_endpoints {
+            Ok(eps) => eps,
+            Err(err) => {
+                warn!("Error retrieving endpoints from custom whitelist: {}", err);
+                return false;
+            }
+        }
+    } else {
+        // No custom whitelist, use the global one
+        // Drop the custom guard first to avoid potential deadlocks
+        drop(custom_guard);
+
+        let global_guard = LISTS.read().await;
+        let global_data_guard = global_guard.data.read().await;
+
+        let global_endpoints = global_data_guard.get_all_endpoints(whitelist_name, &mut visited);
+
+        // Drop the guards
+        drop(global_data_guard);
+        drop(global_guard);
+
+        match global_endpoints {
+            Ok(eps) => eps,
+            Err(err) => {
+                warn!("Error retrieving endpoints from global whitelist: {}", err);
+                return false;
+            }
         }
     };
 
+    // Match the session against the endpoints
     endpoints.iter().any(|endpoint| {
         endpoint_matches(
             session_domain,
@@ -446,6 +565,8 @@ mod tests {
     async fn test_whitelist_inheritance() {
         initialize_test_whitelists().await;
 
+        let custom_whitelists = Arc::new(CustomRwLock::new(None));
+
         // Test inherited endpoint from base_whitelist
         assert!(
             is_session_in_whitelist(
@@ -453,6 +574,7 @@ mod tests {
                 None,
                 443,
                 "TCP",
+                &custom_whitelists,
                 "extended_whitelist",
                 None,
                 None,
@@ -470,6 +592,7 @@ mod tests {
                 Some("192.168.1.100"),
                 80,
                 "TCP",
+                &custom_whitelists,
                 "extended_whitelist",
                 Some(12345),
                 Some("US"),
@@ -486,6 +609,8 @@ mod tests {
     async fn test_wildcard_domain_matching() {
         initialize_test_whitelists().await;
 
+        let custom_whitelists = Arc::new(CustomRwLock::new(None));
+
         // Test exact subdomain match
         assert!(
             is_session_in_whitelist(
@@ -493,6 +618,7 @@ mod tests {
                 None,
                 80,
                 "TCP",
+                &custom_whitelists,
                 "wildcard_whitelist",
                 None,
                 None,
@@ -510,6 +636,7 @@ mod tests {
                 None,
                 80,
                 "TCP",
+                &custom_whitelists,
                 "wildcard_whitelist",
                 None,
                 None,
@@ -527,6 +654,7 @@ mod tests {
                 None,
                 80,
                 "TCP",
+                &custom_whitelists,
                 "wildcard_whitelist",
                 None,
                 None,
@@ -543,6 +671,8 @@ mod tests {
     async fn test_as_number_matching() {
         initialize_test_whitelists().await;
 
+        let custom_whitelists = Arc::new(CustomRwLock::new(None));
+
         // Test complete ASN match
         assert!(
             is_session_in_whitelist(
@@ -550,6 +680,7 @@ mod tests {
                 Some("192.168.1.100"),
                 80,
                 "TCP",
+                &custom_whitelists,
                 "extended_whitelist",
                 Some(12345),
                 Some("US"),
@@ -567,6 +698,7 @@ mod tests {
                 Some("192.168.1.100"),
                 80,
                 "TCP",
+                &custom_whitelists,
                 "extended_whitelist",
                 Some(12345),
                 Some("UK"), // Different country
@@ -583,6 +715,8 @@ mod tests {
     async fn test_invalid_whitelist() {
         initialize_test_whitelists().await;
 
+        let custom_whitelists = Arc::new(CustomRwLock::new(None));
+
         // Test non-existent whitelist
         assert!(
             !is_session_in_whitelist(
@@ -590,6 +724,7 @@ mod tests {
                 None,
                 443,
                 "TCP",
+                &custom_whitelists,
                 "nonexistent_whitelist",
                 None,
                 None,
@@ -606,6 +741,8 @@ mod tests {
     async fn test_l7_process_matching() {
         initialize_test_whitelists().await;
 
+        let custom_whitelists = Arc::new(CustomRwLock::new(None));
+
         // Test matching l7 process
         assert!(
             is_session_in_whitelist(
@@ -613,6 +750,7 @@ mod tests {
                 Some("192.168.1.100"),
                 80,
                 "TCP",
+                &custom_whitelists,
                 "extended_whitelist",
                 Some(12345),
                 Some("US"),
@@ -630,6 +768,7 @@ mod tests {
                 Some("192.168.1.100"),
                 80,
                 "TCP",
+                &custom_whitelists,
                 "extended_whitelist",
                 Some(12345),
                 Some("US"),
@@ -720,6 +859,8 @@ mod tests {
             .overwrite_with_test_data(whitelists)
             .await;
 
+        let custom_whitelists = Arc::new(CustomRwLock::new(None));
+
         // Test that endpoints are correctly aggregated without infinite recursion
         assert!(
             is_session_in_whitelist(
@@ -727,6 +868,7 @@ mod tests {
                 None,
                 80,
                 "TCP",
+                &custom_whitelists,
                 "whitelist_c",
                 None,
                 None,
@@ -743,6 +885,7 @@ mod tests {
                 None,
                 80,
                 "TCP",
+                &custom_whitelists,
                 "whitelist_a",
                 None,
                 None,
@@ -759,6 +902,7 @@ mod tests {
                 None,
                 80,
                 "TCP",
+                &custom_whitelists,
                 "whitelist_b",
                 None,
                 None,
@@ -814,6 +958,8 @@ mod tests {
             .overwrite_with_test_data(whitelists)
             .await;
 
+        let custom_whitelists = Arc::new(CustomRwLock::new(None));
+
         // Should match subdomains of example.com
         assert!(
             is_session_in_whitelist(
@@ -821,6 +967,7 @@ mod tests {
                 None,
                 80,
                 "TCP",
+                &custom_whitelists,
                 "wildcard_domain_whitelist",
                 None,
                 None,
@@ -838,6 +985,7 @@ mod tests {
                 None,
                 80,
                 "TCP",
+                &custom_whitelists,
                 "wildcard_domain_whitelist",
                 None,
                 None,
@@ -855,6 +1003,7 @@ mod tests {
                 None,
                 80,
                 "TCP",
+                &custom_whitelists,
                 "wildcard_domain_whitelist",
                 None,
                 None,
@@ -872,6 +1021,7 @@ mod tests {
                 None,
                 80,
                 "TCP",
+                &custom_whitelists,
                 "wildcard_domain_whitelist",
                 None,
                 None,
@@ -889,6 +1039,7 @@ mod tests {
                 None,
                 80,
                 "TCP",
+                &custom_whitelists,
                 "wildcard_domain_whitelist",
                 None,
                 None,
@@ -931,6 +1082,8 @@ mod tests {
             .overwrite_with_test_data(whitelists)
             .await;
 
+        let custom_whitelists = Arc::new(CustomRwLock::new(None));
+
         // Should match IP within the network
         assert!(
             is_session_in_whitelist(
@@ -938,6 +1091,7 @@ mod tests {
                 Some("192.168.1.50"),
                 80,
                 "TCP",
+                &custom_whitelists,
                 "ipv4_network_whitelist",
                 None,
                 None,
@@ -955,6 +1109,7 @@ mod tests {
                 Some("192.168.2.50"),
                 80,
                 "TCP",
+                &custom_whitelists,
                 "ipv4_network_whitelist",
                 None,
                 None,
@@ -997,6 +1152,8 @@ mod tests {
             .overwrite_with_test_data(whitelists)
             .await;
 
+        let custom_whitelists = Arc::new(CustomRwLock::new(None));
+
         // Should match IP within the network
         assert!(
             is_session_in_whitelist(
@@ -1004,6 +1161,7 @@ mod tests {
                 Some("2001:db8::1"),
                 80,
                 "TCP",
+                &custom_whitelists,
                 "ipv6_network_whitelist",
                 None,
                 None,
@@ -1021,6 +1179,7 @@ mod tests {
                 Some("2001:db9::1"),
                 80,
                 "TCP",
+                &custom_whitelists,
                 "ipv6_network_whitelist",
                 None,
                 None,
@@ -1064,6 +1223,8 @@ mod tests {
             .overwrite_with_test_data(whitelists)
             .await;
 
+        let custom_whitelists = Arc::new(CustomRwLock::new(None));
+
         // Test that a session with port 8080 matches the whitelist
         assert!(
             is_session_in_whitelist(
@@ -1071,6 +1232,7 @@ mod tests {
                 None,                  // session_ip
                 8080,                  // port
                 "TCP",                 // protocol
+                &custom_whitelists,    // custom_whitelists
                 "port_only_whitelist", // whitelist_name
                 None,                  // as_number
                 None,                  // as_country
@@ -1088,6 +1250,7 @@ mod tests {
                 None,                  // session_ip
                 80,                    // port
                 "TCP",                 // protocol
+                &custom_whitelists,    // custom_whitelists
                 "port_only_whitelist", // whitelist_name
                 None,                  // as_number
                 None,                  // as_country
@@ -1096,6 +1259,481 @@ mod tests {
             )
             .await,
             "Should not match session with port 80"
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_invalid_field_in_whitelist_entry() {
+        // Initialize test data with an invalid field "domaine" instead of "domain"
+        let invalid_whitelist_json = r#"
+        {
+            "date": "2024-10-25",
+            "signature": "invalid_test_signature",
+            "whitelists": [
+                {
+                    "name": "invalid_whitelist",
+                    "extends": null,
+                    "endpoints": [
+                        {
+                            "domaine": "invalid.com", // Invalid field
+                            "ip": "10.0.0.1",
+                            "port": 8080,
+                            "protocol": "TCP",
+                            "description": "Invalid endpoint"
+                        }
+                    ]
+                }
+            ]
+        }
+        "#;
+
+        // Attempt to deserialize the invalid JSON
+        let result: Result<WhitelistsJSON> =
+            serde_json::from_str(invalid_whitelist_json).context("Deserialization failed");
+
+        // Assert that deserialization fails due to unknown field
+        assert!(
+            result.is_err(),
+            "Deserialization should fail due to unknown field 'domaine'"
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_new_from_sessions() {
+        use crate::lanscan_sessions::{
+            Protocol, Session, SessionInfo, SessionStats, SessionStatus, WhitelistState,
+        };
+        use chrono::{TimeZone, Utc};
+        use std::net::{IpAddr, Ipv4Addr};
+
+        // Helper function to create a basic SessionInfo
+        fn create_test_session(
+            src_ip: IpAddr,
+            src_port: u16,
+            dst_ip: IpAddr,
+            dst_port: u16,
+            protocol: Protocol,
+            dst_domain: Option<String>,
+        ) -> SessionInfo {
+            // Create minimal SessionStats
+            let stats = SessionStats {
+                start_time: Utc.timestamp_opt(1600000000, 0).unwrap(),
+                end_time: None,
+                last_activity: Utc.timestamp_opt(1600000100, 0).unwrap(),
+                inbound_bytes: 0,
+                outbound_bytes: 0,
+                orig_pkts: 0,
+                resp_pkts: 0,
+                orig_ip_bytes: 0,
+                resp_ip_bytes: 0,
+                history: String::new(),
+                conn_state: None,
+                missed_bytes: 0,
+                uid: "test-uid".to_string(),
+            };
+
+            // Create minimal SessionStatus
+            let status = SessionStatus {
+                active: true,
+                added: true,
+                activated: true,
+                deactivated: false,
+            };
+
+            // Create Session
+            let session = Session {
+                protocol,
+                src_ip,
+                src_port,
+                dst_ip,
+                dst_port,
+            };
+
+            // Create SessionInfo
+            SessionInfo {
+                session,
+                status,
+                stats,
+                is_local_src: true,
+                is_local_dst: false,
+                is_self_src: false,
+                is_self_dst: false,
+                src_domain: None,
+                dst_domain,
+                dst_service: None,
+                l7: None,
+                src_asn: None,
+                dst_asn: None,
+                is_whitelisted: WhitelistState::Unknown,
+                criticality: "Low".to_string(),
+            }
+        }
+
+        // Create test session data
+        let test_sessions = vec![
+            // Session 1 - with domain (HTTPS)
+            create_test_session(
+                IpAddr::V4(Ipv4Addr::new(192, 168, 1, 2)),
+                54321,
+                IpAddr::V4(Ipv4Addr::new(93, 184, 216, 34)),
+                443,
+                Protocol::TCP,
+                Some("example.com".to_string()),
+            ),
+            // Session 2 - without domain (DNS)
+            create_test_session(
+                IpAddr::V4(Ipv4Addr::new(192, 168, 1, 3)),
+                54322,
+                IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)),
+                53,
+                Protocol::UDP,
+                None,
+            ),
+            // Session 3 - duplicate of Session 1 (should be deduplicated)
+            create_test_session(
+                IpAddr::V4(Ipv4Addr::new(192, 168, 1, 5)),
+                54325,
+                IpAddr::V4(Ipv4Addr::new(93, 184, 216, 34)),
+                443,
+                Protocol::TCP,
+                Some("example.com".to_string()),
+            ),
+        ];
+
+        // Create a whitelist from the sessions
+        let whitelist = Whitelists::new_from_sessions(&test_sessions);
+
+        // Verify the structure of the created whitelist
+        assert_eq!(
+            whitelist.whitelists.len(),
+            1,
+            "Should create exactly one whitelist"
+        );
+        assert!(
+            whitelist.whitelists.contains_key("custom_whitelist"),
+            "Should create a whitelist named 'custom_whitelist'"
+        );
+
+        // Get the whitelist entries
+        let custom_whitelists = whitelist.whitelists.get("custom_whitelist").unwrap();
+
+        // With our improved deduplication, we expect 2 endpoints
+        // (Session 1 and 3 should be deduplicated even though they're not consecutive)
+        assert_eq!(
+            custom_whitelists.endpoints.len(),
+            2,
+            "Should have 2 endpoints after proper deduplication"
+        );
+
+        // Find and verify the example.com endpoint
+        let example_endpoint = custom_whitelists
+            .endpoints
+            .iter()
+            .find(|e| e.domain.as_deref() == Some("example.com"))
+            .expect("Should contain an endpoint for example.com");
+
+        assert_eq!(
+            example_endpoint.ip.as_deref(),
+            Some("93.184.216.34"),
+            "Should have correct IP"
+        );
+        assert_eq!(example_endpoint.port, Some(443), "Should have correct port");
+        assert_eq!(
+            example_endpoint.protocol.as_deref(),
+            Some("TCP"),
+            "Should have correct protocol"
+        );
+
+        // Find and verify the DNS endpoint
+        let dns_endpoint = custom_whitelists
+            .endpoints
+            .iter()
+            .find(|e| e.ip.as_deref() == Some("8.8.8.8"))
+            .expect("Should contain an endpoint for 8.8.8.8");
+
+        assert_eq!(dns_endpoint.domain, None, "Should have no domain");
+        assert_eq!(dns_endpoint.port, Some(53), "Should have correct port");
+        assert_eq!(
+            dns_endpoint.protocol.as_deref(),
+            Some("UDP"),
+            "Should have correct protocol"
+        );
+
+        // Verify today's date is used
+        let today = chrono::Local::now().format("%B %dth %Y").to_string();
+        assert_eq!(whitelist.date, today, "Date should be today's date");
+
+        // Verify no signature is set
+        assert_eq!(whitelist.signature, None, "Signature should be None");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_new_from_sessions_empty() {
+        use crate::lanscan_sessions::SessionInfo;
+
+        // Test with an empty sessions list
+        let empty_sessions: Vec<SessionInfo> = Vec::new();
+
+        let whitelist = Whitelists::new_from_sessions(&empty_sessions);
+
+        // Verify we still create a whitelist structure
+        assert_eq!(
+            whitelist.whitelists.len(),
+            1,
+            "Should create a whitelist even with empty sessions"
+        );
+        assert!(
+            whitelist.whitelists.contains_key("custom_whitelist"),
+            "Should create a whitelist named 'custom_whitelist'"
+        );
+
+        // Get the whitelist entries
+        let custom_whitelists = whitelist.whitelists.get("custom_whitelist").unwrap();
+
+        // Verify it has no endpoints
+        assert_eq!(
+            custom_whitelists.endpoints.len(),
+            0,
+            "Should have 0 endpoints with empty sessions list"
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_new_from_sessions_with_process_info() {
+        use crate::asn_db::Record;
+        use crate::lanscan_sessions::{
+            Protocol, Session, SessionInfo, SessionL7, SessionStats, SessionStatus, WhitelistState,
+        };
+        use chrono::{TimeZone, Utc};
+        use std::net::{IpAddr, Ipv4Addr};
+
+        // Helper function to create a session with process and ASN info
+        fn create_session_with_process(
+            dst_ip: IpAddr,
+            dst_port: u16,
+            protocol: Protocol,
+            process_name: &str,
+            as_number: u32,
+            as_country: &str,
+            as_owner: &str,
+        ) -> SessionInfo {
+            // Create Session
+            let session = Session {
+                protocol,
+                src_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100)),
+                src_port: 49152,
+                dst_ip,
+                dst_port,
+            };
+
+            // Create process info
+            let l7 = SessionL7 {
+                pid: 1234,
+                process_name: process_name.to_string(),
+                process_path: format!("/usr/bin/{}", process_name),
+                username: "testuser".to_string(),
+            };
+
+            // Create ASN info
+            let dst_asn = Record {
+                as_number,
+                country: as_country.to_string(),
+                owner: as_owner.to_string(),
+            };
+
+            // Create minimal SessionStats
+            let stats = SessionStats {
+                start_time: Utc.timestamp_opt(1600000000, 0).unwrap(),
+                end_time: None,
+                last_activity: Utc.timestamp_opt(1600000100, 0).unwrap(),
+                inbound_bytes: 1024,
+                outbound_bytes: 512,
+                orig_pkts: 10,
+                resp_pkts: 8,
+                orig_ip_bytes: 1200,
+                resp_ip_bytes: 800,
+                history: "ShAdDf".to_string(),
+                conn_state: Some("S1".to_string()),
+                missed_bytes: 0,
+                uid: format!("test-uid-{}", dst_port),
+            };
+
+            // Create minimal SessionStatus
+            let status = SessionStatus {
+                active: true,
+                added: true,
+                activated: true,
+                deactivated: false,
+            };
+
+            SessionInfo {
+                session,
+                status,
+                stats,
+                is_local_src: true,
+                is_local_dst: false,
+                is_self_src: false,
+                is_self_dst: false,
+                src_domain: None,
+                dst_domain: None,
+                dst_service: None,
+                l7: Some(l7),
+                src_asn: None,
+                dst_asn: Some(dst_asn),
+                is_whitelisted: WhitelistState::Unknown,
+                criticality: "Medium".to_string(),
+            }
+        }
+
+        // Create test sessions with process and ASN info
+        let test_sessions = vec![
+            // Chrome connecting to a web server
+            create_session_with_process(
+                IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10)),
+                443,
+                Protocol::TCP,
+                "chrome",
+                15169, // Google ASN
+                "US",
+                "GOOGLE",
+            ),
+            // Firefox connecting to a different web server
+            create_session_with_process(
+                IpAddr::V4(Ipv4Addr::new(198, 51, 100, 20)),
+                443,
+                Protocol::TCP,
+                "firefox",
+                16509, // Amazon ASN
+                "US",
+                "AMAZON-02",
+            ),
+            // Another Chrome session connecting to the same endpoint as first session (should be deduplicated)
+            create_session_with_process(
+                IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10)),
+                443,
+                Protocol::TCP,
+                "chrome", // Same process
+                15169,    // Same ASN
+                "US",
+                "GOOGLE",
+            ),
+            // Chrome connecting to another endpoint (different destination, should NOT be deduplicated)
+            create_session_with_process(
+                IpAddr::V4(Ipv4Addr::new(203, 0, 113, 20)),
+                443,
+                Protocol::TCP,
+                "chrome",
+                15169, // Google ASN
+                "US",
+                "GOOGLE",
+            ),
+        ];
+
+        // Create whitelist from sessions
+        let whitelist = Whitelists::new_from_sessions(&test_sessions);
+
+        // Verify the whitelist structure
+        assert_eq!(
+            whitelist.whitelists.len(),
+            1,
+            "Should create exactly one whitelist"
+        );
+        let custom_whitelists = whitelist.whitelists.get("custom_whitelist").unwrap();
+
+        // Should have 3 unique endpoints (with proper deduplication of same destination)
+        assert_eq!(
+            custom_whitelists.endpoints.len(),
+            3,
+            "Should have 3 endpoints after deduplication"
+        );
+
+        // Verify which IPs are present after deduplication
+        let ips: Vec<_> = custom_whitelists
+            .endpoints
+            .iter()
+            .filter_map(|e| e.ip.as_deref())
+            .collect();
+
+        // Should include 203.0.113.10 (only once despite appearing twice in input),
+        // 198.51.100.20, and 203.0.113.20
+        assert!(
+            ips.contains(&"203.0.113.10"),
+            "Should contain first Google endpoint IP"
+        );
+        assert!(
+            ips.contains(&"198.51.100.20"),
+            "Should contain Amazon endpoint IP"
+        );
+        assert!(
+            ips.contains(&"203.0.113.20"),
+            "Should contain second Google endpoint IP"
+        );
+
+        // Find and verify each endpoint
+        let google_endpoint = custom_whitelists
+            .endpoints
+            .iter()
+            .find(|e| e.ip.as_deref() == Some("203.0.113.10"))
+            .expect("Should have endpoint for 203.0.113.10");
+
+        let amazon_endpoint = custom_whitelists
+            .endpoints
+            .iter()
+            .find(|e| e.ip.as_deref() == Some("198.51.100.20"))
+            .expect("Should have endpoint for 198.51.100.20");
+
+        // Verify the process information is NOT preserved in the whitelist
+        // (new_from_sessions doesn't include process info in created whitelists)
+        assert_eq!(
+            google_endpoint.process, None,
+            "Process info should not be preserved in the whitelist"
+        );
+        assert_eq!(
+            amazon_endpoint.process, None,
+            "Process info should not be preserved in the whitelist"
+        );
+
+        // Verify IP, port and protocol are correctly preserved
+        assert_eq!(google_endpoint.port, Some(443), "Should have correct port");
+        assert_eq!(
+            google_endpoint.protocol.as_deref(),
+            Some("TCP"),
+            "Should have correct protocol"
+        );
+
+        assert_eq!(amazon_endpoint.port, Some(443), "Should have correct port");
+        assert_eq!(
+            amazon_endpoint.protocol.as_deref(),
+            Some("TCP"),
+            "Should have correct protocol"
+        );
+
+        // Verify ASN information is NOT preserved
+        assert_eq!(
+            google_endpoint.as_number, None,
+            "ASN info should not be preserved"
+        );
+        assert_eq!(
+            google_endpoint.as_country, None,
+            "Country info should not be preserved"
+        );
+        assert_eq!(
+            google_endpoint.as_owner, None,
+            "Owner info should not be preserved"
+        );
+
+        // Verify that all endpoints have descriptions containing session info
+        assert!(
+            google_endpoint
+                .description
+                .as_ref()
+                .unwrap()
+                .contains("Auto-generated from session"),
+            "Description should indicate auto-generated source"
         );
     }
 
@@ -1144,6 +1782,8 @@ mod tests {
             .overwrite_with_test_data(whitelists)
             .await;
 
+        let custom_whitelists = Arc::new(CustomRwLock::new(None));
+
         // Session that should match (Amazon ASN)
         assert!(
             is_session_in_whitelist(
@@ -1151,6 +1791,7 @@ mod tests {
                 Some("54.239.28.85"),       // Amazon IP
                 443,                        // port
                 "TCP",                      // protocol
+                &custom_whitelists,         // custom_whitelists
                 "as_number_test_whitelist", // whitelist_name
                 Some(16509),                // as_number
                 Some("US"),                 // as_country
@@ -1168,6 +1809,7 @@ mod tests {
                 Some("8.8.8.8"),            // Google IP
                 443,                        // port
                 "TCP",                      // protocol
+                &custom_whitelists,         // custom_whitelists
                 "as_number_test_whitelist", // whitelist_name
                 Some(15169),                // as_number (Google ASN)
                 Some("US"),                 // as_country
@@ -1185,6 +1827,7 @@ mod tests {
                 Some("1.1.1.1"),            // Cloudflare IP
                 443,                        // port
                 "TCP",                      // protocol
+                &custom_whitelists,         // custom_whitelists
                 "as_number_test_whitelist", // whitelist_name
                 Some(13335),                // as_number
                 Some("US"),                 // as_country
@@ -1193,43 +1836,6 @@ mod tests {
             )
             .await,
             "Should match session with ASN 13335 (Cloudflare)"
-        );
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn test_invalid_field_in_whitelist_entry() {
-        // Initialize test data with an invalid field "domaine" instead of "domain"
-        let invalid_whitelist_json = r#"
-        {
-            "date": "2024-10-25",
-            "signature": "invalid_test_signature",
-            "whitelists": [
-                {
-                    "name": "invalid_whitelist",
-                    "extends": null,
-                    "endpoints": [
-                        {
-                            "domaine": "invalid.com", // Invalid field
-                            "ip": "10.0.0.1",
-                            "port": 8080,
-                            "protocol": "TCP",
-                            "description": "Invalid endpoint"
-                        }
-                    ]
-                }
-            ]
-        }
-        "#;
-
-        // Attempt to deserialize the invalid JSON
-        let result: Result<WhitelistsJSON> =
-            serde_json::from_str(invalid_whitelist_json).context("Deserialization failed");
-
-        // Assert that deserialization fails due to unknown field
-        assert!(
-            result.is_err(),
-            "Deserialization should fail due to unknown field 'domaine'"
         );
     }
 }

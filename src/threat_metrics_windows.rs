@@ -2,8 +2,8 @@
 pub static THREAT_METRICS_WINDOWS: &str = r#"{
   "name": "threat model Windows",
   "extends": "none",
-  "date": "December 26th 2024",
-  "signature": "207807bd311fb090a31271fd5bcd2596c4d8cc997931f9e975739e6f80e21e85",
+  "date": "March 16th 2025",
+  "signature": "3c78cb6fb75835e0eb66541a128c91b159a0f3495ccad19b095ec8b334a209b5",
   "metrics": [
     {
       "name": "edamame helper disabled",
@@ -258,6 +258,11 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
             "locale": "EN",
             "class": "link",
             "target": "https://en.wikipedia.org/wiki/Password_manager"
+          },
+          {
+            "locale": "FR",
+            "class": "link",
+            "target": "https://fr.wikipedia.org/wiki/Gestionnaire_de_mots_de_passe"
           }
         ]
       },
@@ -272,7 +277,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
           {
             "locale": "FR",
             "class": "link",
-            "target": "https://fr.wikipedia.org/wiki/Password_manager"
+            "target": "https://fr.wikipedia.org/wiki/Gestionnaire_de_mots_de_passe"
           }
         ]
       }
@@ -1691,6 +1696,75 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
             "locale": "FR",
             "class": "html",
             "target": "Si vous devez annuler les modifications, retournez dans les paramètres de l'écran de verrouillage et ajustez les paramètres de délai d'attente et de sécurité de l'économiseur d'écran en conséquence. Assurez-vous de comprendre les implications de sécurité des modifications apportées. Pour plus d'informations, visitez la <a href='https://support.microsoft.com/fr-fr/windows/modifier-vos-param%C3%A8tres-d-%C3%A9cran-de-veille-a9dc2a0c-dc8e-9161-d270-aaccc252082a'>page de support</a>."
+          }
+        ]
+      }
+    },
+    {
+      "name": "Business rule not respected",
+      "metrictype": "bool",
+      "dimension": "applications",
+      "severity": 1,
+      "scope": "generic",
+      "tags": [],
+      "description": [
+        {
+          "locale": "EN",
+          "title": "Business rule not respected",
+          "summary": "One or more business rules are not respected. Please check the command output for more details."
+        },
+        {
+          "locale": "FR",
+          "title": "Règle métier non respectée",
+          "summary": "Une ou plusieurs règles métier ne sont pas respectées. Veuillez vérifier la sortie de la commande pour plus de détails."
+        }
+      ],
+      "implementation": {
+        "system": "Windows",
+        "minversion": 10,
+        "maxversion": 0,
+        "class": "internal",
+        "elevation": "user",
+        "target": "business_rules",
+        "education": []
+      },
+      "remediation": {
+        "system": "Windows",
+        "minversion": 10,
+        "maxversion": 0,
+        "class": "",
+        "elevation": "",
+        "target": "",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "html",
+            "target": "Refer to the business rules documentation for more details."
+          },
+          {
+            "locale": "FR",
+            "class": "html",
+            "target": "Consultez la documentation des règles métier pour plus de détails."
+          }
+        ]
+      },
+      "rollback": {
+        "system": "Windows",
+        "minversion": 10,
+        "maxversion": 0,
+        "class": "",
+        "elevation": "",
+        "target": "",
+        "education": [
+          {
+            "locale": "EN",
+            "class": "html",
+            "target": "Refer to the business rules documentation for more details."
+          },
+          {
+            "locale": "FR",
+            "class": "html",
+            "target": "Consultez la documentation des règles métier pour plus de détails."
           }
         ]
       }

@@ -65,6 +65,7 @@ pub struct LANScanCapture {
     l7_handle: Option<TaskHandle>,
     whitelist_check_handle: Option<TaskHandle>,
     whitelist_name: Arc<CustomRwLock<String>>,
+    custom_whitelists: Arc<CustomRwLock<Option<Whitelists>>>,
     whitelist_conformance: Arc<AtomicBool>,
     last_whitelist_exception_time: Arc<CustomRwLock<DateTime<Utc>>>,
     whitelist_exceptions: Arc<CustomRwLock<Vec<Session>>>,
@@ -86,6 +87,7 @@ impl LANScanCapture {
             l7_handle: None,
             whitelist_check_handle: None,
             whitelist_name: Arc::new(CustomRwLock::new("".to_string())),
+            custom_whitelists: Arc::new(CustomRwLock::new(None)),
             whitelist_conformance: Arc::new(AtomicBool::new(true)),
             last_whitelist_exception_time: Arc::new(CustomRwLock::new(DateTime::<Utc>::from(
                 std::time::UNIX_EPOCH,
@@ -96,18 +98,7 @@ impl LANScanCapture {
         }
     }
 
-    pub async fn set_whitelist(&mut self, whitelist_name: &str) {
-        // Check if the whitelist is valid
-        if !is_valid_whitelist(whitelist_name).await && !whitelist_name.is_empty() {
-            error!("Invalid whitelist name: {}", whitelist_name);
-            return;
-        }
-        // Check if the whitelist is different
-        if self.whitelist_name.read().await.eq(whitelist_name) {
-            return;
-        }
-        // Set the new whitelist name
-        *self.whitelist_name.write().await = whitelist_name.to_string();
+    pub async fn reset_whitelist(&mut self) {
         // Reset the conformance flag
         self.whitelist_conformance.store(true, Ordering::Relaxed);
         // Clear the exceptions
@@ -117,6 +108,33 @@ impl LANScanCapture {
         for mut session in sessions.iter_mut() {
             session.is_whitelisted = WhitelistState::Unknown;
         }
+    }
+
+    pub async fn set_whitelist(&mut self, whitelist_name: &str) {
+        // Check if the whitelist name is "custom_whitelist" which is a special case
+        let is_custom_whitelist = whitelist_name == "custom_whitelist";
+
+        // Only clear the custom whitelist if we're not setting a custom whitelist
+        if !is_custom_whitelist {
+            *self.custom_whitelists.write().await = None;
+        }
+
+        // Check if the whitelist is valid (either a standard whitelist or our custom one)
+        if !is_valid_whitelist(whitelist_name).await
+            && !whitelist_name.is_empty()
+            && !is_custom_whitelist
+        {
+            error!("Invalid whitelist name: {}", whitelist_name);
+            return;
+        }
+        // Check if the whitelist is different
+        if self.whitelist_name.read().await.eq(whitelist_name) {
+            return;
+        }
+        // Set the new whitelist name
+        *self.whitelist_name.write().await = whitelist_name.to_string();
+        // Reset the whitelist
+        self.reset_whitelist().await;
     }
 
     pub async fn set_filter(&mut self, filter: SessionFilter) {
@@ -196,6 +214,42 @@ impl LANScanCapture {
 
     pub async fn get_whitelist(&self) -> String {
         self.whitelist_name.read().await.clone()
+    }
+
+    pub async fn set_custom_whitelists(&mut self, whitelist_json: &str) {
+        // Clear the custom whitelist if the JSON is empty
+        if whitelist_json.is_empty() {
+            *self.custom_whitelists.write().await = None;
+            return;
+        }
+        let whitelist = match serde_json::from_str::<WhitelistsJSON>(whitelist_json) {
+            Ok(whitelist) => Some(Whitelists::new_from_json(whitelist)),
+            Err(e) => {
+                error!("Error setting custom whitelists: {}", e);
+                None
+            }
+        };
+        *self.custom_whitelists.write().await = whitelist;
+        // Reset the whitelist
+        self.reset_whitelist().await;
+    }
+
+    pub async fn create_custom_whitelists(&mut self) -> Result<String> {
+        // Create a whitelist with the current sessions
+        let mut sessions = Vec::new();
+        for session in self.sessions.iter() {
+            sessions.push(session.clone());
+        }
+        // Create a whitelist with the current sessions
+        let whitelist = Whitelists::new_from_sessions(&sessions);
+        let whitelist_json = WhitelistsJSON::from(whitelist);
+        match serde_json::to_string(&whitelist_json) {
+            Ok(json) => Ok(json),
+            Err(e) => {
+                error!("Error creating custom whitelists: {}", e);
+                return Err(anyhow!("Error creating custom whitelists: {}", e));
+            }
+        }
     }
 
     pub async fn get_filter(&self) -> SessionFilter {
@@ -392,6 +446,7 @@ impl LANScanCapture {
     }
 
     async fn start_whitelist_check_task(&mut self) {
+        let custom_whitelists = self.custom_whitelists.clone();
         let whitelist_name = self.whitelist_name.clone();
         let whitelist_exceptions = self.whitelist_exceptions.clone();
         let whitelist_conformance = self.whitelist_conformance.clone();
@@ -410,6 +465,7 @@ impl LANScanCapture {
                 let whitelist_name_clone = whitelist_name.read().await.clone();
                 if !whitelist_name_clone.is_empty() {
                     Self::check_whitelisted_destinations(
+                        &custom_whitelists,
                         &whitelist_name_clone,
                         &whitelist_conformance,
                         &whitelist_exceptions,
@@ -896,6 +952,7 @@ impl LANScanCapture {
     }
 
     async fn check_whitelisted_destinations(
+        custom_whitelists: &Arc<CustomRwLock<Option<Whitelists>>>,
         whitelist_name: &str,
         whitelist_conformance: &AtomicBool,
         whitelist_exceptions: &Arc<CustomRwLock<Vec<Session>>>,
@@ -908,7 +965,7 @@ impl LANScanCapture {
         // Clone the current_sessions to avoid holding the lock for too long
         let current_sessions_clone = current_sessions.read().await.clone();
 
-        if is_valid_whitelist(whitelist_name).await {
+        if custom_whitelists.read().await.is_some() || is_valid_whitelist(whitelist_name).await {
             for key in current_sessions_clone.iter() {
                 // Clone necessary data to avoid holding the lock
                 let session_info = if let Some(session) = sessions.get(key) {
@@ -928,6 +985,7 @@ impl LANScanCapture {
                             Some(&session_info.session.dst_ip.to_string()),
                             session_info.session.dst_port,
                             session_info.session.protocol.to_string().as_str(),
+                            custom_whitelists,
                             whitelist_name,
                             session_info.dst_asn.as_ref().map(|asn| asn.as_number),
                             session_info
@@ -956,6 +1014,7 @@ impl LANScanCapture {
                                 None,
                                 session_info.session.dst_port,
                                 session_info.session.protocol.to_string().as_str(),
+                                custom_whitelists,
                                 whitelist_name,
                                 session_info.dst_asn.as_ref().map(|asn| asn.as_number),
                                 session_info
@@ -982,6 +1041,7 @@ impl LANScanCapture {
                         Some(&session_info.session.dst_ip.to_string()),
                         session_info.session.dst_port,
                         session_info.session.protocol.to_string().as_str(),
+                        custom_whitelists,
                         whitelist_name,
                         session_info.dst_asn.as_ref().map(|asn| asn.as_number),
                         session_info
@@ -996,6 +1056,8 @@ impl LANScanCapture {
                         trace!("Session {:?} failed whitelist check", key);
                         updated_exceptions.push(session_info.session.clone());
                         *last_whitelist_exception_time.write().await = Utc::now();
+                    } else {
+                        whitelisted_sessions.push(session_info.session.clone());
                     }
                 }
             }
@@ -1909,6 +1971,7 @@ mod tests {
 
         // Run whitelist check
         LANScanCapture::check_whitelisted_destinations(
+            &capture.custom_whitelists,
             "github",
             &capture.whitelist_conformance,
             &capture.whitelist_exceptions,
@@ -1981,5 +2044,96 @@ mod tests {
             "Failed to get interface from default device {:?}",
             default_device
         );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_start_capture_if_admin() {
+        // Not working on windows in the CI/CD pipeline yet (no pcap support)
+        if cfg!(windows) {
+            return;
+        }
+
+        // Skip test if not running as admin/root
+        if !get_admin_status() {
+            println!("Skipping test_start_capture_if_admin: not running with admin privileges");
+            return;
+        }
+
+        // Create a LANScanCapture instance
+        let mut capture = LANScanCapture::new();
+
+        // Get the default interface
+        let default_interface = match get_default_interface() {
+            Some(interface) => {
+                println!("Using default interface: {}", interface.name);
+                interface
+            }
+            None => {
+                println!("No default interface detected, skipping test");
+                return;
+            }
+        };
+
+        // Create an interfaces struct with the default interface
+        let interfaces = LANScanInterfaces {
+            interfaces: vec![default_interface],
+        };
+
+        // Start the capture
+        println!("Starting capture...");
+        capture.start(&interfaces).await;
+
+        // Check if capture is running
+        assert!(capture.is_capturing().await, "Capture should be running");
+
+        // Brief delay to allow capture to initialize
+        sleep(Duration::from_secs(2)).await;
+
+        // Stop the capture
+        println!("Stopping capture...");
+        capture.stop().await;
+
+        // Make sure we have sessions
+        let sessions = capture.get_sessions().await;
+        assert!(!sessions.is_empty(), "Capture should have sessions");
+
+        // Make sure we have current sessions
+        let current_sessions = capture.get_current_sessions().await;
+        assert!(
+            !current_sessions.is_empty(),
+            "Capture should have current sessions"
+        );
+
+        // Print the sessions
+        println!("Sessions: {:?}", sessions);
+        println!("Current sessions: {:?}", current_sessions);
+
+        // Try to create a custom whitelist
+        let custom_whitelist = capture.create_custom_whitelists().await;
+        assert!(
+            custom_whitelist.is_ok(),
+            "Custom whitelist should be created"
+        );
+        let custom_whitelist = custom_whitelist.unwrap();
+        assert!(
+            !custom_whitelist.is_empty(),
+            "Custom whitelist should have endpoints"
+        );
+
+        // Print the custom whitelist
+        println!("Custom whitelist: {:?}", custom_whitelist);
+
+        // Try to create a custom whitelist
+        capture.set_whitelist("custom_whitelist").await;
+        assert!(
+            capture.get_whitelist_conformance().await,
+            "Capture should have whitelist conformance"
+        );
+
+        // Check if capture has stopped
+        assert!(!capture.is_capturing().await, "Capture should have stopped");
+
+        println!("Capture test completed successfully");
     }
 }
