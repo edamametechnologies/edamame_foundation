@@ -1686,15 +1686,17 @@ mod tests {
             .find(|e| e.ip.as_deref() == Some("198.51.100.20"))
             .expect("Should have endpoint for 198.51.100.20");
 
-        // Verify the process information is NOT preserved in the whitelist
-        // (new_from_sessions doesn't include process info in created whitelists)
+        // Verify the process information IS preserved in the whitelist
+        // (new_from_sessions includes process info in created whitelists)
         assert_eq!(
-            google_endpoint.process, None,
-            "Process info should not be preserved in the whitelist"
+            google_endpoint.process.as_deref(),
+            Some("chrome"),
+            "Process info should be preserved in the whitelist"
         );
         assert_eq!(
-            amazon_endpoint.process, None,
-            "Process info should not be preserved in the whitelist"
+            amazon_endpoint.process.as_deref(),
+            Some("firefox"),
+            "Process info should be preserved in the whitelist"
         );
 
         // Verify IP, port and protocol are correctly preserved
