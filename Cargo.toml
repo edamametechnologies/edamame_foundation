@@ -128,11 +128,11 @@ dns-parser = { git = "https://github.com/edamametechnologies/dns-parser", branch
 pnet_packet = { version = "0.35.0", optional = true }
 # System information
 sysinfo = { version = "0.33.0", optional = true }
-users = "0.11.0"
 libc = "0.2.168"
 netstat2 = { version = "0.11.0", optional = true }
 
 [target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
+users = "0.11.0"
 # Arp-toolkit depends on Libpnet, a dependency that is not working on iOS/Android and depends on WinPcap on windows (we use an alternative on Windows)
 arp-toolkit = "0.3.2"
 
