@@ -114,7 +114,7 @@ impl LANScanCapture {
         // Check if the whitelist name is "custom_whitelist" which is a special case
         let is_custom_whitelist = whitelist_name == "custom_whitelist";
 
-        // Only clear the custom whitelist if we're not setting a custom whitelist
+        // Only clear the custom whitelists if we're not setting a custom whitelist
         if !is_custom_whitelist {
             *self.custom_whitelists.write().await = None;
         }
@@ -217,7 +217,7 @@ impl LANScanCapture {
     }
 
     pub async fn set_custom_whitelists(&mut self, whitelist_json: &str) {
-        // Clear the custom whitelist if the JSON is empty
+        // Clear the custom whitelists if the JSON is empty
         if whitelist_json.is_empty() {
             *self.custom_whitelists.write().await = None;
             return;
