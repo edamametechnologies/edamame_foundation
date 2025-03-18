@@ -42,7 +42,7 @@ use tokio::select;
 ))]
 use tokio::time::interval;
 use tokio::time::{sleep, Duration};
-use tracing::{error, info, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 
 // A session is considered active if it has had activity in the last 60 seconds
 static CONNECTION_ACTIVITY_TIMEOUT: ChronoDuration = ChronoDuration::seconds(60);
@@ -71,6 +71,7 @@ pub struct LANScanCapture {
     whitelist_exceptions: Arc<CustomRwLock<Vec<Session>>>,
     filter: Arc<CustomRwLock<SessionFilter>>,
     dns_packet_processor: Option<Arc<DnsPacketProcessor>>,
+    dns_integration_handle: Option<TaskHandle>,
 }
 
 impl LANScanCapture {
@@ -95,6 +96,7 @@ impl LANScanCapture {
             whitelist_exceptions: Arc::new(CustomRwLock::new(Vec::new())),
             filter: Arc::new(CustomRwLock::new(SessionFilter::GlobalOnly)),
             dns_packet_processor: None,
+            dns_integration_handle: None,
         }
     }
 
@@ -257,32 +259,42 @@ impl LANScanCapture {
     }
 
     async fn start_current_sessions_task(&mut self) {
-        let current_sessions = self.current_sessions.clone();
+        if self.current_sessions_handle.is_some() {
+            warn!("Current sessions task is already running");
+            return;
+        }
+
         let sessions = self.sessions.clone();
+        let current_sessions = self.current_sessions.clone();
+        let resolver = self.resolver.clone();
+        let dns_packet_processor = self.dns_packet_processor.clone();
+        let l7 = self.l7.clone();
+
         let stop_flag = Arc::new(AtomicBool::new(false));
+        let stop_flag_for_task = stop_flag.clone();
 
-        let stop_flag_clone = stop_flag.clone();
         let handle = async_spawn(async move {
-            loop {
-                trace!("Sessions status update started");
+            info!("Starting current sessions task");
+            while !stop_flag_for_task.load(Ordering::Relaxed) {
+                debug!("Current sessions update started");
                 Self::update_sessions_status(&sessions, &current_sessions).await;
-                info!(
-                    "Sessions status update completed - {} current sessions, {} total sessions",
-                    current_sessions.read().await.len(),
-                    sessions.len()
-                );
-                if stop_flag.load(Ordering::Relaxed) {
-                    break;
+                if let Some(dns_packet_processor) = dns_packet_processor.as_ref() {
+                    Self::populate_domain_names(
+                        &sessions,
+                        &resolver,
+                        &dns_packet_processor.get_dns_resolutions(),
+                        &current_sessions,
+                    )
+                    .await;
                 }
-                sleep(Duration::from_secs(5)).await;
+                Self::populate_l7(&sessions, &l7, &current_sessions).await;
+                debug!("Current sessions update completed");
+                sleep(Duration::from_secs(1)).await;
             }
-            info!("Active sessions task terminated");
+            info!("Current sessions task terminated");
         });
 
-        self.current_sessions_handle = Some(TaskHandle {
-            handle,
-            stop_flag: stop_flag_clone,
-        });
+        self.current_sessions_handle = Some(TaskHandle { handle, stop_flag });
     }
 
     async fn stop_current_sessions_task(&mut self) {
@@ -363,27 +375,74 @@ impl LANScanCapture {
 
     async fn start_dns_packet_processor_task(&mut self) {
         // Create a new DNS packet processor if it doesn't exist
-        if self.dns_packet_processor.is_none() {
-            self.dns_packet_processor = Some(Arc::new(DnsPacketProcessor::new()));
+        if self.dns_packet_processor.is_some() {
+            return;
         }
 
-        // Start the DNS packet processor if it exists
-        if let Some(dns_processor) = &mut self.dns_packet_processor {
-            if let Some(dns_processor) = Arc::get_mut(dns_processor) {
-                dns_processor.start_dns_query_cleanup_task().await;
-            } else {
-                error!("Failed to get mutable reference to DNS packet processor");
-            }
+        let dns_packet_processor = Arc::new(DnsPacketProcessor::new());
+
+        // Start the DNS packet processor's cleanup task
+        let mut dns_processor_clone = dns_packet_processor.clone();
+        if let Some(dns_processor) = Arc::get_mut(&mut dns_processor_clone) {
+            dns_processor.start_dns_query_cleanup_task().await;
+        } else {
+            error!("Failed to get mutable reference to DNS packet processor");
         }
+
+        self.dns_packet_processor = Some(dns_packet_processor);
+
+        // Create a task to periodically integrate DNS resolutions with resolver
+        let capture_self = Arc::new(self.clone());
+        let stop_flag = Arc::new(AtomicBool::new(false));
+        let stop_flag_for_task = stop_flag.clone();
+
+        let handle = async_spawn(async move {
+            info!("Starting DNS integration task");
+            let mut last_integration = tokio::time::Instant::now();
+
+            while !stop_flag_for_task.load(Ordering::Relaxed) {
+                // Sleep for a short time
+                sleep(Duration::from_secs(1)).await;
+
+                // Check if it's time to integrate (every 15 seconds)
+                if tokio::time::Instant::now()
+                    .duration_since(last_integration)
+                    .as_secs()
+                    >= 15
+                {
+                    capture_self.integrate_dns_with_resolver().await;
+                    last_integration = tokio::time::Instant::now();
+                }
+            }
+
+            info!("DNS integration task completed");
+        });
+
+        // Store the handle in a field
+        self.dns_integration_handle = Some(TaskHandle { handle, stop_flag });
     }
 
     async fn stop_dns_packet_processor_task(&mut self) {
-        if let Some(dns_processor) = &mut self.dns_packet_processor {
-            if let Some(dns_processor) = Arc::get_mut(dns_processor) {
+        // First stop the DNS integration task
+        if let Some(task_handle) = self.dns_integration_handle.take() {
+            task_handle.stop_flag.store(true, Ordering::Relaxed);
+            task_handle.handle.await.unwrap_or_default();
+            info!("Stopped DNS integration task");
+        }
+
+        // Then stop the DNS packet processor if it exists
+        if let Some(dns_processor) = &self.dns_packet_processor {
+            // Clone the processor to get a mutable reference
+            let mut dns_processor_clone = dns_processor.clone();
+            if let Some(dns_processor) = Arc::get_mut(&mut dns_processor_clone) {
                 dns_processor.stop_dns_query_cleanup_task().await;
+                info!("Stopped DNS packet processor task");
             } else {
                 error!("Failed to get mutable reference to DNS packet processor");
             }
+
+            // Clear the DNS packet processor
+            self.dns_packet_processor = None;
         }
     }
 
@@ -1119,110 +1178,73 @@ impl LANScanCapture {
         dns_resolutions: &Arc<DashMap<IpAddr, String>>,
         current_sessions: &Arc<CustomRwLock<Vec<Session>>>,
     ) {
-        let current_sessions_clone = current_sessions.read().await.clone();
-        let mut dst_dns_resolution_count = 0;
-        let mut dst_resolver_resolution_count = 0;
+        if resolver.is_none() {
+            return;
+        }
 
-        for key in current_sessions_clone.iter() {
-            // Clone necessary data to avoid holding lock across await
-            let session_info = if let Some(session_info) = sessions.get(key) {
-                session_info.clone()
-            } else {
-                error!("Session was not found for key: {:?}", key);
-                continue;
+        let resolver = resolver.as_ref().unwrap();
+        let current_sessions = current_sessions.read().await.clone();
+
+        for session in current_sessions {
+            // Determine if this is an important service based on port numbers
+            let is_important_dst = match session.dst_port {
+                // Common server ports that should be prioritized
+                80 | 443 | 22 | 21 | 25 | 587 | 3306 | 5432 | 27017 => true,
+                _ => false,
             };
 
-            // Prepare to collect updates
-            let mut new_src_domain = session_info.src_domain.clone();
-            let mut new_dst_domain = session_info.dst_domain.clone();
+            let is_important_src = match session.src_port {
+                // Common server ports that should be prioritized
+                80 | 443 | 22 | 21 | 25 | 587 | 3306 | 5432 | 27017 => true,
+                _ => false,
+            };
 
-            // Check DNS resolution for source IP only if it's not a local IP
-            if !crate::lanscan_ip::is_lan_ip(&session_info.session.src_ip) {
-                if let Some(domain) = dns_resolutions.get(&session_info.session.src_ip) {
-                    trace!("Using DNS resolution for src_ip: {:?}", domain);
-                    new_src_domain = Some(domain.clone());
-                } else {
-                    // If not in dns_resolutions, use the resolver
-                    if let Some(resolver) = resolver.as_ref() {
-                        let domain = resolver.get_resolved_ip(&session_info.session.src_ip).await;
-                        if let Some(domain) = domain {
-                            trace!(
-                                "Using resolver for src_ip: {:?}",
-                                session_info.session.src_ip
-                            );
-                            new_src_domain = Some(domain);
-                        } else {
-                            resolver
-                                .add_ip_to_resolver(&session_info.session.src_ip)
-                                .await;
+            // Try to get domain from DNS resolutions first
+            let src_domain = dns_resolutions
+                .get(&session.src_ip)
+                .map(|d| d.value().clone());
+            let dst_domain = dns_resolutions
+                .get(&session.dst_ip)
+                .map(|d| d.value().clone());
+
+            // Use prioritize_resolution for important services
+            if is_important_dst {
+                resolver.prioritize_resolution(&session.dst_ip, true).await;
+            } else if dst_domain.is_none() {
+                resolver.add_ip_to_resolver(&session.dst_ip).await;
+            }
+
+            if is_important_src {
+                resolver.prioritize_resolution(&session.src_ip, true).await;
+            } else if src_domain.is_none() {
+                resolver.add_ip_to_resolver(&session.src_ip).await;
+            }
+            // Try to get domain from resolver cache
+            let src_domain = match src_domain {
+                Some(domain) => Some(domain),
+                None => resolver.get_resolved_ip(&session.src_ip).await,
+            };
+            let dst_domain = match dst_domain {
+                Some(domain) => Some(domain),
+                None => resolver.get_resolved_ip(&session.dst_ip).await,
+            };
+
+            // Update session info with domains
+            if src_domain.is_some() || dst_domain.is_some() {
+                if let Some(mut session_info) = sessions.get_mut(&session) {
+                    if let Some(domain) = src_domain {
+                        if domain != "Unknown" && domain != "Resolving" {
+                            session_info.src_domain = Some(domain);
+                        }
+                    }
+                    if let Some(domain) = dst_domain {
+                        if domain != "Unknown" && domain != "Resolving" {
+                            session_info.dst_domain = Some(domain);
                         }
                     }
                 }
-            } else {
-                // Use mDNS for local IPs
-                if let Some(src_domain) =
-                    mdns_get_hostname_by_ip(&session_info.session.src_ip).await
-                {
-                    trace!("Using mDNS for src_ip: {:?}", src_domain);
-                    new_src_domain = Some(src_domain);
-                }
-            }
-
-            // Check DNS resolution for destination IP only if it's not a local IP
-            if !crate::lanscan_ip::is_lan_ip(&session_info.session.dst_ip) {
-                if let Some(domain) = dns_resolutions.get(&session_info.session.dst_ip) {
-                    trace!("Using DNS resolution for dst_ip: {:?}", domain);
-                    new_dst_domain = Some(domain.clone());
-                    dst_dns_resolution_count += 1;
-                } else {
-                    // If not in dns_resolutions, use the resolver
-                    if let Some(resolver) = resolver.as_ref() {
-                        let domain = resolver.get_resolved_ip(&session_info.session.dst_ip).await;
-                        if let Some(domain) = domain {
-                            trace!(
-                                "Using resolver for dst_ip: {:?}",
-                                session_info.session.dst_ip
-                            );
-                            new_dst_domain = Some(domain);
-                            dst_resolver_resolution_count += 1;
-                        } else {
-                            resolver
-                                .add_ip_to_resolver(&session_info.session.dst_ip)
-                                .await;
-                        }
-                    }
-                }
-            } else {
-                // Use mDNS for local IPs
-                if let Some(dst_domain) =
-                    mdns_get_hostname_by_ip(&session_info.session.dst_ip).await
-                {
-                    trace!("Using mDNS for dst_ip: {:?}", dst_domain);
-                    new_dst_domain = Some(dst_domain);
-                }
-            }
-
-            // Update the session info after await points
-            let key_clone = key.clone();
-            let new_src_domain_clone = new_src_domain.clone();
-            let new_dst_domain_clone = new_dst_domain.clone();
-            if let Some(mut session_info_mut) = sessions.get_mut(&key_clone) {
-                session_info_mut.src_domain = new_src_domain_clone;
-                session_info_mut.dst_domain = new_dst_domain_clone;
             }
         }
-        // Compute domain % of successful resolutions
-        let total_sessions = sessions.len();
-        let domain_success_rate = (dst_dns_resolution_count + dst_resolver_resolution_count) as f64
-            / total_sessions as f64
-            * 100.0;
-        let dns_success_rate = dst_dns_resolution_count as f64 / total_sessions as f64 * 100.0;
-        let resolver_success_rate =
-            dst_resolver_resolution_count as f64 / total_sessions as f64 * 100.0;
-        info!(
-            "Destination domain success rate: {:.2}% (DNS: {:.2}% + Resolver: {:.2}%)",
-            domain_success_rate, dns_success_rate, resolver_success_rate
-        );
     }
 
     // Populate L7
@@ -1395,6 +1417,61 @@ impl LANScanCapture {
         }
         exceptions
     }
+
+    // Add this new method to integrate DNS packet captures with the resolver
+    async fn integrate_dns_with_resolver(&self) {
+        if self.dns_packet_processor.is_none() || self.resolver.is_none() {
+            trace!("Cannot integrate DNS sources: one or more components missing");
+            return;
+        }
+
+        let dns_processor = self.dns_packet_processor.as_ref().unwrap();
+        let resolver = self.resolver.as_ref().unwrap();
+
+        // Get DNS resolutions from packet processor
+        let dns_resolutions = dns_processor.get_dns_resolutions();
+
+        // Don't do anything if there are no DNS resolutions
+        if dns_resolutions.is_empty() {
+            trace!("No DNS resolutions to integrate");
+            return;
+        }
+
+        // Integrate the DNS resolutions with the resolver
+        let added_count = resolver.add_dns_resolutions(&dns_resolutions);
+
+        if added_count > 0 {
+            debug!(
+                "Integrated {} DNS resolutions from packet capture",
+                added_count
+            );
+        }
+    }
+}
+
+impl Clone for LANScanCapture {
+    fn clone(&self) -> Self {
+        Self {
+            interfaces: self.interfaces.clone(),
+            capture_task_handles: self.capture_task_handles.clone(),
+            sessions: self.sessions.clone(),
+            current_sessions: self.current_sessions.clone(),
+            current_sessions_handle: None, // Don't clone task handles
+            resolver: self.resolver.clone(),
+            resolver_handle: None, // Don't clone task handles
+            l7: self.l7.clone(),
+            l7_handle: None,              // Don't clone task handles
+            whitelist_check_handle: None, // Don't clone task handles
+            whitelist_name: self.whitelist_name.clone(),
+            custom_whitelists: self.custom_whitelists.clone(),
+            whitelist_conformance: self.whitelist_conformance.clone(),
+            last_whitelist_exception_time: self.last_whitelist_exception_time.clone(),
+            whitelist_exceptions: self.whitelist_exceptions.clone(),
+            filter: self.filter.clone(),
+            dns_packet_processor: self.dns_packet_processor.clone(),
+            dns_integration_handle: None, // Don't clone task handles
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1534,7 +1611,10 @@ mod tests {
         let mut capture = LANScanCapture::new();
         capture.set_whitelist("github").await;
 
-        // Do not call capture.start().await
+        // Initialize the resolver component
+        let resolver = Arc::new(LANScanResolver::new());
+        resolver.start().await;
+        capture.resolver = Some(resolver.clone());
 
         // Create a synthetic session and add it to sessions
         let session = Session {
@@ -1611,6 +1691,12 @@ mod tests {
         } else {
             panic!("Session not found");
         };
+
+        // Clean up
+        if let Some(resolver) = &capture.resolver {
+            let resolver = Arc::clone(resolver);
+            resolver.stop().await;
+        }
     }
 
     #[tokio::test]
