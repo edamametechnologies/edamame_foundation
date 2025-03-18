@@ -1,7 +1,7 @@
 // Built in default port vulns db
 pub static PORT_VULNS: &str = r####"{
-    "date": "February 07th 2025",
-    "signature": "c0210cefa3941ff51805966badc0fbf3d6d105a0abe4e5d8fbb5ec34391387fc",
+    "date": "March 17th 2025",
+    "signature": "07d7fbb8ea459d954d0a7cf17cf8a972ac4708f9d86ebd844430cb736b8d7ee1",
     "vulnerabilities": [
         {
             "port": 0,
@@ -118,15 +118,11 @@ pub static PORT_VULNS: &str = r####"{
                     "description": "The Motorola ACE1000 RTU through 2022-05-02 has default credentials. It exposes an SSH interface on port 22/TCP. This interface is used for remote maintenance and for SFTP file-transfer operations that are part of engineering software functionality. Access to this interface is controlled by 5 preconfigured accounts (root, abuilder, acelogin, cappl, ace), all of which come with default credentials. Although the ACE1000 documentation mentions the root, abuilder and acelogin accounts and instructs users to change the default credentials, the cappl and ace accounts remain undocumented and thus are unlikely to have their credentials changed."
                 },
                 {
-                    "name": "CVE-2019-18341",
-                    "description": "A vulnerability has been identified in Control Center Server (CCS) (All versions < V1.5.0). The SFTP service (default port 22/tcp) of the Control Center Server (CCS) contains an authentication bypass vulnerability. A remote attacker with network access to the CCS server could exploit this vulnerability to read data from the EDIR directory (for example, the list of all configured stations)."
-                },
-                {
                     "name": "CVE-2019-10927",
                     "description": "A vulnerability has been identified in SCALANCE SC-600 (V2.0), SCALANCE XB-200 (V4.1), SCALANCE XC-200 (V4.1), SCALANCE XF-200BA (V4.1), SCALANCE XP-200 (V4.1), SCALANCE XR-300WG (V4.1). An authenticated attacker with network access to to port 22/tcp of an affected device may cause a Denial-of-Service condition. The security vulnerability could be exploited by an authenticated attacker with network access to the affected device. No user interaction is required to exploit this vulnerability. The vulnerability impacts the availability of the affected device."
                 }
             ],
-            "count": 4,
+            "count": 3,
             "protocol": "tcp"
         },
         {
@@ -626,24 +622,12 @@ pub static PORT_VULNS: &str = r####"{
                     "description": "This vulnerability allows network-adjacent attackers to bypass authentication on affected installations of NETGEAR R6700 V1.0.4.84_10.0.58 routers. Authentication is not required to exploit this vulnerability. The specific flaw exists within the httpd service, which listens on TCP port 80 by default. The issue results from the lack of proper validation of the length of user-supplied data prior to copying it to a fixed-length, stack-based buffer. An attacker can leverage this vulnerability to execute code in the context of root. Was ZDI-CAN-9703."
                 },
                 {
-                    "name": "CVE-2019-6581",
-                    "description": "A vulnerability has been identified in Siveillance VMS 2017 R2 (All versions < V11.2a), Siveillance VMS 2018 R1 (All versions < V12.1a), Siveillance VMS 2018 R2 (All versions < V12.2a), Siveillance VMS 2018 R3 (All versions < V12.3a), Siveillance VMS 2019 R1 (All versions < V13.1a). An attacker with network access to port 80/TCP could change user roles without proper authorization. The security vulnerability could be exploited by an authenticated attacker with network access to the affected service. No user interaction is required to exploit this security vulnerability. Successful exploitation compromises confidentiality, integrity and availability of the targeted system. At the time of advisory publication no public exploitation of this security vulnerability was known."
-                },
-                {
                     "name": "CVE-2019-6579",
                     "description": "A vulnerability has been identified in Spectrum Power 4 (with Web Office Portal). An attacker with network access to the web server on port 80/TCP or 443/TCP could execute system commands with administrative privileges. The security vulnerability could be exploited by an unauthenticated attacker with network access to the affected service. No user interaction is required to exploit this security vulnerability. Successful exploitation of the security vulnerability compromises confidentiality, integrity or availability of the targeted system. At the time of advisory publication no public exploitation of this security vulnerability was known."
                 },
                 {
-                    "name": "CVE-2019-17146",
-                    "description": "This vulnerability allows remote attackers to execute arbitrary code on affected installations of D-Link DCS-960L v1.07.102. Authentication is not required to exploit this vulnerability. The specific flaw exists within the HNAP service, which listens on TCP port 80 by default. When parsing the SOAPAction request header, the process does not properly validate the length of user-supplied data prior to copying it to a stack-based buffer. An attacker can leverage this vulnerability to execute code in the context of the admin user. Was ZDI-CAN-8458."
-                },
-                {
                     "name": "CVE-2018-4837",
                     "description": "A vulnerability has been identified in TeleControl Server Basic < V3.1. An attacker with access to the TeleControl Server Basic's webserver (port 80/tcp or 443/tcp) could cause a Denial-of-Service condition on the web server. The remaining functionality of the TeleControl Server Basic is not affected by the Denial-of-Service condition."
-                },
-                {
-                    "name": "CVE-2016-7112",
-                    "description": "A vulnerability has been identified in Firmware variant PROFINET IO for EN100 Ethernet module : All versions < V1.04.01; Firmware variant Modbus TCP for EN100 Ethernet module : All versions < V1.11.00; Firmware variant DNP3 TCP for EN100 Ethernet module : All versions < V1.03; Firmware variant IEC 104 for EN100 Ethernet module : All versions < V1.21; EN100 Ethernet module included in SIPROTEC Merging Unit 6MU80 : All versions < 1.02.02. Attackers with network access to the device's web interface (port 80/tcp) could possibly circumvent authentication and perform certain administrative operations."
                 },
                 {
                     "name": "CVE-2024-5295",
@@ -808,9 +792,13 @@ pub static PORT_VULNS: &str = r####"{
                 {
                     "name": "CVE-2024-52547",
                     "description": "An authenticated attacker can trigger a stack based buffer overflow in the DHIP Service (TCP port 80). This vulnerability has been resolved in firmware version 2.800.0000000.8.R.20241111."
+                },
+                {
+                    "name": "CVE-2025-24811",
+                    "description": "A vulnerability has been identified in SIMATIC S7-1200 CPU 1211C AC/DC/Rly (6ES7211-1BE40-0XB0), SIMATIC S7-1200 CPU 1211C DC/DC/DC (6ES7211-1AE40-0XB0), SIMATIC S7-1200 CPU 1211C DC/DC/Rly (6ES7211-1HE40-0XB0), SIMATIC S7-1200 CPU 1212C AC/DC/Rly (6ES7212-1BE40-0XB0), SIMATIC S7-1200 CPU 1212C DC/DC/DC (6ES7212-1AE40-0XB0), SIMATIC S7-1200 CPU 1212C DC/DC/Rly (6ES7212-1HE40-0XB0), SIMATIC S7-1200 CPU 1212FC DC/DC/DC (6ES7212-1AF40-0XB0), SIMATIC S7-1200 CPU 1212FC DC/DC/Rly (6ES7212-1HF40-0XB0), SIMATIC S7-1200 CPU 1214C AC/DC/Rly (6ES7214-1BG40-0XB0), SIMATIC S7-1200 CPU 1214C DC/DC/DC (6ES7214-1AG40-0XB0), SIMATIC S7-1200 CPU 1214C DC/DC/Rly (6ES7214-1HG40-0XB0), SIMATIC S7-1200 CPU 1214FC DC/DC/DC (6ES7214-1AF40-0XB0), SIMATIC S7-1200 CPU 1214FC DC/DC/Rly (6ES7214-1HF40-0XB0), SIMATIC S7-1200 CPU 1215C AC/DC/Rly (6ES7215-1BG40-0XB0), SIMATIC S7-1200 CPU 1215C DC/DC/DC (6ES7215-1AG40-0XB0), SIMATIC S7-1200 CPU 1215C DC/DC/Rly (6ES7215-1HG40-0XB0), SIMATIC S7-1200 CPU 1215FC DC/DC/DC (6ES7215-1AF40-0XB0), SIMATIC S7-1200 CPU 1215FC DC/DC/Rly (6ES7215-1HF40-0XB0), SIMATIC S7-1200 CPU 1217C DC/DC/DC (6ES7217-1AG40-0XB0), SIPLUS S7-1200 CPU 1212 AC/DC/RLY (6AG1212-1BE40-2XB0), SIPLUS S7-1200 CPU 1212 AC/DC/RLY (6AG1212-1BE40-4XB0), SIPLUS S7-1200 CPU 1212 DC/DC/RLY (6AG1212-1HE40-2XB0), SIPLUS S7-1200 CPU 1212 DC/DC/RLY (6AG1212-1HE40-4XB0), SIPLUS S7-1200 CPU 1212C DC/DC/DC (6AG1212-1AE40-2XB0), SIPLUS S7-1200 CPU 1212C DC/DC/DC (6AG1212-1AE40-4XB0), SIPLUS S7-1200 CPU 1212C DC/DC/DC RAIL (6AG2212-1AE40-1XB0), SIPLUS S7-1200 CPU 1214 AC/DC/RLY (6AG1214-1BG40-2XB0), SIPLUS S7-1200 CPU 1214 AC/DC/RLY (6AG1214-1BG40-4XB0), SIPLUS S7-1200 CPU 1214 AC/DC/RLY (6AG1214-1BG40-5XB0), SIPLUS S7-1200 CPU 1214 DC/DC/DC (6AG1214-1AG40-2XB0), SIPLUS S7-1200 CPU 1214 DC/DC/DC (6AG1214-1AG40-4XB0), SIPLUS S7-1200 CPU 1214 DC/DC/DC (6AG1214-1AG40-5XB0), SIPLUS S7-1200 CPU 1214 DC/DC/RLY (6AG1214-1HG40-2XB0), SIPLUS S7-1200 CPU 1214 DC/DC/RLY (6AG1214-1HG40-4XB0), SIPLUS S7-1200 CPU 1214 DC/DC/RLY (6AG1214-1HG40-5XB0), SIPLUS S7-1200 CPU 1214C DC/DC/DC RAIL (6AG2214-1AG40-1XB0), SIPLUS S7-1200 CPU 1214FC DC/DC/DC (6AG1214-1AF40-5XB0), SIPLUS S7-1200 CPU 1214FC DC/DC/RLY (6AG1214-1HF40-5XB0), SIPLUS S7-1200 CPU 1215 AC/DC/RLY (6AG1215-1BG40-2XB0), SIPLUS S7-1200 CPU 1215 AC/DC/RLY (6AG1215-1BG40-4XB0), SIPLUS S7-1200 CPU 1215 AC/DC/RLY (6AG1215-1BG40-5XB0), SIPLUS S7-1200 CPU 1215 DC/DC/DC (6AG1215-1AG40-2XB0), SIPLUS S7-1200 CPU 1215 DC/DC/DC (6AG1215-1AG40-4XB0), SIPLUS S7-1200 CPU 1215 DC/DC/RLY (6AG1215-1HG40-2XB0), SIPLUS S7-1200 CPU 1215 DC/DC/RLY (6AG1215-1HG40-4XB0), SIPLUS S7-1200 CPU 1215 DC/DC/RLY (6AG1215-1HG40-5XB0), SIPLUS S7-1200 CPU 1215C DC/DC/DC (6AG1215-1AG40-5XB0), SIPLUS S7-1200 CPU 1215FC DC/DC/DC (6AG1215-1AF40-5XB0). Affected devices do not process correctly certain special crafted packets sent to port 80/tcp, which could allow an unauthenticated attacker to cause a denial of service in the device."
                 }
             ],
-            "count": 64,
+            "count": 62,
             "protocol": "http"
         },
         {
@@ -1052,12 +1040,12 @@ pub static PORT_VULNS: &str = r####"{
                     "description": "A vulnerability has been identified in SIMATIC Drive Controller family (All versions < V2.9.2), SIMATIC ET 200SP Open Controller CPU 1515SP PC (incl. SIPLUS variants) (All versions), SIMATIC ET 200SP Open Controller CPU 1515SP PC2 (incl. SIPLUS variants) (All versions < V21.9), SIMATIC S7-1200 CPU family (incl. SIPLUS variants) (All versions < V4.5.0), SIMATIC S7-1500 CPU family (incl. related ET200 CPUs and SIPLUS variants) (All versions < V2.9.2), SIMATIC S7-1500 Software Controller (All versions < V21.9), SIMATIC S7-PLCSIM Advanced (All versions < V4.0), SINAMICS PERFECT HARMONY GH180 Drives (Drives manufactured before 2021-08-13), SINUMERIK MC (All versions < V6.15), SINUMERIK ONE (All versions < V6.15). Affected devices are vulnerable to a memory protection bypass through a specific operation. A remote unauthenticated attacker with network access to port 102/tcp could potentially write arbitrary data and code to protected memory areas or read sensitive data to launch further attacks."
                 },
                 {
-                    "name": "CVE-2019-10943",
-                    "description": "A vulnerability has been identified in SIMATIC Drive Controller family (All versions), SIMATIC ET 200SP Open Controller CPU 1515SP PC (incl. SIPLUS variants) (All versions), SIMATIC ET 200SP Open Controller CPU 1515SP PC2 (incl. SIPLUS variants) (All versions < V20.8), SIMATIC ET 200SP Open Controller CPU 1515SP PC2 (incl. SIPLUS variants) (All versions >= V20.8), SIMATIC S7-1200 CPU family (incl. SIPLUS variants) (All versions < V4.4.0), SIMATIC S7-1200 CPU family (incl. SIPLUS variants) (All versions >= V4.4.0), SIMATIC S7-1500 CPU family (incl. related ET200 CPUs and SIPLUS variants) (All versions < V2.8.1), SIMATIC S7-1500 CPU family (incl. related ET200 CPUs and SIPLUS variants) (All versions >= V2.8.1), SIMATIC S7-1500 Software Controller (All versions < V20.8), SIMATIC S7-1500 Software Controller (All versions >= V20.8), SIMATIC S7-PLCSIM Advanced (All versions < V3.0), SIMATIC S7-PLCSIM Advanced (All versions >= V3.0). An attacker with network access to port 102/tcp could potentially modify the user program on the PLC in a way that the running code is different from the source code which is stored on the device. An attacker must have network access to affected devices and must be able to perform changes to the user program. The vulnerability could impact the perceived integrity of the user program stored on the CPU. An engineer that tries to obtain the code of the user program running on the device, can receive different source code that is not actually running on the device."
-                },
-                {
                     "name": "CVE-2018-11451",
                     "description": "A vulnerability has been identified in Firmware variant IEC 61850 for EN100 Ethernet module (All versions < V4.33), Firmware variant PROFINET IO for EN100 Ethernet module (All versions), Firmware variant Modbus TCP for EN100 Ethernet module (All versions), Firmware variant DNP3 TCP for EN100 Ethernet module (All versions), Firmware variant IEC104 for EN100 Ethernet module (All versions < V1.22), SIPROTEC 5 relays with CPU variants CP300 and CP100 and the respective Ethernet communication modules (All versions < V7.80), SIPROTEC 5 relays with CPU variants CP200 and the respective Ethernet communication modules (All versions < V7.58). Specially crafted packets to port 102/tcp could cause a denial-of-service condition in the affected products. A manual restart is required to recover the EN100 module functionality of the affected devices. Successful exploitation requires an attacker with network access to send multiple packets to the affected products or modules. As a precondition the IEC 61850-MMS communication needs to be activated on the affected products or modules. No user interaction or privileges are required to exploit the vulnerability. The vulnerability could allow causing a Denial-of-Service condition of the network functionality of the device, compromising the availability of the system. At the time of advisory publication no public exploitation of this security vulnerability was known."
+                },
+                {
+                    "name": "CVE-2025-24812",
+                    "description": "A vulnerability has been identified in SIMATIC S7-1200 CPU 1211C AC/DC/Rly (6ES7211-1BE40-0XB0) (All versions < V4.7), SIMATIC S7-1200 CPU 1211C DC/DC/DC (6ES7211-1AE40-0XB0) (All versions < V4.7), SIMATIC S7-1200 CPU 1211C DC/DC/Rly (6ES7211-1HE40-0XB0) (All versions < V4.7), SIMATIC S7-1200 CPU 1212C AC/DC/Rly (6ES7212-1BE40-0XB0) (All versions < V4.7), SIMATIC S7-1200 CPU 1212C DC/DC/DC (6ES7212-1AE40-0XB0) (All versions < V4.7), SIMATIC S7-1200 CPU 1212C DC/DC/Rly (6ES7212-1HE40-0XB0) (All versions < V4.7), SIMATIC S7-1200 CPU 1212FC DC/DC/DC (6ES7212-1AF40-0XB0) (All versions < V4.7), SIMATIC S7-1200 CPU 1212FC DC/DC/Rly (6ES7212-1HF40-0XB0) (All versions < V4.7), SIMATIC S7-1200 CPU 1214C AC/DC/Rly (6ES7214-1BG40-0XB0) (All versions < V4.7), SIMATIC S7-1200 CPU 1214C DC/DC/DC (6ES7214-1AG40-0XB0) (All versions < V4.7), SIMATIC S7-1200 CPU 1214C DC/DC/Rly (6ES7214-1HG40-0XB0) (All versions < V4.7), SIMATIC S7-1200 CPU 1214FC DC/DC/DC (6ES7214-1AF40-0XB0) (All versions < V4.7), SIMATIC S7-1200 CPU 1214FC DC/DC/Rly (6ES7214-1HF40-0XB0) (All versions < V4.7), SIMATIC S7-1200 CPU 1215C AC/DC/Rly (6ES7215-1BG40-0XB0) (All versions < V4.7), SIMATIC S7-1200 CPU 1215C DC/DC/DC (6ES7215-1AG40-0XB0) (All versions < V4.7), SIMATIC S7-1200 CPU 1215C DC/DC/Rly (6ES7215-1HG40-0XB0) (All versions < V4.7), SIMATIC S7-1200 CPU 1215FC DC/DC/DC (6ES7215-1AF40-0XB0) (All versions < V4.7), SIMATIC S7-1200 CPU 1215FC DC/DC/Rly (6ES7215-1HF40-0XB0) (All versions < V4.7), SIMATIC S7-1200 CPU 1217C DC/DC/DC (6ES7217-1AG40-0XB0) (All versions < V4.7), SIPLUS S7-1200 CPU 1212 AC/DC/RLY (6AG1212-1BE40-2XB0) (All versions < V4.7), SIPLUS S7-1200 CPU 1212 AC/DC/RLY (6AG1212-1BE40-4XB0) (All versions < V4.7), SIPLUS S7-1200 CPU 1212 DC/DC/RLY (6AG1212-1HE40-2XB0) (All versions < V4.7), SIPLUS S7-1200 CPU 1212 DC/DC/RLY (6AG1212-1HE40-4XB0) (All versions < V4.7), SIPLUS S7-1200 CPU 1212C DC/DC/DC (6AG1212-1AE40-2XB0) (All versions < V4.7), SIPLUS S7-1200 CPU 1212C DC/DC/DC (6AG1212-1AE40-4XB0) (All versions < V4.7), SIPLUS S7-1200 CPU 1212C DC/DC/DC RAIL (6AG2212-1AE40-1XB0) (All versions < V4.7), SIPLUS S7-1200 CPU 1214 AC/DC/RLY (6AG1214-1BG40-2XB0) (All versions < V4.7), SIPLUS S7-1200 CPU 1214 AC/DC/RLY (6AG1214-1BG40-4XB0) (All versions < V4.7), SIPLUS S7-1200 CPU 1214 AC/DC/RLY (6AG1214-1BG40-5XB0) (All versions < V4.7), SIPLUS S7-1200 CPU 1214 DC/DC/DC (6AG1214-1AG40-2XB0) (All versions < V4.7), SIPLUS S7-1200 CPU 1214 DC/DC/DC (6AG1214-1AG40-4XB0) (All versions < V4.7), SIPLUS S7-1200 CPU 1214 DC/DC/DC (6AG1214-1AG40-5XB0) (All versions < V4.7), SIPLUS S7-1200 CPU 1214 DC/DC/RLY (6AG1214-1HG40-2XB0) (All versions < V4.7), SIPLUS S7-1200 CPU 1214 DC/DC/RLY (6AG1214-1HG40-4XB0) (All versions < V4.7), SIPLUS S7-1200 CPU 1214 DC/DC/RLY (6AG1214-1HG40-5XB0) (All versions < V4.7), SIPLUS S7-1200 CPU 1214C DC/DC/DC RAIL (6AG2214-1AG40-1XB0) (All versions < V4.7), SIPLUS S7-1200 CPU 1214FC DC/DC/DC (6AG1214-1AF40-5XB0) (All versions < V4.7), SIPLUS S7-1200 CPU 1214FC DC/DC/RLY (6AG1214-1HF40-5XB0) (All versions < V4.7), SIPLUS S7-1200 CPU 1215 AC/DC/RLY (6AG1215-1BG40-2XB0) (All versions < V4.7), SIPLUS S7-1200 CPU 1215 AC/DC/RLY (6AG1215-1BG40-4XB0) (All versions < V4.7), SIPLUS S7-1200 CPU 1215 AC/DC/RLY (6AG1215-1BG40-5XB0) (All versions < V4.7), SIPLUS S7-1200 CPU 1215 DC/DC/DC (6AG1215-1AG40-2XB0) (All versions < V4.7), SIPLUS S7-1200 CPU 1215 DC/DC/DC (6AG1215-1AG40-4XB0) (All versions < V4.7), SIPLUS S7-1200 CPU 1215 DC/DC/RLY (6AG1215-1HG40-2XB0) (All versions < V4.7), SIPLUS S7-1200 CPU 1215 DC/DC/RLY (6AG1215-1HG40-4XB0) (All versions < V4.7), SIPLUS S7-1200 CPU 1215 DC/DC/RLY (6AG1215-1HG40-5XB0) (All versions < V4.7), SIPLUS S7-1200 CPU 1215C DC/DC/DC (6AG1215-1AG40-5XB0) (All versions < V4.7), SIPLUS S7-1200 CPU 1215FC DC/DC/DC (6AG1215-1AF40-5XB0) (All versions < V4.7). Affected devices do not process correctly certain special crafted packets sent to port 102/tcp, which could allow an attacker to cause a denial of service in the device."
                 }
             ],
             "count": 17,
@@ -2662,10 +2650,6 @@ pub static PORT_VULNS: &str = r####"{
                     "description": "Barco wePresent WiPG-1600W devices have Unprotected Transport of Credentials. Affected Version(s): 2.5.1.8. An attacker armed with hardcoded API credentials (retrieved by exploiting CVE-2020-28329) can issue an authenticated query to display the admin password for the main web user interface listening on port 443/tcp of a Barco wePresent WiPG-1600W device."
                 },
                 {
-                    "name": "CVE-2019-13925",
-                    "description": "A vulnerability has been identified in SCALANCE S602 (All versions >= V3.0 and < V4.1), SCALANCE S612 (All versions >= V3.0 and < V4.1), SCALANCE S623 (All versions >= V3.0 and < V4.1), SCALANCE S627-2M (All versions >= V3.0 and < V4.1). Specially crafted packets sent to port 443/tcp of affected devices could cause a Denial-of-Service condition of the web server."
-                },
-                {
                     "name": "CVE-2019-10930",
                     "description": "A vulnerability has been identified in All other SIPROTEC 5 device types with CPU variants CP300 and CP100 and the respective Ethernet communication modules (All versions ), DIGSI 5 engineering software (All versions < V7.90), SIPROTEC 5 device types 6MD85, 6MD86, 6MD89, 7UM85, 7SA87, 7SD87, 7SL87, 7VK87, 7SA82, 7SA86, 7SD82, 7SD86, 7SL82, 7SL86, 7SJ86, 7SK82, 7SK85, 7SJ82, 7SJ85, 7UT82, 7UT85, 7UT86, 7UT87 and 7VE85 with CPU variants CP300 and CP100 and the respective Ethernet communication modules (All versions < V7.90), SIPROTEC 5 device types 7SS85 and 7KE85 (All versions < V8.01), SIPROTEC 5 device types with CPU variants CP200 and the respective Ethernet communication modules (All versions). A remote attacker could use specially crafted packets sent to port 443/TCP to upload, download or delete files in certain parts of the file system."
                 },
@@ -2688,6 +2672,10 @@ pub static PORT_VULNS: &str = r####"{
                 {
                     "name": "CVE-2024-7600",
                     "description": "Logsign Unified SecOps Platform Directory Traversal Arbitrary File Deletion Vulnerability. This vulnerability allows remote attackers to delete arbitrary files on affected installations of Logsign Unified SecOps Platform. Authentication is required to exploit this vulnerability. The specific flaw exists within the HTTP API service, which listens on TCP port 443 by default. The issue results from the lack of proper validation of a user-supplied path prior to using it in file operations. An attacker can leverage this vulnerability to delete files in the context of root. Was ZDI-CAN-25025."
+                },
+                {
+                    "name": "CVE-2025-1044",
+                    "description": "Logsign Unified SecOps Platform Authentication Bypass Vulnerability. This vulnerability allows remote attackers to bypass authentication on affected installations of Logsign Unified SecOps Platform. Authentication is not required to exploit this vulnerability. The specific flaw exists within the web service, which listens on TCP port 443 by default. The issue results from the lack of proper implementation of the authentication algorithm. An attacker can leverage this vulnerability to bypass authentication on the system. Was ZDI-CAN-25336."
                 }
             ],
             "count": 13,
@@ -13688,6 +13676,19 @@ pub static PORT_VULNS: &str = r####"{
             "protocol": "tcp"
         },
         {
+            "port": 3009,
+            "name": "",
+            "description": "",
+            "vulnerabilities": [
+                {
+                    "name": "CVE-2023-46271",
+                    "description": "Extreme Networks IQ Engine before 10.6r1a, and through 10.6r4 before 10.6r5, has a buffer overflow. This issue arises from the ah_webui service, which listens on TCP port 3009 by default."
+                }
+            ],
+            "count": 1,
+            "protocol": "tcp"
+        },
+        {
             "port": 3010,
             "name": "gw",
             "description": "ping-pong | Telerate Workstation",
@@ -14200,13 +14201,8 @@ pub static PORT_VULNS: &str = r####"{
             "port": 3097,
             "name": "",
             "description": "",
-            "vulnerabilities": [
-                {
-                    "name": "CVE-2019-13411",
-                    "description": "An &#8220;invalid command&#8221; handler issue was discovered in HiNet GPON firmware < I040GWR190731. It allows an attacker to execute arbitrary command through port 3097. CVSS 3.0 Base score 10.0. CVSS vector: (CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H)."
-                }
-            ],
-            "count": 1,
+            "vulnerabilities": [],
+            "count": 0,
             "protocol": "tcp"
         },
         {
@@ -25435,51 +25431,27 @@ pub static PORT_VULNS: &str = r####"{
             "description": "TelepathStart",
             "vulnerabilities": [
                 {
-                    "name": "CVE-2019-18321",
-                    "description": "A vulnerability has been identified in SPPA-T3000 MS3000 Migration Server (All versions). An attacker with network access to the MS3000 Server could be able to read and write arbitrary files on the local file system by sending specifically crafted packets to port 5010/tcp. This vulnerability is independent from CVE-2019-18322. Please note that an attacker needs to have network access to the MS3000 in order to exploit this vulnerability. At the time of advisory publication no public exploitation of this security vulnerability was known."
-                },
-                {
                     "name": "CVE-2019-18306",
                     "description": "A vulnerability has been identified in SPPA-T3000 MS3000 Migration Server (All versions). An attacker with network access to the MS3000 Server could trigger a Denial-of-Service condition by sending specifically crafted packets to port 5010/tcp. This vulnerability is independent from CVE-2019-18290, CVE-2019-18291, CVE-2019-18292, CVE-2019-18294, CVE-2019-18298, CVE-2019-18299, CVE-2019-18300, CVE-2019-18301, CVE-2019-18302, CVE-2019-18303, CVE-2019-18304, CVE-2019-18305, and CVE-2019-18307. Please note that an attacker needs to have network access to the MS3000 in order to exploit this vulnerability. At the time of advisory publication no public exploitation of this security vulnerability was known."
-                },
-                {
-                    "name": "CVE-2019-18304",
-                    "description": "A vulnerability has been identified in SPPA-T3000 MS3000 Migration Server (All versions). An attacker with network access to the MS3000 Server can trigger a Denial-of-Service condition by sending specifically crafted packets to port 5010/tcp. This vulnerability is independent from CVE-2019-18290, CVE-2019-18291, CVE-2019-18292, CVE-2019-18294, CVE-2019-18298, CVE-2019-18299, CVE-2019-18300, CVE-2019-18301, CVE-2019-18302, CVE-2019-18303, CVE-2019-18305, CVE-2019-18306, and CVE-2019-18307. Please note that an attacker needs to have network access to the MS3000 in order to exploit this vulnerability. At the time of advisory publication no public exploitation of this security vulnerability was known."
                 },
                 {
                     "name": "CVE-2019-18302",
                     "description": "A vulnerability has been identified in SPPA-T3000 MS3000 Migration Server (All versions). An attacker with network access to the MS3000 Server can trigger a Denial-of-Service condition by sending specifically crafted packets to port 5010/tcp. This vulnerability is independent from CVE-2019-18290, CVE-2019-18291, CVE-2019-18292, CVE-2019-18294, CVE-2019-18298, CVE-2019-18299, CVE-2019-18300, CVE-2019-18301, CVE-2019-18303, CVE-2019-18304, CVE-2019-18305, CVE-2019-18306, and CVE-2019-18307. Please note that an attacker needs to have network access to the MS3000 in order to exploit this vulnerability. At the time of advisory publication no public exploitation of this security vulnerability was known."
                 },
                 {
-                    "name": "CVE-2019-18300",
-                    "description": "A vulnerability has been identified in SPPA-T3000 MS3000 Migration Server (All versions). An attacker with network access to the MS3000 Server can trigger a Denial-of-Service condition by sending specifically crafted packets to port 5010/tcp. This vulnerability is independent from CVE-2019-18290, CVE-2019-18291, CVE-2019-18292, CVE-2019-18294, CVE-2019-18298, CVE-2019-18299, CVE-2019-18301, CVE-2019-18302, CVE-2019-18303, CVE-2019-18304, CVE-2019-18305, CVE-2019-18306, and CVE-2019-18307. Please note that an attacker needs to have network access to the MS3000 in order to exploit this vulnerability. At the time of advisory publication no public exploitation of this security vulnerability was known."
-                },
-                {
                     "name": "CVE-2019-18298",
                     "description": "A vulnerability has been identified in SPPA-T3000 MS3000 Migration Server (All versions). An attacker with network access to the MS3000 Server could trigger a Denial-of-Service condition by sending specifically crafted packets to port 5010/tcp. This vulnerability is independent from CVE-2019-18290, CVE-2019-18291, CVE-2019-18292, CVE-2019-18294, CVE-2019-18299, CVE-2019-18300, CVE-2019-18301, CVE-2019-18302, CVE-2019-18303, CVE-2019-18304, CVE-2019-18305, CVE-2019-18306, and CVE-2019-18307. Please note that an attacker needs to have network access to the MS3000 in order to exploit this vulnerability. At the time of advisory publication no public exploitation of this security vulnerability was known."
-                },
-                {
-                    "name": "CVE-2019-18295",
-                    "description": "A vulnerability has been identified in SPPA-T3000 MS3000 Migration Server (All versions). An attacker with network access to the MS3000 Server could trigger a Denial-of-Service condition and potentially gain remote code execution by sending specifically crafted packets to port 5010/tcp. This vulnerability is independent from CVE-2019-18289, CVE-2019-18293, and CVE-2019-18296. Please note that an attacker needs to have network access to the MS3000 in order to exploit this vulnerability. At the time of advisory publication no public exploitation of this security vulnerability was known."
                 },
                 {
                     "name": "CVE-2019-18293",
                     "description": "A vulnerability has been identified in SPPA-T3000 MS3000 Migration Server (All versions). An attacker with network access to the MS3000 Server could trigger a Denial-of-Service condition and potentially gain remote code execution by sending specifically crafted packets to port 5010/tcp. This vulnerability is independent from CVE-2019-18289, CVE-2019-18295, and CVE-2019-18296. Please note that an attacker needs to have network access to the MS3000 in order to exploit this vulnerability. At the time of advisory publication no public exploitation of this security vulnerability was known."
                 },
                 {
-                    "name": "CVE-2019-18291",
-                    "description": "A vulnerability has been identified in SPPA-T3000 MS3000 Migration Server (All versions). An attacker with network access to the MS3000 Server could trigger a Denial-of-Service condition by sending specifically crafted packets to port 5010/tcp. This vulnerability is independent from CVE-2019-18290, CVE-2019-18292, CVE-2019-18294, CVE-2019-18298, CVE-2019-18299, CVE-2019-18300, CVE-2019-18301, CVE-2019-18302, CVE-2019-18303, CVE-2019-18304, CVE-2019-18305, CVE-2019-18306, and CVE-2019-18307. Please note that an attacker needs to have network access to the MS3000 in order to exploit this vulnerability. At the time of advisory publication no public exploitation of this security vulnerability was known."
-                },
-                {
                     "name": "CVE-2019-18289",
                     "description": "A vulnerability has been identified in SPPA-T3000 MS3000 Migration Server (All versions). An attacker with network access to the MS3000 Server could trigger a Denial-of-Service condition and potentially gain remote code execution by sending specifically crafted packets to port 5010/tcp. This vulnerability is independent from CVE-2019-18293, CVE-2019-18295, and CVE-2019-18296. Please note that an attacker needs to have network access to the MS3000 in order to exploit this vulnerability. At the time of advisory publication no public exploitation of this security vulnerability was known."
-                },
-                {
-                    "name": "CVE-2019-12389",
-                    "description": "Anviz access control devices expose credentials (names and passwords) by allowing remote attackers to query this information without credentials via port tcp/5010."
                 }
             ],
-            "count": 11,
+            "count": 5,
             "protocol": "tcp"
         },
         {
@@ -27038,13 +27010,8 @@ pub static PORT_VULNS: &str = r####"{
             "port": 5410,
             "name": "salient-usrmgr",
             "description": "Salient User Manager",
-            "vulnerabilities": [
-                {
-                    "name": "CVE-2019-19298",
-                    "description": "A vulnerability has been identified in SiNVR/SiVMS Video Server (All versions < V5.0.2). The streaming service (default port 5410/tcp) of the SiVMS/SiNVR Video Server contains a input validation vulnerability, that could allow an unauthenticated remote attacker to cause a Denial-of-Service condition by sending malformed HTTP requests."
-                }
-            ],
-            "count": 1,
+            "vulnerabilities": [],
+            "count": 0,
             "protocol": "tcp"
         },
         {
@@ -30982,13 +30949,8 @@ pub static PORT_VULNS: &str = r####"{
             "port": 6998,
             "name": "iatp-highpri",
             "description": "",
-            "vulnerabilities": [
-                {
-                    "name": "CVE-2019-15065",
-                    "description": "A service which is hosted on port 6998 in HiNet GPON firmware < I040GWR190731 allows an attacker to execute a specific command to read arbitrary files. CVSS 3.0 Base score 9.3. CVSS vector: (CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:N/A:L)."
-                }
-            ],
-            "count": 1,
+            "vulnerabilities": [],
+            "count": 0,
             "protocol": "tcp"
         },
         {
@@ -31253,13 +31215,8 @@ pub static PORT_VULNS: &str = r####"{
             "port": 7061,
             "name": "",
             "description": "",
-            "vulnerabilities": [
-                {
-                    "name": "CVE-2019-18310",
-                    "description": "A vulnerability has been identified in SPPA-T3000 MS3000 Migration Server (All versions). An attacker with network access to the MS3000 Server could trigger a Denial-of-Service condition by sending specifically crafted packets to port 7061/tcp. This vulnerability is independent from CVE-2019-18311. Please note that an attacker needs to have network access to the MS3000 in order to exploit this vulnerability. At the time of advisory publication no public exploitation of this security vulnerability was known."
-                }
-            ],
-            "count": 1,
+            "vulnerabilities": [],
+            "count": 0,
             "protocol": "tcp"
         },
         {
@@ -33407,13 +33364,8 @@ pub static PORT_VULNS: &str = r####"{
             "port": 8010,
             "name": "xmpp",
             "description": "XMPP File Transfer",
-            "vulnerabilities": [
-                {
-                    "name": "CVE-2019-12297",
-                    "description": "An issue was discovered in scopd on Motorola routers CX2 1.01 and M2 1.01. There is a Use of an Externally Controlled Format String, reachable via TCP port 8010 or UDP port 8080."
-                }
-            ],
-            "count": 1,
+            "vulnerabilities": [],
+            "count": 0,
             "protocol": "tcp"
         },
         {
@@ -33716,15 +33668,11 @@ pub static PORT_VULNS: &str = r####"{
                     "description": "A vulnerability has been identified in LOGO! 8 BM (incl. SIPLUS variants) (All versions < V8.3). Due to the usage of an insecure random number generation function and a deprecated cryptographic function, an attacker could extract the key that is used when communicating with an affected device on port 8080/tcp."
                 },
                 {
-                    "name": "CVE-2019-13129",
-                    "description": "On the Motorola router CX2L MWR04L 1.01, there is a stack consumption (infinite recursion) issue in scopd via TCP port 8010 and UDP port 8080. It is caused by snprintf and inappropriate length handling."
-                },
-                {
                     "name": "CVE-2023-52335",
                     "description": "Advantech iView ConfigurationServlet SQL Injection Information Disclosure Vulnerability. This vulnerability allows remote attackers to disclose sensitive information on affected installations of Advantech iView. Authentication is not required to exploit this vulnerability. The specific flaw exists within the ConfigurationServlet servlet, which listens on TCP port 8080 by default. When parsing the column_value element, the process does not properly validate a user-supplied string before using it to construct SQL queries. An attacker can leverage this vulnerability to disclose stored credentials, leading to further compromise. Was ZDI-CAN-17863."
                 }
             ],
-            "count": 5,
+            "count": 4,
             "protocol": "http"
         },
         {
@@ -34791,8 +34739,13 @@ pub static PORT_VULNS: &str = r####"{
             "port": 8766,
             "name": "amcs",
             "description": "Agilent Connectivity Service",
-            "vulnerabilities": [],
-            "count": 0,
+            "vulnerabilities": [
+                {
+                    "name": "CVE-2025-2233",
+                    "description": "Samsung SmartThings Improper Verification of Cryptographic Signature Authentication Bypass Vulnerability. This vulnerability allows network-adjacent attackers to bypass authentication on affected installations of Samsung SmartThings. Authentication is not required to exploit this vulnerability. The specific flaw exists within the Hub Local API service, which listens on TCP port 8766 by default. The issue results from the lack of proper verification of a cryptographic signature. An attacker can leverage this vulnerability to bypass authentication on the system. Was ZDI-CAN-25615."
+                }
+            ],
+            "count": 1,
             "protocol": "tcp"
         },
         {
@@ -34967,15 +34920,11 @@ pub static PORT_VULNS: &str = r####"{
                     "description": "A vulnerability has been identified in SIMATIC PCS neo (Administration Console) (All versions < V3.1 SP1), SINETPLAN (All versions), TIA Portal (V15, V15.1, V16 and V17). The affected system cannot properly process specially crafted packets sent to port 8888/tcp. A remote attacker could exploit this vulnerability to cause a Denial-of-Service condition. The affected devices must be restarted manually."
                 },
                 {
-                    "name": "CVE-2019-7677",
-                    "description": "XSS exists in Enphase Envoy R3.*.* via the profileName parameter to the /home URI on TCP port 8888."
-                },
-                {
                     "name": "CVE-2024-5035",
                     "description": "The affected device expose a network service called 'rftest' that is vulnerable to unauthenticated command injection on ports TCP/8888, TCP/8889, and TCP/8890. By successfully exploiting this flaw, remote unauthenticated attacker can gain arbitrary command execution on the device with elevated privileges.This issue affects Archer C4500X: through 1_1.1.6."
                 }
             ],
-            "count": 5,
+            "count": 4,
             "protocol": "http"
         },
         {
@@ -36777,15 +36726,11 @@ pub static PORT_VULNS: &str = r####"{
                     "description": "A vulnerability has been identified in LOGO! 8 BM (incl. SIPLUS variants) (All versions < V8.3). A service available on port 10005/tcp of the affected devices could allow complete access to all services without authorization. An attacker could gain full control over an affected device, if he has access to this service. The system manual recommends to protect access to this port."
                 },
                 {
-                    "name": "CVE-2019-10921",
-                    "description": "A vulnerability has been identified in LOGO! 8 BM (incl. SIPLUS variants) (All versions < V8.3). Unencrypted storage of passwords in the project could allow an attacker with access to port 10005/tcp to obtain passwords of the device. The security vulnerability could be exploited by an unauthenticated attacker with network access to port 10005/tcp. No user interaction is required to exploit this security vulnerability. The vulnerability impacts confidentiality of the device. At the time of advisory publication no public exploitation of this security vulnerability was known"
-                },
-                {
                     "name": "CVE-2019-10919",
                     "description": "A vulnerability has been identified in LOGO! 8 BM (incl. SIPLUS variants) (All versions < V8.3). Attackers with access to port 10005/tcp could perform device reconfigurations and obtain project files from the devices. The system manual recommends to protect access to this port. The security vulnerability could be exploited by an unauthenticated attacker with network access to port 10005/tcp. No user interaction is required to exploit this security vulnerability. The vulnerability impacts confidentiality, integrity, and availability of the device. At the time of advisory publication no public exploitation of this security vulnerability was known."
                 }
             ],
-            "count": 4,
+            "count": 3,
             "protocol": "tcp"
         },
         {
@@ -39141,13 +39086,8 @@ pub static PORT_VULNS: &str = r####"{
             "port": 19421,
             "name": "",
             "description": "",
-            "vulnerabilities": [
-                {
-                    "name": "CVE-2019-13449",
-                    "description": "In the Zoom Client before 4.4.2 on macOS, remote attackers can cause a denial of service (continual focus grabs) via a sequence of invalid launch?action=join&confno= requests to localhost port 19421."
-                }
-            ],
-            "count": 1,
+            "vulnerabilities": [],
+            "count": 0,
             "protocol": "tcp"
         },
         {
