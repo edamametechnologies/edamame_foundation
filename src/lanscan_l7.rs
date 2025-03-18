@@ -842,12 +842,12 @@ fn get_windows_username_by_uid(uid: &Uid) -> Option<String> {
     let h_string = HSTRING::from(uid_str.as_str());
 
     unsafe {
-        let mut buffer: *mut c_void = std::ptr::null_mut();
+        let mut buffer: *mut u8 = std::ptr::null_mut();
         let result = NetUserGetInfo(
             PCWSTR::null(), // Local computer
             PCWSTR(h_string.as_ptr()),
             0, // Level 0 for basic info
-            &mut buffer as *mut *mut c_void,
+            &mut buffer as *mut *mut u8,
         );
 
         if result == NERR_Success && !buffer.is_null() {
@@ -855,17 +855,17 @@ fn get_windows_username_by_uid(uid: &Uid) -> Option<String> {
             let username = PWSTR(user_info.usri0_name.0).to_string().ok();
 
             // Free the buffer allocated by NetUserGetInfo
-            let _ = NetApiBufferFree(buffer);
+            let _ = NetApiBufferFree(Some(buffer as *const c_void));
 
             return username;
         } else {
             if !buffer.is_null() {
-                let _ = NetApiBufferFree(buffer);
+                let _ = NetApiBufferFree(Some(buffer as *const c_void));
             }
             debug!(
                 "Failed to get Windows username for UID {}: {:?}",
                 uid_str,
-                Error::from_win32(result.0 as u32)
+                Error::from_win32()
             );
             return None;
         }
