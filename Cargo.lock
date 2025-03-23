@@ -883,7 +883,7 @@ dependencies = [
 
 [[package]]
 name = "edamame_foundation"
-version = "0.9.20"
+version = "0.9.21"
 dependencies = [
  "anyhow",
  "arp-toolkit",
