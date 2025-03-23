@@ -4,7 +4,7 @@ use lazy_static::lazy_static;
 use std::collections::HashSet;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::atomic::{AtomicBool, Ordering};
-use tracing::{error, trace};
+use tracing::{trace, warn};
 
 lazy_static! {
     /// A concurrent cache of IP addresses that are known to be local.
@@ -200,7 +200,7 @@ pub fn is_lan_ip(ip: &IpAddr) -> bool {
         cleanup_cache();
     }
     if !CACHE_INITIALIZED.load(Ordering::Relaxed) {
-        error!(
+        warn!(
             "is_local_ip called without an initialized cache. Please run init_local_cache first."
         );
     }
