@@ -180,21 +180,80 @@ impl LANScanCapture {
             return;
         }
 
-        // First stop the capture task
+        // First stop the capture tasks
         self.stop_capture_tasks().await;
-        // Then stop the other tasks, they will populate their latest data
-        self.stop_l7_task().await;
-        // Then stop the resolver task
-        self.stop_resolver_task().await;
-        // Then stop the current sessions task
-        self.stop_current_sessions_task().await;
-        // Then stop the whitelist check task
-        self.stop_whitelist_check_task().await;
-        // Finally stop the DNS packet processor task
-        self.stop_dns_packet_processor_task().await;
 
-        // Don't clear the state; this is a pause rather than a stop
-        // Don't stop the mDNS task as it's shared with other modules
+        // Stop the shared task handles first to ensure they release their references
+
+        // Stop the whitelist check task first (uses sessions)
+        self.stop_whitelist_check_task().await;
+
+        // Stop the current sessions task (uses sessions)
+        self.stop_current_sessions_task().await;
+
+        // Stop the DNS integration task (uses resolver and DNS packet processor)
+        if let Some(task_handle) = self.dns_integration_handle.take() {
+            task_handle.stop_flag.store(true, Ordering::Relaxed);
+            task_handle.handle.await.unwrap_or_default();
+            info!("Stopped DNS integration task");
+        }
+
+        // Next, stop the L7 task
+        if let Some(task_handle) = self.l7_handle.take() {
+            task_handle.stop_flag.store(true, Ordering::Relaxed);
+            let _ = task_handle.handle.await;
+            info!("L7 task terminated");
+        }
+
+        // Stop the resolver task
+        if let Some(task_handle) = self.resolver_handle.take() {
+            task_handle.stop_flag.store(true, Ordering::Relaxed);
+            let _ = task_handle.handle.await;
+            info!("Resolver task terminated");
+        }
+
+        // Wait a moment to ensure all tasks have properly terminated and dropped references
+        sleep(Duration::from_millis(100)).await;
+
+        // Now stop the underlying resources
+
+        // Stop the L7 resolver
+        if let Some(l7) = &mut self.l7 {
+            if let Some(l7) = Arc::get_mut(l7) {
+                l7.stop().await;
+                info!("L7 resolver stopped");
+            } else {
+                warn!(
+                    "Unable to get mutable reference to L7 resolver - will be dropped regardless"
+                );
+            }
+            // Drop our reference immediately
+            self.l7 = None;
+        }
+
+        // Stop the resolver
+        if let Some(resolver) = &mut self.resolver {
+            if let Some(resolver) = Arc::get_mut(resolver) {
+                resolver.stop().await;
+                info!("Resolver stopped");
+            } else {
+                warn!("Unable to get mutable reference to resolver - will be dropped regardless");
+            }
+            // Drop our reference immediately
+            self.resolver = None;
+        }
+
+        // Finally stop the DNS packet processor
+        if let Some(dns_processor) = &mut self.dns_packet_processor {
+            if let Some(dns_processor) = Arc::get_mut(dns_processor) {
+                dns_processor.stop_dns_query_cleanup_task().await;
+                info!("DNS packet processor stopped");
+            } else {
+                warn!("Unable to get mutable reference to DNS packet processor - will be dropped regardless");
+            }
+            // Drop our reference immediately
+            self.dns_packet_processor = None;
+        }
     }
 
     pub async fn restart(&mut self, interfaces: &LANScanInterfaces) {
@@ -355,24 +414,6 @@ impl LANScanCapture {
         });
     }
 
-    async fn stop_resolver_task(&mut self) {
-        if let Some(task_handle) = self.resolver_handle.take() {
-            task_handle.stop_flag.store(true, Ordering::Relaxed);
-            let _ = task_handle.handle.await;
-        } else {
-            error!("Resolver task not running");
-        }
-
-        // Stop the resolver if it exists
-        if let Some(resolver) = &mut self.resolver {
-            if let Some(resolver) = Arc::get_mut(resolver) {
-                resolver.stop().await;
-            } else {
-                error!("Failed to get mutable reference to resolver");
-            }
-        }
-    }
-
     async fn start_dns_packet_processor_task(&mut self) {
         // Create a new DNS packet processor if it doesn't exist
         if self.dns_packet_processor.is_some() {
@@ -422,30 +463,6 @@ impl LANScanCapture {
         self.dns_integration_handle = Some(TaskHandle { handle, stop_flag });
     }
 
-    async fn stop_dns_packet_processor_task(&mut self) {
-        // First stop the DNS integration task
-        if let Some(task_handle) = self.dns_integration_handle.take() {
-            task_handle.stop_flag.store(true, Ordering::Relaxed);
-            task_handle.handle.await.unwrap_or_default();
-            info!("Stopped DNS integration task");
-        }
-
-        // Then stop the DNS packet processor if it exists
-        if let Some(dns_processor) = &self.dns_packet_processor {
-            // Clone the processor to get a mutable reference
-            let mut dns_processor_clone = dns_processor.clone();
-            if let Some(dns_processor) = Arc::get_mut(&mut dns_processor_clone) {
-                dns_processor.stop_dns_query_cleanup_task().await;
-                info!("Stopped DNS packet processor task");
-            } else {
-                error!("Failed to get mutable reference to DNS packet processor");
-            }
-
-            // Clear the DNS packet processor
-            self.dns_packet_processor = None;
-        }
-    }
-
     async fn start_l7_task(&mut self) {
         // Create L7 resolver if it doesn't exist
         if self.l7.is_none() {
@@ -484,24 +501,6 @@ impl LANScanCapture {
             handle,
             stop_flag: stop_flag_clone,
         });
-    }
-
-    async fn stop_l7_task(&mut self) {
-        if let Some(task_handle) = self.l7_handle.take() {
-            task_handle.stop_flag.store(true, Ordering::Relaxed);
-            let _ = task_handle.handle.await;
-        } else {
-            error!("L7 task not running");
-        }
-
-        // Stop the L7 resolver if it exists
-        if let Some(l7) = &mut self.l7 {
-            if let Some(l7) = Arc::get_mut(l7) {
-                l7.stop().await;
-            } else {
-                error!("Failed to get mutable reference to L7 resolver");
-            }
-        }
     }
 
     async fn start_whitelist_check_task(&mut self) {
