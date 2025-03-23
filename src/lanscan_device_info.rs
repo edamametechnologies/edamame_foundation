@@ -49,6 +49,10 @@ pub struct DeviceInfo {
     pub custom_name: String,
     pub deleted: bool,
     pub last_modified: DateTime<Utc>,
+    // Below are internal properties (not serialized)
+    // Flag to track devices seen by direct scanning
+    #[serde(skip)]
+    pub is_local: bool,
 }
 
 impl DeviceInfo {
@@ -86,6 +90,9 @@ impl DeviceInfo {
             // Initialize the times to UNIX_EPOCH
             first_seen: DateTime::<Utc>::from(std::time::UNIX_EPOCH),
             last_seen: DateTime::<Utc>::from(std::time::UNIX_EPOCH),
+            // Origin tracking for community sharing
+            origin_ip: "".to_string(), // IP of the device that first discovered this device
+            origin_network: "".to_string(), // Network identifier of where the device was first discovered
             // Below are user properties
             dismissed_ports: Vec::new(),
             custom_name: "".to_string(),
@@ -93,9 +100,9 @@ impl DeviceInfo {
             deleted: false,
             // Initialize the last time to UNIX_EPOCH
             last_modified: DateTime::<Utc>::from(std::time::UNIX_EPOCH),
-            // Origin tracking for community sharing
-            origin_ip: "".to_string(), // IP of the device that first discovered this device
-            origin_network: "".to_string(), // Network identifier of where the device was first discovered
+            // Below are internal properties (not serialized)
+            // Not local by default
+            is_local: false,
         }
     }
 
@@ -470,6 +477,8 @@ impl DeviceInfo {
         device.activated = device.activated || new_device.activated;
         device.deactivated = device.deactivated || new_device.deactivated;
         device.no_icmp = device.no_icmp || new_device.no_icmp;
+        // If either device is local, the result is local
+        device.is_local = device.is_local || new_device.is_local;
 
         // Dynamic fields
         // Use the most recent if valid (not unknown)
@@ -505,12 +514,20 @@ impl DeviceInfo {
             device.last_seen = new_device.last_seen;
         }
 
-        // Preserve origin information - only set it if the target doesn't have it
-        if device.origin_ip.is_empty() && !new_device.origin_ip.is_empty() {
+        // Handle origin information
+        // If the new device is local, use its origin_ip
+        if new_device.is_local && !new_device.origin_ip.is_empty() {
+            device.origin_ip.clone_from(&new_device.origin_ip);
+        } else if device.origin_ip.is_empty() && !new_device.origin_ip.is_empty() {
+            // Otherwise preserve origin information - only set it if the target doesn't have it
             device.origin_ip.clone_from(&new_device.origin_ip);
         }
 
-        if device.origin_network.is_empty() && !new_device.origin_network.is_empty() {
+        // Also update origin_network with the same logic
+        if new_device.is_local && !new_device.origin_network.is_empty() {
+            device.origin_network.clone_from(&new_device.origin_network);
+        } else if device.origin_network.is_empty() && !new_device.origin_network.is_empty() {
+            // Otherwise preserve origin information - only set it if the target doesn't have it
             device.origin_network.clone_from(&new_device.origin_network);
         }
 
@@ -1305,5 +1322,174 @@ mod tests {
         // Origin should still be from the local device
         assert_eq!(devices_vec[0].origin_ip, "192.168.1.1");
         assert_eq!(devices_vec[0].origin_network, "home-network");
+    }
+
+    #[test]
+    fn test_merge_is_local_updates_origin_ip() {
+        // Test that when a local device is merged, its origin_ip is used
+        let mut device1 = DeviceInfo::new(Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 30))));
+        device1.origin_ip = "192.168.1.100".to_string(); // Existing origin_ip
+        device1.is_local = false;
+        device1.last_seen = Utc.with_ymd_and_hms(2023, 1, 1, 12, 0, 0).unwrap();
+
+        let mut device2 = DeviceInfo::new(Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 30))));
+        device2.origin_ip = "192.168.1.200".to_string(); // New origin_ip
+        device2.is_local = true; // This device is local
+        device2.last_seen = Utc.with_ymd_and_hms(2023, 1, 1, 13, 0, 0).unwrap();
+
+        // Merge device2 into device1
+        DeviceInfo::merge(&mut device1, &device2);
+
+        // Verify the origin_ip was updated because the new device is local
+        assert_eq!(
+            device1.origin_ip, "192.168.1.200",
+            "origin_ip should be updated when merging a local device"
+        );
+    }
+
+    #[test]
+    fn test_merge_not_local_preserves_origin_ip() {
+        // Test that when a non-local device is merged, the original origin_ip is preserved
+        let mut device1 = DeviceInfo::new(Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 40))));
+        device1.origin_ip = "192.168.1.100".to_string(); // Original origin_ip
+        device1.is_local = false;
+        device1.last_seen = Utc.with_ymd_and_hms(2023, 1, 1, 12, 0, 0).unwrap();
+
+        let mut device2 = DeviceInfo::new(Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 40))));
+        device2.origin_ip = "192.168.1.200".to_string(); // Different origin_ip
+        device2.is_local = false; // This device is NOT local
+        device2.last_seen = Utc.with_ymd_and_hms(2023, 1, 1, 13, 0, 0).unwrap();
+
+        // Merge device2 into device1
+        DeviceInfo::merge(&mut device1, &device2);
+
+        // Verify the origin_ip was NOT updated because the new device is not local
+        assert_eq!(
+            device1.origin_ip, "192.168.1.100",
+            "origin_ip should be preserved when merging a non-local device"
+        );
+    }
+
+    #[test]
+    fn test_merge_is_local_updates_origin_network() {
+        // Test that when a local device is merged, its origin_network is used
+        let mut device1 = DeviceInfo::new(Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 50))));
+        device1.origin_network = "old-network".to_string(); // Existing origin_network
+        device1.is_local = false;
+        device1.last_seen = Utc.with_ymd_and_hms(2023, 1, 1, 12, 0, 0).unwrap();
+
+        let mut device2 = DeviceInfo::new(Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 50))));
+        device2.origin_network = "new-network".to_string(); // New origin_network
+        device2.is_local = true; // This device is local
+        device2.last_seen = Utc.with_ymd_and_hms(2023, 1, 1, 13, 0, 0).unwrap();
+
+        // Merge device2 into device1
+        DeviceInfo::merge(&mut device1, &device2);
+
+        // Verify the origin_network was updated because the new device is local
+        assert_eq!(
+            device1.origin_network, "new-network",
+            "origin_network should be updated when merging a local device"
+        );
+    }
+
+    #[test]
+    fn test_merge_not_local_preserves_origin_network() {
+        // Test that when a non-local device is merged, the original origin_network is preserved
+        let mut device1 = DeviceInfo::new(Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 60))));
+        device1.origin_network = "old-network".to_string(); // Original origin_network
+        device1.is_local = false;
+        device1.last_seen = Utc.with_ymd_and_hms(2023, 1, 1, 12, 0, 0).unwrap();
+
+        let mut device2 = DeviceInfo::new(Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 60))));
+        device2.origin_network = "new-network".to_string(); // Different origin_network
+        device2.is_local = false; // This device is NOT local
+        device2.last_seen = Utc.with_ymd_and_hms(2023, 1, 1, 13, 0, 0).unwrap();
+
+        // Merge device2 into device1
+        DeviceInfo::merge(&mut device1, &device2);
+
+        // Verify the origin_network was NOT updated because the new device is not local
+        assert_eq!(
+            device1.origin_network, "old-network",
+            "origin_network should be preserved when merging a non-local device"
+        );
+    }
+
+    #[test]
+    fn test_merge_is_local_preserved() {
+        // Test that is_local flag is preserved when merging
+        let mut device1 = DeviceInfo::new(Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 10))));
+        device1.is_local = true;
+        device1.hostname = "local-device".to_string();
+        device1.last_seen = Utc.with_ymd_and_hms(2023, 1, 1, 12, 0, 0).unwrap();
+
+        let mut device2 = DeviceInfo::new(Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 10))));
+        device2.is_local = false;
+        device2.os_name = "Some OS".to_string();
+        device2.last_seen = Utc.with_ymd_and_hms(2023, 1, 1, 13, 0, 0).unwrap();
+
+        // Merge device2 into device1
+        DeviceInfo::merge(&mut device1, &device2);
+
+        // Verify is_local remains true
+        assert!(
+            device1.is_local,
+            "is_local should remain true after merging"
+        );
+        // Also verify other fields were updated
+        assert_eq!(device1.os_name, "Some OS", "OS name should be updated");
+        assert_eq!(
+            device1.last_seen,
+            Utc.with_ymd_and_hms(2023, 1, 1, 13, 0, 0).unwrap(),
+            "last_seen should be updated from newer device"
+        );
+    }
+
+    #[test]
+    fn test_merge_is_local_propagates() {
+        // Test that is_local=true propagates from source to destination
+        let mut device1 = DeviceInfo::new(Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 20))));
+        device1.is_local = false;
+        device1.hostname = "device".to_string();
+        device1.last_seen = Utc.with_ymd_and_hms(2023, 1, 1, 12, 0, 0).unwrap();
+
+        let mut device2 = DeviceInfo::new(Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 20))));
+        device2.is_local = true; // Source device is marked as local
+        device2.last_seen = Utc.with_ymd_and_hms(2023, 1, 1, 13, 0, 0).unwrap();
+
+        // Merge device2 into device1
+        DeviceInfo::merge(&mut device1, &device2);
+
+        // Verify is_local was propagated from device2 to device1
+        assert!(
+            device1.is_local,
+            "is_local should be propagated from source to destination"
+        );
+    }
+
+    #[test]
+    fn test_merge_vec_is_local_behavior() {
+        // Test that is_local behavior works correctly when merging vectors
+        let mut devices = vec![{
+            let mut d = DeviceInfo::new(Some(IpAddr::V4(Ipv4Addr::new(192, 168, 0, 10))));
+            d.is_local = false;
+            d
+        }];
+
+        let new_devices = vec![{
+            let mut d = DeviceInfo::new(Some(IpAddr::V4(Ipv4Addr::new(192, 168, 0, 10))));
+            d.is_local = true;
+            d
+        }];
+
+        // Merge the vectors
+        DeviceInfo::merge_vec(&mut devices, &new_devices);
+
+        // Verify the result has is_local=true
+        assert!(
+            devices[0].is_local,
+            "is_local should be true after merging vectors"
+        );
     }
 }

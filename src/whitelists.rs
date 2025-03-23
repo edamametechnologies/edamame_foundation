@@ -369,13 +369,69 @@ fn domain_matches(session_domain: Option<&str>, endpoint_domain: &Option<String>
     match endpoint_domain {
         Some(pattern) => match session_domain {
             Some(domain) => {
+                // Convert both to lowercase for case-insensitive matching
                 let domain = domain.to_lowercase();
-                if pattern.starts_with("*.") {
-                    let suffix = pattern[2..].to_lowercase();
-                    domain.ends_with(&format!(".{}", suffix))
-                } else {
-                    domain.eq_ignore_ascii_case(&pattern.to_lowercase())
+                let pattern = pattern.to_lowercase();
+
+                // Check if pattern contains a wildcard
+                if pattern.contains('*') {
+                    // Handle prefix wildcard (*.example.com)
+                    if pattern.starts_with("*.") {
+                        let suffix = &pattern[2..]; // Remove the "*." prefix
+
+                        // If domain exactly matches suffix (e.g., "example.com" vs "*.example.com"),
+                        // this should NOT match since *.example.com means there must be a subdomain
+                        if domain == suffix {
+                            return false;
+                        }
+
+                        // For wildcard to match, domain must end with the suffix
+                        return domain.ends_with(suffix);
+                    }
+
+                    // Handle suffix wildcard (example.*)
+                    if pattern.ends_with(".*") {
+                        let prefix = &pattern[..pattern.len() - 2]; // Remove the ".*" suffix
+
+                        // For wildcard to match:
+                        // 1. domain must start with the prefix
+                        // 2. if the domain is longer than the prefix, the next character must be a dot
+                        //    (ensuring prefix is a complete domain component)
+                        if domain.starts_with(prefix) {
+                            if domain.len() == prefix.len() {
+                                // Domain exactly matches prefix, which is valid
+                                return true;
+                            } else if domain.len() > prefix.len()
+                                && domain.as_bytes()[prefix.len()] == b'.'
+                            {
+                                // Domain has the prefix followed by a dot, which is valid
+                                return true;
+                            }
+                        }
+
+                        // All other cases are not matches
+                        return false;
+                    }
+
+                    // Handle middle position wildcard (prefix.*.suffix)
+                    let parts: Vec<&str> = pattern.split('*').collect();
+                    if parts.len() == 2 {
+                        let prefix = parts[0];
+                        let suffix = parts[1];
+
+                        // For wildcard to match, domain must start with prefix and end with suffix
+                        // and the domain must be longer than just the prefix and suffix combined
+                        return domain.starts_with(prefix)
+                            && domain.ends_with(suffix)
+                            && domain.len() > prefix.len() + suffix.len();
+                    }
+
+                    // Unsupported wildcard pattern
+                    return false;
                 }
+
+                // Exact match for non-wildcard patterns
+                domain == pattern
             }
             None => false,
         },
@@ -607,11 +663,37 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_wildcard_domain_matching() {
-        initialize_test_whitelists().await;
+        // Initialize test data with various wildcard patterns
+        let test_whitelist_json = WhitelistsJSON {
+            date: "2024-10-20".to_string(),
+            signature: Some("test_signature".to_string()),
+            whitelists: vec![WhitelistInfo {
+                name: "wildcard_domain_whitelist".to_string(),
+                extends: None,
+                endpoints: vec![WhitelistEndpoint {
+                    domain: Some("*.example.com".to_string()),
+                    ip: None,
+                    port: None,
+                    protocol: Some("TCP".to_string()),
+                    as_number: None,
+                    as_country: None,
+                    as_owner: None,
+                    process: None,
+                    description: Some("Prefix wildcard".to_string()),
+                }],
+            }],
+        };
+
+        let whitelists = Whitelists::new_from_json(test_whitelist_json);
+        LISTS
+            .write()
+            .await
+            .overwrite_with_test_data(whitelists)
+            .await;
 
         let custom_whitelists = Arc::new(CustomRwLock::new(None));
 
-        // Test exact subdomain match
+        // Test prefix wildcard (*.example.com)
         assert!(
             is_session_in_whitelist(
                 Some("sub.example.com"),
@@ -619,50 +701,32 @@ mod tests {
                 80,
                 "TCP",
                 &custom_whitelists,
-                "wildcard_whitelist",
+                "wildcard_domain_whitelist",
                 None,
                 None,
                 None,
                 None
             )
             .await,
-            "Should match wildcard subdomain"
+            "Should match sub.example.com with *.example.com"
         );
 
-        // Test multiple level subdomain match
-        assert!(
-            is_session_in_whitelist(
-                Some("sub.sub2.example.com"),
-                None,
-                80,
-                "TCP",
-                &custom_whitelists,
-                "wildcard_whitelist",
-                None,
-                None,
-                None,
-                None
-            )
-            .await,
-            "Should match multiple level subdomain"
-        );
-
-        // Test non-matching domain
+        // Test non-matching cases
         assert!(
             !is_session_in_whitelist(
-                Some("example.org"),
+                Some("example.com"),
                 None,
                 80,
                 "TCP",
                 &custom_whitelists,
-                "wildcard_whitelist",
+                "wildcard_domain_whitelist",
                 None,
                 None,
                 None,
                 None
             )
             .await,
-            "Should not match different domain"
+            "Should not match example.com with *.example.com"
         );
     }
 
@@ -1838,6 +1902,370 @@ mod tests {
             )
             .await,
             "Should match session with ASN 13335 (Cloudflare)"
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_multi_component_wildcard_matching() {
+        // Initialize test data with wildcard patterns
+        let test_whitelist_json = WhitelistsJSON {
+            date: "2024-10-20".to_string(),
+            signature: Some("test_signature".to_string()),
+            whitelists: vec![
+                WhitelistInfo {
+                    name: "prefix_wildcard_whitelist".to_string(),
+                    extends: None,
+                    endpoints: vec![WhitelistEndpoint {
+                        domain: Some("*.example.com".to_string()),
+                        ip: None,
+                        port: None,
+                        protocol: Some("TCP".to_string()),
+                        as_number: None,
+                        as_country: None,
+                        as_owner: None,
+                        process: None,
+                        description: Some("Prefix wildcard".to_string()),
+                    }],
+                },
+                WhitelistInfo {
+                    name: "middle_wildcard_whitelist".to_string(),
+                    extends: None,
+                    endpoints: vec![WhitelistEndpoint {
+                        domain: Some("example.*.com".to_string()),
+                        ip: None,
+                        port: None,
+                        protocol: Some("TCP".to_string()),
+                        as_number: None,
+                        as_country: None,
+                        as_owner: None,
+                        process: None,
+                        description: Some("Middle wildcard".to_string()),
+                    }],
+                },
+                WhitelistInfo {
+                    name: "suffix_wildcard_whitelist".to_string(),
+                    extends: None,
+                    endpoints: vec![WhitelistEndpoint {
+                        domain: Some("example.*".to_string()),
+                        ip: None,
+                        port: None,
+                        protocol: Some("TCP".to_string()),
+                        as_number: None,
+                        as_country: None,
+                        as_owner: None,
+                        process: None,
+                        description: Some("Suffix wildcard".to_string()),
+                    }],
+                },
+                WhitelistInfo {
+                    name: "noncentral_wildcard_whitelist".to_string(),
+                    extends: None,
+                    endpoints: vec![WhitelistEndpoint {
+                        domain: Some("toto.too.toto.*.toto".to_string()),
+                        ip: None,
+                        port: None,
+                        protocol: Some("TCP".to_string()),
+                        as_number: None,
+                        as_country: None,
+                        as_owner: None,
+                        process: None,
+                        description: Some("Non-central wildcard position".to_string()),
+                    }],
+                },
+                WhitelistInfo {
+                    name: "complex_wildcard_whitelist".to_string(),
+                    extends: None,
+                    endpoints: vec![
+                        WhitelistEndpoint {
+                            domain: Some("cloud-mirror-lb.*.azure.com".to_string()),
+                            ip: None,
+                            port: None,
+                            protocol: Some("TCP".to_string()),
+                            as_number: None,
+                            as_country: None,
+                            as_owner: None,
+                            process: None,
+                            description: Some("Azure wildcard".to_string()),
+                        },
+                        WhitelistEndpoint {
+                            domain: Some("*.toto".to_string()),
+                            ip: None,
+                            port: None,
+                            protocol: Some("TCP".to_string()),
+                            as_number: None,
+                            as_country: None,
+                            as_owner: None,
+                            process: None,
+                            description: Some("Prefix wildcard with short TLD".to_string()),
+                        },
+                    ],
+                },
+            ],
+        };
+
+        let whitelists = Whitelists::new_from_json(test_whitelist_json);
+        LISTS
+            .write()
+            .await
+            .overwrite_with_test_data(whitelists)
+            .await;
+
+        let custom_whitelists = Arc::new(CustomRwLock::new(None));
+
+        // Test prefix wildcard (*.example.com)
+        // Single subdomain
+        assert!(
+            is_session_in_whitelist(
+                Some("sub.example.com"),
+                None,
+                80,
+                "TCP",
+                &custom_whitelists,
+                "prefix_wildcard_whitelist",
+                None,
+                None,
+                None,
+                None
+            )
+            .await,
+            "Should match sub.example.com with *.example.com"
+        );
+
+        // Multiple subdomains
+        assert!(
+            is_session_in_whitelist(
+                Some("a.b.c.example.com"),
+                None,
+                80,
+                "TCP",
+                &custom_whitelists,
+                "prefix_wildcard_whitelist",
+                None,
+                None,
+                None,
+                None
+            )
+            .await,
+            "Should match a.b.c.example.com with *.example.com"
+        );
+
+        // Base domain should NOT match prefix wildcard
+        assert!(
+            !is_session_in_whitelist(
+                Some("example.com"),
+                None,
+                80,
+                "TCP",
+                &custom_whitelists,
+                "prefix_wildcard_whitelist",
+                None,
+                None,
+                None,
+                None
+            )
+            .await,
+            "Should NOT match example.com with *.example.com"
+        );
+
+        // Test middle wildcard (example.*.com)
+        // Single component in middle
+        assert!(
+            is_session_in_whitelist(
+                Some("example.test.com"),
+                None,
+                80,
+                "TCP",
+                &custom_whitelists,
+                "middle_wildcard_whitelist",
+                None,
+                None,
+                None,
+                None
+            )
+            .await,
+            "Should match example.test.com with example.*.com"
+        );
+
+        // Multiple components in middle
+        assert!(
+            is_session_in_whitelist(
+                Some("example.one.two.three.com"),
+                None,
+                80,
+                "TCP",
+                &custom_whitelists,
+                "middle_wildcard_whitelist",
+                None,
+                None,
+                None,
+                None
+            )
+            .await,
+            "Should match example.one.two.three.com with example.*.com"
+        );
+
+        // Test suffix wildcard (example.*)
+        // Simple TLD
+        assert!(
+            is_session_in_whitelist(
+                Some("example.com"),
+                None,
+                80,
+                "TCP",
+                &custom_whitelists,
+                "suffix_wildcard_whitelist",
+                None,
+                None,
+                None,
+                None
+            )
+            .await,
+            "Should match example.com with example.*"
+        );
+
+        // Complex TLD
+        assert!(
+            is_session_in_whitelist(
+                Some("example.co.uk"),
+                None,
+                80,
+                "TCP",
+                &custom_whitelists,
+                "suffix_wildcard_whitelist",
+                None,
+                None,
+                None,
+                None
+            )
+            .await,
+            "Should match example.co.uk with example.*"
+        );
+
+        // Test complex wildcard patterns
+        assert!(
+            is_session_in_whitelist(
+                Some("cloud-mirror-lb.eastus.westus.northeurope.southeurope.cloudapp.azure.com"),
+                None,
+                80,
+                "TCP",
+                &custom_whitelists,
+                "complex_wildcard_whitelist",
+                None,
+                None,
+                None,
+                None
+            )
+            .await,
+            "Should match complex domain with multiple middle components"
+        );
+
+        // Test specific case for *.toto matching cloud-mirror-lb.cloudapp.azure.com.toto
+        assert!(
+            is_session_in_whitelist(
+                Some("cloud-mirror-lb.cloudapp.azure.com.toto"),
+                None,
+                80,
+                "TCP",
+                &custom_whitelists,
+                "complex_wildcard_whitelist",
+                None,
+                None,
+                None,
+                None
+            )
+            .await,
+            "Should match cloud-mirror-lb.cloudapp.azure.com.toto with *.toto"
+        );
+
+        // Test complex non-central wildcard pattern (toto.too.toto.*.toto)
+        assert!(
+            is_session_in_whitelist(
+                Some("toto.too.toto.middle.toto"),
+                None,
+                80,
+                "TCP",
+                &custom_whitelists,
+                "noncentral_wildcard_whitelist",
+                None,
+                None,
+                None,
+                None
+            )
+            .await,
+            "Should match toto.too.toto.middle.toto with toto.too.toto.*.toto"
+        );
+
+        // Test complex non-central wildcard with multiple components in wildcard position
+        assert!(
+            is_session_in_whitelist(
+                Some("toto.too.toto.one.two.three.toto"),
+                None,
+                80,
+                "TCP",
+                &custom_whitelists,
+                "noncentral_wildcard_whitelist",
+                None,
+                None,
+                None,
+                None
+            )
+            .await,
+            "Should match toto.too.toto.one.two.three.toto with toto.too.toto.*.toto"
+        );
+
+        // Test non-matching case for non-central wildcard
+        assert!(
+            !is_session_in_whitelist(
+                Some("toto.too.different.middle.toto"),
+                None,
+                80,
+                "TCP",
+                &custom_whitelists,
+                "noncentral_wildcard_whitelist",
+                None,
+                None,
+                None,
+                None
+            )
+            .await,
+            "Should not match toto.too.different.middle.toto with toto.too.toto.*.toto"
+        );
+
+        // General negative tests (should not match any of our whitelists)
+        assert!(
+            !is_session_in_whitelist(
+                Some("different.com"),
+                None,
+                80,
+                "TCP",
+                &custom_whitelists,
+                "prefix_wildcard_whitelist",
+                None,
+                None,
+                None,
+                None
+            )
+            .await,
+            "Should not match different.com with *.example.com"
+        );
+
+        // Make sure unrelated domain with similar prefix doesn't match
+        assert!(
+            !is_session_in_whitelist(
+                Some("examplesite.com"),
+                None,
+                80,
+                "TCP",
+                &custom_whitelists,
+                "suffix_wildcard_whitelist",
+                None,
+                None,
+                None,
+                None
+            )
+            .await,
+            "Should not match examplesite.com with example.*"
         );
     }
 }
