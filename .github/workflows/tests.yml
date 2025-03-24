@@ -160,7 +160,7 @@ jobs:
               rustup target add aarch64-apple-ios
               cargo build --target aarch64-apple-ios
             else
-              # Run default tests for other platforms
+              # Run default tests for other platforms - need sudo for capture tests
               make test
             fi
           else
