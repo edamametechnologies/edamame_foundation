@@ -420,17 +420,16 @@ impl LANScanCapture {
             return;
         }
 
-        let dns_packet_processor = Arc::new(DnsPacketProcessor::new());
+        let mut dns_packet_processor = Arc::new(DnsPacketProcessor::new());
 
-        // Start the DNS packet processor's cleanup task
-        let mut dns_processor_clone = dns_packet_processor.clone();
-        if let Some(dns_processor) = Arc::get_mut(&mut dns_processor_clone) {
+        // Start the cleanup task on the original before cloning
+        if let Some(dns_processor) = Arc::get_mut(&mut dns_packet_processor) {
             dns_processor.start_dns_query_cleanup_task().await;
         } else {
             error!("Failed to get mutable reference to DNS packet processor");
         }
 
-        self.dns_packet_processor = Some(dns_packet_processor);
+        self.dns_packet_processor = Some(dns_packet_processor.clone());
 
         // Create a task to periodically integrate DNS resolutions with resolver
         let capture_self = Arc::new(self.clone());
