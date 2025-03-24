@@ -99,7 +99,7 @@ impl DnsPacketProcessor {
         }
     }
 
-    pub async fn start_dns_query_cleanup_task(&mut self) {
+    pub async fn start(&mut self) {
         let pending_dns_queries = self.pending_dns_queries.clone();
         let stop_flag = Arc::new(AtomicBool::new(false));
         let stop_flag_clone = stop_flag.clone();
@@ -112,6 +112,7 @@ impl DnsPacketProcessor {
                     break;
                 }
                 let now = Instant::now();
+                // Clean up expired DNS queries
                 let mut queries = pending_dns_queries.write().await;
                 queries.retain(|_, pending_query| {
                     now.duration_since(pending_query.timestamp) < Duration::from_secs(30)

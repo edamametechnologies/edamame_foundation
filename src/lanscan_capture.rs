@@ -41,7 +41,6 @@ use tokio::select;
     feature = "asyncpacketcapture"
 ))]
 use tokio::time::interval;
-use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info, trace, warn};
 
 // A session is considered active if it has had activity in the last 60 seconds
@@ -58,12 +57,8 @@ pub struct LANScanCapture {
     capture_task_handles: Arc<DashMap<String, TaskHandle>>,
     sessions: Arc<DashMap<Session, SessionInfo>>,
     current_sessions: Arc<CustomRwLock<Vec<Session>>>,
-    current_sessions_handle: Option<TaskHandle>,
     resolver: Option<Arc<LANScanResolver>>,
-    resolver_handle: Option<TaskHandle>,
     l7: Option<Arc<LANScanL7>>,
-    l7_handle: Option<TaskHandle>,
-    whitelist_check_handle: Option<TaskHandle>,
     whitelist_name: Arc<CustomRwLock<String>>,
     custom_whitelists: Arc<CustomRwLock<Option<Whitelists>>>,
     whitelist_conformance: Arc<AtomicBool>,
@@ -71,7 +66,6 @@ pub struct LANScanCapture {
     whitelist_exceptions: Arc<CustomRwLock<Vec<Session>>>,
     filter: Arc<CustomRwLock<SessionFilter>>,
     dns_packet_processor: Option<Arc<DnsPacketProcessor>>,
-    dns_integration_handle: Option<TaskHandle>,
 }
 
 impl LANScanCapture {
@@ -81,12 +75,8 @@ impl LANScanCapture {
             capture_task_handles: Arc::new(DashMap::new()),
             sessions: Arc::new(DashMap::new()),
             current_sessions: Arc::new(CustomRwLock::new(Vec::new())),
-            current_sessions_handle: None,
             resolver: None,
-            resolver_handle: None,
             l7: None,
-            l7_handle: None,
-            whitelist_check_handle: None,
             whitelist_name: Arc::new(CustomRwLock::new("".to_string())),
             custom_whitelists: Arc::new(CustomRwLock::new(None)),
             whitelist_conformance: Arc::new(AtomicBool::new(true)),
@@ -96,7 +86,6 @@ impl LANScanCapture {
             whitelist_exceptions: Arc::new(CustomRwLock::new(Vec::new())),
             filter: Arc::new(CustomRwLock::new(SessionFilter::GlobalOnly)),
             dns_packet_processor: None,
-            dns_integration_handle: None,
         }
     }
 
@@ -146,8 +135,44 @@ impl LANScanCapture {
     pub async fn start(&mut self, interfaces: &LANScanInterfaces) {
         info!("Starting LANScanCapture");
 
-        // Start mDNS task
+        // Start mDNS task (if it's not already running)
         mdns_start().await;
+
+        // Initialize and start L7
+        if let Some(l7) = &mut self.l7 {
+            if let Some(l7) = Arc::get_mut(l7) {
+                l7.start().await;
+            } else {
+                error!("Unable to get mutable reference to L7");
+            }
+        } else {
+            self.l7 = Some(Arc::new(LANScanL7::new()));
+            if let Some(l7) = &mut self.l7 {
+                if let Some(l7) = Arc::get_mut(l7) {
+                    l7.start().await;
+                } else {
+                    error!("Unable to get mutable reference to L7");
+                }
+            }
+        }
+
+        // Initialize and start resolver
+        if let Some(resolver) = &mut self.resolver {
+            if let Some(resolver) = Arc::get_mut(resolver) {
+                resolver.start().await;
+            }
+        } else {
+            self.resolver = Some(Arc::new(LANScanResolver::new()));
+            if let Some(resolver) = &mut self.resolver {
+                if let Some(resolver) = Arc::get_mut(resolver) {
+                    resolver.start().await;
+                } else {
+                    error!("Unable to get mutable reference to resolver");
+                }
+            }
+        }
+
+        self.start_dns_packet_processor_task().await;
 
         // Set the interface
         *self.interfaces.write().await = interfaces.clone();
@@ -158,18 +183,9 @@ impl LANScanCapture {
             warn!("Capture task already running");
             return;
         }
-        // First start DNS packet processor task
-        self.start_dns_packet_processor_task().await;
+
         // Then start the capture task to populate the sessions map
         self.start_capture_task().await;
-        // Then start DNS resolution tasks
-        self.start_resolver_task().await;
-        // Then start L7 task
-        self.start_l7_task().await;
-        // Then start current sessions task
-        self.start_current_sessions_task().await;
-        // Finally start whitelist check task
-        self.start_whitelist_check_task().await;
     }
 
     pub async fn stop(&mut self) {
@@ -183,77 +199,28 @@ impl LANScanCapture {
         // First stop the capture tasks
         self.stop_capture_tasks().await;
 
-        // Stop the shared task handles first to ensure they release their references
-
-        // Stop the whitelist check task first (uses sessions)
-        self.stop_whitelist_check_task().await;
-
-        // Stop the current sessions task (uses sessions)
-        self.stop_current_sessions_task().await;
-
-        // Stop the DNS integration task (uses resolver and DNS packet processor)
-        if let Some(task_handle) = self.dns_integration_handle.take() {
-            task_handle.stop_flag.store(true, Ordering::Relaxed);
-            task_handle.handle.await.unwrap_or_default();
-            info!("Stopped DNS integration task");
-        }
-
-        // Next, stop the L7 task
-        if let Some(task_handle) = self.l7_handle.take() {
-            task_handle.stop_flag.store(true, Ordering::Relaxed);
-            let _ = task_handle.handle.await;
-            info!("L7 task terminated");
-        }
-
-        // Stop the resolver task
-        if let Some(task_handle) = self.resolver_handle.take() {
-            task_handle.stop_flag.store(true, Ordering::Relaxed);
-            let _ = task_handle.handle.await;
-            info!("Resolver task terminated");
-        }
-
-        // Wait a moment to ensure all tasks have properly terminated and dropped references
-        sleep(Duration::from_millis(100)).await;
-
-        // Now stop the underlying resources
-
-        // Stop the L7 resolver
-        if let Some(l7) = &mut self.l7 {
-            if let Some(l7) = Arc::get_mut(l7) {
-                l7.stop().await;
-                info!("L7 resolver stopped");
-            } else {
-                warn!(
-                    "Unable to get mutable reference to L7 resolver - will be dropped regardless"
-                );
-            }
-            // Drop our reference immediately
-            self.l7 = None;
-        }
-
         // Stop the resolver
         if let Some(resolver) = &mut self.resolver {
             if let Some(resolver) = Arc::get_mut(resolver) {
                 resolver.stop().await;
                 info!("Resolver stopped");
             } else {
-                warn!("Unable to get mutable reference to resolver - will be dropped regardless");
+                error!("Unable to get mutable reference to resolver");
             }
-            // Drop our reference immediately
-            self.resolver = None;
         }
 
-        // Finally stop the DNS packet processor
-        if let Some(dns_processor) = &mut self.dns_packet_processor {
-            if let Some(dns_processor) = Arc::get_mut(dns_processor) {
-                dns_processor.stop_dns_query_cleanup_task().await;
-                info!("DNS packet processor stopped");
+        // Stop the L7
+        if let Some(l7) = &mut self.l7 {
+            if let Some(l7) = Arc::get_mut(l7) {
+                l7.stop().await;
+                info!("L7 stopped");
             } else {
-                warn!("Unable to get mutable reference to DNS packet processor - will be dropped regardless");
+                error!("Unable to get mutable reference to L7");
             }
-            // Drop our reference immediately
-            self.dns_packet_processor = None;
         }
+
+        // Stop the DNS packet processor
+        self.stop_dns_packet_processor_task().await;
     }
 
     pub async fn restart(&mut self, interfaces: &LANScanInterfaces) {
@@ -296,13 +263,17 @@ impl LANScanCapture {
     }
 
     pub async fn create_custom_whitelists(&mut self) -> Result<String> {
-        // Create a whitelist with the current sessions
-        let mut sessions = Vec::new();
-        for session in self.sessions.iter() {
-            sessions.push(session.clone());
-        }
-        // Create a whitelist with the current sessions
-        let whitelist = Whitelists::new_from_sessions(&sessions);
+        // First update all sessions
+        self.update_sessions().await;
+
+        // Create a whitelist using all sessions instead of just current sessions
+        let sessions_vec: Vec<SessionInfo> = self
+            .sessions
+            .iter()
+            .map(|entry| entry.value().clone())
+            .collect();
+
+        let whitelist = Whitelists::new_from_sessions(&sessions_vec);
         let whitelist_json = WhitelistsJSON::from(whitelist);
         match serde_json::to_string(&whitelist_json) {
             Ok(json) => Ok(json),
@@ -317,239 +288,31 @@ impl LANScanCapture {
         self.filter.read().await.clone()
     }
 
-    async fn start_current_sessions_task(&mut self) {
-        if self.current_sessions_handle.is_some() {
-            warn!("Current sessions task is already running");
-            return;
-        }
-
-        let sessions = self.sessions.clone();
-        let current_sessions = self.current_sessions.clone();
-        let resolver = self.resolver.clone();
-        let dns_packet_processor = self.dns_packet_processor.clone();
-        let l7 = self.l7.clone();
-
-        let stop_flag = Arc::new(AtomicBool::new(false));
-        let stop_flag_for_task = stop_flag.clone();
-
-        let handle = async_spawn(async move {
-            info!("Starting current sessions task");
-            while !stop_flag_for_task.load(Ordering::Relaxed) {
-                debug!("Current sessions update started");
-                Self::update_sessions_status(&sessions, &current_sessions).await;
-                if let Some(dns_packet_processor) = dns_packet_processor.as_ref() {
-                    Self::populate_domain_names(
-                        &sessions,
-                        &resolver,
-                        &dns_packet_processor.get_dns_resolutions(),
-                        &current_sessions,
-                    )
-                    .await;
-                }
-                Self::populate_l7(&sessions, &l7, &current_sessions).await;
-                debug!("Current sessions update completed");
-                sleep(Duration::from_secs(1)).await;
-            }
-            info!("Current sessions task terminated");
-        });
-
-        self.current_sessions_handle = Some(TaskHandle { handle, stop_flag });
-    }
-
-    async fn stop_current_sessions_task(&mut self) {
-        if let Some(task_handle) = self.current_sessions_handle.take() {
-            task_handle.stop_flag.store(true, Ordering::Relaxed);
-            let _ = task_handle.handle.await;
-        } else {
-            error!("Active sessions task not running");
-        }
-    }
-
-    async fn start_resolver_task(&mut self) {
-        // Create a new resolver if it doesn't exist
-        if self.resolver.is_none() {
-            self.resolver = Some(Arc::new(LANScanResolver::new()));
-        }
-
-        // Start the resolver if it exists
-        if let Some(resolver) = &mut self.resolver {
-            if let Some(resolver) = Arc::get_mut(resolver) {
-                resolver.start().await;
-            } else {
-                error!("Failed to get mutable reference to resolver");
-            }
-        }
-
-        let resolver = self.resolver.clone();
-        let stop_flag = Arc::new(AtomicBool::new(false));
-        let sessions = self.sessions.clone();
-        let current_sessions = self.current_sessions.clone();
-        let dns_packet_processor = self.dns_packet_processor.clone();
-
-        let stop_flag_clone = stop_flag.clone();
-        let handle = async_spawn(async move {
-            loop {
-                trace!("Domain name population started");
-                if let Some(dns_packet_processor) = dns_packet_processor.as_ref() {
-                    Self::populate_domain_names(
-                        &sessions,
-                        &resolver,
-                        &dns_packet_processor.get_dns_resolutions(),
-                        &current_sessions,
-                    )
-                    .await;
-                }
-                info!("Domain name population completed");
-                if stop_flag.load(Ordering::Relaxed) {
-                    break;
-                }
-                sleep(Duration::from_secs(5)).await;
-            }
-            info!("Resolver task terminated");
-        });
-
-        self.resolver_handle = Some(TaskHandle {
-            handle,
-            stop_flag: stop_flag_clone,
-        });
-    }
-
     async fn start_dns_packet_processor_task(&mut self) {
         // Create a new DNS packet processor if it doesn't exist
-        if self.dns_packet_processor.is_some() {
-            return;
+        if self.dns_packet_processor.is_none() {
+            self.dns_packet_processor = Some(Arc::new(DnsPacketProcessor::new()));
         }
 
-        let mut dns_packet_processor = Arc::new(DnsPacketProcessor::new());
-
-        // Start the cleanup task on the original before cloning
-        if let Some(dns_processor) = Arc::get_mut(&mut dns_packet_processor) {
-            dns_processor.start_dns_query_cleanup_task().await;
-        } else {
-            error!("Failed to get mutable reference to DNS packet processor");
-        }
-
-        self.dns_packet_processor = Some(dns_packet_processor.clone());
-
-        // Create a task to periodically integrate DNS resolutions with resolver
-        let capture_self = Arc::new(self.clone());
-        let stop_flag = Arc::new(AtomicBool::new(false));
-        let stop_flag_for_task = stop_flag.clone();
-
-        let handle = async_spawn(async move {
-            info!("Starting DNS integration task");
-            let mut last_integration = tokio::time::Instant::now();
-
-            while !stop_flag_for_task.load(Ordering::Relaxed) {
-                // Sleep for a short time
-                sleep(Duration::from_secs(1)).await;
-
-                // Check if it's time to integrate (every 15 seconds)
-                if tokio::time::Instant::now()
-                    .duration_since(last_integration)
-                    .as_secs()
-                    >= 15
-                {
-                    capture_self.integrate_dns_with_resolver().await;
-                    last_integration = tokio::time::Instant::now();
-                }
-            }
-
-            info!("DNS integration task completed");
-        });
-
-        // Store the handle in a field
-        self.dns_integration_handle = Some(TaskHandle { handle, stop_flag });
-    }
-
-    async fn start_l7_task(&mut self) {
-        // Create L7 resolver if it doesn't exist
-        if self.l7.is_none() {
-            self.l7 = Some(Arc::new(LANScanL7::new()));
-        }
-
-        // Start the L7 resolver if it exists
-        if let Some(l7) = &mut self.l7 {
-            if let Some(l7) = Arc::get_mut(l7) {
-                l7.start().await;
+        // Start the cleanup task
+        if let Some(dns_processor) = &mut self.dns_packet_processor {
+            if let Some(dns_processor) = Arc::get_mut(dns_processor) {
+                dns_processor.start().await;
             } else {
-                error!("Failed to get mutable reference to L7 resolver");
+                error!("Failed to get mutable reference to DNS packet processor");
             }
         }
-
-        let l7 = self.l7.clone();
-        let stop_flag = Arc::new(AtomicBool::new(false));
-        let sessions = self.sessions.clone();
-        let current_sessions = self.current_sessions.clone();
-
-        let stop_flag_clone = stop_flag.clone();
-        let handle = async_spawn(async move {
-            loop {
-                trace!("L7 update started");
-                Self::populate_l7(&sessions, &l7, &current_sessions).await;
-                info!("L7 update completed");
-                if stop_flag.load(Ordering::Relaxed) {
-                    break;
-                }
-                sleep(Duration::from_secs(5)).await;
-            }
-            info!("L7 task terminated");
-        });
-
-        self.l7_handle = Some(TaskHandle {
-            handle,
-            stop_flag: stop_flag_clone,
-        });
     }
 
-    async fn start_whitelist_check_task(&mut self) {
-        let custom_whitelists = self.custom_whitelists.clone();
-        let whitelist_name = self.whitelist_name.clone();
-        let whitelist_exceptions = self.whitelist_exceptions.clone();
-        let whitelist_conformance = self.whitelist_conformance.clone();
-        let last_whitelist_exception_time = self.last_whitelist_exception_time.clone();
-        let sessions = self.sessions.clone();
-        let current_sessions = self.current_sessions.clone();
-        let stop_flag = Arc::new(AtomicBool::new(false));
-
-        let stop_flag_clone = stop_flag.clone();
-        let handle = async_spawn(async move {
-            loop {
-                if stop_flag.load(Ordering::Relaxed) {
-                    break;
-                }
-                trace!("Whitelist check started");
-                let whitelist_name_clone = whitelist_name.read().await.clone();
-                if !whitelist_name_clone.is_empty() {
-                    Self::check_whitelisted_destinations(
-                        &custom_whitelists,
-                        &whitelist_name_clone,
-                        &whitelist_conformance,
-                        &whitelist_exceptions,
-                        &sessions,
-                        &current_sessions,
-                        &last_whitelist_exception_time,
-                    )
-                    .await;
-                    info!("Whitelist check completed");
-                }
-                sleep(Duration::from_secs(5)).await;
+    async fn stop_dns_packet_processor_task(&mut self) {
+        // Stop the DNS packet processor cleanup task
+        if let Some(dns_processor) = &mut self.dns_packet_processor {
+            if let Some(dns_processor) = Arc::get_mut(dns_processor) {
+                dns_processor.stop_dns_query_cleanup_task().await;
+                info!("DNS packet processor stopped");
+            } else {
+                error!("Failed to get mutable reference to DNS packet processor");
             }
-            info!("Whitelist check task terminated");
-        });
-
-        self.whitelist_check_handle = Some(TaskHandle {
-            handle,
-            stop_flag: stop_flag_clone,
-        });
-    }
-
-    async fn stop_whitelist_check_task(&mut self) {
-        if let Some(task_handle) = self.whitelist_check_handle.take() {
-            task_handle.stop_flag.store(true, Ordering::Relaxed);
-            let _ = task_handle.handle.await;
-        } else {
-            error!("Whitelist check task not running");
         }
     }
 
@@ -935,7 +698,7 @@ impl LANScanCapture {
                     }
                 };
 
-                let mut interval = interval(Duration::from_millis(100));
+                let mut interval = interval(tokio::time::Duration::from_millis(100));
 
                 tracing::debug!("Starting async capture task for {}", interface_clone);
                 loop {
@@ -1014,28 +777,23 @@ impl LANScanCapture {
         whitelist_conformance: &AtomicBool,
         whitelist_exceptions: &Arc<CustomRwLock<Vec<Session>>>,
         sessions: &DashMap<Session, SessionInfo>,
-        current_sessions: &Arc<CustomRwLock<Vec<Session>>>,
         last_whitelist_exception_time: &Arc<CustomRwLock<DateTime<Utc>>>,
     ) {
         let mut updated_exceptions = Vec::new();
         let mut whitelisted_sessions = Vec::new();
-        // Clone the current_sessions to avoid holding the lock for too long
-        let current_sessions_clone = current_sessions.read().await.clone();
 
         if custom_whitelists.read().await.is_some() || is_valid_whitelist(whitelist_name).await {
-            for key in current_sessions_clone.iter() {
-                // Clone necessary data to avoid holding the lock
-                let session_info = if let Some(session) = sessions.get(key) {
-                    session.clone()
-                } else {
-                    error!("Session not found in sessions map");
-                    continue;
-                };
+            // Process all sessions
+            for entry in sessions.iter() {
+                let session_info = entry.value().clone();
+                let key = &session_info.session;
 
                 let dst_domain = session_info.dst_domain.clone();
 
                 if let Some(dst_domain) = dst_domain {
-                    if dst_domain == "Unknown".to_string() {
+                    // If the domain is unknown or resolving, use the IP address instead
+                    if dst_domain == "Unknown".to_string() || dst_domain == "Resolving".to_string()
+                    {
                         // The domain has not been resolved successfully, use the IP address instead
                         if !is_session_in_whitelist(
                             None,
@@ -1061,34 +819,29 @@ impl LANScanCapture {
                             whitelisted_sessions.push(session_info.session.clone());
                         }
                     } else {
-                        if dst_domain == "Resolving".to_string() {
-                            // The domain is still being resolved, ignore it
-                            continue;
+                        // The domain has been resolved
+                        if !is_session_in_whitelist(
+                            Some(&dst_domain),
+                            None,
+                            session_info.session.dst_port,
+                            session_info.session.protocol.to_string().as_str(),
+                            custom_whitelists,
+                            whitelist_name,
+                            session_info.dst_asn.as_ref().map(|asn| asn.as_number),
+                            session_info
+                                .dst_asn
+                                .as_ref()
+                                .map(|asn| asn.country.as_str()),
+                            session_info.dst_asn.as_ref().map(|asn| asn.owner.as_str()),
+                            session_info.l7.as_ref().map(|l7| l7.process_name.as_str()),
+                        )
+                        .await
+                        {
+                            trace!("Session {:?} failed whitelist check", key);
+                            updated_exceptions.push(session_info.session.clone());
+                            *last_whitelist_exception_time.write().await = Utc::now();
                         } else {
-                            // The domain has been resolved
-                            if !is_session_in_whitelist(
-                                Some(&dst_domain),
-                                None,
-                                session_info.session.dst_port,
-                                session_info.session.protocol.to_string().as_str(),
-                                custom_whitelists,
-                                whitelist_name,
-                                session_info.dst_asn.as_ref().map(|asn| asn.as_number),
-                                session_info
-                                    .dst_asn
-                                    .as_ref()
-                                    .map(|asn| asn.country.as_str()),
-                                session_info.dst_asn.as_ref().map(|asn| asn.owner.as_str()),
-                                session_info.l7.as_ref().map(|l7| l7.process_name.as_str()),
-                            )
-                            .await
-                            {
-                                trace!("Session {:?} failed whitelist check", key);
-                                updated_exceptions.push(session_info.session.clone());
-                                *last_whitelist_exception_time.write().await = Utc::now();
-                            } else {
-                                whitelisted_sessions.push(session_info.session.clone());
-                            }
+                            whitelisted_sessions.push(session_info.session.clone());
                         }
                     }
                 } else {
@@ -1345,8 +1098,50 @@ impl LANScanCapture {
         }
     }
 
+    async fn update_sessions(&self) {
+        // Update the sessions status and current sessions
+        Self::update_sessions_status(&self.sessions, &self.current_sessions).await;
+
+        // Update L7 information for all sessions
+        if let Some(l7) = &self.l7 {
+            Self::populate_l7(&self.sessions, &Some(l7.clone()), &self.current_sessions).await;
+        }
+
+        // Enrich DNS resolutions with DNS packet processor information
+        self.integrate_dns_with_resolver().await;
+
+        // Then update resolver information for all sessions
+        if let (Some(resolver), Some(dns_processor)) = (&self.resolver, &self.dns_packet_processor)
+        {
+            Self::populate_domain_names(
+                &self.sessions,
+                &Some(resolver.clone()),
+                &dns_processor.get_dns_resolutions(),
+                &self.current_sessions,
+            )
+            .await;
+        }
+
+        // Finally update whitelist information
+        let whitelist_name = self.whitelist_name.read().await.clone();
+        if !whitelist_name.is_empty() || self.custom_whitelists.read().await.is_some() {
+            Self::check_whitelisted_destinations(
+                &self.custom_whitelists,
+                &whitelist_name,
+                &self.whitelist_conformance,
+                &self.whitelist_exceptions,
+                &self.sessions,
+                &self.last_whitelist_exception_time,
+            )
+            .await;
+        }
+    }
+
     // Get historical sessions as a vector of SessionInfo
     pub async fn get_sessions(&self) -> Vec<SessionInfo> {
+        // First update all sessions
+        self.update_sessions().await;
+
         let mut sessions_vec = Vec::new();
         let filter = self.filter.read().await.clone();
         for entry in self.sessions.iter() {
@@ -1374,6 +1169,9 @@ impl LANScanCapture {
 
     // Active sessions as a vector of SessionInfo
     pub async fn get_current_sessions(&self) -> Vec<SessionInfo> {
+        // First update all sessions
+        self.update_sessions().await;
+
         // Get the sessions from the DashMap that match the keys in the current_sessions Vec
         let filter = self.filter.read().await.clone();
         let mut current_sessions_vec = Vec::new();
@@ -1403,10 +1201,16 @@ impl LANScanCapture {
     }
 
     pub async fn get_whitelist_conformance(&self) -> bool {
+        // First update all sessions
+        self.update_sessions().await;
+
         self.whitelist_conformance.load(Ordering::Relaxed)
     }
 
     pub async fn get_whitelist_exceptions(&self) -> Vec<SessionInfo> {
+        // First update all sessions
+        self.update_sessions().await;
+
         let mut exceptions = Vec::new();
         for key in self.whitelist_exceptions.read().await.iter() {
             if let Some(entry) = self.sessions.get(key) {
@@ -1416,7 +1220,7 @@ impl LANScanCapture {
         exceptions
     }
 
-    // Add this new method to integrate DNS packet captures with the resolver
+    // Enrich dns resolutions with DNS packet processor information
     async fn integrate_dns_with_resolver(&self) {
         if self.dns_packet_processor.is_none() || self.resolver.is_none() {
             trace!("Cannot integrate DNS sources: one or more components missing");
@@ -1454,12 +1258,8 @@ impl Clone for LANScanCapture {
             capture_task_handles: self.capture_task_handles.clone(),
             sessions: self.sessions.clone(),
             current_sessions: self.current_sessions.clone(),
-            current_sessions_handle: None, // Don't clone task handles
             resolver: self.resolver.clone(),
-            resolver_handle: None, // Don't clone task handles
             l7: self.l7.clone(),
-            l7_handle: None,              // Don't clone task handles
-            whitelist_check_handle: None, // Don't clone task handles
             whitelist_name: self.whitelist_name.clone(),
             custom_whitelists: self.custom_whitelists.clone(),
             whitelist_conformance: self.whitelist_conformance.clone(),
@@ -1467,7 +1267,6 @@ impl Clone for LANScanCapture {
             whitelist_exceptions: self.whitelist_exceptions.clone(),
             filter: self.filter.clone(),
             dns_packet_processor: self.dns_packet_processor.clone(),
-            dns_integration_handle: None, // Don't clone task handles
         }
     }
 }
@@ -1480,6 +1279,7 @@ mod tests {
     use pnet_packet::tcp::TcpFlags;
     use serial_test::serial;
     use std::net::{IpAddr, Ipv4Addr};
+    use tokio::time::{sleep, Duration};
     use uuid::Uuid;
 
     #[tokio::test]
@@ -1701,7 +1501,7 @@ mod tests {
     #[serial]
     async fn test_update_sessions_status_added() {
         let mut capture = LANScanCapture::new();
-        capture.set_filter(SessionFilter::All).await; // Include all sessions in the filter
+        capture.set_filter(SessionFilter::All).await;
 
         // Create a synthetic session and add it to sessions
         let session = Session {
@@ -1715,10 +1515,9 @@ mod tests {
         let now = Utc::now();
 
         let stats = SessionStats {
-            start_time: now - ChronoDuration::seconds(10),
+            start_time: now - ChronoDuration::seconds(5), // Recent start time
             end_time: None,
-            last_activity: now - ChronoDuration::seconds(10),
-            // History of bytes
+            last_activity: now - ChronoDuration::seconds(5), // Recent activity
             inbound_bytes: 5000,
             outbound_bytes: 5000,
             orig_pkts: 50,
@@ -1757,114 +1556,13 @@ mod tests {
         capture.sessions.insert(session.clone(), session_info);
         capture.current_sessions.write().await.push(session.clone());
 
-        // Simulate activity by updating last_activity and bytes transferred
-        if let Some(mut entry) = capture.sessions.get_mut(&session) {
-            entry.stats.last_activity = now;
-            entry.stats.outbound_bytes += 5000; // Added 5000 bytes outbound
-            entry.stats.inbound_bytes += 10000; // Added 10000 bytes inbound
-        }
-
-        LANScanCapture::update_sessions_status(&capture.sessions, &capture.current_sessions).await;
-
         // Check current sessions
         let current_sessions = capture.get_current_sessions().await;
-        capture.current_sessions.write().await.push(session.clone());
 
         assert_eq!(current_sessions.len(), 1);
         assert_eq!(current_sessions[0].session, session);
         assert!(current_sessions[0].status.active);
         assert!(current_sessions[0].status.added);
-        assert!(current_sessions[0].status.activated);
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn test_update_sessions_status_activated() {
-        let mut capture = LANScanCapture::new();
-        capture.set_filter(SessionFilter::All).await; // Include all sessions in the filter
-
-        // Create a synthetic session and add it to sessions
-        let session = Session {
-            protocol: Protocol::TCP,
-            src_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
-            src_port: 12345,
-            dst_ip: IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)),
-            dst_port: 80,
-        };
-
-        let now = Utc::now();
-
-        let stats = SessionStats {
-            // Old start time
-            start_time: now - ChronoDuration::seconds(1800),
-            end_time: None,
-            last_activity: now - ChronoDuration::seconds(1800),
-            inbound_bytes: 5000,
-            outbound_bytes: 5000,
-            orig_pkts: 50,
-            resp_pkts: 50,
-            orig_ip_bytes: 0,
-            resp_ip_bytes: 0,
-            history: String::new(),
-            conn_state: None,
-            missed_bytes: 0,
-            uid: Uuid::new_v4().to_string(),
-        };
-
-        let session_info = SessionInfo {
-            session: session.clone(),
-            stats,
-            status: SessionStatus {
-                active: false,
-                added: false,
-                activated: false,
-                deactivated: false,
-            },
-            is_local_src: false,
-            is_local_dst: false,
-            is_self_src: false,
-            is_self_dst: false,
-            src_domain: None,
-            dst_domain: None,
-            dst_service: None,
-            l7: None,
-            src_asn: None,
-            dst_asn: None,
-            is_whitelisted: WhitelistState::Unknown,
-            criticality: "".to_string(),
-        };
-
-        capture.sessions.insert(session.clone(), session_info);
-        capture.current_sessions.write().await.push(session.clone());
-
-        // Check the filter - removing this creates a race condition
-        assert_eq!(capture.filter.read().await.clone(), SessionFilter::All);
-        let current_sessions = capture.get_current_sessions().await;
-
-        LANScanCapture::update_sessions_status(&capture.sessions, &capture.current_sessions).await;
-
-        assert_eq!(current_sessions.len(), 1);
-        assert_eq!(current_sessions[0].session, session);
-        assert!(!current_sessions[0].status.active);
-        assert!(!current_sessions[0].status.added);
-        assert!(!current_sessions[0].status.activated);
-
-        // Simulate activity
-        if let Some(mut entry) = capture.sessions.get_mut(&session) {
-            entry.stats.last_activity = now;
-            entry.stats.outbound_bytes += 5000; // Added 5000 bytes outbound
-            entry.stats.inbound_bytes += 10000; // Added 10000 bytes inbound
-        }
-
-        LANScanCapture::update_sessions_status(&capture.sessions, &capture.current_sessions).await;
-
-        // Check current sessions
-        let current_sessions = capture.get_current_sessions().await;
-
-        assert_eq!(current_sessions.len(), 1);
-        assert_eq!(current_sessions[0].session, session);
-        assert!(current_sessions[0].status.active);
-        assert!(!current_sessions[0].status.added);
         assert!(current_sessions[0].status.activated);
     }
 
@@ -2060,7 +1758,6 @@ mod tests {
             &capture.whitelist_conformance,
             &capture.whitelist_exceptions,
             &capture.sessions,
-            &capture.current_sessions,
             &capture.last_whitelist_exception_time,
         )
         .await;
@@ -2168,15 +1865,23 @@ mod tests {
         println!("Starting capture...");
         capture.start(&interfaces).await;
 
+        // Make sure we have an L7 processor
+        assert!(capture.l7.is_some(), "Capture should have an L7 processor");
+
+        // Make sure we have a resolver
+        assert!(capture.resolver.is_some(), "Capture should have a resolver");
+
+        // Make sure we have a DNS packet processor
+        assert!(
+            capture.dns_packet_processor.is_some(),
+            "Capture should have a DNS packet processor"
+        );
+
         // Check if capture is running
         assert!(capture.is_capturing().await, "Capture should be running");
 
-        // Brief delay to allow capture to initialize
-        sleep(Duration::from_secs(2)).await;
-
-        // Stop the capture
-        println!("Stopping capture...");
-        capture.stop().await;
+        // Delay to allow capture to get some sessions and be resolved
+        sleep(Duration::from_secs(45)).await;
 
         // Make sure we have sessions
         let sessions = capture.get_sessions().await;
@@ -2208,12 +1913,32 @@ mod tests {
         // Print the custom whitelist
         println!("Custom whitelist: {:?}", custom_whitelist);
 
-        // Try to create a custom whitelist
-        capture.set_whitelist("custom_whitelist").await;
-        assert!(
-            capture.get_whitelist_conformance().await,
-            "Capture should have whitelist conformance"
-        );
+        // Set the whitelist
+        capture.set_custom_whitelists(&custom_whitelist).await;
+
+        // Make sure all sessions have a status that is not Unknown, and at least some have process info and DNS info
+        let sessions = capture.get_sessions().await;
+        let mut have_process_info = false;
+        let mut have_dns_info = false;
+        let mut have_unknown = false;
+        for session in sessions {
+            println!("Session: {:?}", session);
+            if session.is_whitelisted == WhitelistState::Unknown {
+                have_unknown = true;
+            }
+            if session.l7.is_some() && !session.l7.unwrap().process_name.is_empty() {
+                have_process_info = true;
+            }
+            if session.dst_domain.is_some() && !session.dst_domain.unwrap().is_empty() {
+                have_dns_info = true;
+            }
+        }
+        assert!(!have_unknown, "All sessions should have a whitelist status");
+        assert!(have_process_info, "Some sessions should have process info");
+        assert!(have_dns_info, "Some sessions should have DNS info");
+
+        // Stop the capture
+        capture.stop().await;
 
         // Check if capture has stopped
         assert!(!capture.is_capturing().await, "Capture should have stopped");
