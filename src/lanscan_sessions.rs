@@ -51,6 +51,7 @@ pub struct SessionInfo {
     pub dst_asn: Option<Record>,
     pub is_whitelisted: WhitelistState,
     pub criticality: String,
+    pub whitelist_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Ord, PartialOrd)]
@@ -228,6 +229,7 @@ pub fn format_sessions_log(sessions: &Vec<SessionInfo>) -> Vec<String> {
 
         let stats = session_info.stats.clone();
         let is_whitelisted = session_info.is_whitelisted.clone();
+        let whitelist_reason = session_info.whitelist_reason.clone();
         let session = session_info.session.clone();
         let start_time = stats.start_time.to_rfc3339();
         let duration = match stats.end_time {
@@ -269,6 +271,15 @@ pub fn format_sessions_log(sessions: &Vec<SessionInfo>) -> Vec<String> {
             None => format!("{}", session.dst_port.to_string()),
         };
 
+        // Format the whitelist status including the reason if NonConforming
+        let whitelist_status = match is_whitelisted {
+            WhitelistState::NonConforming => match whitelist_reason {
+                Some(reason) => format!("NonConforming: {}", reason),
+                None => "NonConforming".to_string(),
+            },
+            _ => format!("{}", is_whitelisted),
+        };
+
         let log_entry = format!(
             "[{}] {} {} - {} {}:{} -> {}:{} {} ({} bytes sent, {} bytes received, duration: {}, whitelisted: {})",
             start_time,
@@ -283,7 +294,7 @@ pub fn format_sessions_log(sessions: &Vec<SessionInfo>) -> Vec<String> {
             stats.outbound_bytes,
             stats.inbound_bytes,
             duration,
-            is_whitelisted
+            whitelist_status
         );
 
         log_entries.push(log_entry);
@@ -365,6 +376,7 @@ mod tests {
             dst_asn: None,
             is_whitelisted: WhitelistState::Conforming,
             criticality: "".to_string(),
+            whitelist_reason: None,
         };
 
         let session_global = SessionInfo {
@@ -412,6 +424,7 @@ mod tests {
             }),
             is_whitelisted: WhitelistState::NonConforming,
             criticality: "".to_string(),
+            whitelist_reason: Some("Reason for non-conforming".to_string()),
         };
 
         let sessions = vec![session_local.clone(), session_global.clone()];
@@ -478,6 +491,7 @@ mod tests {
             }),
             is_whitelisted: WhitelistState::Unknown,
             criticality: "".to_string(),
+            whitelist_reason: None,
         };
 
         let sessions = vec![session];
@@ -557,6 +571,7 @@ mod tests {
             }),
             is_whitelisted: WhitelistState::Unknown,
             criticality: "".to_string(),
+            whitelist_reason: None,
         };
 
         let sessions = vec![session];

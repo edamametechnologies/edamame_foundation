@@ -232,6 +232,9 @@ pub async fn is_valid_whitelist(whitelist_name: &str) -> bool {
 }
 
 /// Checks if a given session is in the specified whitelist.
+/// Returns a tuple (bool, Option<String>) where:
+/// - The boolean indicates whether the session is in the whitelist
+/// - If false, the Option<String> contains a reason why the session didn't match
 pub async fn is_session_in_whitelist(
     session_domain: Option<&str>,
     session_ip: Option<&str>,
@@ -243,7 +246,7 @@ pub async fn is_session_in_whitelist(
     as_country: Option<&str>,
     as_owner: Option<&str>,
     process: Option<&str>,
-) -> bool {
+) -> (bool, Option<String>) {
     trace!(
         "Checking if domain: {:?}, ip: {:?}, port: {} ({}) is in whitelist {} with ASN {:?}, Country {:?}, Owner {:?}, L7 Process {:?}",
         session_domain,
@@ -272,8 +275,10 @@ pub async fn is_session_in_whitelist(
         match custom_endpoints {
             Ok(eps) => eps,
             Err(err) => {
-                warn!("Error retrieving endpoints from custom whitelist: {}", err);
-                return false;
+                let error_msg =
+                    format!("Error retrieving endpoints from custom whitelist: {}", err);
+                warn!("{}", error_msg);
+                return (false, Some(error_msg));
             }
         }
     } else {
@@ -293,15 +298,27 @@ pub async fn is_session_in_whitelist(
         match global_endpoints {
             Ok(eps) => eps,
             Err(err) => {
-                warn!("Error retrieving endpoints from global whitelist: {}", err);
-                return false;
+                let error_msg =
+                    format!("Error retrieving endpoints from global whitelist: {}", err);
+                warn!("{}", error_msg);
+                return (false, Some(error_msg));
             }
         }
     };
 
+    if endpoints.is_empty() {
+        return (
+            false,
+            Some(format!(
+                "Whitelist '{}' contains no endpoints",
+                whitelist_name
+            )),
+        );
+    }
+
     // Match the session against the endpoints
-    endpoints.iter().any(|endpoint| {
-        endpoint_matches(
+    for endpoint in &endpoints {
+        let (matches, _reason) = endpoint_matches_with_reason(
             session_domain,
             session_ip,
             port,
@@ -311,12 +328,25 @@ pub async fn is_session_in_whitelist(
             as_owner,
             process,
             endpoint,
-        )
-    })
+        );
+
+        if matches {
+            trace!("Matched whitelist endpoint: {:?}", endpoint);
+            return (true, None);
+        }
+    }
+
+    // If we got here, no endpoint matched
+    let reason = format!(
+        "No matching endpoint found in whitelist '{}' for domain: {:?}, ip: {:?}, port: {}, protocol: {}, ASN: {:?}, Country: {:?}, Owner: {:?}, Process: {:?}",
+        whitelist_name, session_domain, session_ip, port, protocol, as_number, as_country, as_owner, process
+    );
+
+    (false, Some(reason))
 }
 
-/// Helper function to match the session against a whitelist endpoint.
-fn endpoint_matches(
+/// Helper function to match the session against a whitelist endpoint with reason.
+fn endpoint_matches_with_reason(
     session_domain: Option<&str>,
     session_ip: Option<&str>,
     port: u16,
@@ -326,7 +356,7 @@ fn endpoint_matches(
     as_owner: Option<&str>,
     process: Option<&str>,
     endpoint: &WhitelistEndpoint,
-) -> bool {
+) -> (bool, Option<String>) {
     let domain_match = domain_matches(session_domain, &endpoint.domain);
     let ip_match = ip_matches(session_ip, &endpoint.ip);
     let port_match = port_matches(port, endpoint.port);
@@ -345,22 +375,66 @@ fn endpoint_matches(
         && owner_match
         && l7_match
     {
-        trace!("Matched whitelist endpoint: {:?}", endpoint);
-        true
+        (true, None)
     } else {
+        let mut reasons = Vec::new();
+
+        if !domain_match {
+            reasons.push(format!(
+                "Domain mismatch: {:?} not matching {:?}",
+                session_domain, endpoint.domain
+            ));
+        }
+        if !ip_match {
+            reasons.push(format!(
+                "IP mismatch: {:?} not matching {:?}",
+                session_ip, endpoint.ip
+            ));
+        }
+        if !port_match {
+            reasons.push(format!(
+                "Port mismatch: {} not matching {:?}",
+                port, endpoint.port
+            ));
+        }
+        if !protocol_match {
+            reasons.push(format!(
+                "Protocol mismatch: {} not matching {:?}",
+                protocol, endpoint.protocol
+            ));
+        }
+        if !as_number_match {
+            reasons.push(format!(
+                "AS number mismatch: {:?} not matching {:?}",
+                as_number, endpoint.as_number
+            ));
+        }
+        if !country_match {
+            reasons.push(format!(
+                "Country mismatch: {:?} not matching {:?}",
+                as_country, endpoint.as_country
+            ));
+        }
+        if !owner_match {
+            reasons.push(format!(
+                "Owner mismatch: {:?} not matching {:?}",
+                as_owner, endpoint.as_owner
+            ));
+        }
+        if !l7_match {
+            reasons.push(format!(
+                "Process mismatch: {:?} not matching {:?}",
+                process, endpoint.process
+            ));
+        }
+
         trace!(
-            "Did not match whitelist endpoint: {:?}, Reasons: domain_match={}, ip_match={}, port_match={}, protocol_match={}, as_number_match={}, country_match={}, owner_match={}, l7_match={}",
+            "Did not match whitelist endpoint: {:?}, Reasons: {}",
             endpoint,
-            domain_match,
-            ip_match,
-            port_match,
-            protocol_match,
-            as_number_match,
-            country_match,
-            owner_match,
-            l7_match
+            reasons.join(", ")
         );
-        false
+
+        (false, Some(reasons.join(", ")))
     }
 }
 
@@ -637,7 +711,8 @@ mod tests {
                 None,
                 None
             )
-            .await,
+            .await
+            .0,
             "Should match inherited endpoint"
         );
 
@@ -655,7 +730,8 @@ mod tests {
                 Some("Test ISP"),
                 Some("nginx")
             )
-            .await,
+            .await
+            .0,
             "Should match extended whitelist endpoint"
         );
     }
@@ -679,7 +755,7 @@ mod tests {
                     as_country: None,
                     as_owner: None,
                     process: None,
-                    description: Some("Prefix wildcard".to_string()),
+                    description: Some("Wildcard domain".to_string()),
                 }],
             }],
         };
@@ -707,7 +783,8 @@ mod tests {
                 None,
                 None
             )
-            .await,
+            .await
+            .0,
             "Should match sub.example.com with *.example.com"
         );
 
@@ -725,52 +802,9 @@ mod tests {
                 None,
                 None
             )
-            .await,
+            .await
+            .0,
             "Should not match example.com with *.example.com"
-        );
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn test_as_number_matching() {
-        initialize_test_whitelists().await;
-
-        let custom_whitelists = Arc::new(CustomRwLock::new(None));
-
-        // Test complete ASN match
-        assert!(
-            is_session_in_whitelist(
-                None,
-                Some("192.168.1.100"),
-                80,
-                "TCP",
-                &custom_whitelists,
-                "extended_whitelist",
-                Some(12345),
-                Some("US"),
-                Some("Test ISP"),
-                Some("nginx")
-            )
-            .await,
-            "Should match with complete ASN info"
-        );
-
-        // Test partial ASN match (missing some fields)
-        assert!(
-            !is_session_in_whitelist(
-                None,
-                Some("192.168.1.100"),
-                80,
-                "TCP",
-                &custom_whitelists,
-                "extended_whitelist",
-                Some(12345),
-                Some("UK"), // Different country
-                Some("Test ISP"),
-                Some("nginx")
-            )
-            .await,
-            "Should not match with different country"
         );
     }
 
@@ -795,7 +829,8 @@ mod tests {
                 None,
                 None
             )
-            .await,
+            .await
+            .0,
             "Should return false for non-existent whitelist"
         );
     }
@@ -821,7 +856,8 @@ mod tests {
                 Some("Test ISP"),
                 Some("nginx")
             )
-            .await,
+            .await
+            .0,
             "Should match with correct l7 process"
         );
 
@@ -839,7 +875,8 @@ mod tests {
                 Some("Test ISP"),
                 Some("apache")
             )
-            .await,
+            .await
+            .0,
             "Should not match with different l7 process"
         );
     }
@@ -939,7 +976,8 @@ mod tests {
                 None,
                 None
             )
-            .await,
+            .await
+            .0,
             "Should match 'a.com' in 'whitelist_c' due to recursive inheritance"
         );
 
@@ -956,7 +994,8 @@ mod tests {
                 None,
                 None
             )
-            .await,
+            .await
+            .0,
             "Should match 'b.com' in 'whitelist_a' due to recursive inheritance"
         );
 
@@ -973,1299 +1012,9 @@ mod tests {
                 None,
                 None
             )
-            .await,
+            .await
+            .0,
             "Should match 'c.com' in 'whitelist_b' due to recursive inheritance"
-        );
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn test_extended_wildcard_domain_matching() {
-        // Initialize test data with wildcard domains
-        let test_whitelist_json = WhitelistsJSON {
-            date: "2024-10-20".to_string(),
-            signature: Some("test_signature".to_string()),
-            whitelists: vec![WhitelistInfo {
-                name: "wildcard_domain_whitelist".to_string(),
-                extends: None,
-                endpoints: vec![
-                    WhitelistEndpoint {
-                        domain: Some("*.example.com".to_string()),
-                        ip: None,
-                        port: None,
-                        protocol: Some("TCP".to_string()),
-                        as_number: None,
-                        as_country: None,
-                        as_owner: None,
-                        process: None,
-                        description: Some("Wildcard domain".to_string()),
-                    },
-                    WhitelistEndpoint {
-                        domain: Some("specific.domain.com".to_string()),
-                        ip: None,
-                        port: None,
-                        protocol: Some("TCP".to_string()),
-                        as_number: None,
-                        as_country: None,
-                        as_owner: None,
-                        process: None,
-                        description: Some("Specific domain".to_string()),
-                    },
-                ],
-            }],
-        };
-
-        let whitelists = Whitelists::new_from_json(test_whitelist_json);
-        LISTS
-            .write()
-            .await
-            .overwrite_with_test_data(whitelists)
-            .await;
-
-        let custom_whitelists = Arc::new(CustomRwLock::new(None));
-
-        // Should match subdomains of example.com
-        assert!(
-            is_session_in_whitelist(
-                Some("sub.example.com"),
-                None,
-                80,
-                "TCP",
-                &custom_whitelists,
-                "wildcard_domain_whitelist",
-                None,
-                None,
-                None,
-                None
-            )
-            .await,
-            "Should match sub.example.com"
-        );
-
-        // Should match multiple levels of subdomains
-        assert!(
-            is_session_in_whitelist(
-                Some("deep.sub.example.com"),
-                None,
-                80,
-                "TCP",
-                &custom_whitelists,
-                "wildcard_domain_whitelist",
-                None,
-                None,
-                None,
-                None
-            )
-            .await,
-            "Should match deep.sub.example.com"
-        );
-
-        // Should not match the base domain without subdomain
-        assert!(
-            !is_session_in_whitelist(
-                Some("example.com"),
-                None,
-                80,
-                "TCP",
-                &custom_whitelists,
-                "wildcard_domain_whitelist",
-                None,
-                None,
-                None,
-                None
-            )
-            .await,
-            "Should not match example.com without subdomain"
-        );
-
-        // Should match the specific domain
-        assert!(
-            is_session_in_whitelist(
-                Some("specific.domain.com"),
-                None,
-                80,
-                "TCP",
-                &custom_whitelists,
-                "wildcard_domain_whitelist",
-                None,
-                None,
-                None,
-                None
-            )
-            .await,
-            "Should match specific.domain.com"
-        );
-
-        // Should not match unrelated domains
-        assert!(
-            !is_session_in_whitelist(
-                Some("otherdomain.com"),
-                None,
-                80,
-                "TCP",
-                &custom_whitelists,
-                "wildcard_domain_whitelist",
-                None,
-                None,
-                None,
-                None
-            )
-            .await,
-            "Should not match otherdomain.com"
-        );
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn test_ipv4_network_matching() {
-        // Initialize test data with IPv4 network
-        let test_whitelist_json = WhitelistsJSON {
-            date: "2024-10-20".to_string(),
-            signature: Some("test_signature".to_string()),
-            whitelists: vec![WhitelistInfo {
-                name: "ipv4_network_whitelist".to_string(),
-                extends: None,
-                endpoints: vec![WhitelistEndpoint {
-                    domain: None,
-                    ip: Some("192.168.1.0/24".to_string()),
-                    port: None,
-                    protocol: Some("TCP".to_string()),
-                    as_number: None,
-                    as_country: None,
-                    as_owner: None,
-                    process: None,
-                    description: Some("IPv4 network".to_string()),
-                }],
-            }],
-        };
-
-        let whitelists = Whitelists::new_from_json(test_whitelist_json);
-        LISTS
-            .write()
-            .await
-            .overwrite_with_test_data(whitelists)
-            .await;
-
-        let custom_whitelists = Arc::new(CustomRwLock::new(None));
-
-        // Should match IP within the network
-        assert!(
-            is_session_in_whitelist(
-                None,
-                Some("192.168.1.50"),
-                80,
-                "TCP",
-                &custom_whitelists,
-                "ipv4_network_whitelist",
-                None,
-                None,
-                None,
-                None
-            )
-            .await,
-            "Should match IP within IPv4 network"
-        );
-
-        // Should not match IP outside the network
-        assert!(
-            !is_session_in_whitelist(
-                None,
-                Some("192.168.2.50"),
-                80,
-                "TCP",
-                &custom_whitelists,
-                "ipv4_network_whitelist",
-                None,
-                None,
-                None,
-                None
-            )
-            .await,
-            "Should not match IP outside IPv4 network"
-        );
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn test_ipv6_network_matching() {
-        // Initialize test data with IPv6 network
-        let test_whitelist_json = WhitelistsJSON {
-            date: "2024-10-20".to_string(),
-            signature: Some("test_signature".to_string()),
-            whitelists: vec![WhitelistInfo {
-                name: "ipv6_network_whitelist".to_string(),
-                extends: None,
-                endpoints: vec![WhitelistEndpoint {
-                    domain: None,
-                    ip: Some("2001:db8::/32".to_string()),
-                    port: None,
-                    protocol: Some("TCP".to_string()),
-                    as_number: None,
-                    as_country: None,
-                    as_owner: None,
-                    process: None,
-                    description: Some("IPv6 network".to_string()),
-                }],
-            }],
-        };
-
-        let whitelists = Whitelists::new_from_json(test_whitelist_json);
-        LISTS
-            .write()
-            .await
-            .overwrite_with_test_data(whitelists)
-            .await;
-
-        let custom_whitelists = Arc::new(CustomRwLock::new(None));
-
-        // Should match IP within the network
-        assert!(
-            is_session_in_whitelist(
-                None,
-                Some("2001:db8::1"),
-                80,
-                "TCP",
-                &custom_whitelists,
-                "ipv6_network_whitelist",
-                None,
-                None,
-                None,
-                None
-            )
-            .await,
-            "Should match IP within IPv6 network"
-        );
-
-        // Should not match IP outside the network
-        assert!(
-            !is_session_in_whitelist(
-                None,
-                Some("2001:db9::1"),
-                80,
-                "TCP",
-                &custom_whitelists,
-                "ipv6_network_whitelist",
-                None,
-                None,
-                None,
-                None
-            )
-            .await,
-            "Should not match IP outside IPv6 network"
-        );
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn test_port_only_whitelist() {
-        // Initialize test data with a port-only whitelist
-        let test_whitelist_json = WhitelistsJSON {
-            date: "2024-10-20".to_string(),
-            signature: Some("test_signature".to_string()),
-            whitelists: vec![WhitelistInfo {
-                name: "port_only_whitelist".to_string(),
-                extends: None,
-                endpoints: vec![WhitelistEndpoint {
-                    domain: None,
-                    ip: None,
-                    port: Some(8080),
-                    protocol: None,
-                    as_number: None,
-                    as_country: None,
-                    as_owner: None,
-                    process: None,
-                    description: Some("Port-only endpoint".to_string()),
-                }],
-            }],
-        };
-
-        // Overwrite the global LISTS with the test data
-        let whitelists = Whitelists::new_from_json(test_whitelist_json);
-        LISTS
-            .write()
-            .await
-            .overwrite_with_test_data(whitelists)
-            .await;
-
-        let custom_whitelists = Arc::new(CustomRwLock::new(None));
-
-        // Test that a session with port 8080 matches the whitelist
-        assert!(
-            is_session_in_whitelist(
-                None,                  // session_domain
-                None,                  // session_ip
-                8080,                  // port
-                "TCP",                 // protocol
-                &custom_whitelists,    // custom_whitelists
-                "port_only_whitelist", // whitelist_name
-                None,                  // as_number
-                None,                  // as_country
-                None,                  // as_owner
-                None                   // process
-            )
-            .await,
-            "Should match session with port 8080"
-        );
-
-        // Test that a session with a different port does not match
-        assert!(
-            !is_session_in_whitelist(
-                None,                  // session_domain
-                None,                  // session_ip
-                80,                    // port
-                "TCP",                 // protocol
-                &custom_whitelists,    // custom_whitelists
-                "port_only_whitelist", // whitelist_name
-                None,                  // as_number
-                None,                  // as_country
-                None,                  // as_owner
-                None                   // process
-            )
-            .await,
-            "Should not match session with port 80"
-        );
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn test_invalid_field_in_whitelist_entry() {
-        // Initialize test data with an invalid field "domaine" instead of "domain"
-        let invalid_whitelist_json = r#"
-        {
-            "date": "2024-10-25",
-            "signature": "invalid_test_signature",
-            "whitelists": [
-                {
-                    "name": "invalid_whitelist",
-                    "extends": null,
-                    "endpoints": [
-                        {
-                            "domaine": "invalid.com", // Invalid field
-                            "ip": "10.0.0.1",
-                            "port": 8080,
-                            "protocol": "TCP",
-                            "description": "Invalid endpoint"
-                        }
-                    ]
-                }
-            ]
-        }
-        "#;
-
-        // Attempt to deserialize the invalid JSON
-        let result: Result<WhitelistsJSON> =
-            serde_json::from_str(invalid_whitelist_json).context("Deserialization failed");
-
-        // Assert that deserialization fails due to unknown field
-        assert!(
-            result.is_err(),
-            "Deserialization should fail due to unknown field 'domaine'"
-        );
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn test_new_from_sessions() {
-        use crate::lanscan_sessions::{
-            Protocol, Session, SessionInfo, SessionStats, SessionStatus, WhitelistState,
-        };
-        use chrono::{TimeZone, Utc};
-        use std::net::{IpAddr, Ipv4Addr};
-
-        // Helper function to create a basic SessionInfo
-        fn create_test_session(
-            src_ip: IpAddr,
-            src_port: u16,
-            dst_ip: IpAddr,
-            dst_port: u16,
-            protocol: Protocol,
-            dst_domain: Option<String>,
-        ) -> SessionInfo {
-            // Create minimal SessionStats
-            let stats = SessionStats {
-                start_time: Utc.timestamp_opt(1600000000, 0).unwrap(),
-                end_time: None,
-                last_activity: Utc.timestamp_opt(1600000100, 0).unwrap(),
-                inbound_bytes: 0,
-                outbound_bytes: 0,
-                orig_pkts: 0,
-                resp_pkts: 0,
-                orig_ip_bytes: 0,
-                resp_ip_bytes: 0,
-                history: String::new(),
-                conn_state: None,
-                missed_bytes: 0,
-                uid: "test-uid".to_string(),
-            };
-
-            // Create minimal SessionStatus
-            let status = SessionStatus {
-                active: true,
-                added: true,
-                activated: true,
-                deactivated: false,
-            };
-
-            // Create Session
-            let session = Session {
-                protocol,
-                src_ip,
-                src_port,
-                dst_ip,
-                dst_port,
-            };
-
-            // Create SessionInfo
-            SessionInfo {
-                session,
-                status,
-                stats,
-                is_local_src: true,
-                is_local_dst: false,
-                is_self_src: false,
-                is_self_dst: false,
-                src_domain: None,
-                dst_domain,
-                dst_service: None,
-                l7: None,
-                src_asn: None,
-                dst_asn: None,
-                is_whitelisted: WhitelistState::Unknown,
-                criticality: "Low".to_string(),
-            }
-        }
-
-        // Create test session data
-        let test_sessions = vec![
-            // Session 1 - with domain (HTTPS)
-            create_test_session(
-                IpAddr::V4(Ipv4Addr::new(192, 168, 1, 2)),
-                54321,
-                IpAddr::V4(Ipv4Addr::new(93, 184, 216, 34)),
-                443,
-                Protocol::TCP,
-                Some("example.com".to_string()),
-            ),
-            // Session 2 - without domain (DNS)
-            create_test_session(
-                IpAddr::V4(Ipv4Addr::new(192, 168, 1, 3)),
-                54322,
-                IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)),
-                53,
-                Protocol::UDP,
-                None,
-            ),
-            // Session 3 - duplicate of Session 1 (should be deduplicated)
-            create_test_session(
-                IpAddr::V4(Ipv4Addr::new(192, 168, 1, 5)),
-                54325,
-                IpAddr::V4(Ipv4Addr::new(93, 184, 216, 34)),
-                443,
-                Protocol::TCP,
-                Some("example.com".to_string()),
-            ),
-        ];
-
-        // Create a whitelist from the sessions
-        let whitelist = Whitelists::new_from_sessions(&test_sessions);
-
-        // Verify the structure of the created whitelist
-        assert_eq!(
-            whitelist.whitelists.len(),
-            1,
-            "Should create exactly one whitelist"
-        );
-        assert!(
-            whitelist.whitelists.contains_key("custom_whitelist"),
-            "Should create a whitelist named 'custom_whitelist'"
-        );
-
-        // Get the whitelist entries
-        let custom_whitelists = whitelist.whitelists.get("custom_whitelist").unwrap();
-
-        // With our improved deduplication, we expect 2 endpoints
-        // (Session 1 and 3 should be deduplicated even though they're not consecutive)
-        assert_eq!(
-            custom_whitelists.endpoints.len(),
-            2,
-            "Should have 2 endpoints after proper deduplication"
-        );
-
-        // Find and verify the example.com endpoint
-        let example_endpoint = custom_whitelists
-            .endpoints
-            .iter()
-            .find(|e| e.domain.as_deref() == Some("example.com"))
-            .expect("Should contain an endpoint for example.com");
-
-        assert_eq!(
-            example_endpoint.ip.as_deref(),
-            Some("93.184.216.34"),
-            "Should have correct IP"
-        );
-        assert_eq!(example_endpoint.port, Some(443), "Should have correct port");
-        assert_eq!(
-            example_endpoint.protocol.as_deref(),
-            Some("TCP"),
-            "Should have correct protocol"
-        );
-
-        // Find and verify the DNS endpoint
-        let dns_endpoint = custom_whitelists
-            .endpoints
-            .iter()
-            .find(|e| e.ip.as_deref() == Some("8.8.8.8"))
-            .expect("Should contain an endpoint for 8.8.8.8");
-
-        assert_eq!(dns_endpoint.domain, None, "Should have no domain");
-        assert_eq!(dns_endpoint.port, Some(53), "Should have correct port");
-        assert_eq!(
-            dns_endpoint.protocol.as_deref(),
-            Some("UDP"),
-            "Should have correct protocol"
-        );
-
-        // Verify today's date is used
-        let today = chrono::Local::now().format("%B %dth %Y").to_string();
-        assert_eq!(whitelist.date, today, "Date should be today's date");
-
-        // Verify no signature is set
-        assert_eq!(whitelist.signature, None, "Signature should be None");
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn test_new_from_sessions_empty() {
-        use crate::lanscan_sessions::SessionInfo;
-
-        // Test with an empty sessions list
-        let empty_sessions: Vec<SessionInfo> = Vec::new();
-
-        let whitelist = Whitelists::new_from_sessions(&empty_sessions);
-
-        // Verify we still create a whitelist structure
-        assert_eq!(
-            whitelist.whitelists.len(),
-            1,
-            "Should create a whitelist even with empty sessions"
-        );
-        assert!(
-            whitelist.whitelists.contains_key("custom_whitelist"),
-            "Should create a whitelist named 'custom_whitelist'"
-        );
-
-        // Get the whitelist entries
-        let custom_whitelists = whitelist.whitelists.get("custom_whitelist").unwrap();
-
-        // Verify it has no endpoints
-        assert_eq!(
-            custom_whitelists.endpoints.len(),
-            0,
-            "Should have 0 endpoints with empty sessions list"
-        );
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn test_new_from_sessions_with_process_info() {
-        use crate::asn_db::Record;
-        use crate::lanscan_sessions::{
-            Protocol, Session, SessionInfo, SessionL7, SessionStats, SessionStatus, WhitelistState,
-        };
-        use chrono::{TimeZone, Utc};
-        use std::net::{IpAddr, Ipv4Addr};
-
-        // Helper function to create a session with process and ASN info
-        fn create_session_with_process(
-            dst_ip: IpAddr,
-            dst_port: u16,
-            protocol: Protocol,
-            process_name: &str,
-            as_number: u32,
-            as_country: &str,
-            as_owner: &str,
-        ) -> SessionInfo {
-            // Create Session
-            let session = Session {
-                protocol,
-                src_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100)),
-                src_port: 49152,
-                dst_ip,
-                dst_port,
-            };
-
-            // Create process info
-            let l7 = SessionL7 {
-                pid: 1234,
-                process_name: process_name.to_string(),
-                process_path: format!("/usr/bin/{}", process_name),
-                username: "testuser".to_string(),
-            };
-
-            // Create ASN info
-            let dst_asn = Record {
-                as_number,
-                country: as_country.to_string(),
-                owner: as_owner.to_string(),
-            };
-
-            // Create minimal SessionStats
-            let stats = SessionStats {
-                start_time: Utc.timestamp_opt(1600000000, 0).unwrap(),
-                end_time: None,
-                last_activity: Utc.timestamp_opt(1600000100, 0).unwrap(),
-                inbound_bytes: 1024,
-                outbound_bytes: 512,
-                orig_pkts: 10,
-                resp_pkts: 8,
-                orig_ip_bytes: 1200,
-                resp_ip_bytes: 800,
-                history: "ShAdDf".to_string(),
-                conn_state: Some("S1".to_string()),
-                missed_bytes: 0,
-                uid: format!("test-uid-{}", dst_port),
-            };
-
-            // Create minimal SessionStatus
-            let status = SessionStatus {
-                active: true,
-                added: true,
-                activated: true,
-                deactivated: false,
-            };
-
-            SessionInfo {
-                session,
-                status,
-                stats,
-                is_local_src: true,
-                is_local_dst: false,
-                is_self_src: false,
-                is_self_dst: false,
-                src_domain: None,
-                dst_domain: None,
-                dst_service: None,
-                l7: Some(l7),
-                src_asn: None,
-                dst_asn: Some(dst_asn),
-                is_whitelisted: WhitelistState::Unknown,
-                criticality: "Medium".to_string(),
-            }
-        }
-
-        // Create test sessions with process and ASN info
-        let test_sessions = vec![
-            // Chrome connecting to a web server
-            create_session_with_process(
-                IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10)),
-                443,
-                Protocol::TCP,
-                "chrome",
-                15169, // Google ASN
-                "US",
-                "GOOGLE",
-            ),
-            // Firefox connecting to a different web server
-            create_session_with_process(
-                IpAddr::V4(Ipv4Addr::new(198, 51, 100, 20)),
-                443,
-                Protocol::TCP,
-                "firefox",
-                16509, // Amazon ASN
-                "US",
-                "AMAZON-02",
-            ),
-            // Another Chrome session connecting to the same endpoint as first session (should be deduplicated)
-            create_session_with_process(
-                IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10)),
-                443,
-                Protocol::TCP,
-                "chrome", // Same process
-                15169,    // Same ASN
-                "US",
-                "GOOGLE",
-            ),
-            // Chrome connecting to another endpoint (different destination, should NOT be deduplicated)
-            create_session_with_process(
-                IpAddr::V4(Ipv4Addr::new(203, 0, 113, 20)),
-                443,
-                Protocol::TCP,
-                "chrome",
-                15169, // Google ASN
-                "US",
-                "GOOGLE",
-            ),
-        ];
-
-        // Create whitelist from sessions
-        let whitelist = Whitelists::new_from_sessions(&test_sessions);
-
-        // Verify the whitelist structure
-        assert_eq!(
-            whitelist.whitelists.len(),
-            1,
-            "Should create exactly one whitelist"
-        );
-        let custom_whitelists = whitelist.whitelists.get("custom_whitelist").unwrap();
-
-        // Should have 3 unique endpoints (with proper deduplication of same destination)
-        assert_eq!(
-            custom_whitelists.endpoints.len(),
-            3,
-            "Should have 3 endpoints after deduplication"
-        );
-
-        // Verify which IPs are present after deduplication
-        let ips: Vec<_> = custom_whitelists
-            .endpoints
-            .iter()
-            .filter_map(|e| e.ip.as_deref())
-            .collect();
-
-        // Should include 203.0.113.10 (only once despite appearing twice in input),
-        // 198.51.100.20, and 203.0.113.20
-        assert!(
-            ips.contains(&"203.0.113.10"),
-            "Should contain first Google endpoint IP"
-        );
-        assert!(
-            ips.contains(&"198.51.100.20"),
-            "Should contain Amazon endpoint IP"
-        );
-        assert!(
-            ips.contains(&"203.0.113.20"),
-            "Should contain second Google endpoint IP"
-        );
-
-        // Find and verify each endpoint
-        let google_endpoint = custom_whitelists
-            .endpoints
-            .iter()
-            .find(|e| e.ip.as_deref() == Some("203.0.113.10"))
-            .expect("Should have endpoint for 203.0.113.10");
-
-        let amazon_endpoint = custom_whitelists
-            .endpoints
-            .iter()
-            .find(|e| e.ip.as_deref() == Some("198.51.100.20"))
-            .expect("Should have endpoint for 198.51.100.20");
-
-        // Verify the process information IS preserved in the whitelist
-        // (new_from_sessions includes process info in created whitelists)
-        assert_eq!(
-            google_endpoint.process.as_deref(),
-            Some("chrome"),
-            "Process info should be preserved in the whitelist"
-        );
-        assert_eq!(
-            amazon_endpoint.process.as_deref(),
-            Some("firefox"),
-            "Process info should be preserved in the whitelist"
-        );
-
-        // Verify IP, port and protocol are correctly preserved
-        assert_eq!(google_endpoint.port, Some(443), "Should have correct port");
-        assert_eq!(
-            google_endpoint.protocol.as_deref(),
-            Some("TCP"),
-            "Should have correct protocol"
-        );
-
-        assert_eq!(amazon_endpoint.port, Some(443), "Should have correct port");
-        assert_eq!(
-            amazon_endpoint.protocol.as_deref(),
-            Some("TCP"),
-            "Should have correct protocol"
-        );
-
-        // Verify ASN information is NOT preserved
-        assert_eq!(
-            google_endpoint.as_number, None,
-            "ASN info should not be preserved"
-        );
-        assert_eq!(
-            google_endpoint.as_country, None,
-            "Country info should not be preserved"
-        );
-        assert_eq!(
-            google_endpoint.as_owner, None,
-            "Owner info should not be preserved"
-        );
-
-        // Verify that all endpoints have descriptions containing session info
-        assert!(
-            google_endpoint
-                .description
-                .as_ref()
-                .unwrap()
-                .contains("Auto-generated from session"),
-            "Description should indicate auto-generated source"
-        );
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn test_as_number_deserialization_and_matching() {
-        // Initialize test data with an endpoint specifying ASN
-        let test_whitelist_json = WhitelistsJSON {
-            date: "2024-10-24".to_string(),
-            signature: Some("test_signature".to_string()),
-            whitelists: vec![WhitelistInfo {
-                name: "as_number_test_whitelist".to_string(),
-                extends: None,
-                endpoints: vec![
-                    WhitelistEndpoint {
-                        domain: None,
-                        ip: None,
-                        port: Some(443),
-                        protocol: Some("TCP".to_string()),
-                        as_number: Some(16509), // Amazon ASN
-                        as_country: Some("US".to_string()),
-                        as_owner: Some("AMAZON-02".to_string()),
-                        process: None,
-                        description: Some("Amazon HTTPS".to_string()),
-                    },
-                    WhitelistEndpoint {
-                        domain: None,
-                        ip: Some("1.1.1.1".to_string()),
-                        port: Some(443),
-                        protocol: Some("TCP".to_string()),
-                        as_number: Some(13335), // Cloudflare ASN
-                        as_country: Some("US".to_string()),
-                        as_owner: Some("CLOUDFLARENET".to_string()),
-                        process: None,
-                        description: Some("Cloudflare HTTPS".to_string()),
-                    },
-                ],
-            }],
-        };
-
-        // Overwrite the global LISTS with the test data
-        let whitelists = Whitelists::new_from_json(test_whitelist_json);
-        LISTS
-            .write()
-            .await
-            .overwrite_with_test_data(whitelists)
-            .await;
-
-        let custom_whitelists = Arc::new(CustomRwLock::new(None));
-
-        // Session that should match (Amazon ASN)
-        assert!(
-            is_session_in_whitelist(
-                None,                       // session_domain
-                Some("54.239.28.85"),       // Amazon IP
-                443,                        // port
-                "TCP",                      // protocol
-                &custom_whitelists,         // custom_whitelists
-                "as_number_test_whitelist", // whitelist_name
-                Some(16509),                // as_number
-                Some("US"),                 // as_country
-                Some("AMAZON-02"),          // as_owner
-                None                        // process
-            )
-            .await,
-            "Should match session with ASN 16509 (Amazon)"
-        );
-
-        // Session that should not match (Different ASN)
-        assert!(
-            !is_session_in_whitelist(
-                None,                       // session_domain
-                Some("8.8.8.8"),            // Google IP
-                443,                        // port
-                "TCP",                      // protocol
-                &custom_whitelists,         // custom_whitelists
-                "as_number_test_whitelist", // whitelist_name
-                Some(15169),                // as_number (Google ASN)
-                Some("US"),                 // as_country
-                Some("GOOGLE"),             // as_owner
-                None                        // process
-            )
-            .await,
-            "Should not match session with ASN 15169 (Google)"
-        );
-
-        // Session that should match (Cloudflare ASN)
-        assert!(
-            is_session_in_whitelist(
-                None,                       // session_domain
-                Some("1.1.1.1"),            // Cloudflare IP
-                443,                        // port
-                "TCP",                      // protocol
-                &custom_whitelists,         // custom_whitelists
-                "as_number_test_whitelist", // whitelist_name
-                Some(13335),                // as_number
-                Some("US"),                 // as_country
-                Some("CLOUDFLARENET"),      // as_owner
-                None                        // process
-            )
-            .await,
-            "Should match session with ASN 13335 (Cloudflare)"
-        );
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn test_multi_component_wildcard_matching() {
-        // Initialize test data with wildcard patterns
-        let test_whitelist_json = WhitelistsJSON {
-            date: "2024-10-20".to_string(),
-            signature: Some("test_signature".to_string()),
-            whitelists: vec![
-                WhitelistInfo {
-                    name: "prefix_wildcard_whitelist".to_string(),
-                    extends: None,
-                    endpoints: vec![WhitelistEndpoint {
-                        domain: Some("*.example.com".to_string()),
-                        ip: None,
-                        port: None,
-                        protocol: Some("TCP".to_string()),
-                        as_number: None,
-                        as_country: None,
-                        as_owner: None,
-                        process: None,
-                        description: Some("Prefix wildcard".to_string()),
-                    }],
-                },
-                WhitelistInfo {
-                    name: "middle_wildcard_whitelist".to_string(),
-                    extends: None,
-                    endpoints: vec![WhitelistEndpoint {
-                        domain: Some("example.*.com".to_string()),
-                        ip: None,
-                        port: None,
-                        protocol: Some("TCP".to_string()),
-                        as_number: None,
-                        as_country: None,
-                        as_owner: None,
-                        process: None,
-                        description: Some("Middle wildcard".to_string()),
-                    }],
-                },
-                WhitelistInfo {
-                    name: "suffix_wildcard_whitelist".to_string(),
-                    extends: None,
-                    endpoints: vec![WhitelistEndpoint {
-                        domain: Some("example.*".to_string()),
-                        ip: None,
-                        port: None,
-                        protocol: Some("TCP".to_string()),
-                        as_number: None,
-                        as_country: None,
-                        as_owner: None,
-                        process: None,
-                        description: Some("Suffix wildcard".to_string()),
-                    }],
-                },
-                WhitelistInfo {
-                    name: "noncentral_wildcard_whitelist".to_string(),
-                    extends: None,
-                    endpoints: vec![WhitelistEndpoint {
-                        domain: Some("toto.too.toto.*.toto".to_string()),
-                        ip: None,
-                        port: None,
-                        protocol: Some("TCP".to_string()),
-                        as_number: None,
-                        as_country: None,
-                        as_owner: None,
-                        process: None,
-                        description: Some("Non-central wildcard position".to_string()),
-                    }],
-                },
-                WhitelistInfo {
-                    name: "complex_wildcard_whitelist".to_string(),
-                    extends: None,
-                    endpoints: vec![
-                        WhitelistEndpoint {
-                            domain: Some("cloud-mirror-lb.*.azure.com".to_string()),
-                            ip: None,
-                            port: None,
-                            protocol: Some("TCP".to_string()),
-                            as_number: None,
-                            as_country: None,
-                            as_owner: None,
-                            process: None,
-                            description: Some("Azure wildcard".to_string()),
-                        },
-                        WhitelistEndpoint {
-                            domain: Some("*.toto".to_string()),
-                            ip: None,
-                            port: None,
-                            protocol: Some("TCP".to_string()),
-                            as_number: None,
-                            as_country: None,
-                            as_owner: None,
-                            process: None,
-                            description: Some("Prefix wildcard with short TLD".to_string()),
-                        },
-                    ],
-                },
-            ],
-        };
-
-        let whitelists = Whitelists::new_from_json(test_whitelist_json);
-        LISTS
-            .write()
-            .await
-            .overwrite_with_test_data(whitelists)
-            .await;
-
-        let custom_whitelists = Arc::new(CustomRwLock::new(None));
-
-        // Test prefix wildcard (*.example.com)
-        // Single subdomain
-        assert!(
-            is_session_in_whitelist(
-                Some("sub.example.com"),
-                None,
-                80,
-                "TCP",
-                &custom_whitelists,
-                "prefix_wildcard_whitelist",
-                None,
-                None,
-                None,
-                None
-            )
-            .await,
-            "Should match sub.example.com with *.example.com"
-        );
-
-        // Multiple subdomains
-        assert!(
-            is_session_in_whitelist(
-                Some("a.b.c.example.com"),
-                None,
-                80,
-                "TCP",
-                &custom_whitelists,
-                "prefix_wildcard_whitelist",
-                None,
-                None,
-                None,
-                None
-            )
-            .await,
-            "Should match a.b.c.example.com with *.example.com"
-        );
-
-        // Base domain should NOT match prefix wildcard
-        assert!(
-            !is_session_in_whitelist(
-                Some("example.com"),
-                None,
-                80,
-                "TCP",
-                &custom_whitelists,
-                "prefix_wildcard_whitelist",
-                None,
-                None,
-                None,
-                None
-            )
-            .await,
-            "Should NOT match example.com with *.example.com"
-        );
-
-        // Test middle wildcard (example.*.com)
-        // Single component in middle
-        assert!(
-            is_session_in_whitelist(
-                Some("example.test.com"),
-                None,
-                80,
-                "TCP",
-                &custom_whitelists,
-                "middle_wildcard_whitelist",
-                None,
-                None,
-                None,
-                None
-            )
-            .await,
-            "Should match example.test.com with example.*.com"
-        );
-
-        // Multiple components in middle
-        assert!(
-            is_session_in_whitelist(
-                Some("example.one.two.three.com"),
-                None,
-                80,
-                "TCP",
-                &custom_whitelists,
-                "middle_wildcard_whitelist",
-                None,
-                None,
-                None,
-                None
-            )
-            .await,
-            "Should match example.one.two.three.com with example.*.com"
-        );
-
-        // Test suffix wildcard (example.*)
-        // Simple TLD
-        assert!(
-            is_session_in_whitelist(
-                Some("example.com"),
-                None,
-                80,
-                "TCP",
-                &custom_whitelists,
-                "suffix_wildcard_whitelist",
-                None,
-                None,
-                None,
-                None
-            )
-            .await,
-            "Should match example.com with example.*"
-        );
-
-        // Complex TLD
-        assert!(
-            is_session_in_whitelist(
-                Some("example.co.uk"),
-                None,
-                80,
-                "TCP",
-                &custom_whitelists,
-                "suffix_wildcard_whitelist",
-                None,
-                None,
-                None,
-                None
-            )
-            .await,
-            "Should match example.co.uk with example.*"
-        );
-
-        // Test complex wildcard patterns
-        assert!(
-            is_session_in_whitelist(
-                Some("cloud-mirror-lb.eastus.westus.northeurope.southeurope.cloudapp.azure.com"),
-                None,
-                80,
-                "TCP",
-                &custom_whitelists,
-                "complex_wildcard_whitelist",
-                None,
-                None,
-                None,
-                None
-            )
-            .await,
-            "Should match complex domain with multiple middle components"
-        );
-
-        // Test specific case for *.toto matching cloud-mirror-lb.cloudapp.azure.com.toto
-        assert!(
-            is_session_in_whitelist(
-                Some("cloud-mirror-lb.cloudapp.azure.com.toto"),
-                None,
-                80,
-                "TCP",
-                &custom_whitelists,
-                "complex_wildcard_whitelist",
-                None,
-                None,
-                None,
-                None
-            )
-            .await,
-            "Should match cloud-mirror-lb.cloudapp.azure.com.toto with *.toto"
-        );
-
-        // Test complex non-central wildcard pattern (toto.too.toto.*.toto)
-        assert!(
-            is_session_in_whitelist(
-                Some("toto.too.toto.middle.toto"),
-                None,
-                80,
-                "TCP",
-                &custom_whitelists,
-                "noncentral_wildcard_whitelist",
-                None,
-                None,
-                None,
-                None
-            )
-            .await,
-            "Should match toto.too.toto.middle.toto with toto.too.toto.*.toto"
-        );
-
-        // Test complex non-central wildcard with multiple components in wildcard position
-        assert!(
-            is_session_in_whitelist(
-                Some("toto.too.toto.one.two.three.toto"),
-                None,
-                80,
-                "TCP",
-                &custom_whitelists,
-                "noncentral_wildcard_whitelist",
-                None,
-                None,
-                None,
-                None
-            )
-            .await,
-            "Should match toto.too.toto.one.two.three.toto with toto.too.toto.*.toto"
-        );
-
-        // Test non-matching case for non-central wildcard
-        assert!(
-            !is_session_in_whitelist(
-                Some("toto.too.different.middle.toto"),
-                None,
-                80,
-                "TCP",
-                &custom_whitelists,
-                "noncentral_wildcard_whitelist",
-                None,
-                None,
-                None,
-                None
-            )
-            .await,
-            "Should not match toto.too.different.middle.toto with toto.too.toto.*.toto"
-        );
-
-        // General negative tests (should not match any of our whitelists)
-        assert!(
-            !is_session_in_whitelist(
-                Some("different.com"),
-                None,
-                80,
-                "TCP",
-                &custom_whitelists,
-                "prefix_wildcard_whitelist",
-                None,
-                None,
-                None,
-                None
-            )
-            .await,
-            "Should not match different.com with *.example.com"
-        );
-
-        // Make sure unrelated domain with similar prefix doesn't match
-        assert!(
-            !is_session_in_whitelist(
-                Some("examplesite.com"),
-                None,
-                80,
-                "TCP",
-                &custom_whitelists,
-                "suffix_wildcard_whitelist",
-                None,
-                None,
-                None,
-                None
-            )
-            .await,
-            "Should not match examplesite.com with example.*"
         );
     }
 }

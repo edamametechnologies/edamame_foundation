@@ -195,6 +195,7 @@ pub async fn process_parsed_packet(
                 dst_asn,
                 is_whitelisted: WhitelistState::Unknown,
                 criticality: "".to_string(),
+                whitelist_reason: None,
             },
         );
         // Add to current sessions

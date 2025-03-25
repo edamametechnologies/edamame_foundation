@@ -156,21 +156,30 @@ impl LANScanCapture {
 
     pub async fn set_whitelist(&mut self, whitelist_name: &str) {
         // Check if the whitelist is valid (either a standard whitelist or our custom one)
-        if !whitelist_name.is_empty() && !is_valid_whitelist(whitelist_name).await {
+        if !whitelist_name.is_empty()
+            && whitelist_name != "custom_whitelist"
+            && !is_valid_whitelist(whitelist_name).await
+        {
             error!("Invalid whitelist name: {}", whitelist_name);
             return;
         }
-        // Check if the whitelist is different
-        if self.whitelist_name.read().await.eq(whitelist_name) {
+
+        // If we're switching to a non-custom whitelist, check if it's different
+        if whitelist_name != "custom_whitelist"
+            && self.whitelist_name.read().await.eq(whitelist_name)
+        {
             return;
         }
+
         // Set the new whitelist name
         *self.whitelist_name.write().await = whitelist_name.to_string();
 
-        // Clear the custom whitelists
-        *self.custom_whitelists.write().await = None;
+        // Clear the custom whitelists if we're switching to a standard whitelist
+        if whitelist_name != "custom_whitelist" {
+            *self.custom_whitelists.write().await = None;
+        }
 
-        // Reset the whitelist
+        // Reset the whitelist state
         self.reset_whitelist().await;
     }
 
@@ -287,32 +296,36 @@ impl LANScanCapture {
     }
 
     pub async fn get_whitelist(&self) -> String {
-        let whitelist_name = self.whitelist_name.read().await.clone();
-        if whitelist_name.is_empty() {
-            if self.custom_whitelists.read().await.is_some() {
-                "custom_whitelist".to_string()
-            } else {
-                "".to_string()
-            }
-        } else {
-            whitelist_name
-        }
+        // Simply return the configured whitelist name
+        // It will already be "custom_whitelist" when custom whitelists are in use
+        self.whitelist_name.read().await.clone()
     }
 
     pub async fn set_custom_whitelists(&mut self, whitelist_json: &str) {
         // Clear the custom whitelists if the JSON is empty
         if whitelist_json.is_empty() {
             *self.custom_whitelists.write().await = None;
+            // Don't reset the whitelist name if we're clearing custom whitelists
+            // since the user might be switching back to a standard whitelist
+            self.reset_whitelist().await;
             return;
         }
-        let whitelist = match serde_json::from_str::<WhitelistsJSON>(whitelist_json) {
-            Ok(whitelist) => Some(Whitelists::new_from_json(whitelist)),
+
+        let whitelist_result = serde_json::from_str::<WhitelistsJSON>(whitelist_json);
+
+        match whitelist_result {
+            Ok(whitelist_data) => {
+                let whitelist = Some(Whitelists::new_from_json(whitelist_data));
+                *self.custom_whitelists.write().await = whitelist;
+                // Set the whitelist name to indicate we're using a custom whitelist
+                *self.whitelist_name.write().await = "custom_whitelist".to_string();
+            }
             Err(e) => {
                 error!("Error setting custom whitelists: {}", e);
-                None
+                *self.custom_whitelists.write().await = None;
             }
-        };
-        *self.custom_whitelists.write().await = whitelist;
+        }
+
         // Reset the whitelist
         self.reset_whitelist().await;
     }
@@ -839,74 +852,33 @@ impl LANScanCapture {
         sessions: &DashMap<Session, SessionInfo>,
         last_whitelist_exception_time: &Arc<CustomRwLock<DateTime<Utc>>>,
     ) {
-        let mut updated_exceptions = Vec::new();
-        let mut whitelisted_sessions = Vec::new();
+        // If the whitelist name is "custom_whitelist", we check the custom whitelists
+        // If it's something else, we check the standard whitelist with that name
+        let using_custom = whitelist_name == "custom_whitelist";
 
-        if custom_whitelists.read().await.is_some() || is_valid_whitelist(whitelist_name).await {
-            // Process all sessions
-            for entry in sessions.iter() {
-                let session_info = entry.value().clone();
-                let key = &session_info.session;
+        // Skip the check if the specified whitelist doesn't exist
+        if (using_custom && custom_whitelists.read().await.is_none())
+            || (!using_custom && !is_valid_whitelist(whitelist_name).await)
+        {
+            if !whitelist_name.is_empty() {
+                error!("Invalid or missing whitelist: {}", whitelist_name);
+            }
+            return;
+        }
 
-                let dst_domain = session_info.dst_domain.clone();
+        let mut whitelist_check_results = Vec::new();
 
-                if let Some(dst_domain) = dst_domain {
-                    // If the domain is unknown or resolving, use the IP address instead
-                    if dst_domain == "Unknown".to_string() || dst_domain == "Resolving".to_string()
-                    {
-                        // The domain has not been resolved successfully, use the IP address instead
-                        if !is_session_in_whitelist(
-                            None,
-                            Some(&session_info.session.dst_ip.to_string()),
-                            session_info.session.dst_port,
-                            session_info.session.protocol.to_string().as_str(),
-                            custom_whitelists,
-                            whitelist_name,
-                            session_info.dst_asn.as_ref().map(|asn| asn.as_number),
-                            session_info
-                                .dst_asn
-                                .as_ref()
-                                .map(|asn| asn.country.as_str()),
-                            session_info.dst_asn.as_ref().map(|asn| asn.owner.as_str()),
-                            session_info.l7.as_ref().map(|l7| l7.process_name.as_str()),
-                        )
-                        .await
-                        {
-                            trace!("Session {:?} failed whitelist check", key);
-                            updated_exceptions.push(session_info.session.clone());
-                            *last_whitelist_exception_time.write().await = Utc::now();
-                        } else {
-                            whitelisted_sessions.push(session_info.session.clone());
-                        }
-                    } else {
-                        // The domain has been resolved
-                        if !is_session_in_whitelist(
-                            Some(&dst_domain),
-                            None,
-                            session_info.session.dst_port,
-                            session_info.session.protocol.to_string().as_str(),
-                            custom_whitelists,
-                            whitelist_name,
-                            session_info.dst_asn.as_ref().map(|asn| asn.as_number),
-                            session_info
-                                .dst_asn
-                                .as_ref()
-                                .map(|asn| asn.country.as_str()),
-                            session_info.dst_asn.as_ref().map(|asn| asn.owner.as_str()),
-                            session_info.l7.as_ref().map(|l7| l7.process_name.as_str()),
-                        )
-                        .await
-                        {
-                            trace!("Session {:?} failed whitelist check", key);
-                            updated_exceptions.push(session_info.session.clone());
-                            *last_whitelist_exception_time.write().await = Utc::now();
-                        } else {
-                            whitelisted_sessions.push(session_info.session.clone());
-                        }
-                    }
-                } else {
-                    // The domain has not been resolved yet, use the IP address instead
-                    if !is_session_in_whitelist(
+        // Process each active session
+        for key in sessions.iter() {
+            let session_info = key.value().clone();
+
+            let dst_domain = session_info.dst_domain.clone();
+
+            if let Some(dst_domain) = dst_domain {
+                // If the domain is unknown or resolving, use the IP address instead
+                if dst_domain == "Unknown".to_string() || dst_domain == "Resolving".to_string() {
+                    // The domain has not been resolved successfully, use the IP address instead
+                    let (is_whitelisted, reason) = is_session_in_whitelist(
                         None,
                         Some(&session_info.session.dst_ip.to_string()),
                         session_info.session.dst_port,
@@ -921,64 +893,118 @@ impl LANScanCapture {
                         session_info.dst_asn.as_ref().map(|asn| asn.owner.as_str()),
                         session_info.l7.as_ref().map(|l7| l7.process_name.as_str()),
                     )
-                    .await
-                    {
-                        trace!("Session {:?} failed whitelist check", key);
-                        updated_exceptions.push(session_info.session.clone());
-                        *last_whitelist_exception_time.write().await = Utc::now();
-                    } else {
-                        whitelisted_sessions.push(session_info.session.clone());
-                    }
-                }
-            }
-            // If one session is not whitelisted, set the whitelist conformance to false
-            if !updated_exceptions.is_empty() {
-                whitelist_conformance.store(false, Ordering::Relaxed);
-            }
-            // Set the is_whitelisted flag for each session
-            for exception in updated_exceptions.iter() {
-                if let Some(mut session) = sessions.get_mut(exception) {
-                    session.value_mut().is_whitelisted = WhitelistState::NonConforming;
+                    .await;
+
+                    whitelist_check_results.push((
+                        session_info.session.clone(),
+                        is_whitelisted,
+                        reason,
+                    ));
                 } else {
-                    error!("Session not found in sessions map");
+                    // The domain has been resolved
+                    let (is_whitelisted, reason) = is_session_in_whitelist(
+                        Some(&dst_domain),
+                        None,
+                        session_info.session.dst_port,
+                        session_info.session.protocol.to_string().as_str(),
+                        custom_whitelists,
+                        whitelist_name,
+                        session_info.dst_asn.as_ref().map(|asn| asn.as_number),
+                        session_info
+                            .dst_asn
+                            .as_ref()
+                            .map(|asn| asn.country.as_str()),
+                        session_info.dst_asn.as_ref().map(|asn| asn.owner.as_str()),
+                        session_info.l7.as_ref().map(|l7| l7.process_name.as_str()),
+                    )
+                    .await;
+
+                    whitelist_check_results.push((
+                        session_info.session.clone(),
+                        is_whitelisted,
+                        reason,
+                    ));
                 }
+            } else {
+                // The domain has not been resolved yet, use the IP address instead
+                let (is_whitelisted, reason) = is_session_in_whitelist(
+                    None,
+                    Some(&session_info.session.dst_ip.to_string()),
+                    session_info.session.dst_port,
+                    session_info.session.protocol.to_string().as_str(),
+                    custom_whitelists,
+                    whitelist_name,
+                    session_info.dst_asn.as_ref().map(|asn| asn.as_number),
+                    session_info
+                        .dst_asn
+                        .as_ref()
+                        .map(|asn| asn.country.as_str()),
+                    session_info.dst_asn.as_ref().map(|asn| asn.owner.as_str()),
+                    session_info.l7.as_ref().map(|l7| l7.process_name.as_str()),
+                )
+                .await;
+
+                whitelist_check_results.push((
+                    session_info.session.clone(),
+                    is_whitelisted,
+                    reason,
+                ));
             }
-            for session in whitelisted_sessions.iter() {
-                if let Some(mut session_info) = sessions.get_mut(session) {
+        }
+
+        // Process the results
+        let mut updated_exceptions = Vec::new();
+        let mut whitelisted_sessions = Vec::new();
+
+        for (session, is_whitelisted, reason) in whitelist_check_results {
+            if !is_whitelisted {
+                trace!("Session {:?} failed whitelist check", session);
+                updated_exceptions.push(session.clone());
+                *last_whitelist_exception_time.write().await = Utc::now();
+
+                if let Some(mut session_info) = sessions.get_mut(&session) {
+                    session_info.value_mut().is_whitelisted = WhitelistState::NonConforming;
+                    session_info.value_mut().whitelist_reason = reason;
+                }
+            } else {
+                whitelisted_sessions.push(session.clone());
+
+                if let Some(mut session_info) = sessions.get_mut(&session) {
                     session_info.value_mut().is_whitelisted = WhitelistState::Conforming;
-                } else {
-                    error!("Session not found in sessions map");
+                    session_info.value_mut().whitelist_reason = None;
                 }
             }
+        }
 
-            // Merge the updated exceptions with the existing ones
-            let mut new_exceptions = whitelist_exceptions.read().await.clone();
-            new_exceptions.extend(updated_exceptions);
+        // If one session is not whitelisted, set the whitelist conformance to false
+        if !updated_exceptions.is_empty() {
+            whitelist_conformance.store(false, Ordering::Relaxed);
+        }
 
-            // Deduplicate the exceptions
-            new_exceptions.sort_by_key(|k| k.clone());
-            new_exceptions.dedup_by_key(|k| k.clone());
-            *whitelist_exceptions.write().await = new_exceptions;
+        // Merge the updated exceptions with the existing ones
+        let mut new_exceptions = whitelist_exceptions.read().await.clone();
+        new_exceptions.extend(updated_exceptions);
 
+        // Deduplicate the exceptions
+        new_exceptions.sort_by_key(|k| k.clone());
+        new_exceptions.dedup_by_key(|k| k.clone());
+        *whitelist_exceptions.write().await = new_exceptions;
+
+        info!(
+            "Total whitelist exceptions: {}",
+            whitelist_exceptions.read().await.len()
+        );
+
+        // Clear the whitelist_conformance if it's been more than WHITELIST_EXCEPTION_TIMEOUT seconds
+        if !whitelist_conformance.load(Ordering::Relaxed)
+            && Utc::now()
+                > *last_whitelist_exception_time.read().await + WHITELIST_EXCEPTION_TIMEOUT
+        {
             info!(
-                "Total whitelist exceptions: {}",
-                whitelist_exceptions.read().await.len()
+                "Clearing whitelist conformance after no activity for {} seconds",
+                WHITELIST_EXCEPTION_TIMEOUT.num_seconds()
             );
-            // Clear the whitelist_conformance if it's been more than WHITELIST_EXCEPTION_TIMEOUT seconds
-            if !whitelist_conformance.load(Ordering::Relaxed)
-                && Utc::now()
-                    > *last_whitelist_exception_time.read().await + WHITELIST_EXCEPTION_TIMEOUT
-            {
-                info!(
-                    "Clearing whitelist conformance after no activity for {} seconds",
-                    WHITELIST_EXCEPTION_TIMEOUT.num_seconds()
-                );
-                whitelist_conformance.store(true, Ordering::Relaxed);
-            }
-        } else {
-            if !whitelist_name.is_empty() {
-                error!("Invalid whitelist name: {}", whitelist_name);
-            }
+            whitelist_conformance.store(true, Ordering::Relaxed);
         }
     }
 
@@ -1538,6 +1564,7 @@ mod tests {
             dst_asn: None,
             is_whitelisted: WhitelistState::Unknown,
             criticality: "".to_string(),
+            whitelist_reason: None,
         };
 
         capture.sessions.insert(session.clone(), session_info);
@@ -1613,7 +1640,7 @@ mod tests {
             stats,
             status: SessionStatus {
                 active: false,
-                added: false,
+                added: true,
                 activated: false,
                 deactivated: false,
             },
@@ -1629,6 +1656,7 @@ mod tests {
             dst_asn: None,
             is_whitelisted: WhitelistState::Unknown,
             criticality: "".to_string(),
+            whitelist_reason: None,
         };
 
         capture.sessions.insert(session.clone(), session_info);
@@ -1823,6 +1851,7 @@ mod tests {
                 dst_asn: None,
                 is_whitelisted: WhitelistState::Unknown,
                 criticality: "".to_string(),
+                whitelist_reason: None,
             };
 
             capture.sessions.insert(session.clone(), session_info);
@@ -1972,10 +2001,6 @@ mod tests {
             "Capture should have current sessions"
         );
 
-        // Print the sessions
-        println!("Sessions: {:?}", sessions);
-        println!("Current sessions: {:?}", current_sessions);
-
         // Try to create a custom whitelist
         let custom_whitelist = capture.create_custom_whitelists().await;
         assert!(
@@ -1988,9 +2013,6 @@ mod tests {
             "Custom whitelist should have endpoints"
         );
 
-        // Print the custom whitelist
-        println!("Custom whitelist: {:?}", custom_whitelist);
-
         // Set the whitelist
         capture.set_custom_whitelists(&custom_whitelist).await;
 
@@ -2002,6 +2024,9 @@ mod tests {
         for session in sessions {
             if session.is_whitelisted == WhitelistState::Unknown {
                 have_unknown = true;
+            }
+            if session.is_whitelisted == WhitelistState::NonConforming {
+                println!("Session is non-conforming: {:?}", session.clone());
             }
             if session.l7.is_some() && !session.l7.unwrap().process_name.is_empty() {
                 have_process_info = true;
