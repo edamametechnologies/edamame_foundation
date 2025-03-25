@@ -155,19 +155,8 @@ impl LANScanCapture {
     }
 
     pub async fn set_whitelist(&mut self, whitelist_name: &str) {
-        // Check if the whitelist name is "custom_whitelist" which is a special case
-        let is_custom_whitelist = whitelist_name == "custom_whitelist";
-
-        // Only clear the custom whitelists if we're not setting a custom whitelist
-        if !is_custom_whitelist {
-            *self.custom_whitelists.write().await = None;
-        }
-
         // Check if the whitelist is valid (either a standard whitelist or our custom one)
-        if !is_valid_whitelist(whitelist_name).await
-            && !whitelist_name.is_empty()
-            && !is_custom_whitelist
-        {
+        if !whitelist_name.is_empty() && !is_valid_whitelist(whitelist_name).await {
             error!("Invalid whitelist name: {}", whitelist_name);
             return;
         }
@@ -177,6 +166,10 @@ impl LANScanCapture {
         }
         // Set the new whitelist name
         *self.whitelist_name.write().await = whitelist_name.to_string();
+
+        // Clear the custom whitelists
+        *self.custom_whitelists.write().await = None;
+
         // Reset the whitelist
         self.reset_whitelist().await;
     }
@@ -294,7 +287,16 @@ impl LANScanCapture {
     }
 
     pub async fn get_whitelist(&self) -> String {
-        self.whitelist_name.read().await.clone()
+        let whitelist_name = self.whitelist_name.read().await.clone();
+        if whitelist_name.is_empty() {
+            if self.custom_whitelists.read().await.is_some() {
+                "custom_whitelist".to_string()
+            } else {
+                "".to_string()
+            }
+        } else {
+            whitelist_name
+        }
     }
 
     pub async fn set_custom_whitelists(&mut self, whitelist_json: &str) {
