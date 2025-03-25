@@ -1,5 +1,6 @@
 use crate::lanscan_asn::*;
 use crate::lanscan_ip::is_lan_ip;
+use crate::lanscan_l7::LANScanL7;
 use crate::lanscan_port_vulns::get_name_from_port;
 use crate::lanscan_sessions::session_macros::*;
 use crate::lanscan_sessions::*;
@@ -43,6 +44,7 @@ pub async fn process_parsed_packet(
     current_sessions: &Arc<CustomRwLock<Vec<Session>>>,
     self_ips: &Vec<IpAddr>,
     filter: &Arc<CustomRwLock<SessionFilter>>,
+    l7: Option<&Arc<LANScanL7>>,
 ) {
     let now = Utc::now();
     let is_self_src = self_ips.contains(&parsed_packet.session.src_ip);
@@ -142,6 +144,11 @@ pub async fn process_parsed_packet(
         let is_local_dst = is_lan_ip(&key.dst_ip);
 
         trace!("New session: {:?}", key);
+
+        // Queue the new session for L7 resolution immediately
+        if let Some(l7) = l7 {
+            l7.add_connection_to_resolver(&key).await;
+        }
 
         // Query the ASN database for non-local addresses
         let src_asn = if !is_lan_ip(&key.src_ip) {

@@ -43,6 +43,59 @@ use tokio::select;
 use tokio::time::interval;
 use tracing::{debug, error, info, trace, warn};
 
+/*
+ * DNS Resolution and L7 Process Resolution Architecture
+ * ====================================================
+ *
+ * DNS Resolution Logic:
+ * ---------------------
+ * The system uses a hybrid approach to DNS resolution combining passive monitoring
+ * and active resolution:
+ *
+ * 1. Passive DNS Monitoring (DnsPacketProcessor):
+ *    - Captures actual DNS query/response packets from network traffic
+ *    - Extracts domain-to-IP mappings in real-time from observed DNS traffic
+ *    - Provides immediate and accurate mappings for domains actively being accessed
+ *
+ * 2. Active DNS Resolution (LANScanResolver):
+ *    - Performs programmatic DNS lookups for IPs without observed DNS packets
+ *    - Handles both forward resolution (domain → IP) and reverse resolution (IP → domain)
+ *    - Maintains a cache of resolved entries with TTL management
+ *
+ * 3. Integration Strategy:
+ *    - DNS packet data is prioritized over active lookups (in populate_domain_names)
+ *    - Important services (ports 80, 443, 22, etc.) are prioritized for resolution
+ *    - Resolutions are continuously updated as connections remain active
+ *    - The integrate_dns_with_resolver method synchronizes data between both systems
+ *
+ * L7 Process Resolution Logic:
+ * ---------------------------
+ * L7 resolution identifies which applications/processes own network connections:
+ *
+ * 1. Resolution Triggering:
+ *    - New connections are immediately queued for L7 resolution when first seen
+ *    - Sessions with missing L7 data are re-queued during the populate_l7 phase (not needed for most sessions)
+ *
+ * 2. Resolution Strategy (in LANScanL7):
+ *    - Uses a multi-tiered matching approach to find the responsible process:
+ *      a. Exact socket matches (full match on src/dst IP:port pairs)
+ *      b. Partial matches (match on one endpoint)
+ *      c. Port-only matches (when endpoints change but ports remain consistent)
+ *    - Applies different retry strategies for ephemeral vs. long-lived connections
+ *      - Ephemeral connections (DNS, high ports): Very fast 50ms retries
+ *      - Standard connections: Exponential backoff (100ms to 10s)
+ *
+ * 3. Caching Mechanism:
+ *    - Port-to-process cache retains successful resolutions
+ *    - Host service cache tracks local services
+ *    - Long-lived cache for frequently accessed services
+ *    - Periodic cleanup of stale cache entries
+ *
+ * This approach ensures accurate resolution of both short-lived connections
+ * (like DNS queries or ephemeral client connections) and long-running sessions
+ * while maintaining efficient system resource usage.
+ */
+
 // A session is considered active if it has had activity in the last 60 seconds
 static CONNECTION_ACTIVITY_TIMEOUT: ChronoDuration = ChronoDuration::seconds(60);
 // A session is considered current if it has been active in the last 180 seconds
@@ -578,6 +631,9 @@ impl LANScanCapture {
         // Clone the DNS packet processor for the async move block
         let dns_packet_processor = self.dns_packet_processor.clone();
 
+        // Clone the L7 for the async move block
+        let l7 = self.l7.clone();
+
         // Spawn the capture task
         let handle = async_spawn(async move {
             let mut cap = match Capture::from_device(device_clone.clone()) {
@@ -627,6 +683,7 @@ impl LANScanCapture {
                                             &current_sessions,
                                             &self_ips,
                                             &filter,
+                                            l7.as_ref(),
                                         )
                                         .await;
                                     }
@@ -720,6 +777,7 @@ impl LANScanCapture {
                                             &current_sessions,
                                             &self_ips,
                                             &filter,
+                                            l7.as_ref(),
                                         )
                                         .await;
                                     }
@@ -1015,6 +1073,18 @@ impl LANScanCapture {
                     continue;
                 };
 
+                // Add connection to resolver queue if it doesn't already have L7 data
+                let needs_resolution = if let Some(session_info) = sessions.get(key) {
+                    session_info.value().l7.is_none()
+                } else {
+                    false
+                };
+
+                if needs_resolution {
+                    // Add connection to the resolver queue if it's not already there
+                    l7.add_connection_to_resolver(&session_info.session).await;
+                }
+
                 // Always attempt to get the resolved L7 data
                 let l7_resolution = l7.get_resolved_l7(&session_info.session).await;
 
@@ -1036,8 +1106,11 @@ impl LANScanCapture {
             .iter()
             .filter(|session| session.value().l7.is_some())
             .count();
-        let l7_success_rate = (successful_resolutions as f64 / total_sessions as f64) * 100.0;
-        info!("L7 success rate: {:.2}%", l7_success_rate);
+
+        if total_sessions > 0 {
+            let l7_success_rate = (successful_resolutions as f64 / total_sessions as f64) * 100.0;
+            info!("L7 success rate: {:.2}%", l7_success_rate);
+        }
     }
 
     async fn update_sessions_status(
@@ -1325,6 +1398,7 @@ mod tests {
             &capture.current_sessions,
             &self_ips,
             &capture.filter,
+            capture.l7.as_ref(),
         )
         .await;
 
@@ -1334,6 +1408,7 @@ mod tests {
             &capture.current_sessions,
             &self_ips,
             &capture.filter,
+            capture.l7.as_ref(),
         )
         .await;
 
@@ -1379,6 +1454,7 @@ mod tests {
             &capture.current_sessions,
             &self_ips,
             &capture.filter,
+            capture.l7.as_ref(),
         )
         .await;
 
