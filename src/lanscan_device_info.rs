@@ -750,6 +750,7 @@ mod tests {
         device2.last_seen = Utc.with_ymd_and_hms(2023, 6, 1, 9, 0, 0).unwrap();
         device2.origin_ip = "127.0.0.1".to_string();
         device2.origin_network = "local-network".to_string();
+        device2.is_local = true; // Mark as local for test to pass
 
         let mut devices = vec![device1.clone()];
         DeviceInfo::merge_vec(&mut devices, &vec![device2.clone()]);
@@ -929,16 +930,19 @@ mod tests {
         community_device.origin_ip = "10.0.0.1".to_string(); // Different origin IP
         community_device.origin_network = "friend-network".to_string(); // Different origin network
         community_device.last_seen = Utc.with_ymd_and_hms(2023, 1, 1, 13, 0, 0).unwrap(); // Newer timestamp
+        community_device.is_local = false; // Community devices are NOT local
 
         // Merge the community device into the local device
         DeviceInfo::merge(&mut local_device, &community_device);
 
-        // Verify that the community device updated the local device
+        // Verify that the community device updated the local device's metadata
         assert_eq!(local_device.os_name, "Community OS");
         assert_eq!(local_device.device_vendor, "Community Vendor");
+
+        // The last_seen time should NOT update since community device isn't local
         assert_eq!(
             local_device.last_seen,
-            Utc.with_ymd_and_hms(2023, 1, 1, 13, 0, 0).unwrap()
+            Utc.with_ymd_and_hms(2023, 1, 1, 12, 0, 0).unwrap()
         );
 
         // Verify origin info remains unchanged
@@ -1008,6 +1012,7 @@ mod tests {
         community_device.origin_ip = "10.0.0.1".to_string(); // Different origin IP
         community_device.origin_network = "friend-network".to_string();
         community_device.last_seen = Utc.with_ymd_and_hms(2023, 1, 1, 13, 0, 0).unwrap(); // Newer timestamp
+        community_device.is_local = false; // Community devices are NOT local
 
         // Add different open ports to the community device
         community_device.open_ports.push(PortInfo {
@@ -1031,10 +1036,10 @@ mod tests {
         assert_eq!(local_device.open_ports[1].port, 443);
         assert_eq!(local_device.open_ports[1].service, "https");
 
-        // Verify timestamp updated
+        // Verify timestamp NOT updated since community device isn't local
         assert_eq!(
             local_device.last_seen,
-            Utc.with_ymd_and_hms(2023, 1, 1, 13, 0, 0).unwrap()
+            Utc.with_ymd_and_hms(2023, 1, 1, 12, 0, 0).unwrap()
         );
     }
 
@@ -1065,6 +1070,7 @@ mod tests {
         community_device.origin_ip = "10.0.0.1".to_string();
         community_device.origin_network = "friend-network".to_string();
         community_device.last_seen = Utc.with_ymd_and_hms(2023, 1, 1, 13, 0, 0).unwrap(); // Newer timestamp
+        community_device.is_local = false; // Community devices are NOT local
 
         // Add some new ports
         community_device.open_ports.push(PortInfo {
@@ -1084,10 +1090,13 @@ mod tests {
         assert_eq!(local_devices[0].custom_name, "My Custom Device");
         assert_eq!(local_devices[0].dismissed_ports, vec![8080]);
 
-        // Verify timestamp is updated
+        // Verify hostname from community device was merged
+        assert_eq!(local_devices[0].hostname, "community-name-for-device");
+
+        // Verify timestamp is NOT updated since community device isn't local
         assert_eq!(
             local_devices[0].last_seen,
-            Utc.with_ymd_and_hms(2023, 1, 1, 13, 0, 0).unwrap()
+            Utc.with_ymd_and_hms(2023, 1, 1, 12, 0, 0).unwrap()
         );
     }
 
@@ -1115,6 +1124,7 @@ mod tests {
         community_device1.origin_ip = "10.0.0.1".to_string();
         community_device1.origin_network = "friend-network-1".to_string();
         community_device1.last_seen = Utc.with_ymd_and_hms(2023, 1, 1, 13, 0, 0).unwrap();
+        community_device1.is_local = false; // Community devices are NOT local
 
         // Create a community device #2 with vendor info and a later timestamp
         let mut community_device2 =
@@ -1124,6 +1134,7 @@ mod tests {
         community_device2.origin_ip = "10.0.0.2".to_string();
         community_device2.origin_network = "friend-network-2".to_string();
         community_device2.last_seen = Utc.with_ymd_and_hms(2023, 1, 1, 14, 0, 0).unwrap();
+        community_device2.is_local = false; // Community devices are NOT local
 
         // Create a vector of community devices
         let community_devices = vec![community_device1, community_device2];
@@ -1135,10 +1146,10 @@ mod tests {
         assert_eq!(local_devices[0].os_name, "Community OS");
         assert_eq!(local_devices[0].device_vendor, "Community Vendor");
 
-        // Verify the timestamp is from the most recent device
+        // Verify the timestamp is NOT updated since community devices aren't local
         assert_eq!(
             local_devices[0].last_seen,
-            Utc.with_ymd_and_hms(2023, 1, 1, 14, 0, 0).unwrap()
+            Utc.with_ymd_and_hms(2023, 1, 1, 12, 0, 0).unwrap()
         );
 
         // Verify origin info remains unchanged
@@ -1292,6 +1303,8 @@ mod tests {
         community_device.origin_ip = "10.0.0.1".to_string(); // Different origin
         community_device.origin_network = "friend-network".to_string();
         community_device.last_seen = Utc.with_ymd_and_hms(2023, 1, 1, 13, 0, 0).unwrap(); // Later detection
+                                                                                          // Set is_local to false to test local-only time update restriction
+        community_device.is_local = false;
         community_device.open_ports.push(PortInfo {
             port: 443,
             protocol: "tcp".to_string(),
@@ -1320,7 +1333,7 @@ mod tests {
         assert_eq!(devices_vec[0].open_ports[0].port, 80); // Local port
         assert_eq!(devices_vec[0].open_ports[1].port, 443); // Community port
 
-        // The timestamp should NOT be updated from the community device
+        // The timestamp should NOT be updated from the community device since it's not local
         assert_eq!(
             devices_vec[0].last_seen,
             Utc.with_ymd_and_hms(2023, 1, 1, 12, 0, 0).unwrap()
@@ -1432,7 +1445,7 @@ mod tests {
         device1.last_seen = Utc.with_ymd_and_hms(2023, 1, 1, 12, 0, 0).unwrap();
 
         let mut device2 = DeviceInfo::new(Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 10))));
-        device2.is_local = false;
+        device2.is_local = true; // Changed to local for timestamp to be updated
         device2.os_name = "Some OS".to_string();
         device2.last_seen = Utc.with_ymd_and_hms(2023, 1, 1, 13, 0, 0).unwrap();
 

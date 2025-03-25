@@ -1922,7 +1922,6 @@ mod tests {
         let mut have_dns_info = false;
         let mut have_unknown = false;
         for session in sessions {
-            println!("Session: {:?}", session);
             if session.is_whitelisted == WhitelistState::Unknown {
                 have_unknown = true;
             }
