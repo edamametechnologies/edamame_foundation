@@ -509,8 +509,8 @@ impl DeviceInfo {
             device.first_seen = new_device.first_seen;
         }
 
-        // Update the last seen time
-        if new_device.last_seen > device.last_seen {
+        // Update the last seen time only if the new device is local
+        if new_device.is_local && new_device.last_seen > device.last_seen {
             device.last_seen = new_device.last_seen;
         }
 
@@ -843,7 +843,7 @@ mod tests {
 
     #[test]
     fn test_merge_last_seen_newer_overrides() {
-        // If the new device has a more recent last_seen, it should override the existing device
+        // If the new device has a more recent last_seen and is local, it should override the existing device
         let mut device_current = DeviceInfo::new(Some(IpAddr::V4(Ipv4Addr::new(192, 168, 10, 1))));
         device_current.last_seen = Utc.with_ymd_and_hms(2023, 5, 1, 13, 0, 0).unwrap();
         device_current.origin_ip = "192.168.1.100".to_string();
@@ -852,6 +852,8 @@ mod tests {
         let mut device_new = device_current.clone();
         // Give the new device a more recent last_seen
         device_new.last_seen = Utc.with_ymd_and_hms(2023, 5, 1, 14, 0, 0).unwrap();
+        // Make the device local to allow updating last_seen
+        device_new.is_local = true;
         // Keep the same origin info
         device_new.origin_ip = "192.168.1.100".to_string();
         device_new.origin_network = "test-network".to_string();
@@ -862,7 +864,7 @@ mod tests {
         assert_eq!(
             device_current.last_seen,
             Utc.with_ymd_and_hms(2023, 5, 1, 14, 0, 0).unwrap(),
-            "A more recent last_seen should override the existing device's last_seen"
+            "A more recent last_seen from a local device should override the existing device's last_seen"
         );
     }
 
@@ -1173,7 +1175,8 @@ mod tests {
         mdns_device.hostname = "mdns-hostname".to_string(); // Better hostname from mDNS
         mdns_device.origin_ip = "192.168.1.1".to_string(); // Same origin
         mdns_device.origin_network = "home-network".to_string();
-
+        // The mDNS device should be local
+        mdns_device.is_local = true;
         // In real code, mDNS sets both timestamps to mdns_info.first_seen
         let mdns_timestamp = Utc.with_ymd_and_hms(2023, 1, 1, 12, 15, 0).unwrap();
         mdns_device.first_seen = mdns_timestamp;
@@ -1194,6 +1197,8 @@ mod tests {
         let mut rescan_device = DeviceInfo::new(Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100))));
         rescan_device.origin_ip = "192.168.1.1".to_string();
         rescan_device.origin_network = "home-network".to_string();
+        // The rescan device should be local
+        rescan_device.is_local = true;
 
         // In real code this is Utc::now() at scan time
         let rescan_timestamp = Utc.with_ymd_and_hms(2023, 1, 1, 12, 30, 0).unwrap();
@@ -1236,7 +1241,8 @@ mod tests {
 
         // Verify community updates
         assert_eq!(device.os_name, "Ubuntu 22.04");
-        assert_eq!(device.last_seen, community_timestamp); // Updated to community timestamp
+        // last_seen should NOT be updated since community device is not local
+        assert_eq!(device.last_seen, rescan_timestamp);
 
         // Step 5: Receive older community information (shouldn't update timestamp)
         let mut older_community_device =
@@ -1255,7 +1261,7 @@ mod tests {
 
         // Verify older info behavior
         assert_eq!(device.device_vendor, "Old Vendor"); // Vendor info applied since our device had no vendor
-        assert_eq!(device.last_seen, community_timestamp); // Timestamp not changed (still has newest)
+        assert_eq!(device.last_seen, rescan_timestamp); // Timestamp not changed (still has rescan timestamp)
     }
 
     #[test]
@@ -1269,6 +1275,7 @@ mod tests {
         local_device.hostname = "local-discovery".to_string();
         local_device.origin_ip = "192.168.1.1".to_string();
         local_device.origin_network = "home-network".to_string();
+        local_device.is_local = true; // This is a local device
         local_device.last_seen = Utc.with_ymd_and_hms(2023, 1, 1, 12, 0, 0).unwrap();
         local_device.open_ports.push(PortInfo {
             port: 80,
@@ -1313,10 +1320,10 @@ mod tests {
         assert_eq!(devices_vec[0].open_ports[0].port, 80); // Local port
         assert_eq!(devices_vec[0].open_ports[1].port, 443); // Community port
 
-        // The timestamp should be from the most recent discovery (community device)
+        // The timestamp should NOT be updated from the community device
         assert_eq!(
             devices_vec[0].last_seen,
-            Utc.with_ymd_and_hms(2023, 1, 1, 13, 0, 0).unwrap()
+            Utc.with_ymd_and_hms(2023, 1, 1, 12, 0, 0).unwrap()
         );
 
         // Origin should still be from the local device

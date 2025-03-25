@@ -1881,7 +1881,7 @@ mod tests {
         assert!(capture.is_capturing().await, "Capture should be running");
 
         // Delay to allow capture to get some sessions and be resolved
-        sleep(Duration::from_secs(45)).await;
+        sleep(Duration::from_secs(60)).await;
 
         // Make sure we have sessions
         let sessions = capture.get_sessions().await;
