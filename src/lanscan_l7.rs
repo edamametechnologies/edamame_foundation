@@ -157,38 +157,6 @@ impl LANScanL7 {
                         .map(|user| (user.id(), user.name()))
                         .collect();
 
-                    // Add fallback for Unix systems using the users crate
-                    #[cfg(unix)]
-                    {
-                        // Only do this if we have fewer users than expected
-                        if uid_to_username.len() < 5 {
-                            // arbitrary threshold, adjust as needed
-                            debug!(
-                                "Few users found ({}) in sysinfo, adding fallback",
-                                uid_to_username.len()
-                            );
-
-                            // Preload commonly used system users to avoid lookups during packet processing
-                            if let Ok(all_users) = users::all_users() {
-                                debug!("Preloaded {} users from users crate", all_users.count());
-                            }
-                        }
-                    }
-
-                    // Add fallback for Windows systems
-                    #[cfg(windows)]
-                    {
-                        // Windows doesn't provide an easy way to enumerate all users programmatically
-                        // without elevated privileges, so we'll rely on the per-user lookup in extract_l7_from_socket
-                        if uid_to_username.len() < 3 {
-                            // arbitrary threshold for Windows
-                            debug!(
-                                "Few users found ({}) in sysinfo on Windows",
-                                uid_to_username.len()
-                            );
-                        }
-                    }
-
                     Self::update_host_service_cache(
                         &socket_info,
                         &pid_to_process,
@@ -407,23 +375,8 @@ impl LANScanL7 {
                 // Clean up port process cache
                 let mut to_remove = Vec::new();
                 for entry in port_process_cache.iter() {
-                    // Sliding scale for retention based on hit count
-                    // Higher hit counts get longer retention times
-                    let hit_count = entry.value().hit_count;
-                    let retention_hours = if hit_count > 100 {
-                        24 // Keep very active entries for 24 hours
-                    } else if hit_count > 50 {
-                        12 // Keep moderately active entries for 12 hours
-                    } else if hit_count > 20 {
-                        6 // Keep somewhat active entries for 6 hours
-                    } else if hit_count > 10 {
-                        3 // Keep lightly active entries for 3 hours
-                    } else {
-                        1 // Default retention is 1 hour
-                    };
-
-                    if entry.value().last_seen.elapsed()
-                        > Duration::from_secs(3600 * retention_hours)
+                    if entry.value().last_seen.elapsed() > Duration::from_secs(3600)
+                        && entry.value().hit_count < 10
                     {
                         to_remove.push(entry.key().clone());
                     }
@@ -658,40 +611,6 @@ impl LANScanL7 {
             return Ok(l7_data);
         }
 
-        // Additional fallback for well-known services
-        if connection.protocol == Protocol::TCP
-            && (connection.src_port < 1024 || connection.dst_port < 1024)
-        {
-            // This is likely a known service - try to find any socket with the same local port
-            let well_known_port = if connection.src_port < 1024 {
-                connection.src_port
-            } else {
-                connection.dst_port
-            };
-            for socket in socket_info.iter() {
-                match &socket.protocol_socket_info {
-                    ProtocolSocketInfo::Tcp(tcp_socket) => {
-                        if tcp_socket.local_port == well_known_port {
-                            if let Some(l7) = Self::extract_l7_from_socket(
-                                socket,
-                                pid_to_process,
-                                uid_to_username,
-                            )
-                            .await
-                            {
-                                debug!(
-                                    "Found L7 data using well-known port fallback for {:?}",
-                                    connection
-                                );
-                                return Ok(l7);
-                            }
-                        }
-                    }
-                    _ => continue,
-                }
-            }
-        }
-
         Err(anyhow::anyhow!("No matching process found"))
     }
 
@@ -805,37 +724,7 @@ impl LANScanL7 {
     ) -> Option<SessionL7> {
         let socket_pids = socket.associated_pids.clone();
 
-        // Use a static cache to map common system process PIDs to names
-        // for cases when process lookup fails
-        use once_cell::sync::Lazy;
-        static COMMON_SYSTEM_PROCESSES: Lazy<DashMap<u32, (String, String)>> = Lazy::new(|| {
-            let m = DashMap::new();
-            #[cfg(windows)]
-            {
-                // Common Windows system processes and services
-                m.insert(
-                    4,
-                    ("System".to_string(), "NT AUTHORITY\\SYSTEM".to_string()),
-                );
-                m.insert(
-                    0,
-                    (
-                        "System Idle Process".to_string(),
-                        "NT AUTHORITY\\SYSTEM".to_string(),
-                    ),
-                );
-            }
-            #[cfg(unix)]
-            {
-                // Common Unix/Linux system processes
-                m.insert(1, ("init".to_string(), "root".to_string()));
-                m.insert(2, ("kthreadd".to_string(), "root".to_string()));
-            }
-            m
-        });
-
         for socket_pid in socket_pids.clone() {
-            // First try to get from normal process map
             if let Some(process) = pid_to_process.get(&socket_pid) {
                 let username = if let Some(user_id) = process.user_id() {
                     match uid_to_username.get(&user_id).map(|s| s.to_string()) {
@@ -848,11 +737,8 @@ impl LANScanL7 {
                                 if let Some(user) = users::get_user_by_uid(user_id_u32) {
                                     user.name().to_string_lossy().to_string()
                                 } else {
-                                    debug!("Trying fallback for user_id {:?}", user_id);
-                                    match user_id_u32 {
-                                        0 => "root".to_string(),
-                                        _ => format!("uid-{}", user_id_u32),
-                                    }
+                                    warn!("No username found for user_id {:?}", user_id);
+                                    String::new()
                                 }
                             }
                             #[cfg(windows)]
@@ -860,39 +746,20 @@ impl LANScanL7 {
                                 if let Some(username) = get_windows_username_by_uid(user_id) {
                                     username
                                 } else {
-                                    // Use SID as fallback
-                                    format!("user-{}", user_id.to_string())
+                                    warn!("No username found for user_id {:?}", user_id);
+                                    String::new()
                                 }
                             }
                             #[cfg(not(any(unix, windows)))]
                             {
                                 warn!("No username found for user_id {:?}", user_id);
-                                format!("user-{:?}", user_id)
+                                String::new()
                             }
                         }
                     }
                 } else {
-                    debug!("No user_id found for PID {:?}, using fallback", socket_pid);
-                    #[cfg(windows)]
-                    {
-                        if socket_pid <= 4 {
-                            "NT AUTHORITY\\SYSTEM".to_string()
-                        } else {
-                            "SYSTEM".to_string()
-                        }
-                    }
-                    #[cfg(unix)]
-                    {
-                        if socket_pid <= 2 {
-                            "root".to_string()
-                        } else {
-                            "unknown".to_string()
-                        }
-                    }
-                    #[cfg(not(any(unix, windows)))]
-                    {
-                        "unknown".to_string()
-                    }
+                    warn!("No user_id found for PID {:?}", socket_pid);
+                    String::new()
                 };
 
                 let process_name = process.name().to_string_lossy().to_string();
@@ -908,56 +775,8 @@ impl LANScanL7 {
                     process_path,
                     username,
                 });
-            } else if let Some(common_proc) = COMMON_SYSTEM_PROCESSES.get(&socket_pid) {
-                // Check for common system process
-                let (process_name, username) = common_proc.clone();
-                return Some(SessionL7 {
-                    pid: socket_pid,
-                    process_name,
-                    process_path: String::new(),
-                    username,
-                });
             }
         }
-
-        // If no process found but we have a socket with a privileged port (< 1024),
-        // make a best effort identification based on common port numbers
-        if let ProtocolSocketInfo::Tcp(tcp_socket) = &socket.protocol_socket_info {
-            if tcp_socket.local_port < 1024 {
-                let (process_name, username) = match tcp_socket.local_port {
-                    22 => ("sshd".to_string(), "root".to_string()),
-                    80 | 443 => ("httpd".to_string(), "www-data".to_string()),
-                    21 => ("ftpd".to_string(), "ftp".to_string()),
-                    25 | 587 => ("smtpd".to_string(), "postfix".to_string()),
-                    53 => ("named".to_string(), "bind".to_string()),
-                    _ => return None, // Don't guess for other ports
-                };
-
-                return Some(SessionL7 {
-                    pid: 0, // Unknown PID
-                    process_name,
-                    process_path: String::new(),
-                    username,
-                });
-            }
-        } else if let ProtocolSocketInfo::Udp(udp_socket) = &socket.protocol_socket_info {
-            if udp_socket.local_port < 1024 {
-                let (process_name, username) = match udp_socket.local_port {
-                    53 => ("named".to_string(), "bind".to_string()),
-                    67 | 68 => ("dhcpd".to_string(), "dhcp".to_string()),
-                    123 => ("ntpd".to_string(), "ntp".to_string()),
-                    _ => return None, // Don't guess for other ports
-                };
-
-                return Some(SessionL7 {
-                    pid: 0, // Unknown PID
-                    process_name,
-                    process_path: String::new(),
-                    username,
-                });
-            }
-        }
-
         None
     }
 
@@ -983,36 +802,11 @@ impl LANScanL7 {
 
 #[cfg(windows)]
 fn get_windows_username_by_uid(uid: &Uid) -> Option<String> {
-    use once_cell::sync::Lazy;
-    use std::collections::HashMap;
     use std::ffi::c_void;
-    use std::sync::Mutex;
     use windows::core::{Error, PCWSTR};
-
-    // Cache for usernames - avoid repeated lookups
-    static USERNAME_CACHE: Lazy<Mutex<HashMap<String, Option<String>>>> =
-        Lazy::new(|| Mutex::new(HashMap::new()));
 
     // The Uid is typically a SID in string form on Windows
     let uid_str = uid.to_string();
-
-    // Check cache first
-    if let Ok(cache) = USERNAME_CACHE.lock() {
-        if let Some(cached_result) = cache.get(&uid_str) {
-            return cached_result.clone();
-        }
-    }
-
-    // Try to get well-known system account names first
-    if uid_str.ends_with("-500") {
-        return Some("Administrator".to_string());
-    } else if uid_str.ends_with("-501") {
-        return Some("Guest".to_string());
-    } else if uid_str.ends_with("-503") {
-        return Some("DefaultAccount".to_string());
-    } else if uid_str.ends_with("-504") {
-        return Some("WDAGUtilityAccount".to_string());
-    }
 
     // Convert the UID string to a wide string for Windows API
     let h_string = HSTRING::from(uid_str.as_str());
@@ -1026,14 +820,14 @@ fn get_windows_username_by_uid(uid: &Uid) -> Option<String> {
             &mut buffer as *mut *mut u8,
         );
 
-        let username_result = if result == NERR_Success && !buffer.is_null() {
+        if result == NERR_Success && !buffer.is_null() {
             let user_info = &*(buffer as *const USER_INFO_0);
             let username = PWSTR(user_info.usri0_name.0).to_string().ok();
 
             // Free the buffer allocated by NetUserGetInfo
             let _ = NetApiBufferFree(Some(buffer as *const c_void));
 
-            username
+            return username;
         } else {
             if !buffer.is_null() {
                 let _ = NetApiBufferFree(Some(buffer as *const c_void));
@@ -1043,15 +837,8 @@ fn get_windows_username_by_uid(uid: &Uid) -> Option<String> {
                 uid_str,
                 Error::from_win32()
             );
-            None
-        };
-
-        // Cache the result
-        if let Ok(mut cache) = USERNAME_CACHE.lock() {
-            cache.insert(uid_str.clone(), username_result.clone());
+            return None;
         }
-
-        return username_result;
     }
 }
 
