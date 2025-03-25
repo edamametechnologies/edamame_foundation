@@ -272,13 +272,17 @@ impl LANScanResolver {
                         if existing_value == "Unknown" || existing_value == "Resolving" {
                             true
                         } else {
-                            // For other values (likely from reverse DNS), prefer forward DNS
-                            // but log that we're replacing the value
-                            debug!(
-                                "Replacing reverse DNS {} with forward DNS {} for IP {}",
-                                existing_value, domain, ip
-                            );
-                            true
+                            if domain != existing_value.as_str() {
+                                // For other values (likely from reverse DNS), prefer forward DNS
+                                // but log that we're replacing the value
+                                debug!(
+                                    "Replacing reverse DNS {} with forward DNS {} for IP {}",
+                                    existing_value, domain, ip
+                                );
+                                true
+                            } else {
+                                false
+                            }
                         }
                     }
                     None => true, // No existing entry, so add it
