@@ -86,10 +86,10 @@ pub fn get_model_name(platform: &str) -> Result<&'static str> {
 }
 
 impl ThreatMetrics {
-    pub fn get_model_url(platform: &str, branch: &str) -> Result<String> {
+    pub fn get_threats_url(platform: &str, branch: &str) -> Result<String> {
         let model_name = get_model_name(platform)?;
         let url = format!(
-            "https://github.com/edamame-macos/edamame-data/raw/{}/{}",
+            "https://github.com/edamametechnologies/threatmodels/blob/{}/{}",
             branch, model_name
         );
         Ok(url)
