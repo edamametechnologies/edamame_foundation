@@ -357,38 +357,18 @@ fn endpoint_matches_with_reason(
     process: Option<&str>,
     endpoint: &WhitelistEndpoint,
 ) -> (bool, Option<String>) {
-    let domain_match = domain_matches(session_domain, &endpoint.domain);
-    let ip_match = ip_matches(session_ip, &endpoint.ip);
-    let port_match = port_matches(port, endpoint.port);
+    // Process name, protocol and port are fundamental for service identification - they must match
     let protocol_match = protocol_matches(protocol, &endpoint.protocol);
-    let as_number_match = as_number_matches(as_number, endpoint.as_number);
-    let country_match = as_country_matches(as_country, &endpoint.as_country);
-    let owner_match = as_owner_matches(as_owner, &endpoint.as_owner);
-    let l7_match = process_matches(process, &endpoint.process);
+    let port_match = port_matches(port, endpoint.port);
+    let process_match = process_matches(process, &endpoint.process);
 
-    if domain_match
-        && ip_match
-        && port_match
-        && protocol_match
-        && as_number_match
-        && country_match
-        && owner_match
-        && l7_match
-    {
-        (true, None)
-    } else {
+    if !protocol_match || !port_match || !process_match {
+        // If protocol or port don't match, there's no need to proceed further
         let mut reasons = Vec::new();
-
-        if !domain_match {
+        if !protocol_match {
             reasons.push(format!(
-                "Domain mismatch: {:?} not matching {:?}",
-                session_domain, endpoint.domain
-            ));
-        }
-        if !ip_match {
-            reasons.push(format!(
-                "IP mismatch: {:?} not matching {:?}",
-                session_ip, endpoint.ip
+                "Protocol mismatch: {} not matching {:?}",
+                protocol, endpoint.protocol
             ));
         }
         if !port_match {
@@ -397,45 +377,121 @@ fn endpoint_matches_with_reason(
                 port, endpoint.port
             ));
         }
-        if !protocol_match {
-            reasons.push(format!(
-                "Protocol mismatch: {} not matching {:?}",
-                protocol, endpoint.protocol
-            ));
-        }
-        if !as_number_match {
-            reasons.push(format!(
-                "AS number mismatch: {:?} not matching {:?}",
-                as_number, endpoint.as_number
-            ));
-        }
-        if !country_match {
-            reasons.push(format!(
-                "Country mismatch: {:?} not matching {:?}",
-                as_country, endpoint.as_country
-            ));
-        }
-        if !owner_match {
-            reasons.push(format!(
-                "Owner mismatch: {:?} not matching {:?}",
-                as_owner, endpoint.as_owner
-            ));
-        }
-        if !l7_match {
+        if !process_match {
             reasons.push(format!(
                 "Process mismatch: {:?} not matching {:?}",
                 process, endpoint.process
             ));
         }
-
-        trace!(
-            "Did not match whitelist endpoint: {:?}, Reasons: {}",
-            endpoint,
-            reasons.join(", ")
-        );
-
-        (false, Some(reasons.join(", ")))
+        return (false, Some(reasons.join(", ")));
     }
+
+    // Check if we have a domain match
+    let domain_match = domain_matches(session_domain, &endpoint.domain);
+    let domain_specified = endpoint.domain.is_some();
+
+    // If domain is specified and matches, other checks are irrelevant
+    if domain_specified && domain_match {
+        return (true, None);
+    }
+
+    // Check if we have an IP match
+    let ip_match = ip_matches(session_ip, &endpoint.ip);
+    let ip_specified = endpoint.ip.is_some();
+
+    // If IP is specified and matches, return true
+    if ip_specified && ip_match {
+        return (true, None);
+    }
+
+    // Track whether we need to check the domain or IP
+    let entity_matched = (domain_specified && domain_match) || (ip_specified && ip_match);
+    let needs_entity_match = domain_specified || ip_specified;
+
+    // If entity matching is required but failed, we don't match
+    if needs_entity_match && !entity_matched {
+        let mut reasons = Vec::new();
+        if domain_specified {
+            reasons.push(format!(
+                "Domain mismatch: {:?} not matching {:?}",
+                session_domain, endpoint.domain
+            ));
+        }
+        if ip_specified {
+            reasons.push(format!(
+                "IP mismatch: {:?} not matching {:?}",
+                session_ip, endpoint.ip
+            ));
+        }
+        return (false, Some(reasons.join(", ")));
+    }
+
+    // AS checks are only relevant if no domain/IP were specified or if they weren't provided in the session
+    let should_check_as = (!domain_specified && !ip_specified)
+        || (endpoint.as_number.is_some()
+            || endpoint.as_owner.is_some()
+            || endpoint.as_country.is_some());
+
+    if should_check_as {
+        // Check AS number if specified (most specific identifier)
+        if let Some(whitelist_asn) = endpoint.as_number {
+            match as_number {
+                Some(session_asn) if session_asn == whitelist_asn => {
+                    // ASN matches, continue to next checks
+                }
+                _ => {
+                    return (
+                        false,
+                        Some(format!(
+                            "AS number mismatch: {:?} not matching {:?}",
+                            as_number, endpoint.as_number
+                        )),
+                    );
+                }
+            }
+        }
+
+        // Check AS owner if specified
+        if let Some(ref whitelist_owner) = endpoint.as_owner {
+            match as_owner {
+                Some(session_owner) if session_owner.eq_ignore_ascii_case(whitelist_owner) => {
+                    // Owner matches, continue
+                }
+                _ => {
+                    return (
+                        false,
+                        Some(format!(
+                            "Owner mismatch: {:?} not matching {:?}",
+                            as_owner, endpoint.as_owner
+                        )),
+                    );
+                }
+            }
+        }
+
+        // Check AS country if specified
+        if let Some(ref whitelist_country) = endpoint.as_country {
+            match as_country {
+                Some(session_country)
+                    if session_country.eq_ignore_ascii_case(whitelist_country) =>
+                {
+                    // Country matches, continue
+                }
+                _ => {
+                    return (
+                        false,
+                        Some(format!(
+                            "Country mismatch: {:?} not matching {:?}",
+                            as_country, endpoint.as_country
+                        )),
+                    );
+                }
+            }
+        }
+    }
+
+    // All required checks passed
+    (true, None)
 }
 
 /// Helper function to match domain names with optional wildcards.
@@ -459,8 +515,12 @@ fn domain_matches(session_domain: Option<&str>, endpoint_domain: &Option<String>
                             return false;
                         }
 
-                        // For wildcard to match, domain must end with the suffix
-                        return domain.ends_with(suffix);
+                        // For a valid subdomain match:
+                        // 1. Domain must end with the suffix
+                        // 2. The character before the suffix must be a dot (.)
+                        return domain.ends_with(suffix)
+                            && domain.len() > suffix.len()
+                            && domain.as_bytes()[domain.len() - suffix.len() - 1] == b'.';
                     }
 
                     // Handle suffix wildcard (example.*)
@@ -478,7 +538,8 @@ fn domain_matches(session_domain: Option<&str>, endpoint_domain: &Option<String>
                             } else if domain.len() > prefix.len()
                                 && domain.as_bytes()[prefix.len()] == b'.'
                             {
-                                // Domain has the prefix followed by a dot, which is valid
+                                // Domain has the prefix followed by a dot and any TLD, which is valid
+                                // For suffix wildcards (example.*), we want to match any TLD
                                 return true;
                             }
                         }
@@ -546,37 +607,6 @@ fn ip_matches(session_ip: Option<&str>, endpoint_ip: &Option<String>) -> bool {
 /// Helper function to match ports.
 fn port_matches(port: u16, whitelist_port: Option<u16>) -> bool {
     whitelist_port.map_or(true, |wp| wp == port)
-}
-
-/// Helper functions to match ASN and L7 criteria
-fn as_number_matches(session_as_number: Option<u32>, whitelist_as_number: Option<u32>) -> bool {
-    match whitelist_as_number {
-        Some(w_as_number) => session_as_number == Some(w_as_number),
-        None => true,
-    }
-}
-
-fn as_country_matches(
-    session_as_country: Option<&str>,
-    whitelist_as_country: &Option<String>,
-) -> bool {
-    match whitelist_as_country {
-        Some(w_country) => match session_as_country {
-            Some(s_country) => s_country.eq_ignore_ascii_case(w_country),
-            None => false,
-        },
-        None => true,
-    }
-}
-
-fn as_owner_matches(session_as_owner: Option<&str>, whitelist_as_owner: &Option<String>) -> bool {
-    match whitelist_as_owner {
-        Some(w_owner) => match session_as_owner {
-            Some(s_owner) => s_owner.eq_ignore_ascii_case(w_owner),
-            None => false,
-        },
-        None => true,
-    }
 }
 
 fn process_matches(session_l7: Option<&str>, whitelist_l7: &Option<String>) -> bool {
@@ -738,25 +768,48 @@ mod tests {
 
     #[tokio::test]
     #[serial]
-    async fn test_wildcard_domain_matching() {
-        // Initialize test data with various wildcard patterns
+    async fn test_wildcard_domain_patterns() {
         let test_whitelist_json = WhitelistsJSON {
             date: "2024-10-20".to_string(),
             signature: Some("test_signature".to_string()),
             whitelists: vec![WhitelistInfo {
-                name: "wildcard_domain_whitelist".to_string(),
+                name: "wildcard_patterns".to_string(),
                 extends: None,
-                endpoints: vec![WhitelistEndpoint {
-                    domain: Some("*.example.com".to_string()),
-                    ip: None,
-                    port: None,
-                    protocol: Some("TCP".to_string()),
-                    as_number: None,
-                    as_country: None,
-                    as_owner: None,
-                    process: None,
-                    description: Some("Wildcard domain".to_string()),
-                }],
+                endpoints: vec![
+                    WhitelistEndpoint {
+                        domain: Some("*.example.com".to_string()),
+                        ip: None,
+                        port: Some(443),
+                        protocol: Some("TCP".to_string()),
+                        as_number: None,
+                        as_country: None,
+                        as_owner: None,
+                        process: None,
+                        description: Some("Prefix wildcard".to_string()),
+                    },
+                    WhitelistEndpoint {
+                        domain: Some("example.*".to_string()),
+                        ip: None,
+                        port: Some(443),
+                        protocol: Some("TCP".to_string()),
+                        as_number: None,
+                        as_country: None,
+                        as_owner: None,
+                        process: None,
+                        description: Some("Suffix wildcard".to_string()),
+                    },
+                    WhitelistEndpoint {
+                        domain: Some("api.*.example.com".to_string()),
+                        ip: None,
+                        port: Some(443),
+                        protocol: Some("TCP".to_string()),
+                        as_number: None,
+                        as_country: None,
+                        as_owner: None,
+                        process: None,
+                        description: Some("Middle wildcard".to_string()),
+                    },
+                ],
             }],
         };
 
@@ -774,10 +827,10 @@ mod tests {
             is_session_in_whitelist(
                 Some("sub.example.com"),
                 None,
-                80,
+                443,
                 "TCP",
                 &custom_whitelists,
-                "wildcard_domain_whitelist",
+                "wildcard_patterns",
                 None,
                 None,
                 None,
@@ -785,18 +838,84 @@ mod tests {
             )
             .await
             .0,
-            "Should match sub.example.com with *.example.com"
+            "Should match subdomain with prefix wildcard"
         );
 
-        // Test non-matching cases
+        // Test suffix wildcard (example.*)
+        assert!(
+            is_session_in_whitelist(
+                Some("example.net"),
+                None,
+                443,
+                "TCP",
+                &custom_whitelists,
+                "wildcard_patterns",
+                None,
+                None,
+                None,
+                None
+            )
+            .await
+            .0,
+            "Should match TLD with suffix wildcard"
+        );
+
+        // Test middle wildcard (api.*.example.com)
+        assert!(
+            is_session_in_whitelist(
+                Some("api.prod.example.com"),
+                None,
+                443,
+                "TCP",
+                &custom_whitelists,
+                "wildcard_patterns",
+                None,
+                None,
+                None,
+                None
+            )
+            .await
+            .0,
+            "Should match domain with middle wildcard"
+        );
+
+        // Test invalid matches
+        // Create a new whitelist specifically for testing the prefix wildcard
+        let test_prefix_whitelist_json = WhitelistsJSON {
+            date: "2024-10-20".to_string(),
+            signature: Some("test_signature".to_string()),
+            whitelists: vec![WhitelistInfo {
+                name: "prefix_only_whitelist".to_string(),
+                extends: None,
+                endpoints: vec![WhitelistEndpoint {
+                    domain: Some("*.example.com".to_string()),
+                    ip: None,
+                    port: Some(443),
+                    protocol: Some("TCP".to_string()),
+                    as_number: None,
+                    as_country: None,
+                    as_owner: None,
+                    process: None,
+                    description: Some("Only prefix wildcard".to_string()),
+                }],
+            }],
+        };
+
+        let prefix_whitelists = Whitelists::new_from_json(test_prefix_whitelist_json);
+        LISTS
+            .write()
+            .await
+            .overwrite_with_test_data(prefix_whitelists)
+            .await;
+
         assert!(
             !is_session_in_whitelist(
                 Some("example.com"),
                 None,
-                80,
+                443,
                 "TCP",
                 &custom_whitelists,
-                "wildcard_domain_whitelist",
+                "prefix_only_whitelist",
                 None,
                 None,
                 None,
@@ -804,7 +923,25 @@ mod tests {
             )
             .await
             .0,
-            "Should not match example.com with *.example.com"
+            "Should not match base domain with prefix wildcard"
+        );
+
+        assert!(
+            !is_session_in_whitelist(
+                Some("api.example"),
+                None,
+                443,
+                "TCP",
+                &custom_whitelists,
+                "wildcard_patterns",
+                None,
+                None,
+                None,
+                None
+            )
+            .await
+            .0,
+            "Should not match incomplete domain with suffix wildcard"
         );
     }
 
@@ -1015,6 +1152,487 @@ mod tests {
             .await
             .0,
             "Should match 'c.com' in 'whitelist_b' due to recursive inheritance"
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_domain_priority_matching() {
+        let test_whitelist_json = WhitelistsJSON {
+            date: "2024-10-20".to_string(),
+            signature: Some("test_signature".to_string()),
+            whitelists: vec![WhitelistInfo {
+                name: "priority_whitelist".to_string(),
+                extends: None,
+                endpoints: vec![WhitelistEndpoint {
+                    domain: Some("example.com".to_string()),
+                    ip: Some("192.168.1.1".to_string()), // Different IP
+                    port: Some(443),
+                    protocol: Some("TCP".to_string()),
+                    as_number: Some(12345), // Different AS info
+                    as_country: Some("US".to_string()),
+                    as_owner: Some("Test ISP".to_string()),
+                    process: None,
+                    description: Some("Domain priority test".to_string()),
+                }],
+            }],
+        };
+
+        let whitelists = Whitelists::new_from_json(test_whitelist_json);
+        LISTS
+            .write()
+            .await
+            .overwrite_with_test_data(whitelists)
+            .await;
+
+        let custom_whitelists = Arc::new(CustomRwLock::new(None));
+
+        // Should match based on domain even with mismatched IP and AS info
+        assert!(
+            is_session_in_whitelist(
+                Some("example.com"),
+                Some("10.0.0.1"), // Different IP
+                443,
+                "TCP",
+                &custom_whitelists,
+                "priority_whitelist",
+                Some(54321),       // Different AS number
+                Some("UK"),        // Different country
+                Some("Other ISP"), // Different owner
+                None
+            )
+            .await
+            .0,
+            "Should match based on domain regardless of IP and AS info"
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_ip_priority_over_as() {
+        let test_whitelist_json = WhitelistsJSON {
+            date: "2024-10-20".to_string(),
+            signature: Some("test_signature".to_string()),
+            whitelists: vec![WhitelistInfo {
+                name: "ip_priority_whitelist".to_string(),
+                extends: None,
+                endpoints: vec![WhitelistEndpoint {
+                    domain: None,
+                    ip: Some("192.168.1.0/24".to_string()),
+                    port: Some(443),
+                    protocol: Some("TCP".to_string()),
+                    as_number: Some(12345), // Different AS info
+                    as_country: Some("US".to_string()),
+                    as_owner: Some("Test ISP".to_string()),
+                    process: None,
+                    description: Some("IP priority test".to_string()),
+                }],
+            }],
+        };
+
+        let whitelists = Whitelists::new_from_json(test_whitelist_json);
+        LISTS
+            .write()
+            .await
+            .overwrite_with_test_data(whitelists)
+            .await;
+
+        let custom_whitelists = Arc::new(CustomRwLock::new(None));
+
+        // Should match based on IP even with mismatched AS info
+        assert!(
+            is_session_in_whitelist(
+                None,
+                Some("192.168.1.100"),
+                443,
+                "TCP",
+                &custom_whitelists,
+                "ip_priority_whitelist",
+                Some(54321),       // Different AS number
+                Some("UK"),        // Different country
+                Some("Other ISP"), // Different owner
+                None
+            )
+            .await
+            .0,
+            "Should match based on IP regardless of AS info"
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_as_only_matching() {
+        let test_whitelist_json = WhitelistsJSON {
+            date: "2024-10-20".to_string(),
+            signature: Some("test_signature".to_string()),
+            whitelists: vec![WhitelistInfo {
+                name: "as_whitelist".to_string(),
+                extends: None,
+                endpoints: vec![WhitelistEndpoint {
+                    domain: None,
+                    ip: None,
+                    port: Some(443),
+                    protocol: Some("TCP".to_string()),
+                    as_number: Some(12345),
+                    as_country: Some("US".to_string()),
+                    as_owner: Some("Test ISP".to_string()),
+                    process: None,
+                    description: Some("AS-only test".to_string()),
+                }],
+            }],
+        };
+
+        let whitelists = Whitelists::new_from_json(test_whitelist_json);
+        LISTS
+            .write()
+            .await
+            .overwrite_with_test_data(whitelists)
+            .await;
+
+        let custom_whitelists = Arc::new(CustomRwLock::new(None));
+
+        // Should match when only AS info matches
+        assert!(
+            is_session_in_whitelist(
+                None,
+                Some("10.0.0.1"),
+                443,
+                "TCP",
+                &custom_whitelists,
+                "as_whitelist",
+                Some(12345),
+                Some("US"),
+                Some("Test ISP"),
+                None
+            )
+            .await
+            .0,
+            "Should match based on AS info when no domain/IP specified"
+        );
+
+        // Should not match with mismatched AS info
+        assert!(
+            !is_session_in_whitelist(
+                None,
+                Some("10.0.0.1"),
+                443,
+                "TCP",
+                &custom_whitelists,
+                "as_whitelist",
+                Some(54321),
+                Some("UK"),
+                Some("Other ISP"),
+                None
+            )
+            .await
+            .0,
+            "Should not match with mismatched AS info"
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_mixed_criteria_matching() {
+        let test_whitelist_json = WhitelistsJSON {
+            date: "2024-10-20".to_string(),
+            signature: Some("test_signature".to_string()),
+            whitelists: vec![WhitelistInfo {
+                name: "mixed_whitelist".to_string(),
+                extends: None,
+                endpoints: vec![WhitelistEndpoint {
+                    domain: Some("example.com".to_string()),
+                    ip: Some("192.168.1.0/24".to_string()),
+                    port: Some(443),
+                    protocol: Some("TCP".to_string()),
+                    as_number: Some(12345),
+                    as_country: Some("US".to_string()),
+                    as_owner: Some("Test ISP".to_string()),
+                    process: Some("test-process".to_string()),
+                    description: Some("Mixed criteria test".to_string()),
+                }],
+            }],
+        };
+
+        let whitelists = Whitelists::new_from_json(test_whitelist_json);
+        LISTS
+            .write()
+            .await
+            .overwrite_with_test_data(whitelists)
+            .await;
+
+        let custom_whitelists = Arc::new(CustomRwLock::new(None));
+
+        // Should match on domain regardless of other criteria
+        assert!(
+            is_session_in_whitelist(
+                Some("example.com"),
+                Some("10.0.0.1"), // Different IP
+                443,
+                "TCP",
+                &custom_whitelists,
+                "mixed_whitelist",
+                Some(54321), // Different AS
+                Some("UK"),
+                Some("Other ISP"),
+                Some("test-process")
+            )
+            .await
+            .0,
+            "Should match on domain despite mismatched IP and AS"
+        );
+
+        // Should match on IP when domain doesn't match
+        assert!(
+            is_session_in_whitelist(
+                Some("other.com"),
+                Some("192.168.1.100"),
+                443,
+                "TCP",
+                &custom_whitelists,
+                "mixed_whitelist",
+                Some(54321), // Different AS
+                Some("UK"),
+                Some("Other ISP"),
+                Some("test-process")
+            )
+            .await
+            .0,
+            "Should match on IP when domain doesn't match"
+        );
+
+        // Should not match when required process doesn't match
+        assert!(
+            !is_session_in_whitelist(
+                Some("example.com"),
+                Some("192.168.1.100"),
+                443,
+                "TCP",
+                &custom_whitelists,
+                "mixed_whitelist",
+                Some(12345),
+                Some("US"),
+                Some("Test ISP"),
+                Some("different-process")
+            )
+            .await
+            .0,
+            "Should not match when process doesn't match"
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_ip_cidr_matching() {
+        let test_whitelist_json = WhitelistsJSON {
+            date: "2024-10-20".to_string(),
+            signature: Some("test_signature".to_string()),
+            whitelists: vec![WhitelistInfo {
+                name: "ip_cidr_whitelist".to_string(),
+                extends: None,
+                endpoints: vec![
+                    WhitelistEndpoint {
+                        domain: None,
+                        ip: Some("192.168.1.0/24".to_string()),
+                        port: Some(443),
+                        protocol: Some("TCP".to_string()),
+                        as_number: None,
+                        as_country: None,
+                        as_owner: None,
+                        process: None,
+                        description: Some("IPv4 CIDR test".to_string()),
+                    },
+                    WhitelistEndpoint {
+                        domain: None,
+                        ip: Some("2001:db8::/32".to_string()),
+                        port: Some(443),
+                        protocol: Some("TCP".to_string()),
+                        as_number: None,
+                        as_country: None,
+                        as_owner: None,
+                        process: None,
+                        description: Some("IPv6 CIDR test".to_string()),
+                    },
+                ],
+            }],
+        };
+
+        let whitelists = Whitelists::new_from_json(test_whitelist_json);
+        LISTS
+            .write()
+            .await
+            .overwrite_with_test_data(whitelists)
+            .await;
+
+        let custom_whitelists = Arc::new(CustomRwLock::new(None));
+
+        // Test IPv4 CIDR matching
+        assert!(
+            is_session_in_whitelist(
+                None,
+                Some("192.168.1.100"),
+                443,
+                "TCP",
+                &custom_whitelists,
+                "ip_cidr_whitelist",
+                None,
+                None,
+                None,
+                None
+            )
+            .await
+            .0,
+            "Should match IPv4 in CIDR range"
+        );
+
+        // Test IPv6 CIDR matching
+        assert!(
+            is_session_in_whitelist(
+                None,
+                Some("2001:db8:1234::1"),
+                443,
+                "TCP",
+                &custom_whitelists,
+                "ip_cidr_whitelist",
+                None,
+                None,
+                None,
+                None
+            )
+            .await
+            .0,
+            "Should match IPv6 in CIDR range"
+        );
+
+        // Test IP outside CIDR range
+        assert!(
+            !is_session_in_whitelist(
+                None,
+                Some("192.168.2.1"),
+                443,
+                "TCP",
+                &custom_whitelists,
+                "ip_cidr_whitelist",
+                None,
+                None,
+                None,
+                None
+            )
+            .await
+            .0,
+            "Should not match IP outside CIDR range"
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_protocol_case_sensitivity() {
+        let test_whitelist_json = WhitelistsJSON {
+            date: "2024-10-20".to_string(),
+            signature: Some("test_signature".to_string()),
+            whitelists: vec![WhitelistInfo {
+                name: "protocol_whitelist".to_string(),
+                extends: None,
+                endpoints: vec![WhitelistEndpoint {
+                    domain: Some("example.com".to_string()),
+                    ip: None,
+                    port: Some(443),
+                    protocol: Some("TCP".to_string()),
+                    as_number: None,
+                    as_country: None,
+                    as_owner: None,
+                    process: None,
+                    description: Some("Protocol case test".to_string()),
+                }],
+            }],
+        };
+
+        let whitelists = Whitelists::new_from_json(test_whitelist_json);
+        LISTS
+            .write()
+            .await
+            .overwrite_with_test_data(whitelists)
+            .await;
+
+        let custom_whitelists = Arc::new(CustomRwLock::new(None));
+
+        // Test case-insensitive protocol matching
+        assert!(
+            is_session_in_whitelist(
+                Some("example.com"),
+                None,
+                443,
+                "tcp",
+                &custom_whitelists,
+                "protocol_whitelist",
+                None,
+                None,
+                None,
+                None
+            )
+            .await
+            .0,
+            "Should match lowercase protocol"
+        );
+
+        assert!(
+            is_session_in_whitelist(
+                Some("example.com"),
+                None,
+                443,
+                "TcP",
+                &custom_whitelists,
+                "protocol_whitelist",
+                None,
+                None,
+                None,
+                None
+            )
+            .await
+            .0,
+            "Should match mixed-case protocol"
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_empty_whitelist() {
+        let test_whitelist_json = WhitelistsJSON {
+            date: "2024-10-20".to_string(),
+            signature: Some("test_signature".to_string()),
+            whitelists: vec![WhitelistInfo {
+                name: "empty_whitelist".to_string(),
+                extends: None,
+                endpoints: vec![],
+            }],
+        };
+
+        let whitelists = Whitelists::new_from_json(test_whitelist_json);
+        LISTS
+            .write()
+            .await
+            .overwrite_with_test_data(whitelists)
+            .await;
+
+        let custom_whitelists = Arc::new(CustomRwLock::new(None));
+        // Test empty whitelist behavior
+        let (matches, reason) = is_session_in_whitelist(
+            Some("example.com"),
+            None,
+            443,
+            "TCP",
+            &custom_whitelists,
+            "empty_whitelist",
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+
+        assert!(!matches, "Empty whitelist should not match any session");
+        assert!(
+            reason.is_some() && reason.unwrap().contains("contains no endpoints"),
+            "Should return appropriate error message for empty whitelist"
         );
     }
 }
