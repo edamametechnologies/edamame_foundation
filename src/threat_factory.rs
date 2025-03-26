@@ -86,12 +86,9 @@ pub fn get_model_name(platform: &str) -> Result<&'static str> {
 }
 
 impl ThreatMetrics {
-    pub fn get_threats_url(platform: &str, branch: &str) -> Result<String> {
+    pub async fn get_threats_url(platform: &str, branch: &str) -> Result<String> {
         let model_name = get_model_name(platform)?;
-        let url = format!(
-            "https://github.com/edamametechnologies/threatmodels/blob/{}/{}",
-            branch, model_name
-        );
+        let url = CloudModel::<ThreatMetrics>::get_data_url(branch, &model_name);
         Ok(url)
     }
 
