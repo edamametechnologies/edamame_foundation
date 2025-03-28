@@ -870,7 +870,7 @@ checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
 [[package]]
 name = "edamame_backend"
 version = "0.3.4"
-source = "git+https://github.com/edamametechnologies/edamame_backend#9901dbc0ae722d58c3f6df897e8f1c0bae5a574e"
+source = "git+https://github.com/edamametechnologies/edamame_backend#bb95a1fe577ac25a8cda926a3ac53f777af00f9b"
 dependencies = [
  "anyhow",
  "blake3",
