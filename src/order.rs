@@ -41,8 +41,6 @@ impl Into<MetricOrderResultBackend> for MetricOrderResult {
             timestamp: self.timestamp,
             success: self.success,
             validated: self.validated,
-            // Always set output to empty string for backend for privacy reasons
-            output: "".to_string(),
             metricname: self.metric.metric.name.clone(),
         }
     }
