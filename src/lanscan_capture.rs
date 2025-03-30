@@ -1,3 +1,4 @@
+use crate::blacklists::{Blacklists, BlacklistsJSON};
 use crate::lanscan_dns::DnsPacketProcessor;
 use crate::lanscan_interface::*;
 use crate::lanscan_ip::*;
@@ -9,7 +10,7 @@ use crate::lanscan_sessions::session_macros::*;
 use crate::lanscan_sessions::*;
 use crate::runtime::*;
 use crate::rwlock::CustomRwLock;
-use crate::whitelists::*;
+use crate::whitelists::{is_session_in_whitelist, is_valid_whitelist, Whitelists, WhitelistsJSON};
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use dashmap::DashMap;
@@ -119,6 +120,7 @@ pub struct LANScanCapture {
     whitelist_exceptions: Arc<CustomRwLock<Vec<Session>>>,
     filter: Arc<CustomRwLock<SessionFilter>>,
     dns_packet_processor: Option<Arc<DnsPacketProcessor>>,
+    custom_blacklists: Arc<CustomRwLock<Option<Blacklists>>>,
 }
 
 impl LANScanCapture {
@@ -139,6 +141,7 @@ impl LANScanCapture {
             whitelist_exceptions: Arc::new(CustomRwLock::new(Vec::new())),
             filter: Arc::new(CustomRwLock::new(SessionFilter::GlobalOnly)),
             dns_packet_processor: None,
+            custom_blacklists: Arc::new(CustomRwLock::new(None)),
         }
     }
 
@@ -649,6 +652,9 @@ impl LANScanCapture {
         // Clone the L7 for the async move block
         let l7 = self.l7.clone();
 
+        // Clone the custom_blacklists for the async move block
+        let custom_blacklists = self.custom_blacklists.clone();
+
         // Spawn the capture task
         let handle = async_spawn(async move {
             let mut cap = match Capture::from_device(device_clone.clone()) {
@@ -699,6 +705,7 @@ impl LANScanCapture {
                                             &self_ips,
                                             &filter,
                                             l7.as_ref(),
+                                            Some(&custom_blacklists),
                                         )
                                         .await;
                                     }
@@ -793,6 +800,7 @@ impl LANScanCapture {
                                             &self_ips,
                                             &filter,
                                             l7.as_ref(),
+                                            Some(&custom_blacklists),
                                         )
                                         .await;
                                     }
@@ -1350,6 +1358,27 @@ impl LANScanCapture {
             );
         }
     }
+
+    pub async fn set_custom_blacklists(&mut self, blacklist_json: &str) {
+        // Clear the custom blacklists if the JSON is empty
+        if blacklist_json.is_empty() {
+            *self.custom_blacklists.write().await = None;
+            return;
+        }
+
+        let blacklist_result = serde_json::from_str::<BlacklistsJSON>(blacklist_json);
+
+        match blacklist_result {
+            Ok(blacklist_data) => {
+                let blacklist = Some(Blacklists::new_from_json(blacklist_data));
+                *self.custom_blacklists.write().await = blacklist;
+            }
+            Err(e) => {
+                error!("Error setting custom blacklists: {}", e);
+                *self.custom_blacklists.write().await = None;
+            }
+        }
+    }
 }
 
 impl Clone for LANScanCapture {
@@ -1368,6 +1397,7 @@ impl Clone for LANScanCapture {
             whitelist_exceptions: self.whitelist_exceptions.clone(),
             filter: self.filter.clone(),
             dns_packet_processor: self.dns_packet_processor.clone(),
+            custom_blacklists: self.custom_blacklists.clone(),
         }
     }
 }
@@ -1376,6 +1406,7 @@ impl Clone for LANScanCapture {
 mod tests {
     use super::*;
     use crate::admin::*;
+    use crate::blacklists::*;
     use chrono::Utc;
     use pnet_packet::tcp::TcpFlags;
     use serial_test::serial;
@@ -1427,6 +1458,7 @@ mod tests {
             &self_ips,
             &capture.filter,
             capture.l7.as_ref(),
+            Some(&capture.custom_blacklists),
         )
         .await;
 
@@ -1437,6 +1469,7 @@ mod tests {
             &self_ips,
             &capture.filter,
             capture.l7.as_ref(),
+            Some(&capture.custom_blacklists),
         )
         .await;
 
@@ -1483,6 +1516,7 @@ mod tests {
             &self_ips,
             &capture.filter,
             capture.l7.as_ref(),
+            Some(&capture.custom_blacklists),
         )
         .await;
 
@@ -1540,7 +1574,6 @@ mod tests {
             history: String::new(),
             conn_state: None,
             missed_bytes: 0,
-            uid: Uuid::new_v4().to_string(),
         };
 
         let session_info = SessionInfo {
@@ -1565,6 +1598,8 @@ mod tests {
             is_whitelisted: WhitelistState::Unknown,
             criticality: "".to_string(),
             whitelist_reason: None,
+            uid: Uuid::new_v4().to_string(),
+            last_modified: Utc::now(),
         };
 
         capture.sessions.insert(session.clone(), session_info);
@@ -1632,7 +1667,6 @@ mod tests {
             history: String::new(),
             conn_state: None,
             missed_bytes: 0,
-            uid: Uuid::new_v4().to_string(),
         };
 
         let session_info = SessionInfo {
@@ -1657,6 +1691,8 @@ mod tests {
             is_whitelisted: WhitelistState::Unknown,
             criticality: "".to_string(),
             whitelist_reason: None,
+            uid: Uuid::new_v4().to_string(),
+            last_modified: Utc::now(),
         };
 
         capture.sessions.insert(session.clone(), session_info);
@@ -1827,7 +1863,6 @@ mod tests {
                 history: String::new(),
                 conn_state: None,
                 missed_bytes: 0,
-                uid: Uuid::new_v4().to_string(),
             };
 
             let session_info = SessionInfo {
@@ -1852,6 +1887,8 @@ mod tests {
                 is_whitelisted: WhitelistState::Unknown,
                 criticality: "".to_string(),
                 whitelist_reason: None,
+                uid: Uuid::new_v4().to_string(),
+                last_modified: Utc::now(),
             };
 
             capture.sessions.insert(session.clone(), session_info);
@@ -2046,5 +2083,269 @@ mod tests {
         assert!(!capture.is_capturing().await, "Capture should have stopped");
 
         println!("Capture test completed successfully");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_blacklist_integration() {
+        let mut capture = LANScanCapture::new();
+        capture.set_filter(SessionFilter::All).await;
+
+        // Create a custom blacklist that includes our test IP
+        let blacklist_info = BlacklistInfo {
+            name: "firehol_level1".to_string(),
+            description: Some("Test blacklist".to_string()),
+            last_updated: Some("2025-03-29".to_string()),
+            source_url: None,
+            ip_ranges: vec![
+                "100.64.0.0/10".to_string(), // Carrier-grade NAT range
+            ],
+        };
+
+        let blacklists_json = BlacklistsJSON {
+            date: "2025-03-29".to_string(),
+            signature: "test-signature".to_string(),
+            blacklists: vec![blacklist_info],
+        };
+
+        let blacklists = Blacklists::new_from_json(blacklists_json);
+
+        // Override global blacklists with our test data
+        LISTS
+            .write()
+            .await
+            .overwrite_with_test_data(blacklists)
+            .await;
+
+        // Simulate an outbound packet to a known blacklisted IP (in firehol_level1)
+        // Using 100.64.0.0/10 from the blacklist (Carrier-grade NAT range)
+        let session_packet = SessionPacketData {
+            session: Session {
+                protocol: Protocol::TCP,
+                src_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
+                src_port: 12345,
+                dst_ip: IpAddr::V4(Ipv4Addr::new(100, 64, 1, 1)),
+                dst_port: 80,
+            },
+            packet_length: 100,
+            ip_packet_length: 120,
+            flags: Some(TcpFlags::SYN),
+        };
+
+        let self_ips = vec![IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))];
+
+        // Process the packet
+        process_parsed_packet(
+            session_packet,
+            &capture.sessions,
+            &capture.current_sessions,
+            &self_ips,
+            &capture.filter,
+            capture.l7.as_ref(),
+            Some(&capture.custom_blacklists),
+        )
+        .await;
+
+        // Check that the session has the criticality field set
+        let sessions = capture.get_sessions().await;
+        assert_eq!(sessions.len(), 1);
+        let session_info = &sessions[0];
+
+        // Verify the criticality field is set as expected
+        assert_eq!(session_info.criticality, "blacklist:firehol_level1");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_blacklist_functionality() {
+        let mut capture = LANScanCapture::new();
+
+        // Verify we can set custom blacklists
+        let blacklist_info = BlacklistInfo {
+            name: "another_test_blacklist".to_string(),
+            description: Some("Another test blacklist".to_string()),
+            last_updated: Some("2025-03-29".to_string()),
+            source_url: None,
+            ip_ranges: vec!["192.168.5.0/24".to_string(), "10.10.10.0/24".to_string()],
+        };
+
+        let blacklists_json = BlacklistsJSON {
+            date: "2025-03-29".to_string(),
+            signature: "test-signature".to_string(),
+            blacklists: vec![blacklist_info],
+        };
+
+        let json_str = serde_json::to_string(&blacklists_json).unwrap();
+
+        // Set the custom blacklist
+        capture.set_custom_blacklists(&json_str).await;
+
+        // Verify the custom blacklist exists
+        assert!(capture.custom_blacklists.read().await.is_some());
+
+        // Clear custom blacklists
+        capture.set_custom_blacklists("").await;
+
+        // Verify the custom blacklist is cleared
+        assert!(capture.custom_blacklists.read().await.is_none());
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_custom_blacklists() {
+        let mut capture = LANScanCapture::new();
+
+        // Create a custom blacklist
+        let blacklist_info = BlacklistInfo {
+            name: "custom_test_blacklist".to_string(),
+            description: Some("Custom test blacklist".to_string()),
+            last_updated: Some("2025-03-29".to_string()),
+            source_url: None,
+            ip_ranges: vec!["192.168.1.100/32".to_string(), "1.1.1.0/24".to_string()],
+        };
+
+        let blacklists_json = BlacklistsJSON {
+            date: "2025-03-29".to_string(),
+            signature: "test-signature".to_string(),
+            blacklists: vec![blacklist_info],
+        };
+
+        let json_str = serde_json::to_string(&blacklists_json).unwrap();
+
+        // Clear the global blacklist first to avoid interference
+        let empty_blacklists = Blacklists::new_from_json(BlacklistsJSON {
+            date: "2025-03-29".to_string(),
+            signature: "test-signature".to_string(),
+            blacklists: vec![],
+        });
+
+        LISTS
+            .write()
+            .await
+            .overwrite_with_test_data(empty_blacklists)
+            .await;
+
+        // Set the custom blacklist
+        capture.set_custom_blacklists(&json_str).await;
+
+        // Verify the custom blacklist exists
+        assert!(capture.custom_blacklists.read().await.is_some());
+
+        // Simulate a packet to 1.1.1.1 (which is in our custom blacklist)
+        let session_packet = SessionPacketData {
+            session: Session {
+                protocol: Protocol::TCP,
+                src_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
+                src_port: 12345,
+                dst_ip: IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)),
+                dst_port: 80,
+            },
+            packet_length: 100,
+            ip_packet_length: 120,
+            flags: Some(TcpFlags::SYN),
+        };
+
+        let self_ips = vec![IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))];
+
+        process_parsed_packet(
+            session_packet,
+            &capture.sessions,
+            &capture.current_sessions,
+            &self_ips,
+            &capture.filter,
+            capture.l7.as_ref(),
+            Some(&capture.custom_blacklists),
+        )
+        .await;
+
+        // Check that the session has the criticality field set
+        let sessions = capture.get_sessions().await;
+        assert_eq!(sessions.len(), 1);
+        let session_info = &sessions[0];
+
+        // Verify the criticality field is set as expected
+        assert_eq!(session_info.criticality, "blacklist:custom_test_blacklist");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_multiple_blacklists() {
+        let mut capture = LANScanCapture::new();
+        capture.set_filter(SessionFilter::All).await;
+
+        // Create multiple blacklists that include the same IP
+        let blacklist_info1 = BlacklistInfo {
+            name: "malware_ips".to_string(),
+            description: Some("Malware IP addresses".to_string()),
+            last_updated: Some("2025-03-29".to_string()),
+            source_url: None,
+            ip_ranges: vec![
+                "192.0.2.0/24".to_string(), // TEST-NET-1 range
+            ],
+        };
+
+        let blacklist_info2 = BlacklistInfo {
+            name: "spam_ips".to_string(),
+            description: Some("Spam IP addresses".to_string()),
+            last_updated: Some("2025-03-29".to_string()),
+            source_url: None,
+            ip_ranges: vec![
+                "192.0.2.0/28".to_string(), // Subset of TEST-NET-1
+            ],
+        };
+
+        let blacklists_json = BlacklistsJSON {
+            date: "2025-03-29".to_string(),
+            signature: "test-signature".to_string(),
+            blacklists: vec![blacklist_info1, blacklist_info2],
+        };
+
+        let blacklists = Blacklists::new_from_json(blacklists_json);
+
+        // Override global blacklists with our test data
+        LISTS
+            .write()
+            .await
+            .overwrite_with_test_data(blacklists)
+            .await;
+
+        // Simulate an outbound packet to an IP that should be in both blacklists
+        let session_packet = SessionPacketData {
+            session: Session {
+                protocol: Protocol::TCP,
+                src_ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+                src_port: 12345,
+                dst_ip: IpAddr::V4(Ipv4Addr::new(192, 0, 2, 5)),
+                dst_port: 80,
+            },
+            packet_length: 100,
+            ip_packet_length: 120,
+            flags: Some(TcpFlags::SYN),
+        };
+
+        let self_ips = vec![IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))];
+
+        // Process the packet
+        process_parsed_packet(
+            session_packet,
+            &capture.sessions,
+            &capture.current_sessions,
+            &self_ips,
+            &capture.filter,
+            capture.l7.as_ref(),
+            Some(&capture.custom_blacklists),
+        )
+        .await;
+
+        // Check that the session has the criticality field set
+        let sessions = capture.get_sessions().await;
+        assert_eq!(sessions.len(), 1);
+        let session_info = &sessions[0];
+
+        // Verify the criticality field contains both blacklist names (in alphabetical order)
+        assert_eq!(
+            session_info.criticality,
+            "blacklist:malware_ips,blacklist:spam_ips"
+        );
     }
 }

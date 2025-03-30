@@ -19,13 +19,6 @@ pub struct Session {
     pub dst_port: u16,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Ord, PartialOrd, Display)]
-pub enum WhitelistState {
-    Conforming,
-    NonConforming,
-    Unknown,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Ord, PartialOrd)]
 pub struct SessionL7 {
     pub pid: u32,
@@ -52,6 +45,8 @@ pub struct SessionInfo {
     pub is_whitelisted: WhitelistState,
     pub criticality: String,
     pub whitelist_reason: Option<String>,
+    pub uid: String,
+    pub last_modified: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Ord, PartialOrd)]
@@ -78,7 +73,6 @@ pub struct SessionStats {
     pub history: String,            // Sequence of observed flags
     pub conn_state: Option<String>, // Final session state
     pub missed_bytes: u64,          // Number of bytes missed
-    pub uid: String,                // Unique identifier
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, Ord, PartialOrd, Display)]
@@ -86,6 +80,13 @@ pub enum SessionFilter {
     LocalOnly,
     GlobalOnly,
     All,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Ord, PartialOrd, Display)]
+pub enum WhitelistState {
+    Conforming,
+    NonConforming,
+    Unknown,
 }
 
 pub fn filter_local_sessions(sessions: &Vec<SessionInfo>) -> Vec<SessionInfo> {
@@ -186,7 +187,7 @@ pub fn format_sessions_zeek(sessions: &Vec<SessionInfo>) -> Vec<String> {
         let zeek_entry = format!(
             "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             start_time,
-            session.stats.uid,
+            session.uid,
             session.session.src_ip,
             session.session.src_port,
             session.session.dst_ip,
@@ -281,7 +282,7 @@ pub fn format_sessions_log(sessions: &Vec<SessionInfo>) -> Vec<String> {
         };
 
         let log_entry = format!(
-            "[{}] {} {} - {} {}:{} -> {}:{} {} ({} bytes sent, {} bytes received, duration: {}, whitelisted: {})",
+            "[{}] {} {} - {} {}:{} -> {}:{} {} ({} bytes sent, {} bytes received, duration: {}, whitelisted: {}, criticality: {})",
             start_time,
             username,
             process_name,
@@ -294,7 +295,8 @@ pub fn format_sessions_log(sessions: &Vec<SessionInfo>) -> Vec<String> {
             stats.outbound_bytes,
             stats.inbound_bytes,
             duration,
-            whitelist_status
+            whitelist_status,
+            session_info.criticality
         );
 
         log_entries.push(log_entry);
@@ -362,7 +364,6 @@ mod tests {
                 history: "ShADadfF".to_string(),
                 conn_state: Some("ESTABLISHED".to_string()),
                 missed_bytes: 0,
-                uid: "S1".to_string(),
             },
             is_local_src: true,
             is_local_dst: true,
@@ -377,6 +378,8 @@ mod tests {
             is_whitelisted: WhitelistState::Conforming,
             criticality: "".to_string(),
             whitelist_reason: None,
+            uid: "S1".to_string(),
+            last_modified: Utc::now(),
         };
 
         let session_global = SessionInfo {
@@ -406,7 +409,6 @@ mod tests {
                 history: "Dd".to_string(),
                 conn_state: Some("FINISHED".to_string()),
                 missed_bytes: 0,
-                uid: "S2".to_string(),
             },
             is_local_src: true,
             is_local_dst: false,
@@ -425,6 +427,8 @@ mod tests {
             is_whitelisted: WhitelistState::NonConforming,
             criticality: "".to_string(),
             whitelist_reason: Some("Reason for non-conforming".to_string()),
+            uid: "S2".to_string(),
+            last_modified: Utc::now(),
         };
 
         let sessions = vec![session_local.clone(), session_global.clone()];
@@ -473,7 +477,6 @@ mod tests {
                 history: "ShADadfF".to_string(),
                 conn_state: Some("ESTABLISHED".to_string()),
                 missed_bytes: 0,
-                uid: "S3".to_string(),
             },
             is_local_src: true,
             is_local_dst: false,
@@ -492,6 +495,8 @@ mod tests {
             is_whitelisted: WhitelistState::Unknown,
             criticality: "".to_string(),
             whitelist_reason: None,
+            uid: "S3".to_string(),
+            last_modified: Utc::now(),
         };
 
         let sessions = vec![session];
@@ -548,7 +553,6 @@ mod tests {
                 history: "ShADadfF".to_string(),
                 conn_state: Some("CLOSED".to_string()),
                 missed_bytes: 0,
-                uid: "S4".to_string(),
             },
             is_local_src: true,
             is_local_dst: false,
@@ -572,6 +576,8 @@ mod tests {
             is_whitelisted: WhitelistState::Unknown,
             criticality: "".to_string(),
             whitelist_reason: None,
+            uid: "S4".to_string(),
+            last_modified: Utc::now(),
         };
 
         let sessions = vec![session];

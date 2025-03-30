@@ -2,6 +2,8 @@
 pub mod admin;
 pub mod asn_db;
 pub mod backend;
+pub mod blacklists;
+pub mod blacklists_db;
 pub mod cloud_model;
 pub mod health;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
@@ -77,13 +79,5 @@ pub mod threat_metrics_linux;
 pub mod threat_metrics_macos;
 pub mod threat_metrics_windows;
 pub mod version;
-#[cfg(all(
-    any(target_os = "macos", target_os = "linux", target_os = "windows"),
-    feature = "packetcapture"
-))]
 pub mod whitelists;
-#[cfg(all(
-    any(target_os = "macos", target_os = "linux", target_os = "windows"),
-    feature = "packetcapture"
-))]
 pub mod whitelists_db;
