@@ -629,7 +629,7 @@ fn protocol_matches(session_protocol: &str, whitelist_protocol: &Option<String>)
 
 /// Updates the whitelists by fetching the latest data from the specified branch.
 /// This function utilizes the `CloudModel` to perform the update.
-pub async fn update_whitelists(branch: &str) -> Result<UpdateStatus> {
+pub async fn update(branch: &str, force: bool) -> Result<UpdateStatus> {
     info!("Starting whitelists update from backend");
 
     // Acquire lock on LISTS
@@ -637,7 +637,7 @@ pub async fn update_whitelists(branch: &str) -> Result<UpdateStatus> {
 
     // Perform the update
     let status = model
-        .update(branch, false, |data| {
+        .update(branch, force, |data| {
             let whitelist_info_json: WhitelistsJSON =
                 serde_json::from_str(data).with_context(|| "Failed to parse JSON data")?;
             Ok(Whitelists::new_from_json(whitelist_info_json))

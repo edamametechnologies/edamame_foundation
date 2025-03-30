@@ -183,6 +183,42 @@ update_whitelists_db() {
     echo -e $trailer >> "$target"
 }
 
+update_blacklist_db() {
+    local is_local=${1:-false}
+    local target=./src/blacklist_db.rs
+    local header="// Built in default blacklist db\npub static BLACKLISTS: &str = r#\""
+    local trailer="\"#;"
+
+    echo "Updating blacklists db"
+
+    # Delete the file if it exists
+    if [ -f "$target" ]; then
+        rm "$target"
+    fi
+
+    if [ "$is_local" = true ]; then
+        echo "Using local blacklist db file"
+        local body="$(cat ../threatmodels/blacklists-db.json)"
+    else
+        echo "Fetching blacklists db from GitHub"
+        local branch=$(git rev-parse --abbrev-ref HEAD)
+        # Only deal with main and dev branches, default to dev
+        if [ $branch != "dev" ] && [ $branch != "main" ]; then
+          branch=dev
+        fi
+        # Prevent bash parsing of escape chars
+        local body="$(wget --no-cache -qO- https://raw.githubusercontent.com/edamametechnologies/threatmodels/$branch/blacklists-db.json)"
+    fi
+
+    # Interpret escape chars
+    echo -n -e "$header" > "$target"
+    # Preserve escape chars
+    echo -n "$body" >> "$target"
+    # Interpret escape chars
+    echo -e $trailer >> "$target"
+}
+
+
 # Define the array of target operating systems
 targets=("macOS" "Linux" "Windows" "iOS" "Android")
 
@@ -210,6 +246,7 @@ if [ -n "$SPECIFIC_OS" ]; then
     update_lanscan_port_vulns $USE_LOCAL
     update_lanscan_vendor_vulns $USE_LOCAL
     update_whitelists_db $USE_LOCAL
+    update_blacklist_db $USE_LOCAL
 else
     # Loop through all targets
     for os in "${targets[@]}"; do
@@ -219,4 +256,5 @@ else
     update_lanscan_port_vulns $USE_LOCAL
     update_lanscan_vendor_vulns $USE_LOCAL
     update_whitelists_db $USE_LOCAL
+    update_blacklist_db $USE_LOCAL
 fi

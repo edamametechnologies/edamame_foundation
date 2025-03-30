@@ -1,3 +1,4 @@
+use crate::blacklists::*;
 use crate::lanscan_asn::*;
 use crate::lanscan_ip::is_lan_ip;
 use crate::lanscan_l7::LANScanL7;
@@ -45,6 +46,7 @@ pub async fn process_parsed_packet(
     self_ips: &Vec<IpAddr>,
     filter: &Arc<CustomRwLock<SessionFilter>>,
     l7: Option<&Arc<LANScanL7>>,
+    custom_blacklists: Option<&Arc<CustomRwLock<Option<Blacklists>>>>,
 ) {
     let now = Utc::now();
     let is_self_src = self_ips.contains(&parsed_packet.session.src_ip);
@@ -119,7 +121,6 @@ pub async fn process_parsed_packet(
             history: String::new(),
             conn_state: None,
             missed_bytes: 0,
-            uid,
         };
 
         // Update session stats
@@ -173,31 +174,77 @@ pub async fn process_parsed_packet(
             deactivated: false,
         };
 
-        sessions.insert(
-            key.clone(),
-            SessionInfo {
-                session: key.clone(),
-                stats,
-                status,
-                is_local_src,
-                is_local_dst,
-                is_self_src,
-                is_self_dst,
-                src_domain: None,
-                dst_domain: None,
-                dst_service: if final_dst_service.is_empty() {
-                    None
-                } else {
-                    Some(final_dst_service)
-                },
-                l7: None,
-                src_asn,
-                dst_asn,
-                is_whitelisted: WhitelistState::Unknown,
-                criticality: "".to_string(),
-                whitelist_reason: None,
+        // Create the SessionInfo struct
+        let mut session_info = SessionInfo {
+            session: key.clone(),
+            stats,
+            status,
+            is_local_src,
+            is_local_dst,
+            is_self_src,
+            is_self_dst,
+            src_domain: None,
+            dst_domain: None,
+            dst_service: if final_dst_service.is_empty() {
+                None
+            } else {
+                Some(final_dst_service)
             },
-        );
+            l7: None,
+            src_asn,
+            dst_asn,
+            is_whitelisted: WhitelistState::Unknown,
+            criticality: "".to_string(),
+            whitelist_reason: None,
+            uid: uid,
+            last_modified: Utc::now(),
+        };
+
+        // Check if source or destination IPs are blacklisted
+        if let Some(blacklists) = custom_blacklists {
+            // Check destination IP if not local
+
+            let (dst_blacklisted, dst_blacklist_names) = if !is_local_dst {
+                let dst_ip_str = key.dst_ip.to_string();
+                is_ip_blacklisted(&dst_ip_str, blacklists).await
+            } else {
+                (false, Vec::new())
+            };
+            // Check source IP if not local
+            let (src_blacklisted, src_blacklist_names) = if !is_local_src {
+                let src_ip_str = key.src_ip.to_string();
+                is_ip_blacklisted(&src_ip_str, blacklists).await
+            } else {
+                (false, Vec::new())
+            };
+
+            // Combine blacklist matches
+            let mut all_blacklists = Vec::new();
+            if dst_blacklisted {
+                all_blacklists.extend(dst_blacklist_names);
+            }
+            if src_blacklisted {
+                all_blacklists.extend(src_blacklist_names);
+            }
+
+            // Remove duplicates
+            all_blacklists.sort();
+            all_blacklists.dedup();
+
+            // Set criticality if any blacklists matched
+            if !all_blacklists.is_empty() {
+                session_info.criticality = format!(
+                    "{}",
+                    all_blacklists
+                        .iter()
+                        .map(|name| format!("blacklist:{}", name))
+                        .collect::<Vec<_>>()
+                        .join(",")
+                );
+            }
+        }
+
+        sessions.insert(key.clone(), session_info);
         // Add to current sessions
         current_sessions.write().await.push(key);
     }
@@ -465,5 +512,170 @@ pub fn parse_packet_pcap(packet_data: &[u8]) -> Option<ParsedPacket> {
             }
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::blacklists::{BlacklistInfo, Blacklists, BlacklistsJSON};
+    use serial_test::serial;
+    use std::net::{IpAddr, Ipv4Addr};
+
+    #[tokio::test]
+    #[serial]
+    async fn test_blacklisted_ip_criticality() {
+        // Create a test blacklist
+        let blacklist_info = BlacklistInfo {
+            name: "test_blacklist".to_string(),
+            description: Some("Test blacklist".to_string()),
+            last_updated: Some("2025-03-29".to_string()),
+            source_url: None,
+            ip_ranges: vec![
+                "192.168.1.100/32".to_string(), // Specific IP
+                "10.0.0.0/8".to_string(),       // Private IP range
+                "8.8.8.0/24".to_string(),       // Google DNS range
+            ],
+        };
+
+        let blacklists_json = BlacklistsJSON {
+            date: "2025-03-29".to_string(),
+            signature: "test-signature".to_string(),
+            blacklists: vec![blacklist_info],
+        };
+
+        let blacklists = Blacklists::new_from_json(blacklists_json);
+
+        // Override global blacklists with our test data to ensure we only have our test blacklist
+        LISTS
+            .write()
+            .await
+            .overwrite_with_test_data(blacklists.clone())
+            .await;
+
+        let custom_blacklists = Arc::new(CustomRwLock::new(None));
+
+        // Create session data with a blacklisted IP (8.8.8.8)
+        let session_data = SessionPacketData {
+            session: Session {
+                protocol: Protocol::TCP,
+                src_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
+                src_port: 12345,
+                dst_ip: IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)),
+                dst_port: 80,
+            },
+            packet_length: 100,
+            ip_packet_length: 120,
+            flags: Some(TcpFlags::SYN),
+        };
+
+        // Create necessary objects for the test
+        let sessions = Arc::new(DashMap::new());
+        let current_sessions = Arc::new(CustomRwLock::new(Vec::new()));
+        let self_ips = vec![IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))];
+        let filter = Arc::new(CustomRwLock::new(SessionFilter::All));
+
+        // Process the packet
+        process_parsed_packet(
+            session_data,
+            &sessions,
+            &current_sessions,
+            &self_ips,
+            &filter,
+            None,
+            Some(&custom_blacklists),
+        )
+        .await;
+
+        // Verify that the session was added with the correct criticality
+        assert_eq!(sessions.len(), 1);
+        let session_key = Session {
+            protocol: Protocol::TCP,
+            src_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
+            src_port: 12345,
+            dst_ip: IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)),
+            dst_port: 80,
+        };
+
+        let session_info = sessions.get(&session_key).unwrap();
+        assert_eq!(session_info.criticality, "blacklist:test_blacklist");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_non_blacklisted_ip_criticality() {
+        // Create a test blacklist that doesn't include our test IPs
+        let blacklist_info = BlacklistInfo {
+            name: "test_blacklist".to_string(),
+            description: Some("Test blacklist".to_string()),
+            last_updated: Some("2025-03-29".to_string()),
+            source_url: None,
+            ip_ranges: vec![
+                "172.16.0.0/12".to_string(),  // Different private range
+                "203.0.113.0/24".to_string(), // TEST-NET-3 range
+            ],
+        };
+
+        let blacklists_json = BlacklistsJSON {
+            date: "2025-03-29".to_string(),
+            signature: "test-signature".to_string(),
+            blacklists: vec![blacklist_info],
+        };
+
+        let blacklists = Blacklists::new_from_json(blacklists_json);
+
+        // Override global blacklists with our test data to ensure we only have our test blacklist
+        LISTS
+            .write()
+            .await
+            .overwrite_with_test_data(blacklists.clone())
+            .await;
+
+        let custom_blacklists = Arc::new(CustomRwLock::new(None));
+
+        // Create session data with a non-blacklisted IP
+        let session_data = SessionPacketData {
+            session: Session {
+                protocol: Protocol::TCP,
+                src_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
+                src_port: 12345,
+                dst_ip: IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)), // Cloudflare DNS
+                dst_port: 80,
+            },
+            packet_length: 100,
+            ip_packet_length: 120,
+            flags: Some(TcpFlags::SYN),
+        };
+
+        // Create necessary objects for the test
+        let sessions = Arc::new(DashMap::new());
+        let current_sessions = Arc::new(CustomRwLock::new(Vec::new()));
+        let self_ips = vec![IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))];
+        let filter = Arc::new(CustomRwLock::new(SessionFilter::All));
+
+        // Process the packet
+        process_parsed_packet(
+            session_data,
+            &sessions,
+            &current_sessions,
+            &self_ips,
+            &filter,
+            None,
+            Some(&custom_blacklists),
+        )
+        .await;
+
+        // Verify that the session was added without a criticality
+        assert_eq!(sessions.len(), 1);
+        let session_key = Session {
+            protocol: Protocol::TCP,
+            src_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
+            src_port: 12345,
+            dst_ip: IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)),
+            dst_port: 80,
+        };
+
+        let session_info = sessions.get(&session_key).unwrap();
+        assert_eq!(session_info.criticality, "");
     }
 }
