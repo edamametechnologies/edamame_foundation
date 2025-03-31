@@ -338,7 +338,7 @@ pub async fn is_session_in_whitelist(
 
     // If we got here, no endpoint matched
     let reason = format!(
-        "No matching endpoint found in whitelist '{}' for domain: {:?}, ip: {:?}, port: {}, protocol: {}, ASN: {:?}, Country: {:?}, Owner: {:?}, Process: {:?}",
+        "No matching endpoint found in whitelist '{}' for domain: {:?}, ip: {:?}, port: {}, protocol: {}, ASN: {:?}, country: {:?}, owner: {:?}, process: {:?}",
         whitelist_name, session_domain, session_ip, port, protocol, as_number, as_country, as_owner, process
     );
 
