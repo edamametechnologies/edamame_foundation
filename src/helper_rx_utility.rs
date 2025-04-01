@@ -293,6 +293,19 @@ pub async fn utility_create_custom_whitelists() -> Result<String> {
     any(target_os = "macos", target_os = "linux", target_os = "windows"),
     feature = "packetcapture"
 ))]
+pub async fn utility_set_custom_blacklists(blacklist_json: &str) -> Result<String> {
+    CAPTURE
+        .lock()
+        .await
+        .set_custom_blacklists(blacklist_json)
+        .await;
+    Ok("".to_string())
+}
+
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux", target_os = "windows"),
+    feature = "packetcapture"
+))]
 pub async fn utility_set_filter(filter: &str) -> Result<String> {
     match serde_json::from_str::<SessionFilter>(filter) {
         Ok(filter) => CAPTURE.lock().await.set_filter(filter).await,

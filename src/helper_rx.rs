@@ -414,6 +414,11 @@ pub async fn rpc_run(
                 any(target_os = "macos", target_os = "linux", target_os = "windows"),
                 feature = "packetcapture"
             ))]
+            "set_custom_blacklists" => utility_set_custom_blacklists(arg1).await,
+            #[cfg(all(
+                any(target_os = "macos", target_os = "linux", target_os = "windows"),
+                feature = "packetcapture"
+            ))]
             "set_filter" => utility_set_filter(arg1).await,
             #[cfg(all(
                 any(target_os = "macos", target_os = "linux", target_os = "windows"),
