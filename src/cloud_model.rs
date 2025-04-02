@@ -327,7 +327,10 @@ mod tests {
         let data = model.data.read().await;
         assert_eq!(data.content, "builtin_content");
         assert_eq!(data.signature, "builtin_sig");
-        assert!(!model.is_custom().await, "Model should not be custom initially");
+        assert!(
+            !model.is_custom().await,
+            "Model should not be custom initially"
+        );
     }
 
     #[tokio::test]
@@ -346,7 +349,10 @@ mod tests {
         let data = model.data.read().await;
         assert_eq!(data.content, "custom_content");
         assert_eq!(data.signature, "custom_sig");
-        assert!(model.is_custom().await, "Model should be custom after setting custom data");
+        assert!(
+            model.is_custom().await,
+            "Model should be custom after setting custom data"
+        );
     }
 
     #[tokio::test]
@@ -362,7 +368,10 @@ mod tests {
 
         // Set custom data first
         model.set_custom_data(custom_data).await;
-        assert!(model.is_custom().await, "Model should be custom initially in this test");
+        assert!(
+            model.is_custom().await,
+            "Model should be custom initially in this test"
+        );
 
         // Reset to default
         model.reset_to_default().await;
@@ -370,14 +379,20 @@ mod tests {
         let data = model.data.read().await;
         assert_eq!(data.content, "builtin_content");
         assert_eq!(data.signature, "builtin_sig");
-        assert!(!model.is_custom().await, "Model should not be custom after reset");
+        assert!(
+            !model.is_custom().await,
+            "Model should not be custom after reset"
+        );
 
         // Test resetting when already default
         let initial_sig = data.signature.clone();
         drop(data); // Release read lock
         model.reset_to_default().await; // Should do nothing
         let data_after_reset = model.data.read().await;
-        assert_eq!(data_after_reset.signature, initial_sig, "Resetting default should not change data");
+        assert_eq!(
+            data_after_reset.signature, initial_sig,
+            "Resetting default should not change data"
+        );
         assert!(!model.is_custom().await, "Model should still not be custom");
     }
 
@@ -396,7 +411,11 @@ mod tests {
         // Attempt update without force
         let update_status = model.update("main", false, test_parser).await.unwrap();
 
-        assert_eq!(update_status, UpdateStatus::SkippedCustom, "Update should be skipped for custom data without force");
+        assert_eq!(
+            update_status,
+            UpdateStatus::SkippedCustom,
+            "Update should be skipped for custom data without force"
+        );
 
         // Verify data hasn't changed
         let data = model.data.read().await;
@@ -421,10 +440,16 @@ mod tests {
         // but the key is that it should *attempt* the update after resetting.
         let update_result = model.update("main", true, test_parser).await;
 
-        assert!(update_result.is_err(), "Update should fail due to network error, but it attempted");
+        assert!(
+            update_result.is_err(),
+            "Update should fail due to network error, but it attempted"
+        );
 
         // Verify model was reset to default *before* the failed update attempt
-        assert!(!model.is_custom().await, "Model should have been reset to default during forced update");
+        assert!(
+            !model.is_custom().await,
+            "Model should have been reset to default during forced update"
+        );
         let data = model.data.read().await;
         assert_eq!(data.content, "builtin_content"); // Should be reset
     }
@@ -444,6 +469,10 @@ mod tests {
         // needs_update should return Ok(false) when custom data is set
         let needs_update_result = model.needs_update("main").await;
         assert!(needs_update_result.is_ok(), "needs_update should succeed");
-        assert_eq!(needs_update_result.unwrap(), false, "needs_update should return false for custom data");
+        assert_eq!(
+            needs_update_result.unwrap(),
+            false,
+            "needs_update should return false for custom data"
+        );
     }
 }
