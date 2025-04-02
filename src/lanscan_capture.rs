@@ -1419,9 +1419,60 @@ impl LANScanCapture {
 
     /// Resets the blacklist CloudModel to its default built-in state
     async fn recalculate_blacklist_criticality(&self) {
-        // Implement the logic to recalculate blacklist criticality
-        // This is a placeholder and should be replaced with actual implementation
-        info!("Recalculating blacklist criticality");
+        info!("Recalculating blacklist criticality for all sessions");
+
+        // Get all sessions
+        let sessions = self.sessions.clone();
+
+        // For each session, check both source and destination IPs against the blacklists
+        for mut session_entry in sessions.iter_mut() {
+            let src_ip = session_entry.session.src_ip.to_string();
+            let dst_ip = session_entry.session.dst_ip.to_string();
+
+            // Check source IP
+            let (src_is_blacklisted, src_blacklists) =
+                crate::blacklists::is_ip_blacklisted(&src_ip).await;
+
+            // Check destination IP
+            let (dst_is_blacklisted, dst_blacklists) =
+                crate::blacklists::is_ip_blacklisted(&dst_ip).await;
+
+            // Combine blacklists and sort them
+            let mut all_blacklists = Vec::new();
+            if src_is_blacklisted {
+                all_blacklists.extend(src_blacklists);
+            }
+            if dst_is_blacklisted {
+                all_blacklists.extend(dst_blacklists);
+            }
+            all_blacklists.sort();
+            all_blacklists.dedup();
+
+            // Update session criticality
+            if !all_blacklists.is_empty() {
+                let blacklist_tags: Vec<String> = all_blacklists
+                    .iter()
+                    .map(|name| format!("blacklist:{}", name))
+                    .collect();
+                session_entry.criticality = blacklist_tags.join(",");
+                debug!(
+                    "Updated session criticality for {}:{} -> {}:{} to {}",
+                    session_entry.session.src_ip,
+                    session_entry.session.src_port,
+                    session_entry.session.dst_ip,
+                    session_entry.session.dst_port,
+                    session_entry.criticality
+                );
+            } else {
+                // Clear any existing blacklist tags
+                let non_blacklist_tags: Vec<&str> = session_entry
+                    .criticality
+                    .split(',')
+                    .filter(|s| !s.trim().starts_with("blacklist:"))
+                    .collect();
+                session_entry.criticality = non_blacklist_tags.join(",");
+            }
+        }
     }
 }
 

@@ -208,10 +208,11 @@ pub async fn process_parsed_packet(
         let (dst_blacklisted, dst_lists) = is_ip_blacklisted(&dst_ip_str).await;
 
         let mut criticality_parts = Vec::new();
-        if src_blacklisted {
+        // Only add tags if the IP is actually blacklisted AND is not a local/LAN IP
+        if src_blacklisted && !is_lan_ip(&key.src_ip) {
             criticality_parts.extend(src_lists);
         }
-        if dst_blacklisted {
+        if dst_blacklisted && !is_lan_ip(&key.dst_ip) {
             criticality_parts.extend(dst_lists);
         }
 
