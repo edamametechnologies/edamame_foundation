@@ -54,6 +54,7 @@ impl CloudSignature for DeviceTypeList {
     }
 }
 
+#[derive(Clone)]
 pub struct DeviceTypeList {
     pub date: String,
     pub signature: String,
@@ -265,6 +266,14 @@ pub async fn update(branch: &str, force: bool) -> Result<UpdateStatus> {
             Ok(DeviceTypeList::new_from_json(profiles_list))
         })
         .await?;
+
+    match status {
+        UpdateStatus::Updated => info!("Profiles were successfully updated."),
+        UpdateStatus::NotUpdated => info!("Profiles are already up to date."),
+        UpdateStatus::FormatError => warn!("There was a format error in the profiles data."),
+        UpdateStatus::SkippedCustom => info!("Update skipped because custom profiles are in use."),
+    }
+
     Ok(status)
 }
 
@@ -405,10 +414,9 @@ mod tests {
         let status = update(branch, false).await.expect("Update failed");
 
         // Check that the update was performed
-        assert_eq!(
-            status,
-            UpdateStatus::Updated,
-            "Expected the update to be performed"
+        assert!(
+            matches!(status, UpdateStatus::Updated | UpdateStatus::SkippedCustom),
+            "Expected the update to be performed or skipped due to custom data"
         );
 
         // Check that the signature is no longer zeros

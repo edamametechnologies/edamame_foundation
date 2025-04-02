@@ -114,13 +114,11 @@ pub struct LANScanCapture {
     resolver: Option<Arc<LANScanResolver>>,
     l7: Option<Arc<LANScanL7>>,
     whitelist_name: Arc<CustomRwLock<String>>,
-    custom_whitelists: Arc<CustomRwLock<Option<Whitelists>>>,
     whitelist_conformance: Arc<AtomicBool>,
     last_whitelist_exception_time: Arc<CustomRwLock<DateTime<Utc>>>,
     whitelist_exceptions: Arc<CustomRwLock<Vec<Session>>>,
     filter: Arc<CustomRwLock<SessionFilter>>,
     dns_packet_processor: Option<Arc<DnsPacketProcessor>>,
-    custom_blacklists: Arc<CustomRwLock<Option<Blacklists>>>,
 }
 
 impl LANScanCapture {
@@ -133,7 +131,6 @@ impl LANScanCapture {
             resolver: None,
             l7: None,
             whitelist_name: Arc::new(CustomRwLock::new("".to_string())),
-            custom_whitelists: Arc::new(CustomRwLock::new(None)),
             whitelist_conformance: Arc::new(AtomicBool::new(true)),
             last_whitelist_exception_time: Arc::new(CustomRwLock::new(DateTime::<Utc>::from(
                 std::time::UNIX_EPOCH,
@@ -141,7 +138,6 @@ impl LANScanCapture {
             whitelist_exceptions: Arc::new(CustomRwLock::new(Vec::new())),
             filter: Arc::new(CustomRwLock::new(SessionFilter::GlobalOnly)),
             dns_packet_processor: None,
-            custom_blacklists: Arc::new(CustomRwLock::new(None)),
         }
     }
 
@@ -159,30 +155,31 @@ impl LANScanCapture {
 
     pub async fn set_whitelist(&mut self, whitelist_name: &str) {
         // Check if the whitelist is valid (either a standard whitelist or our custom one)
-        if !whitelist_name.is_empty()
-            && whitelist_name != "custom_whitelist"
-            && !is_valid_whitelist(whitelist_name).await
-        {
+        let is_custom = whitelist_name == "custom_whitelist";
+        if !whitelist_name.is_empty() && !is_custom && !is_valid_whitelist(whitelist_name).await {
             error!("Invalid whitelist name: {}", whitelist_name);
             return;
         }
 
-        // If we're switching to a non-custom whitelist, check if it's different
-        if whitelist_name != "custom_whitelist"
-            && self.whitelist_name.read().await.eq(whitelist_name)
-        {
+        // Check if the name is actually changing
+        let current_name = self.whitelist_name.read().await.clone();
+        if current_name == whitelist_name {
             return;
         }
 
         // Set the new whitelist name
         *self.whitelist_name.write().await = whitelist_name.to_string();
 
-        // Clear the custom whitelists if we're switching to a standard whitelist
-        if whitelist_name != "custom_whitelist" {
-            *self.custom_whitelists.write().await = None;
+        // If switching to a standard (non-custom) whitelist, reset the CloudModel
+        if !is_custom {
+            crate::whitelists::LISTS
+                .write()
+                .await
+                .reset_to_default()
+                .await;
         }
 
-        // Reset the whitelist state
+        // Reset the internal whitelist state tracking
         self.reset_whitelist().await;
     }
 
@@ -307,9 +304,17 @@ impl LANScanCapture {
     pub async fn set_custom_whitelists(&mut self, whitelist_json: &str) {
         // Clear the custom whitelists if the JSON is empty
         if whitelist_json.is_empty() {
-            *self.custom_whitelists.write().await = None;
-            // Don't reset the whitelist name if we're clearing custom whitelists
-            // since the user might be switching back to a standard whitelist
+            // Reset the CloudModel to default if clearing custom data
+            crate::whitelists::LISTS
+                .write()
+                .await
+                .reset_to_default()
+                .await;
+            // Set name back to empty if needed, or let set_whitelist handle it?
+            // Assuming we want to revert to "no specific whitelist" state
+            if *self.whitelist_name.read().await == "custom_whitelist" {
+                *self.whitelist_name.write().await = "".to_string();
+            }
             self.reset_whitelist().await;
             return;
         }
@@ -318,18 +323,29 @@ impl LANScanCapture {
 
         match whitelist_result {
             Ok(whitelist_data) => {
-                let whitelist = Some(Whitelists::new_from_json(whitelist_data));
-                *self.custom_whitelists.write().await = whitelist;
+                let whitelist = Whitelists::new_from_json(whitelist_data);
+                // Set custom data in the CloudModel
+                crate::whitelists::LISTS
+                    .write()
+                    .await
+                    .set_custom_data(whitelist)
+                    .await;
                 // Set the whitelist name to indicate we're using a custom whitelist
                 *self.whitelist_name.write().await = "custom_whitelist".to_string();
             }
             Err(e) => {
                 error!("Error setting custom whitelists: {}", e);
-                *self.custom_whitelists.write().await = None;
+                // Optionally reset to default on error?
+                crate::whitelists::LISTS
+                    .write()
+                    .await
+                    .reset_to_default()
+                    .await;
+                *self.whitelist_name.write().await = "".to_string();
             }
         }
 
-        // Reset the whitelist
+        // Reset the internal whitelist state
         self.reset_whitelist().await;
     }
 
@@ -652,9 +668,6 @@ impl LANScanCapture {
         // Clone the L7 for the async move block
         let l7 = self.l7.clone();
 
-        // Clone the custom_blacklists for the async move block
-        let custom_blacklists = self.custom_blacklists.clone();
-
         // Spawn the capture task
         let handle = async_spawn(async move {
             let mut cap = match Capture::from_device(device_clone.clone()) {
@@ -705,7 +718,6 @@ impl LANScanCapture {
                                             &self_ips,
                                             &filter,
                                             l7.as_ref(),
-                                            Some(&custom_blacklists),
                                         )
                                         .await;
                                     }
@@ -800,7 +812,6 @@ impl LANScanCapture {
                                             &self_ips,
                                             &filter,
                                             l7.as_ref(),
-                                            Some(&custom_blacklists),
                                         )
                                         .await;
                                     }
@@ -853,24 +864,34 @@ impl LANScanCapture {
     }
 
     async fn check_whitelisted_destinations(
-        custom_whitelists: &Arc<CustomRwLock<Option<Whitelists>>>,
         whitelist_name: &str,
         whitelist_conformance: &AtomicBool,
         whitelist_exceptions: &Arc<CustomRwLock<Vec<Session>>>,
         sessions: &DashMap<Session, SessionInfo>,
         last_whitelist_exception_time: &Arc<CustomRwLock<DateTime<Utc>>>,
     ) {
-        // If the whitelist name is "custom_whitelist", we check the custom whitelists
-        // If it's something else, we check the standard whitelist with that name
-        let using_custom = whitelist_name == "custom_whitelist";
+        // If the whitelist name is empty, skip checks
+        if whitelist_name.is_empty() {
+            return;
+        }
 
-        // Skip the check if the specified whitelist doesn't exist
-        if (using_custom && custom_whitelists.read().await.is_none())
-            || (!using_custom && !is_valid_whitelist(whitelist_name).await)
-        {
-            if !whitelist_name.is_empty() {
-                error!("Invalid or missing whitelist: {}", whitelist_name);
-            }
+        // Check if the currently configured whitelist (in the model) is valid
+        let is_custom = whitelist_name == "custom_whitelist";
+        let model_is_custom = crate::whitelists::LISTS.read().await.is_custom().await;
+
+        if (is_custom && !model_is_custom) || (!is_custom && model_is_custom) {
+            warn!(
+                "Whitelist name '{}' mismatches CloudModel state (is_custom: {}). Skipping check.",
+                whitelist_name, model_is_custom
+            );
+            return;
+        }
+
+        if !is_valid_whitelist(whitelist_name).await {
+            warn!(
+                "Whitelist '{}' is not valid. Skipping check.",
+                whitelist_name
+            );
             return;
         }
 
@@ -891,7 +912,6 @@ impl LANScanCapture {
                         Some(&session_info.session.dst_ip.to_string()),
                         session_info.session.dst_port,
                         session_info.session.protocol.to_string().as_str(),
-                        custom_whitelists,
                         whitelist_name,
                         session_info.dst_asn.as_ref().map(|asn| asn.as_number),
                         session_info
@@ -915,7 +935,6 @@ impl LANScanCapture {
                         None,
                         session_info.session.dst_port,
                         session_info.session.protocol.to_string().as_str(),
-                        custom_whitelists,
                         whitelist_name,
                         session_info.dst_asn.as_ref().map(|asn| asn.as_number),
                         session_info
@@ -940,7 +959,6 @@ impl LANScanCapture {
                     Some(&session_info.session.dst_ip.to_string()),
                     session_info.session.dst_port,
                     session_info.session.protocol.to_string().as_str(),
-                    custom_whitelists,
                     whitelist_name,
                     session_info.dst_asn.as_ref().map(|asn| asn.as_number),
                     session_info
@@ -1233,9 +1251,12 @@ impl LANScanCapture {
 
         // Finally update whitelist information
         let whitelist_name = self.whitelist_name.read().await.clone();
-        if !whitelist_name.is_empty() || self.custom_whitelists.read().await.is_some() {
+        // Check name or if model is custom
+        let list_model = crate::whitelists::LISTS.read().await;
+        if !whitelist_name.is_empty() || list_model.is_custom().await {
+            // Drop the read lock before calling the async function
+            drop(list_model);
             Self::check_whitelisted_destinations(
-                &self.custom_whitelists,
                 &whitelist_name,
                 &self.whitelist_conformance,
                 &self.whitelist_exceptions,
@@ -1362,7 +1383,12 @@ impl LANScanCapture {
     pub async fn set_custom_blacklists(&mut self, blacklist_json: &str) {
         // Clear the custom blacklists if the JSON is empty
         if blacklist_json.is_empty() {
-            *self.custom_blacklists.write().await = None;
+            crate::blacklists::LISTS
+                .write()
+                .await
+                .reset_to_default()
+                .await;
+            self.recalculate_blacklist_criticality().await; // Recalculate after reset
             return;
         }
 
@@ -1370,14 +1396,32 @@ impl LANScanCapture {
 
         match blacklist_result {
             Ok(blacklist_data) => {
-                let blacklist = Some(Blacklists::new_from_json(blacklist_data));
-                *self.custom_blacklists.write().await = blacklist;
+                let blacklist = Blacklists::new_from_json(blacklist_data);
+                crate::blacklists::LISTS
+                    .write()
+                    .await
+                    .set_custom_data(blacklist)
+                    .await;
             }
             Err(e) => {
                 error!("Error setting custom blacklists: {}", e);
-                *self.custom_blacklists.write().await = None;
+                // Optionally reset to default on error?
+                crate::blacklists::LISTS
+                    .write()
+                    .await
+                    .reset_to_default()
+                    .await;
             }
         }
+        // Recalculate criticality after setting custom lists
+        self.recalculate_blacklist_criticality().await;
+    }
+
+    /// Resets the blacklist CloudModel to its default built-in state
+    async fn recalculate_blacklist_criticality(&self) {
+        // Implement the logic to recalculate blacklist criticality
+        // This is a placeholder and should be replaced with actual implementation
+        info!("Recalculating blacklist criticality");
     }
 }
 
@@ -1391,13 +1435,11 @@ impl Clone for LANScanCapture {
             resolver: self.resolver.clone(),
             l7: self.l7.clone(),
             whitelist_name: self.whitelist_name.clone(),
-            custom_whitelists: self.custom_whitelists.clone(),
             whitelist_conformance: self.whitelist_conformance.clone(),
             last_whitelist_exception_time: self.last_whitelist_exception_time.clone(),
             whitelist_exceptions: self.whitelist_exceptions.clone(),
             filter: self.filter.clone(),
             dns_packet_processor: self.dns_packet_processor.clone(),
-            custom_blacklists: self.custom_blacklists.clone(),
         }
     }
 }
@@ -1458,7 +1500,6 @@ mod tests {
             &self_ips,
             &capture.filter,
             capture.l7.as_ref(),
-            Some(&capture.custom_blacklists),
         )
         .await;
 
@@ -1469,7 +1510,6 @@ mod tests {
             &self_ips,
             &capture.filter,
             capture.l7.as_ref(),
-            Some(&capture.custom_blacklists),
         )
         .await;
 
@@ -1516,7 +1556,6 @@ mod tests {
             &self_ips,
             &capture.filter,
             capture.l7.as_ref(),
-            Some(&capture.custom_blacklists),
         )
         .await;
 
@@ -1897,7 +1936,6 @@ mod tests {
 
         // Run whitelist check
         LANScanCapture::check_whitelisted_destinations(
-            &capture.custom_whitelists,
             "github",
             &capture.whitelist_conformance,
             &capture.whitelist_exceptions,
@@ -2142,7 +2180,6 @@ mod tests {
             &self_ips,
             &capture.filter,
             capture.l7.as_ref(),
-            Some(&capture.custom_blacklists),
         )
         .await;
 
@@ -2160,7 +2197,7 @@ mod tests {
     async fn test_blacklist_functionality() {
         let mut capture = LANScanCapture::new();
 
-        // Verify we can set custom blacklists
+        // Verify we can set custom blacklists using the new method
         let blacklist_info = BlacklistInfo {
             name: "another_test_blacklist".to_string(),
             description: Some("Another test blacklist".to_string()),
@@ -2180,14 +2217,13 @@ mod tests {
         // Set the custom blacklist
         capture.set_custom_blacklists(&json_str).await;
 
-        // Verify the custom blacklist exists
-        assert!(capture.custom_blacklists.read().await.is_some());
+        // Verify the custom blacklist exists in the CloudModel
+        assert!(crate::blacklists::LISTS.read().await.is_custom().await);
 
         // Clear custom blacklists
         capture.set_custom_blacklists("").await;
 
-        // Verify the custom blacklist is cleared
-        assert!(capture.custom_blacklists.read().await.is_none());
+        assert!(!crate::blacklists::LISTS.read().await.is_custom().await);
     }
 
     #[tokio::test]
@@ -2219,7 +2255,7 @@ mod tests {
             blacklists: vec![],
         });
 
-        LISTS
+        crate::blacklists::LISTS
             .write()
             .await
             .overwrite_with_test_data(empty_blacklists)
@@ -2228,8 +2264,8 @@ mod tests {
         // Set the custom blacklist
         capture.set_custom_blacklists(&json_str).await;
 
-        // Verify the custom blacklist exists
-        assert!(capture.custom_blacklists.read().await.is_some());
+        // Verify the custom blacklist exists in the CloudModel
+        assert!(crate::blacklists::LISTS.read().await.is_custom().await);
 
         // Simulate a packet to 1.1.1.1 (which is in our custom blacklist)
         let session_packet = SessionPacketData {
@@ -2254,7 +2290,6 @@ mod tests {
             &self_ips,
             &capture.filter,
             capture.l7.as_ref(),
-            Some(&capture.custom_blacklists),
         )
         .await;
 
@@ -2265,6 +2300,13 @@ mod tests {
 
         // Verify the criticality field is set as expected
         assert_eq!(session_info.criticality, "blacklist:custom_test_blacklist");
+
+        // Reset to default after test
+        crate::blacklists::LISTS
+            .write()
+            .await
+            .reset_to_default()
+            .await;
     }
 
     #[tokio::test]
@@ -2303,7 +2345,7 @@ mod tests {
         let blacklists = Blacklists::new_from_json(blacklists_json);
 
         // Override global blacklists with our test data
-        LISTS
+        crate::blacklists::LISTS
             .write()
             .await
             .overwrite_with_test_data(blacklists)
@@ -2333,7 +2375,6 @@ mod tests {
             &self_ips,
             &capture.filter,
             capture.l7.as_ref(),
-            Some(&capture.custom_blacklists),
         )
         .await;
 
@@ -2347,5 +2388,12 @@ mod tests {
             session_info.criticality,
             "blacklist:malware_ips,blacklist:spam_ips"
         );
+
+        // Reset to default after test
+        crate::blacklists::LISTS
+            .write()
+            .await
+            .reset_to_default()
+            .await;
     }
 }

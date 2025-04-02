@@ -7,7 +7,6 @@ use ipnet::IpNet;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
-use std::sync::Arc;
 use tracing::{info, trace, warn};
 
 // Constants
@@ -157,6 +156,7 @@ lazy_static! {
     };
 }
 
+/// Checks if a blacklist name exists in the current model (default or custom).
 pub async fn is_valid_blacklist(blacklist_name: &str) -> bool {
     LISTS
         .read()
@@ -172,45 +172,19 @@ pub async fn is_valid_blacklist(blacklist_name: &str) -> bool {
 /// Returns a tuple (bool, Vec<String>) where:
 /// - The boolean indicates whether the IP is blacklisted in any list
 /// - The Vec<String> contains the names of all blacklists that match
-pub async fn is_ip_blacklisted(
-    ip: &str,
-    custom_blacklists: &Arc<CustomRwLock<Option<Blacklists>>>,
-) -> (bool, Vec<String>) {
+pub async fn is_ip_blacklisted(ip: &str) -> (bool, Vec<String>) {
     trace!("Checking if IP: {} is blacklisted", ip);
 
     let mut matching_blacklists = Vec::new();
 
-    // First check custom blacklists
-    let custom_guard = custom_blacklists.read().await;
+    // Access the current blacklist data (could be default or custom)
+    let list_model = LISTS.read().await;
+    let list_data = list_model.data.read().await;
 
-    if let Some(blacklists) = custom_guard.as_ref() {
-        // Check each blacklist in the custom blacklists
-        for entry in blacklists.blacklists.iter() {
-            let blacklist_name = entry.key();
-            let result = blacklists.is_ip_in_blacklist(ip, blacklist_name);
-
-            match result {
-                Ok(true) => {
-                    matching_blacklists.push(blacklist_name.clone());
-                }
-                Ok(false) => {}
-                Err(e) => {
-                    warn!("Error checking custom blacklist {}: {}", blacklist_name, e);
-                }
-            }
-        }
-    }
-
-    drop(custom_guard);
-
-    // Then check global blacklists
-    let global_guard = LISTS.read().await;
-    let global_data_guard = global_guard.data.read().await;
-
-    // Check each global blacklist
-    for entry in global_data_guard.blacklists.iter() {
+    // Check each blacklist in the current data model
+    for entry in list_data.blacklists.iter() {
         let blacklist_name = entry.key();
-        let result = global_data_guard.is_ip_in_blacklist(ip, blacklist_name);
+        let result = list_data.is_ip_in_blacklist(ip, blacklist_name);
 
         match result {
             Ok(true) => {
@@ -218,13 +192,14 @@ pub async fn is_ip_blacklisted(
             }
             Ok(false) => {}
             Err(e) => {
-                warn!("Error checking global blacklist {}: {}", blacklist_name, e);
+                warn!("Error checking blacklist {}: {}", blacklist_name, e);
             }
         }
     }
 
-    drop(global_data_guard);
-    drop(global_guard);
+    // Drop guards
+    drop(list_data);
+    drop(list_model);
 
     let is_blacklisted = !matching_blacklists.is_empty();
 
@@ -252,6 +227,9 @@ pub async fn update(branch: &str, force: bool) -> Result<UpdateStatus> {
         UpdateStatus::Updated => info!("Blacklists were successfully updated."),
         UpdateStatus::NotUpdated => info!("Blacklists are already up to date."),
         UpdateStatus::FormatError => warn!("There was a format error in the blacklists data."),
+        UpdateStatus::SkippedCustom => {
+            info!("Update skipped because custom blacklists are in use.")
+        }
     }
 
     Ok(status)
@@ -298,14 +276,12 @@ mod tests {
     async fn test_ip_matching() {
         initialize_test_blacklists().await;
 
-        let custom_blacklists = Arc::new(CustomRwLock::new(None));
-
         // Test IP in range
-        let (is_blacklisted, _) = is_ip_blacklisted("192.168.1.1", &custom_blacklists).await;
+        let (is_blacklisted, _) = is_ip_blacklisted("192.168.1.1").await;
         assert!(is_blacklisted, "IP in range should be blacklisted");
 
         // Test IP not in range
-        let (is_blacklisted, _) = is_ip_blacklisted("8.8.8.8", &custom_blacklists).await;
+        let (is_blacklisted, _) = is_ip_blacklisted("8.8.8.8").await;
         assert!(!is_blacklisted, "IP not in range should not be blacklisted");
     }
 
@@ -314,10 +290,8 @@ mod tests {
     async fn test_invalid_blacklist() {
         initialize_test_blacklists().await;
 
-        let custom_blacklists = Arc::new(CustomRwLock::new(None));
-
         // Test with IP that is not in any blacklist
-        let (is_blacklisted, _) = is_ip_blacklisted("8.8.8.8", &custom_blacklists).await;
+        let (is_blacklisted, _) = is_ip_blacklisted("8.8.8.8").await;
         assert!(
             !is_blacklisted,
             "Should return false for non-blacklisted IP"
@@ -343,10 +317,9 @@ mod tests {
     #[serial]
     async fn test_invalid_ip_format() {
         initialize_test_blacklists().await;
-        let custom_blacklists = Arc::new(CustomRwLock::new(None));
 
         // Invalid IP format should return false
-        let (is_blacklisted, _) = is_ip_blacklisted("not-an-ip", &custom_blacklists).await;
+        let (is_blacklisted, _) = is_ip_blacklisted("not-an-ip").await;
         assert!(!is_blacklisted, "Invalid IP should not be blacklisted");
     }
 
@@ -372,16 +345,12 @@ mod tests {
             .overwrite_with_test_data(blacklists)
             .await;
 
-        let custom_blacklists = Arc::new(CustomRwLock::new(None));
-
         // Test IPv6 in range
-        let (is_blacklisted, _) =
-            is_ip_blacklisted("2001:db8:1:2:3:4:5:6", &custom_blacklists).await;
+        let (is_blacklisted, _) = is_ip_blacklisted("2001:db8:1:2:3:4:5:6").await;
         assert!(is_blacklisted, "IPv6 in range should be blacklisted");
 
         // Test IPv6 not in range
-        let (is_blacklisted, _) =
-            is_ip_blacklisted("2002:db8:1:2:3:4:5:6", &custom_blacklists).await;
+        let (is_blacklisted, _) = is_ip_blacklisted("2002:db8:1:2:3:4:5:6").await;
         assert!(
             !is_blacklisted,
             "IPv6 not in range should not be blacklisted"
@@ -393,18 +362,16 @@ mod tests {
     async fn test_blacklist_ip_check() {
         initialize_test_blacklists().await;
 
-        let custom_blacklists = Arc::new(CustomRwLock::new(None));
-
         // Test with IP in blacklist range
-        let (is_blacklisted, _) = is_ip_blacklisted("192.168.1.10", &custom_blacklists).await;
+        let (is_blacklisted, _) = is_ip_blacklisted("192.168.1.10").await;
         assert!(is_blacklisted, "IP in range should be blacklisted");
 
         // Test with IP not in blacklist range
-        let (is_blacklisted, _) = is_ip_blacklisted("8.8.8.8", &custom_blacklists).await;
+        let (is_blacklisted, _) = is_ip_blacklisted("8.8.8.8").await;
         assert!(!is_blacklisted, "IP not in range should not be blacklisted");
 
         // Test IP in second blacklist
-        let (is_blacklisted, _) = is_ip_blacklisted("172.16.1.1", &custom_blacklists).await;
+        let (is_blacklisted, _) = is_ip_blacklisted("172.16.1.1").await;
         assert!(
             is_blacklisted,
             "IP in second blacklist should be blacklisted"
@@ -427,34 +394,43 @@ mod tests {
         };
 
         let blacklists = Blacklists::new_from_json(test_blacklist_json);
-        let custom_blacklists = Arc::new(CustomRwLock::new(Some(blacklists)));
+        // Overwrite the global model directly for this test
+        LISTS
+            .write()
+            .await
+            .overwrite_with_test_data(blacklists)
+            .await;
 
         // Test IPv6 in blacklist range
-        let (is_blacklisted, _) =
-            is_ip_blacklisted("2001:db8:1:2:3:4:5:6", &custom_blacklists).await;
+        let (is_blacklisted, _) = is_ip_blacklisted("2001:db8:1:2:3:4:5:6").await;
         assert!(is_blacklisted, "IPv6 in range should be blacklisted");
 
-        // Test IPv6 not in blacklist range
-        let (is_blacklisted, _) =
-            is_ip_blacklisted("2002:db8:1:2:3:4:5:6", &custom_blacklists).await;
+        // Test IPv6 not in range
+        let (is_blacklisted, _) = is_ip_blacklisted("2002:db8:1:2:3:4:5:6").await;
         assert!(
             !is_blacklisted,
             "IPv6 not in range should not be blacklisted"
         );
 
         // Test IPv6 localhost
-        let (is_blacklisted, _) = is_ip_blacklisted("::1", &custom_blacklists).await;
+        let (is_blacklisted, _) = is_ip_blacklisted("::1").await;
         assert!(is_blacklisted, "IPv6 localhost should be blacklisted");
+
+        // Reset LISTS back to default after the test
+        LISTS.write().await.reset_to_default().await;
     }
 
     #[tokio::test]
     #[serial]
     async fn test_empty_blacklist_name() {
         initialize_test_blacklists().await;
-        let custom_blacklists = Arc::new(CustomRwLock::new(None));
 
-        // Empty blacklist name should never match
-        let (is_blacklisted, _) = is_ip_blacklisted("8.8.8.8", &custom_blacklists).await;
-        assert!(!is_blacklisted, "Empty blacklist name should never match");
+        // Empty blacklist name should never match (though the function currently loops through all)
+        let (is_blacklisted, _) = is_ip_blacklisted("8.8.8.8").await;
+        // The behavior depends on the test data; if 8.8.8.8 isn't in any list, it should be false.
+        assert!(
+            !is_blacklisted,
+            "Empty blacklist name check (behavior test)"
+        );
     }
 }
