@@ -46,7 +46,6 @@ pub async fn process_parsed_packet(
     self_ips: &Vec<IpAddr>,
     filter: &Arc<CustomRwLock<SessionFilter>>,
     l7: Option<&Arc<LANScanL7>>,
-    custom_blacklists: Option<&Arc<CustomRwLock<Option<Blacklists>>>>,
 ) {
     let now = Utc::now();
     let is_self_src = self_ips.contains(&parsed_packet.session.src_ip);
@@ -200,48 +199,36 @@ pub async fn process_parsed_packet(
             last_modified: Utc::now(),
         };
 
-        // Check if source or destination IPs are blacklisted
-        if let Some(blacklists) = custom_blacklists {
-            // Check destination IP if not local
+        // Check for blacklisted IPs
+        let src_ip_str = key.src_ip.to_string();
+        let dst_ip_str = key.dst_ip.to_string();
 
-            let (dst_blacklisted, dst_blacklist_names) = if !is_local_dst {
-                let dst_ip_str = key.dst_ip.to_string();
-                is_ip_blacklisted(&dst_ip_str, blacklists).await
-            } else {
-                (false, Vec::new())
-            };
-            // Check source IP if not local
-            let (src_blacklisted, src_blacklist_names) = if !is_local_src {
-                let src_ip_str = key.src_ip.to_string();
-                is_ip_blacklisted(&src_ip_str, blacklists).await
-            } else {
-                (false, Vec::new())
-            };
+        // Combine checks for blacklist criticality
+        let (src_blacklisted, src_lists) = is_ip_blacklisted(&src_ip_str).await;
+        let (dst_blacklisted, dst_lists) = is_ip_blacklisted(&dst_ip_str).await;
 
-            // Combine blacklist matches
-            let mut all_blacklists = Vec::new();
-            if dst_blacklisted {
-                all_blacklists.extend(dst_blacklist_names);
-            }
-            if src_blacklisted {
-                all_blacklists.extend(src_blacklist_names);
-            }
+        let mut criticality_parts = Vec::new();
+        if src_blacklisted {
+            criticality_parts.extend(src_lists);
+        }
+        if dst_blacklisted {
+            criticality_parts.extend(dst_lists);
+        }
 
-            // Remove duplicates
-            all_blacklists.sort();
-            all_blacklists.dedup();
+        // Remove duplicates
+        criticality_parts.sort();
+        criticality_parts.dedup();
 
-            // Set criticality if any blacklists matched
-            if !all_blacklists.is_empty() {
-                session_info.criticality = format!(
-                    "{}",
-                    all_blacklists
-                        .iter()
-                        .map(|name| format!("blacklist:{}", name))
-                        .collect::<Vec<_>>()
-                        .join(",")
-                );
-            }
+        // Set criticality if any blacklists matched
+        if !criticality_parts.is_empty() {
+            session_info.criticality = format!(
+                "{}",
+                criticality_parts
+                    .iter()
+                    .map(|name| format!("blacklist:{}", name))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            );
         }
 
         sessions.insert(key.clone(), session_info);
@@ -553,8 +540,6 @@ mod tests {
             .overwrite_with_test_data(blacklists.clone())
             .await;
 
-        let custom_blacklists = Arc::new(CustomRwLock::new(None));
-
         // Create session data with a blacklisted IP (8.8.8.8)
         let session_data = SessionPacketData {
             session: Session {
@@ -583,7 +568,6 @@ mod tests {
             &self_ips,
             &filter,
             None,
-            Some(&custom_blacklists),
         )
         .await;
 
@@ -631,8 +615,6 @@ mod tests {
             .overwrite_with_test_data(blacklists.clone())
             .await;
 
-        let custom_blacklists = Arc::new(CustomRwLock::new(None));
-
         // Create session data with a non-blacklisted IP
         let session_data = SessionPacketData {
             session: Session {
@@ -661,7 +643,6 @@ mod tests {
             &self_ips,
             &filter,
             None,
-            Some(&custom_blacklists),
         )
         .await;
 

@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use dashmap::DashMap;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
-use tracing::info;
+use tracing::{info, warn};
 
 const PORT_VULNS_NAME: &str = "lanscan-port-vulns-db.json";
 
@@ -37,6 +37,7 @@ impl CloudSignature for VulnerabilityPortInfoList {
     }
 }
 
+#[derive(Clone)]
 pub struct VulnerabilityPortInfoList {
     pub date: String,
     pub signature: String,
@@ -211,6 +212,16 @@ pub async fn update(branch: &str, force: bool) -> Result<UpdateStatus> {
             Ok(VulnerabilityPortInfoList::new_from_json(vuln_info_json))
         })
         .await?;
+
+    match status {
+        UpdateStatus::Updated => info!("Port vulns were successfully updated."),
+        UpdateStatus::NotUpdated => info!("Port vulns are already up to date."),
+        UpdateStatus::FormatError => warn!("There was a format error in the port vulns data."),
+        UpdateStatus::SkippedCustom => {
+            info!("Update skipped because custom port vulns are in use.")
+        }
+    }
+
     Ok(status)
 }
 
@@ -332,10 +343,9 @@ mod tests {
         let status = update(branch, false).await.expect("Update failed");
 
         // Check that the update was performed
-        assert_eq!(
-            status,
-            UpdateStatus::Updated,
-            "Expected the update to be performed"
+        assert!(
+            matches!(status, UpdateStatus::Updated | UpdateStatus::SkippedCustom),
+            "Expected the update to be performed or skipped due to custom data"
         );
 
         // Check that the signature is no longer zeros

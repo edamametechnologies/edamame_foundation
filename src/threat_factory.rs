@@ -172,6 +172,9 @@ pub async fn update(branch: &str, force: bool, platform: &str) -> Result<UpdateS
         .await?;
 
     match status {
+        UpdateStatus::SkippedCustom => {
+            info!("Threat metrics were skipped because custom data is in use.")
+        }
         UpdateStatus::Updated => info!("Threat metrics were successfully updated."),
         UpdateStatus::NotUpdated => info!("Threat metrics are already up to date."),
         UpdateStatus::FormatError => {

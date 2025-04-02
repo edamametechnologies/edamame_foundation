@@ -10,7 +10,6 @@ use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::net::IpAddr;
-use std::sync::Arc;
 use tracing::{info, trace, warn};
 
 // Constants
@@ -46,6 +45,7 @@ pub struct WhitelistsJSON {
     pub whitelists: Vec<WhitelistInfo>,
 }
 
+#[derive(Clone)]
 pub struct Whitelists {
     pub date: String,
     pub signature: Option<String>,
@@ -220,6 +220,7 @@ lazy_static! {
     };
 }
 
+/// Checks if a whitelist name exists in the current model (default or custom).
 pub async fn is_valid_whitelist(whitelist_name: &str) -> bool {
     LISTS
         .read()
@@ -240,7 +241,6 @@ pub async fn is_session_in_whitelist(
     session_ip: Option<&str>,
     port: u16,
     protocol: &str,
-    custom_whitelists: &Arc<CustomRwLock<Option<Whitelists>>>,
     whitelist_name: &str,
     as_number: Option<u32>,
     as_country: Option<&str>,
@@ -263,48 +263,28 @@ pub async fn is_session_in_whitelist(
     let mut visited = HashSet::new();
     visited.insert(whitelist_name.to_string());
 
-    // Decide which whitelist to use (custom or global)
-    let custom_guard = custom_whitelists.read().await;
-    let endpoints = if let Some(whitelists) = custom_guard.as_ref() {
-        // We have a custom whitelist, use it
-        let custom_endpoints = whitelists.get_all_endpoints(whitelist_name, &mut visited);
+    // Access the current whitelist data (could be default or custom)
+    let list_model = LISTS.read().await;
+    let list_data = list_model.data.read().await;
 
-        // Drop the guard to avoid holding it longer than needed
-        drop(custom_guard);
-
-        match custom_endpoints {
-            Ok(eps) => eps,
-            Err(err) => {
-                let error_msg =
-                    format!("Error retrieving endpoints from custom whitelist: {}", err);
-                warn!("{}", error_msg);
-                return (false, Some(error_msg));
-            }
-        }
-    } else {
-        // No custom whitelist, use the global one
-        // Drop the custom guard first to avoid potential deadlocks
-        drop(custom_guard);
-
-        let global_guard = LISTS.read().await;
-        let global_data_guard = global_guard.data.read().await;
-
-        let global_endpoints = global_data_guard.get_all_endpoints(whitelist_name, &mut visited);
-
-        // Drop the guards
-        drop(global_data_guard);
-        drop(global_guard);
-
-        match global_endpoints {
-            Ok(eps) => eps,
-            Err(err) => {
-                let error_msg =
-                    format!("Error retrieving endpoints from global whitelist: {}", err);
-                warn!("{}", error_msg);
-                return (false, Some(error_msg));
-            }
+    let endpoints = match list_data.get_all_endpoints(whitelist_name, &mut visited) {
+        Ok(eps) => eps,
+        Err(err) => {
+            let error_msg = format!(
+                "Error retrieving endpoints for whitelist '{}': {}",
+                whitelist_name, err
+            );
+            warn!("{}", error_msg);
+            // Explicitly drop guards before returning
+            drop(list_data);
+            drop(list_model);
+            return (false, Some(error_msg));
         }
     };
+
+    // Drop the guards as they are no longer needed
+    drop(list_data);
+    drop(list_model);
 
     if endpoints.is_empty() {
         return (
@@ -648,6 +628,9 @@ pub async fn update(branch: &str, force: bool) -> Result<UpdateStatus> {
         UpdateStatus::Updated => info!("Whitelists were successfully updated."),
         UpdateStatus::NotUpdated => info!("Whitelists are already up to date."),
         UpdateStatus::FormatError => warn!("There was a format error in the whitelists data."),
+        UpdateStatus::SkippedCustom => {
+            info!("Update skipped because custom whitelists are in use.")
+        }
     }
 
     Ok(status)
@@ -725,8 +708,6 @@ mod tests {
     async fn test_whitelist_inheritance() {
         initialize_test_whitelists().await;
 
-        let custom_whitelists = Arc::new(CustomRwLock::new(None));
-
         // Test inherited endpoint from base_whitelist
         assert!(
             is_session_in_whitelist(
@@ -734,7 +715,6 @@ mod tests {
                 None,
                 443,
                 "TCP",
-                &custom_whitelists,
                 "extended_whitelist",
                 None,
                 None,
@@ -753,7 +733,6 @@ mod tests {
                 Some("192.168.1.100"),
                 80,
                 "TCP",
-                &custom_whitelists,
                 "extended_whitelist",
                 Some(12345),
                 Some("US"),
@@ -820,8 +799,6 @@ mod tests {
             .overwrite_with_test_data(whitelists)
             .await;
 
-        let custom_whitelists = Arc::new(CustomRwLock::new(None));
-
         // Test prefix wildcard (*.example.com)
         assert!(
             is_session_in_whitelist(
@@ -829,7 +806,6 @@ mod tests {
                 None,
                 443,
                 "TCP",
-                &custom_whitelists,
                 "wildcard_patterns",
                 None,
                 None,
@@ -848,7 +824,6 @@ mod tests {
                 None,
                 443,
                 "TCP",
-                &custom_whitelists,
                 "wildcard_patterns",
                 None,
                 None,
@@ -867,7 +842,6 @@ mod tests {
                 None,
                 443,
                 "TCP",
-                &custom_whitelists,
                 "wildcard_patterns",
                 None,
                 None,
@@ -914,7 +888,6 @@ mod tests {
                 None,
                 443,
                 "TCP",
-                &custom_whitelists,
                 "prefix_only_whitelist",
                 None,
                 None,
@@ -932,7 +905,6 @@ mod tests {
                 None,
                 443,
                 "TCP",
-                &custom_whitelists,
                 "wildcard_patterns",
                 None,
                 None,
@@ -950,8 +922,6 @@ mod tests {
     async fn test_invalid_whitelist() {
         initialize_test_whitelists().await;
 
-        let custom_whitelists = Arc::new(CustomRwLock::new(None));
-
         // Test non-existent whitelist
         assert!(
             !is_session_in_whitelist(
@@ -959,7 +929,6 @@ mod tests {
                 None,
                 443,
                 "TCP",
-                &custom_whitelists,
                 "nonexistent_whitelist",
                 None,
                 None,
@@ -977,8 +946,6 @@ mod tests {
     async fn test_l7_process_matching() {
         initialize_test_whitelists().await;
 
-        let custom_whitelists = Arc::new(CustomRwLock::new(None));
-
         // Test matching l7 process
         assert!(
             is_session_in_whitelist(
@@ -986,7 +953,6 @@ mod tests {
                 Some("192.168.1.100"),
                 80,
                 "TCP",
-                &custom_whitelists,
                 "extended_whitelist",
                 Some(12345),
                 Some("US"),
@@ -1005,7 +971,6 @@ mod tests {
                 Some("192.168.1.100"),
                 80,
                 "TCP",
-                &custom_whitelists,
                 "extended_whitelist",
                 Some(12345),
                 Some("US"),
@@ -1097,8 +1062,6 @@ mod tests {
             .overwrite_with_test_data(whitelists)
             .await;
 
-        let custom_whitelists = Arc::new(CustomRwLock::new(None));
-
         // Test that endpoints are correctly aggregated without infinite recursion
         assert!(
             is_session_in_whitelist(
@@ -1106,7 +1069,6 @@ mod tests {
                 None,
                 80,
                 "TCP",
-                &custom_whitelists,
                 "whitelist_c",
                 None,
                 None,
@@ -1124,7 +1086,6 @@ mod tests {
                 None,
                 80,
                 "TCP",
-                &custom_whitelists,
                 "whitelist_a",
                 None,
                 None,
@@ -1142,7 +1103,6 @@ mod tests {
                 None,
                 80,
                 "TCP",
-                &custom_whitelists,
                 "whitelist_b",
                 None,
                 None,
@@ -1185,8 +1145,6 @@ mod tests {
             .overwrite_with_test_data(whitelists)
             .await;
 
-        let custom_whitelists = Arc::new(CustomRwLock::new(None));
-
         // Should match based on domain even with mismatched IP and AS info
         assert!(
             is_session_in_whitelist(
@@ -1194,7 +1152,6 @@ mod tests {
                 Some("10.0.0.1"), // Different IP
                 443,
                 "TCP",
-                &custom_whitelists,
                 "priority_whitelist",
                 Some(54321),       // Different AS number
                 Some("UK"),        // Different country
@@ -1237,8 +1194,6 @@ mod tests {
             .overwrite_with_test_data(whitelists)
             .await;
 
-        let custom_whitelists = Arc::new(CustomRwLock::new(None));
-
         // Should match based on IP even with mismatched AS info
         assert!(
             is_session_in_whitelist(
@@ -1246,7 +1201,6 @@ mod tests {
                 Some("192.168.1.100"),
                 443,
                 "TCP",
-                &custom_whitelists,
                 "ip_priority_whitelist",
                 Some(54321),       // Different AS number
                 Some("UK"),        // Different country
@@ -1289,8 +1243,6 @@ mod tests {
             .overwrite_with_test_data(whitelists)
             .await;
 
-        let custom_whitelists = Arc::new(CustomRwLock::new(None));
-
         // Should match when only AS info matches
         assert!(
             is_session_in_whitelist(
@@ -1298,7 +1250,6 @@ mod tests {
                 Some("10.0.0.1"),
                 443,
                 "TCP",
-                &custom_whitelists,
                 "as_whitelist",
                 Some(12345),
                 Some("US"),
@@ -1317,7 +1268,6 @@ mod tests {
                 Some("10.0.0.1"),
                 443,
                 "TCP",
-                &custom_whitelists,
                 "as_whitelist",
                 Some(54321),
                 Some("UK"),
@@ -1360,8 +1310,6 @@ mod tests {
             .overwrite_with_test_data(whitelists)
             .await;
 
-        let custom_whitelists = Arc::new(CustomRwLock::new(None));
-
         // Should match on domain regardless of other criteria
         assert!(
             is_session_in_whitelist(
@@ -1369,7 +1317,6 @@ mod tests {
                 Some("10.0.0.1"), // Different IP
                 443,
                 "TCP",
-                &custom_whitelists,
                 "mixed_whitelist",
                 Some(54321), // Different AS
                 Some("UK"),
@@ -1388,7 +1335,6 @@ mod tests {
                 Some("192.168.1.100"),
                 443,
                 "TCP",
-                &custom_whitelists,
                 "mixed_whitelist",
                 Some(54321), // Different AS
                 Some("UK"),
@@ -1407,7 +1353,6 @@ mod tests {
                 Some("192.168.1.100"),
                 443,
                 "TCP",
-                &custom_whitelists,
                 "mixed_whitelist",
                 Some(12345),
                 Some("US"),
@@ -1463,8 +1408,6 @@ mod tests {
             .overwrite_with_test_data(whitelists)
             .await;
 
-        let custom_whitelists = Arc::new(CustomRwLock::new(None));
-
         // Test IPv4 CIDR matching
         assert!(
             is_session_in_whitelist(
@@ -1472,7 +1415,6 @@ mod tests {
                 Some("192.168.1.100"),
                 443,
                 "TCP",
-                &custom_whitelists,
                 "ip_cidr_whitelist",
                 None,
                 None,
@@ -1491,7 +1433,6 @@ mod tests {
                 Some("2001:db8:1234::1"),
                 443,
                 "TCP",
-                &custom_whitelists,
                 "ip_cidr_whitelist",
                 None,
                 None,
@@ -1510,7 +1451,6 @@ mod tests {
                 Some("192.168.2.1"),
                 443,
                 "TCP",
-                &custom_whitelists,
                 "ip_cidr_whitelist",
                 None,
                 None,
@@ -1553,8 +1493,6 @@ mod tests {
             .overwrite_with_test_data(whitelists)
             .await;
 
-        let custom_whitelists = Arc::new(CustomRwLock::new(None));
-
         // Test case-insensitive protocol matching
         assert!(
             is_session_in_whitelist(
@@ -1562,7 +1500,6 @@ mod tests {
                 None,
                 443,
                 "tcp",
-                &custom_whitelists,
                 "protocol_whitelist",
                 None,
                 None,
@@ -1580,7 +1517,6 @@ mod tests {
                 None,
                 443,
                 "TcP",
-                &custom_whitelists,
                 "protocol_whitelist",
                 None,
                 None,
@@ -1613,14 +1549,12 @@ mod tests {
             .overwrite_with_test_data(whitelists)
             .await;
 
-        let custom_whitelists = Arc::new(CustomRwLock::new(None));
         // Test empty whitelist behavior
         let (matches, reason) = is_session_in_whitelist(
             Some("example.com"),
             None,
             443,
             "TCP",
-            &custom_whitelists,
             "empty_whitelist",
             None,
             None,
