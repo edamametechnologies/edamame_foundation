@@ -245,7 +245,7 @@ pub fn format_sessions_log(sessions: &Vec<SessionInfo>) -> Vec<String> {
         let src_name = match src_domain {
             Some(name) => match name.as_str() {
                 "Resolving" | "Unknown" => session.src_ip.to_string(),
-                _ => name.clone(),
+                _ => format!("{} ({})", name, session.src_ip.to_string()),
             },
             None => session.src_ip.to_string(),
         };
@@ -253,7 +253,7 @@ pub fn format_sessions_log(sessions: &Vec<SessionInfo>) -> Vec<String> {
         let dst_name = match dst_domain {
             Some(name) => match name.as_str() {
                 "Resolving" | "Unknown" => session.dst_ip.to_string(),
-                _ => name.clone(),
+                _ => format!("{} ({})", name, session.dst_ip.to_string()),
             },
             None => session.dst_ip.to_string(),
         };
