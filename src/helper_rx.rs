@@ -395,11 +395,7 @@ pub async fn rpc_run(
                 feature = "packetcapture"
             ))]
             "set_whitelist" => utility_set_whitelist(arg1).await,
-            #[cfg(all(
-                any(target_os = "macos", target_os = "linux", target_os = "windows"),
-                feature = "packetcapture"
-            ))]
-            "get_whitelist" => utility_get_whitelist().await,
+
             #[cfg(all(
                 any(target_os = "macos", target_os = "linux", target_os = "windows"),
                 feature = "packetcapture"
@@ -445,6 +441,21 @@ pub async fn rpc_run(
                 feature = "packetcapture"
             ))]
             "get_whitelist_exceptions" => utility_get_whitelist_exceptions().await,
+            #[cfg(all(
+                any(target_os = "macos", target_os = "linux", target_os = "windows"),
+                feature = "packetcapture"
+            ))]
+            "get_whitelists" => utility_get_whitelists().await,
+            #[cfg(all(
+                any(target_os = "macos", target_os = "linux", target_os = "windows"),
+                feature = "packetcapture"
+            ))]
+            "get_blacklists" => utility_get_blacklists().await,
+            #[cfg(all(
+                any(target_os = "macos", target_os = "linux", target_os = "windows"),
+                feature = "packetcapture"
+            ))]
+            "get_whitelist_name" => utility_get_whitelist_name().await,
             _ => order_error(
                 &format!("unknown or unimplemented utilityorder {}", subordertype),
                 false,
