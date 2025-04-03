@@ -20,13 +20,13 @@ use std::sync::Arc;
 use tracing::{trace, warn};
 use uuid::Uuid;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum ParsedPacket {
     SessionPacket(SessionPacketData),
     DnsPacket(DnsPacketData),
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct SessionPacketData {
     pub session: Session,
     pub packet_length: usize,
@@ -34,7 +34,7 @@ pub struct SessionPacketData {
     pub flags: Option<u8>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct DnsPacketData {
     pub dns_payload: Vec<u8>,
 }

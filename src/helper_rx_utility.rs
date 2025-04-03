@@ -254,16 +254,6 @@ pub async fn utility_set_whitelist(whitelist_name: &str) -> Result<String> {
     any(target_os = "macos", target_os = "linux", target_os = "windows"),
     feature = "packetcapture"
 ))]
-pub async fn utility_get_whitelist() -> Result<String> {
-    let whitelist = CAPTURE.lock().await.get_whitelist().await;
-    info!("Returning whitelist: {}", whitelist);
-    Ok(whitelist)
-}
-
-#[cfg(all(
-    any(target_os = "macos", target_os = "linux", target_os = "windows"),
-    feature = "packetcapture"
-))]
 pub async fn utility_set_custom_whitelists(whitelist_json: &str) -> Result<String> {
     CAPTURE
         .lock()
@@ -407,6 +397,36 @@ pub async fn utility_get_whitelist_exceptions() -> Result<String> {
     };
     info!("Returning {} whitelist exceptions", exceptions.len());
     Ok(json_exceptions)
+}
+
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux", target_os = "windows"),
+    feature = "packetcapture"
+))]
+pub async fn utility_get_whitelists() -> Result<String> {
+    let json = CAPTURE.lock().await.get_whitelists().await;
+    info!("Returning whitelists JSON");
+    Ok(json)
+}
+
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux", target_os = "windows"),
+    feature = "packetcapture"
+))]
+pub async fn utility_get_blacklists() -> Result<String> {
+    let json = CAPTURE.lock().await.get_blacklists().await;
+    info!("Returning blacklists JSON");
+    Ok(json)
+}
+
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux", target_os = "windows"),
+    feature = "packetcapture"
+))]
+pub async fn utility_get_whitelist_name() -> Result<String> {
+    let name = CAPTURE.lock().await.get_whitelist_name().await;
+    info!("Returning whitelist name: {}", name);
+    Ok(name)
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
