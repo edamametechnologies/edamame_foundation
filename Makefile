@@ -17,12 +17,11 @@ clean:
 	rm -rf ./build/
 	rm -rf ./target/
 
+
 ios:
-	# To test building for iOS
 	cargo build --target=aarch64-apple-ios
 
 android:
-	# To test building for Android
 	cross build --release --target x86_64-linux-android
 
 
@@ -45,11 +44,8 @@ linux_test: unix_test
 
 macos_test: unix_test
 
-mobile_test:
-	cargo test -- --nocapture
+ios_test: ios
 
-ios_test: mobile_test
-
-android_test: mobile_test
+android_test: android
 
 
