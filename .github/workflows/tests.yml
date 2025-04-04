@@ -136,10 +136,16 @@ jobs:
           fi
         shell: bash
 
-      # Install Cross for Linux
-      - name: Install Cross for Linux
+      - name: iOS add-ons
+        if: matrix.platform == 'ios'
+        run: |
+          rustup target add aarch64-apple-ios
+
+      - name: Android add-ons
         if: matrix.platform == 'android'
-        run: cargo install cross --git https://github.com/cross-rs/cross
+        run: |
+          rustup target add x86_64-linux-android
+          cargo install cross --git https://github.com/cross-rs/cross
 
       - name: Install protobuf
         run: ${{ matrix.protobuf_install }}
