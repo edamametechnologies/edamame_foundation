@@ -2747,18 +2747,34 @@ mod tests {
         *capture.whitelist_name.write().await = "".to_string(); // Ensure no initial whitelist
 
         // --- Initial Sessions ---
+        // IPv4 sessions
         // Session that WILL match the custom whitelist
-        let packet_conforming = create_test_packet(
+        let packet_conforming_ipv4 = create_test_packet(
             IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
             IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)),
             443,
         );
         // Session that WILL NOT match the custom whitelist
-        let packet_non_conforming =
+        let packet_non_conforming_ipv4 =
             create_test_packet(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)), IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)), 80);
 
+        // IPv6 sessions
+        // Session that WILL match the custom whitelist
+        let packet_conforming_ipv6 = create_test_packet(
+            IpAddr::V6(Ipv6Addr::from_str("2001:db8::1").unwrap()),
+            IpAddr::V6(Ipv6Addr::from_str("2001:db8:1::1").unwrap()),
+            443,
+        );
+        // Session that WILL NOT match the custom whitelist
+        let packet_non_conforming_ipv6 = create_test_packet(
+            IpAddr::V6(Ipv6Addr::from_str("2001:db8::1").unwrap()),
+            IpAddr::V6(Ipv6Addr::from_str("2001:db8:2::1").unwrap()),
+            80,
+        );
+
+        // Process IPv4 packets
         process_parsed_packet(
-            packet_conforming.clone(),
+            packet_conforming_ipv4.clone(),
             &capture.sessions,
             &capture.current_sessions,
             &self_ips,
@@ -2767,7 +2783,27 @@ mod tests {
         )
         .await;
         process_parsed_packet(
-            packet_non_conforming.clone(),
+            packet_non_conforming_ipv4.clone(),
+            &capture.sessions,
+            &capture.current_sessions,
+            &self_ips,
+            &capture.filter,
+            None,
+        )
+        .await;
+        
+        // Process IPv6 packets
+        process_parsed_packet(
+            packet_conforming_ipv6.clone(),
+            &capture.sessions,
+            &capture.current_sessions,
+            &self_ips,
+            &capture.filter,
+            None,
+        )
+        .await;
+        process_parsed_packet(
+            packet_non_conforming_ipv6.clone(),
             &capture.sessions,
             &capture.current_sessions,
             &self_ips,
@@ -2779,21 +2815,29 @@ mod tests {
         // Verify initial state (Unknown as no whitelist is set)
         capture.update_sessions().await; // Trigger potential updates (though none expected here for whitelist)
         let initial_sessions = capture.get_sessions().await;
-        assert_eq!(initial_sessions.len(), 2);
-        assert_eq!(initial_sessions[0].is_whitelisted, WhitelistState::Unknown);
-        assert_eq!(initial_sessions[1].is_whitelisted, WhitelistState::Unknown);
+        assert_eq!(initial_sessions.len(), 4); // Now 4 sessions (2 IPv4 + 2 IPv6)
+        for session in &initial_sessions {
+            assert_eq!(session.is_whitelisted, WhitelistState::Unknown);
+        }
 
-        // --- Set Custom Whitelist ---
+        // --- Set Custom Whitelist with both IPv4 and IPv6 entries ---
         let custom_whitelist_json = r#"{
             "date": "2024-01-01",
             "signature": "custom-sig",
             "whitelists": [{
                 "name": "custom_whitelist",
-                "endpoints": [{
-                    "ip": "1.1.1.1",
-                    "port": 443,
-                    "protocol": "TCP"
-                }]
+                "endpoints": [
+                    {
+                        "ip": "1.1.1.1",
+                        "port": 443,
+                        "protocol": "TCP"
+                    },
+                    {
+                        "ip": "2001:db8:1::1",
+                        "port": 443,
+                        "protocol": "TCP"
+                    }
+                ]
             }]
         }"#;
         capture.set_custom_whitelists(custom_whitelist_json).await;
@@ -2805,40 +2849,74 @@ mod tests {
         // --- Check Recomputation ---
         // get_sessions() triggers update_sessions -> check_whitelisted_destinations
         let updated_sessions = capture.get_sessions().await;
-        assert_eq!(updated_sessions.len(), 2);
+        assert_eq!(updated_sessions.len(), 4);
 
-        let conforming_session = updated_sessions
+        let conforming_ipv4_session = updated_sessions
             .iter()
-            .find(|s| s.session == packet_conforming.session)
+            .find(|s| s.session == packet_conforming_ipv4.session)
             .unwrap();
-        let non_conforming_session = updated_sessions
+        let non_conforming_ipv4_session = updated_sessions
             .iter()
-            .find(|s| s.session == packet_non_conforming.session)
+            .find(|s| s.session == packet_non_conforming_ipv4.session)
+            .unwrap();
+        let conforming_ipv6_session = updated_sessions
+            .iter()
+            .find(|s| s.session == packet_conforming_ipv6.session)
+            .unwrap();
+        let non_conforming_ipv6_session = updated_sessions
+            .iter()
+            .find(|s| s.session == packet_non_conforming_ipv6.session)
             .unwrap();
 
+        // IPv4 checks
         assert_eq!(
-            conforming_session.is_whitelisted,
+            conforming_ipv4_session.is_whitelisted,
             WhitelistState::Conforming
         );
         assert_eq!(
-            non_conforming_session.is_whitelisted,
+            non_conforming_ipv4_session.is_whitelisted,
             WhitelistState::NonConforming
         );
-        assert!(non_conforming_session.whitelist_reason.is_some());
+        assert!(non_conforming_ipv4_session.whitelist_reason.is_some());
+
+        // IPv6 checks
+        assert_eq!(
+            conforming_ipv6_session.is_whitelisted,
+            WhitelistState::Conforming
+        );
+        assert_eq!(
+            non_conforming_ipv6_session.is_whitelisted,
+            WhitelistState::NonConforming
+        );
+        assert!(non_conforming_ipv6_session.whitelist_reason.is_some());
 
         // --- Check New Sessions ---
-        // New conforming session
-        let packet_new_conforming = create_test_packet(
+        // New conforming IPv4 session (same as existing, but will update)
+        let packet_new_conforming_ipv4 = create_test_packet(
             IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
             IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)),
             443,
         );
-        // New non-conforming session
-        let packet_new_non_conforming =
+        // New non-conforming IPv4 session
+        let packet_new_non_conforming_ipv4 =
             create_test_packet(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)), IpAddr::V4(Ipv4Addr::new(9, 9, 9, 9)), 53);
+            
+        // New conforming IPv6 session (same as existing, but will update)
+        let packet_new_conforming_ipv6 = create_test_packet(
+            IpAddr::V6(Ipv6Addr::from_str("2001:db8::1").unwrap()),
+            IpAddr::V6(Ipv6Addr::from_str("2001:db8:1::1").unwrap()),
+            443,
+        );
+        // New non-conforming IPv6 session
+        let packet_new_non_conforming_ipv6 = create_test_packet(
+            IpAddr::V6(Ipv6Addr::from_str("2001:db8::1").unwrap()),
+            IpAddr::V6(Ipv6Addr::from_str("2001:db8:3::1").unwrap()),
+            53,
+        );
 
+        // Process all new packets
         process_parsed_packet(
-            packet_new_conforming.clone(),
+            packet_new_conforming_ipv4.clone(),
             &capture.sessions,
             &capture.current_sessions,
             &self_ips,
@@ -2847,7 +2925,25 @@ mod tests {
         )
         .await;
         process_parsed_packet(
-            packet_new_non_conforming.clone(),
+            packet_new_non_conforming_ipv4.clone(),
+            &capture.sessions,
+            &capture.current_sessions,
+            &self_ips,
+            &capture.filter,
+            None,
+        )
+        .await;
+        process_parsed_packet(
+            packet_new_conforming_ipv6.clone(),
+            &capture.sessions,
+            &capture.current_sessions,
+            &self_ips,
+            &capture.filter,
+            None,
+        )
+        .await;
+        process_parsed_packet(
+            packet_new_non_conforming_ipv6.clone(),
             &capture.sessions,
             &capture.current_sessions,
             &self_ips,
@@ -2857,37 +2953,57 @@ mod tests {
         .await;
 
         // Trigger update and check again
-        // Since packet_new_conforming has the same session key as packet_conforming,
-        // it will update the existing session, not create a new one.
+        // Since new_conforming packets have the same session keys as conforming packets,
+        // they will update existing sessions, not create a new one.
         let final_sessions = capture.get_sessions().await;
-        assert_eq!(final_sessions.len(), 3); // Should have 3 sessions now (2 initial + 1 new non-conforming)
+        assert_eq!(final_sessions.len(), 6); // Should have 6 sessions now (4 initial + 2 new non-conforming)
 
-        // Note: New sessions' whitelist status might be checked during the next `update_sessions` call
         // Explicitly trigger update_sessions to ensure checks are run before assertions
         capture.update_sessions().await;
         let final_sessions_after_update = capture.get_sessions().await;
-        assert_eq!(final_sessions_after_update.len(), 3); // Length should still be 3
+        assert_eq!(final_sessions_after_update.len(), 6); // Length should still be 6
 
         // Find the sessions again after the update
-        let conforming_session_updated = final_sessions_after_update
+        let conforming_ipv4_session_updated = final_sessions_after_update
             .iter()
-            .find(|s| s.session == packet_conforming.session) // Use original conforming packet session
+            .find(|s| s.session == packet_conforming_ipv4.session) // Use original conforming packet session
             .unwrap();
-        let new_non_conforming_session_updated = final_sessions_after_update
+        let new_non_conforming_ipv4_session_updated = final_sessions_after_update
             .iter()
-            .find(|s| s.session == packet_new_non_conforming.session)
+            .find(|s| s.session == packet_new_non_conforming_ipv4.session)
+            .unwrap();
+        let conforming_ipv6_session_updated = final_sessions_after_update
+            .iter()
+            .find(|s| s.session == packet_conforming_ipv6.session)
+            .unwrap();
+        let new_non_conforming_ipv6_session_updated = final_sessions_after_update
+            .iter()
+            .find(|s| s.session == packet_new_non_conforming_ipv6.session)
             .unwrap();
 
-        // Check their states
+        // Check their states - IPv4
         assert_eq!(
-            conforming_session_updated.is_whitelisted,
+            conforming_ipv4_session_updated.is_whitelisted,
             WhitelistState::Conforming
         );
         assert_eq!(
-            new_non_conforming_session_updated.is_whitelisted,
+            new_non_conforming_ipv4_session_updated.is_whitelisted,
             WhitelistState::NonConforming
         );
-        assert!(new_non_conforming_session_updated
+        assert!(new_non_conforming_ipv4_session_updated
+            .whitelist_reason
+            .is_some());
+            
+        // Check their states - IPv6
+        assert_eq!(
+            conforming_ipv6_session_updated.is_whitelisted,
+            WhitelistState::Conforming
+        );
+        assert_eq!(
+            new_non_conforming_ipv6_session_updated.is_whitelisted,
+            WhitelistState::NonConforming
+        );
+        assert!(new_non_conforming_ipv6_session_updated
             .whitelist_reason
             .is_some());
 
@@ -2899,7 +3015,7 @@ mod tests {
         // Check if states reset (should go back to Unknown as no whitelist is active)
         capture.update_sessions().await;
         let reset_sessions = capture.get_sessions().await;
-        assert_eq!(reset_sessions.len(), 3);
+        assert_eq!(reset_sessions.len(), 6);
         for session in reset_sessions {
             assert_eq!(session.is_whitelisted, WhitelistState::Unknown);
         }
@@ -2911,174 +3027,6 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_custom_blacklist_recomputation() {
-        let mut capture = LANScanCapture::new();
-        capture.set_filter(SessionFilter::All).await;
-        let self_ips = get_self_ips();
-
-        // Explicitly reset global blacklist state at the beginning of the test
-        blacklists::LISTS.write().await.reset_to_default().await;
-
-        // --- Initial Sessions ---
-        // Session that WILL match the custom blacklist
-        let packet_blacklisted = create_test_packet(
-            IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
-            IpAddr::V4(Ipv4Addr::new(100, 64, 0, 1)),
-            80,
-        );
-        // Session that WILL NOT match the custom blacklist
-        let packet_not_blacklisted = create_test_packet(
-            IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
-            IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)),
-            443,
-        );
-
-        process_parsed_packet(
-            packet_blacklisted.clone(),
-            &capture.sessions,
-            &capture.current_sessions,
-            &self_ips,
-            &capture.filter,
-            None,
-        )
-        .await;
-        process_parsed_packet(
-            packet_not_blacklisted.clone(),
-            &capture.sessions,
-            &capture.current_sessions,
-            &self_ips,
-            &capture.filter,
-            None,
-        )
-        .await;
-
-        // Verify initial state (criticality should be based on DEFAULT lists)
-        let initial_sessions = capture.get_sessions().await;
-        assert_eq!(initial_sessions.len(), 2);
-        // Find sessions by key for clarity
-        let initial_blacklisted = initial_sessions
-            .iter()
-            .find(|s| s.session == packet_blacklisted.session)
-            .expect("Initial blacklisted session not found");
-        let initial_not_blacklisted = initial_sessions
-            .iter()
-            .find(|s| s.session == packet_not_blacklisted.session)
-            .expect("Initial non-blacklisted session not found");
-
-        assert_eq!(initial_blacklisted.criticality, "blacklist:firehol_level1");
-        assert_eq!(initial_not_blacklisted.criticality, "");
-
-        // --- Set Custom Blacklist ---
-        let custom_blacklist_json = r#"{
-            "date": "2024-01-01",
-            "signature": "custom-sig",
-            "blacklists": [{
-                "name": "custom_bad_ips",
-                "ip_ranges": ["100.64.0.0/10"]
-            }]
-        }"#;
-        // set_custom_blacklists triggers recalculate_blacklist_criticality
-        capture.set_custom_blacklists(custom_blacklist_json).await;
-
-        // Verify CloudModel is custom
-        assert!(blacklists::LISTS.read().await.is_custom().await);
-
-        // --- Check Recomputation ---
-        // get_sessions() will return the already recomputed sessions
-        let updated_sessions = capture.get_sessions().await;
-        assert_eq!(updated_sessions.len(), 2);
-
-        let blacklisted_session = updated_sessions
-            .iter()
-            .find(|s| s.session == packet_blacklisted.session)
-            .unwrap();
-        let not_blacklisted_session = updated_sessions
-            .iter()
-            .find(|s| s.session == packet_not_blacklisted.session)
-            .unwrap();
-
-        assert_eq!(blacklisted_session.criticality, "blacklist:custom_bad_ips");
-        assert_eq!(not_blacklisted_session.criticality, "");
-
-        // --- Check New Sessions ---
-        // New blacklisted session
-        let packet_new_blacklisted = create_test_packet(
-            IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
-            IpAddr::V4(Ipv4Addr::new(100, 65, 0, 1)),
-            80,
-        );
-        // New non-blacklisted session
-        let packet_new_not_blacklisted =
-            create_test_packet(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)), IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)), 53);
-
-        // Process new packets - process_parsed_packet checks blacklists for new sessions
-        process_parsed_packet(
-            packet_new_blacklisted.clone(),
-            &capture.sessions,
-            &capture.current_sessions,
-            &self_ips,
-            &capture.filter,
-            None,
-        )
-        .await;
-        process_parsed_packet(
-            packet_new_not_blacklisted.clone(),
-            &capture.sessions,
-            &capture.current_sessions,
-            &self_ips,
-            &capture.filter,
-            None,
-        )
-        .await;
-
-        // Check the criticality of new sessions
-        let final_sessions = capture.get_sessions().await;
-        assert_eq!(final_sessions.len(), 4);
-
-        let new_blacklisted_session = final_sessions
-            .iter()
-            .find(|s| s.session == packet_new_blacklisted.session)
-            .unwrap();
-        let new_not_blacklisted_session = final_sessions
-            .iter()
-            .find(|s| s.session == packet_new_not_blacklisted.session)
-            .unwrap();
-
-        assert_eq!(
-            new_blacklisted_session.criticality,
-            "blacklist:custom_bad_ips"
-        );
-        assert_eq!(new_not_blacklisted_session.criticality, "");
-
-        // --- Reset Blacklist ---
-        // set_custom_blacklists("") triggers reset_to_default -> recalculate_blacklist_criticality
-        capture.set_custom_blacklists("").await;
-        assert!(!blacklists::LISTS.read().await.is_custom().await);
-
-        // Explicitly update sessions after reset before final check
-        capture.update_sessions().await;
-
-        // Check if criticality resets (based on the default list)
-        let reset_sessions = capture.get_sessions().await;
-        assert_eq!(reset_sessions.len(), 4);
-        let previously_blacklisted = reset_sessions
-            .iter()
-            .find(|s| s.session == packet_blacklisted.session)
-            .unwrap();
-        // This assertion depends on the default blacklist content. If the default is empty, it should be "".
-        // Let's assume the default doesn't contain 100.64.0.1.
-        // The panic message indicates it *does* find it in firehol_level1.
-        assert_eq!(
-            previously_blacklisted.criticality,
-            "blacklist:firehol_level1"
-        );
-
-        // Cleanup global state
-        blacklists::LISTS.write().await.reset_to_default().await;
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn test_custom_blacklist_ipv4_ipv6_recomputation() {
         let mut capture = LANScanCapture::new();
         capture.set_filter(SessionFilter::All).await;
         // Use an IpAddr for self_ips helper compatibility
@@ -3167,7 +3115,7 @@ mod tests {
             "signature": "custom-sig",
             "blacklists": [{
                 "name": "custom_bad_ips",
-                "ip_ranges": ["100.64.0.0/10", "2001:db8::/128"]
+                "ip_ranges": ["100.64.0.0/10", "2001:db8::/64"]
             }]
         }"#;
         // set_custom_blacklists triggers recalculate_blacklist_criticality
