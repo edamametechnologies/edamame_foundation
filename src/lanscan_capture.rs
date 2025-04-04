@@ -1668,18 +1668,19 @@ mod tests {
     use chrono::Utc;
     use pnet_packet::tcp::TcpFlags;
     use serial_test::serial;
-    use std::net::{IpAddr, Ipv4Addr};
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr}; // Import Ipv6Addr here
+    use std::str::FromStr; // Import FromStr for Ipv6Addr
     use tokio::time::{sleep, Duration};
     use uuid::Uuid;
 
     // Helper to create a basic SessionPacketData for testing
-    fn create_test_packet(src_ip: Ipv4Addr, dst_ip: Ipv4Addr, dst_port: u16) -> SessionPacketData {
+    fn create_test_packet(src_ip: IpAddr, dst_ip: IpAddr, dst_port: u16) -> SessionPacketData {
         SessionPacketData {
             session: Session {
                 protocol: Protocol::TCP,
-                src_ip: IpAddr::V4(src_ip),
+                src_ip, // Use the provided IpAddr
                 src_port: 12345, // Arbitrary client port
-                dst_ip: IpAddr::V4(dst_ip),
+                dst_ip, // Use the provided IpAddr
                 dst_port,
             },
             packet_length: 100,
@@ -2748,13 +2749,13 @@ mod tests {
         // --- Initial Sessions ---
         // Session that WILL match the custom whitelist
         let packet_conforming = create_test_packet(
-            Ipv4Addr::new(192, 168, 1, 1),
-            Ipv4Addr::new(1, 1, 1, 1),
+            IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
+            IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)),
             443,
         );
         // Session that WILL NOT match the custom whitelist
         let packet_non_conforming =
-            create_test_packet(Ipv4Addr::new(192, 168, 1, 1), Ipv4Addr::new(8, 8, 8, 8), 80);
+            create_test_packet(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)), IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)), 80);
 
         process_parsed_packet(
             packet_conforming.clone(),
@@ -2828,13 +2829,13 @@ mod tests {
         // --- Check New Sessions ---
         // New conforming session
         let packet_new_conforming = create_test_packet(
-            Ipv4Addr::new(192, 168, 1, 1),
-            Ipv4Addr::new(1, 1, 1, 1),
+            IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
+            IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)),
             443,
         );
         // New non-conforming session
         let packet_new_non_conforming =
-            create_test_packet(Ipv4Addr::new(192, 168, 1, 1), Ipv4Addr::new(9, 9, 9, 9), 53);
+            create_test_packet(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)), IpAddr::V4(Ipv4Addr::new(9, 9, 9, 9)), 53);
 
         process_parsed_packet(
             packet_new_conforming.clone(),
@@ -2920,14 +2921,14 @@ mod tests {
         // --- Initial Sessions ---
         // Session that WILL match the custom blacklist
         let packet_blacklisted = create_test_packet(
-            Ipv4Addr::new(192, 168, 1, 1),
-            Ipv4Addr::new(100, 64, 0, 1),
+            IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
+            IpAddr::V4(Ipv4Addr::new(100, 64, 0, 1)),
             80,
         );
         // Session that WILL NOT match the custom blacklist
         let packet_not_blacklisted = create_test_packet(
-            Ipv4Addr::new(192, 168, 1, 1),
-            Ipv4Addr::new(1, 1, 1, 1),
+            IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
+            IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)),
             443,
         );
 
@@ -3001,13 +3002,13 @@ mod tests {
         // --- Check New Sessions ---
         // New blacklisted session
         let packet_new_blacklisted = create_test_packet(
-            Ipv4Addr::new(192, 168, 1, 1),
-            Ipv4Addr::new(100, 65, 0, 1),
+            IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
+            IpAddr::V4(Ipv4Addr::new(100, 65, 0, 1)),
             80,
         );
         // New non-blacklisted session
         let packet_new_not_blacklisted =
-            create_test_packet(Ipv4Addr::new(192, 168, 1, 1), Ipv4Addr::new(8, 8, 8, 8), 53);
+            create_test_packet(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)), IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)), 53);
 
         // Process new packets - process_parsed_packet checks blacklists for new sessions
         process_parsed_packet(
@@ -3080,7 +3081,8 @@ mod tests {
     async fn test_custom_blacklist_ipv4_ipv6_recomputation() {
         let mut capture = LANScanCapture::new();
         capture.set_filter(SessionFilter::All).await;
-        let self_ips = get_self_ips();
+        // Use an IpAddr for self_ips helper compatibility
+        let self_ips = vec![IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))];
 
         // Explicitly reset global blacklist state at the beginning of the test
         blacklists::LISTS.write().await.reset_to_default().await;
@@ -3088,19 +3090,19 @@ mod tests {
         // --- Initial Sessions ---
         // Session that WILL match the custom blacklist
         let packet_blacklisted_ipv4 = create_test_packet(
-            Ipv4Addr::new(192, 168, 1, 1),
-            Ipv4Addr::new(100, 64, 0, 1),
+            IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)), // Use IpAddr::V4
+            IpAddr::V4(Ipv4Addr::new(100, 64, 0, 1)), // Use IpAddr::V4
             80,
         );
         let packet_blacklisted_ipv6 = create_test_packet(
-            Ipv6Addr::from_str("2001:db8::1").unwrap(),
-            Ipv6Addr::from_str("2001:db8::2").unwrap(),
+            IpAddr::V6(Ipv6Addr::from_str("2001:db8::1").unwrap()), // Use IpAddr::V6
+            IpAddr::V6(Ipv6Addr::from_str("2001:db8::2").unwrap()), // Use IpAddr::V6
             80,
         );
         // Session that WILL NOT match the custom blacklist
         let packet_not_blacklisted = create_test_packet(
-            Ipv4Addr::new(192, 168, 1, 1),
-            Ipv4Addr::new(1, 1, 1, 1),
+            IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)), // Use IpAddr::V4
+            IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)),    // Use IpAddr::V4
             443,
         );
 
@@ -3205,18 +3207,18 @@ mod tests {
         // --- Check New Sessions ---
         // New blacklisted session
         let packet_new_blacklisted_ipv4 = create_test_packet(
-            Ipv4Addr::new(192, 168, 1, 1),
-            Ipv4Addr::new(100, 65, 0, 1),
+            IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)), // Use IpAddr::V4
+            IpAddr::V4(Ipv4Addr::new(100, 65, 0, 1)), // Use IpAddr::V4
             80,
         );
         let packet_new_blacklisted_ipv6 = create_test_packet(
-            Ipv6Addr::from_str("2001:db8::1").unwrap(),
-            Ipv6Addr::from_str("2001:db8::3").unwrap(),
+            IpAddr::V6(Ipv6Addr::from_str("2001:db8::1").unwrap()), // Use IpAddr::V6
+            IpAddr::V6(Ipv6Addr::from_str("2001:db8::3").unwrap()), // Use IpAddr::V6
             80,
         );
         // New non-blacklisted session
         let packet_new_not_blacklisted =
-            create_test_packet(Ipv4Addr::new(192, 168, 1, 1), Ipv4Addr::new(8, 8, 8, 8), 53);
+            create_test_packet(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)), IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)), 53);
 
         // Process new packets - process_parsed_packet checks blacklists for new sessions
         process_parsed_packet(
@@ -3367,32 +3369,32 @@ mod tests {
         // Test getting default whitelists
         let whitelists_json = capture
             .get_whitelists()
-            .await
-            .expect("Should get whitelists JSON");
+            .await;
         let whitelists: WhitelistsJSON =
             serde_json::from_str(&whitelists_json).expect("Should deserialize whitelists");
         assert!(
             !whitelists.whitelists.is_empty(),
             "Default whitelists should not be empty"
         );
+        // Handle Option<String> for signature
         assert!(
-            !whitelists.signature.contains("custom"),
+            !whitelists.signature.map_or(false, |s| s.contains("custom")), // map_or for Option<String>
             "Default signature should not contain 'custom'"
         );
 
         // Test getting default blacklists
         let blacklists_json = capture
             .get_blacklists()
-            .await
-            .expect("Should get blacklists JSON");
+            .await;
         let blacklists: BlacklistsJSON =
             serde_json::from_str(&blacklists_json).expect("Should deserialize blacklists");
         assert!(
             !blacklists.blacklists.is_empty(),
             "Default blacklists should not be empty"
         );
+        // Handle String for signature
         assert!(
-            !blacklists.signature.contains("custom"),
+            !blacklists.signature.contains("custom"), // contains for String
             "Default signature should not contain 'custom'"
         );
     }
@@ -3409,17 +3411,20 @@ mod tests {
         capture.set_whitelist("github").await;
         assert_eq!(capture.get_whitelist_name().await, "github");
 
-        // Set custom whitelist
-        let custom_whitelist = Whitelist {
-            name: "custom_whitelist".to_string(),
-            endpoints: vec![Endpoint {
-                ip: "1.1.1.1".to_string(),
-                port: 443,
-                protocol: "TCP".to_string(),
-            }],
-        };
-        let custom_whitelist_json = serde_json::to_string(&custom_whitelist).unwrap();
-        capture.set_custom_whitelists(&custom_whitelist_json).await;
+        // Set custom whitelist using a JSON string
+        let custom_whitelist_json = r#"{
+            "date": "2024-01-01",
+            "signature": "custom-sig-test",
+            "whitelists": [{
+                "name": "custom_whitelist",
+                "endpoints": [{
+                    "ip": "1.1.1.1",
+                    "port": 443,
+                    "protocol": "TCP"
+                }]
+            }]
+        }"#;
+        capture.set_custom_whitelists(custom_whitelist_json).await;
         assert_eq!(capture.get_whitelist_name().await, "custom_whitelist");
 
         // Reset custom whitelists
