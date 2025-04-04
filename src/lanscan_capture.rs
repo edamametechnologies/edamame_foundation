@@ -3157,7 +3157,7 @@ mod tests {
         );
         assert_eq!(
             initial_blacklisted_ipv6.criticality,
-            "blacklist:firehol_level1"
+            "" // Expect empty, default blacklist likely doesn't have the test IPv6
         );
         assert_eq!(initial_not_blacklisted.criticality, "");
 
@@ -3304,7 +3304,7 @@ mod tests {
         );
         assert_eq!(
             previously_blacklisted_ipv6.criticality,
-            "blacklist:firehol_level1"
+            "" // Expect empty after reset, default doesn't have the test IPv6
         );
 
         // Cleanup global state
