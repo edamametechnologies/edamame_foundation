@@ -183,7 +183,7 @@ impl LANScanCapture {
 
         // If switching to a standard (non-custom) whitelist, reset the CloudModel
         if !is_custom {
-            whitelists::LISTS.write().await.reset_to_default().await;
+            whitelists::LISTS.reset_to_default().await;
         }
 
         // Reset the internal whitelist state tracking
@@ -313,14 +313,14 @@ impl LANScanCapture {
     }
 
     pub async fn get_whitelists(&self) -> String {
-        let list_model = whitelists::LISTS.read().await;
+        let list_model = &whitelists::LISTS;
         let data = list_model.data.read().await;
         let json_data = WhitelistsJSON::from(data.clone()); // Clone the data inside the lock
         serde_json::to_string(&json_data).unwrap_or_default()
     }
 
     pub async fn get_blacklists(&self) -> String {
-        let list_model = blacklists::LISTS.read().await;
+        let list_model = &blacklists::LISTS;
         let data = list_model.data.read().await;
         let json_data = BlacklistsJSON::from(data.clone()); // Clone the data inside the lock
         serde_json::to_string(&json_data).unwrap_or_default()
@@ -331,7 +331,7 @@ impl LANScanCapture {
         if whitelist_json.is_empty() {
             {
                 // Acquire lock, reset, release lock
-                let list_model = whitelists::LISTS.write().await;
+                let list_model = &whitelists::LISTS;
                 list_model.reset_to_default().await;
             } // Lock released
 
@@ -352,7 +352,7 @@ impl LANScanCapture {
                 let whitelist = Whitelists::new_from_json(whitelist_data);
                 // Set custom data within a minimal lock scope
                 {
-                    let list_model = whitelists::LISTS.write().await;
+                    let list_model = &whitelists::LISTS;
                     list_model.set_custom_data(whitelist).await;
                 } // Lock released
 
@@ -363,7 +363,7 @@ impl LANScanCapture {
                 error!("Error setting custom whitelists: {}", e);
                 // Optionally reset to default on error?
                 {
-                    let list_model = whitelists::LISTS.write().await;
+                    let list_model = &whitelists::LISTS;
                     list_model.reset_to_default().await;
                 } // Lock released
                 *self.whitelist_name.write().await = "".to_string();
@@ -996,7 +996,7 @@ impl LANScanCapture {
 
         // Check if the currently configured whitelist (in the model) is valid
         let is_custom = whitelist_name == "custom_whitelist";
-        let model_is_custom = whitelists::LISTS.read().await.is_custom().await;
+        let model_is_custom = whitelists::LISTS.is_custom().await;
 
         if (is_custom && !model_is_custom) || (!is_custom && model_is_custom) {
             warn!(
@@ -1378,10 +1378,8 @@ impl LANScanCapture {
         // Finally update whitelist information
         let whitelist_name = self.whitelist_name.read().await.clone();
         // Check name or if model is custom
-        let list_model = whitelists::LISTS.read().await;
+        let list_model = &whitelists::LISTS;
         if !whitelist_name.is_empty() || list_model.is_custom().await {
-            // Drop the read lock before calling the async function
-            drop(list_model);
             Self::check_whitelisted_destinations(
                 &whitelist_name,
                 &self.whitelist_conformance,
@@ -1519,7 +1517,7 @@ impl LANScanCapture {
     pub async fn set_custom_blacklists(&mut self, blacklist_json: &str) {
         // Clear the custom blacklists if the JSON is empty
         if blacklist_json.is_empty() {
-            blacklists::LISTS.write().await.reset_to_default().await;
+            blacklists::LISTS.reset_to_default().await;
             self.recalculate_blacklist_criticality().await; // Recalculate after reset
             return;
         }
@@ -1529,16 +1527,12 @@ impl LANScanCapture {
         match blacklist_result {
             Ok(blacklist_data) => {
                 let blacklist = Blacklists::new_from_json(blacklist_data);
-                blacklists::LISTS
-                    .write()
-                    .await
-                    .set_custom_data(blacklist)
-                    .await;
+                blacklists::LISTS.set_custom_data(blacklist).await;
             }
             Err(e) => {
                 error!("Error setting custom blacklists: {}", e);
                 // Optionally reset to default on error?
-                blacklists::LISTS.write().await.reset_to_default().await;
+                blacklists::LISTS.reset_to_default().await;
             }
         }
         // Recalculate criticality after setting custom lists
@@ -1550,8 +1544,8 @@ impl LANScanCapture {
         info!("Recalculating blacklist criticality for all sessions");
 
         // Get a read lock on the current blacklist data ONCE
-        let list_model_guard = blacklists::LISTS.read().await;
-        let current_blacklist_data = list_model_guard.data.read().await;
+        let list = &blacklists::LISTS;
+        let current_blacklist_data = list.data.read().await;
 
         // Get all sessions
         let sessions = self.sessions.clone();
@@ -1637,7 +1631,6 @@ impl LANScanCapture {
         }
         // Drop the lock AFTER the loop finishes
         drop(current_blacklist_data);
-        drop(list_model_guard);
     }
 }
 
@@ -2271,8 +2264,8 @@ mod tests {
         println!("Setting up capture test...");
         let mut capture = LANScanCapture::new();
         // Reset global state before starting
-        whitelists::LISTS.write().await.reset_to_default().await;
-        blacklists::LISTS.write().await.reset_to_default().await;
+        whitelists::LISTS.reset_to_default().await;
+        blacklists::LISTS.reset_to_default().await;
 
         let default_interface = match get_default_interface() {
             Some(interface) => interface,
@@ -2395,7 +2388,7 @@ mod tests {
         println!("Applying custom blacklist...");
         capture.set_custom_blacklists(&custom_blacklist_json).await;
         assert!(
-            blacklists::LISTS.read().await.is_custom().await,
+            &blacklists::LISTS.is_custom().await,
             "Blacklist model should be custom"
         );
         println!("Custom blacklist applied. Waiting 15s for initial processing...");
@@ -2464,8 +2457,8 @@ mod tests {
         println!("Resetting global whitelist/blacklist state...");
         capture.set_custom_whitelists("").await; // Resets name and triggers model reset if needed
         capture.set_custom_blacklists("").await; // Triggers model reset
-        whitelists::LISTS.write().await.reset_to_default().await;
-        blacklists::LISTS.write().await.reset_to_default().await;
+        whitelists::LISTS.reset_to_default().await;
+        blacklists::LISTS.reset_to_default().await;
         println!("Capture test completed successfully.");
     }
 
@@ -2495,11 +2488,7 @@ mod tests {
         let blacklists = Blacklists::new_from_json(blacklists_json);
 
         // Override global blacklists with our test data
-        blacklists::LISTS
-            .write()
-            .await
-            .overwrite_with_test_data(blacklists)
-            .await;
+        blacklists::LISTS.overwrite_with_test_data(blacklists).await;
 
         // Simulate an outbound packet to a known blacklisted IP (in firehol_level1)
         // Using 100.64.0.0/10 from the blacklist (Carrier-grade NAT range)
@@ -2564,12 +2553,12 @@ mod tests {
         capture.set_custom_blacklists(&json_str).await;
 
         // Verify the custom blacklist exists in the CloudModel
-        assert!(blacklists::LISTS.read().await.is_custom().await);
+        assert!(&blacklists::LISTS.is_custom().await);
 
         // Clear custom blacklists
         capture.set_custom_blacklists("").await;
 
-        assert!(!blacklists::LISTS.read().await.is_custom().await);
+        assert!(!&blacklists::LISTS.is_custom().await);
     }
 
     #[tokio::test]
@@ -2602,8 +2591,6 @@ mod tests {
         });
 
         blacklists::LISTS
-            .write()
-            .await
             .overwrite_with_test_data(empty_blacklists)
             .await;
 
@@ -2611,7 +2598,7 @@ mod tests {
         capture.set_custom_blacklists(&json_str).await;
 
         // Verify the custom blacklist exists in the CloudModel
-        assert!(blacklists::LISTS.read().await.is_custom().await);
+        assert!(&blacklists::LISTS.is_custom().await);
 
         // Simulate a packet to 1.1.1.1 (which is in our custom blacklist)
         let session_packet = SessionPacketData {
@@ -2648,7 +2635,7 @@ mod tests {
         assert_eq!(session_info.criticality, "blacklist:custom_test_blacklist");
 
         // Reset to default after test
-        blacklists::LISTS.write().await.reset_to_default().await;
+        blacklists::LISTS.reset_to_default().await;
     }
 
     #[tokio::test]
@@ -2687,11 +2674,7 @@ mod tests {
         let blacklists = Blacklists::new_from_json(blacklists_json);
 
         // Override global blacklists with our test data
-        blacklists::LISTS
-            .write()
-            .await
-            .overwrite_with_test_data(blacklists)
-            .await;
+        blacklists::LISTS.overwrite_with_test_data(blacklists).await;
 
         // Simulate an outbound packet to an IP that should be in both blacklists
         let session_packet = SessionPacketData {
@@ -2732,7 +2715,7 @@ mod tests {
         );
 
         // Reset to default after test
-        blacklists::LISTS.write().await.reset_to_default().await;
+        blacklists::LISTS.reset_to_default().await;
     }
 
     #[tokio::test]
@@ -2743,7 +2726,7 @@ mod tests {
         let self_ips = get_self_ips();
 
         // Reset global state before test
-        whitelists::LISTS.write().await.reset_to_default().await;
+        whitelists::LISTS.reset_to_default().await;
         *capture.whitelist_name.write().await = "".to_string(); // Ensure no initial whitelist
 
         // --- Initial Sessions ---
@@ -2846,7 +2829,7 @@ mod tests {
         capture.set_custom_whitelists(custom_whitelist_json).await;
 
         // Verify CloudModel is custom and name is set
-        assert!(whitelists::LISTS.read().await.is_custom().await);
+        assert!(&whitelists::LISTS.is_custom().await);
         assert_eq!(*capture.whitelist_name.read().await, "custom_whitelist");
 
         // --- Check Recomputation ---
@@ -3015,7 +2998,7 @@ mod tests {
 
         // --- Reset Whitelist ---
         capture.set_custom_whitelists("").await;
-        assert!(!whitelists::LISTS.read().await.is_custom().await);
+        assert!(!&whitelists::LISTS.is_custom().await);
         assert_eq!(*capture.whitelist_name.read().await, "");
 
         // Check if states reset (should go back to Unknown as no whitelist is active)
@@ -3027,7 +3010,7 @@ mod tests {
         }
 
         // Cleanup global state
-        whitelists::LISTS.write().await.reset_to_default().await;
+        whitelists::LISTS.reset_to_default().await;
     }
 
     #[tokio::test]
@@ -3039,7 +3022,7 @@ mod tests {
         let self_ips = vec![IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))];
 
         // Explicitly reset global blacklist state at the beginning of the test
-        blacklists::LISTS.write().await.reset_to_default().await;
+        blacklists::LISTS.reset_to_default().await;
 
         // --- Initial Sessions ---
         // Session that WILL match the custom blacklist
@@ -3128,7 +3111,7 @@ mod tests {
         capture.set_custom_blacklists(custom_blacklist_json).await;
 
         // Verify CloudModel is custom
-        assert!(blacklists::LISTS.read().await.is_custom().await);
+        assert!(&blacklists::LISTS.is_custom().await);
 
         // --- Check Recomputation ---
         // get_sessions() will return the already recomputed sessions
@@ -3236,7 +3219,7 @@ mod tests {
         // --- Reset Blacklist ---
         // set_custom_blacklists("") triggers reset_to_default -> recalculate_blacklist_criticality
         capture.set_custom_blacklists("").await;
-        assert!(!blacklists::LISTS.read().await.is_custom().await);
+        assert!(!&blacklists::LISTS.is_custom().await);
 
         // Explicitly update sessions after reset before final check
         capture.update_sessions().await;
@@ -3265,7 +3248,7 @@ mod tests {
         );
 
         // Cleanup global state
-        blacklists::LISTS.write().await.reset_to_default().await;
+        blacklists::LISTS.reset_to_default().await;
     }
 
     #[tokio::test]
@@ -3385,6 +3368,6 @@ mod tests {
         assert_eq!(capture.get_whitelist_name().await, ""); // Should reset to empty
 
         // Cleanup global state
-        whitelists::LISTS.write().await.reset_to_default().await;
+        whitelists::LISTS.reset_to_default().await;
     }
 }

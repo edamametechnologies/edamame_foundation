@@ -1,6 +1,5 @@
 use crate::cloud_model::*;
 use crate::lanscan_sessions::SessionInfo;
-use crate::rwlock::CustomRwLock;
 use crate::whitelists_db::WHITELISTS;
 use anyhow::{anyhow, Context, Result};
 use chrono;
@@ -209,22 +208,20 @@ impl Whitelists {
 
 // Global LISTS Variable using lazy_static! and Tokio's RwLock
 lazy_static! {
-    pub static ref LISTS: CustomRwLock<CloudModel<Whitelists>> = {
+    pub static ref LISTS: CloudModel<Whitelists> = {
         let model = CloudModel::initialize(WHITELISTS_FILE_NAME.to_string(), WHITELISTS, |data| {
             let whitelist_info_json: WhitelistsJSON =
                 serde_json::from_str(data).with_context(|| "Failed to parse JSON data")?;
             Ok(Whitelists::new_from_json(whitelist_info_json))
         })
         .expect("Failed to initialize CloudModel");
-        CustomRwLock::new(model)
+        model
     };
 }
 
 /// Checks if a whitelist name exists in the current model (default or custom).
 pub async fn is_valid_whitelist(whitelist_name: &str) -> bool {
     LISTS
-        .read()
-        .await
         .data
         .read()
         .await
@@ -264,8 +261,7 @@ pub async fn is_session_in_whitelist(
     visited.insert(whitelist_name.to_string());
 
     // Access the current whitelist data (could be default or custom)
-    let list_model = LISTS.read().await;
-    let list_data = list_model.data.read().await;
+    let list_data = LISTS.data.read().await;
 
     let endpoints = match list_data.get_all_endpoints(whitelist_name, &mut visited) {
         Ok(eps) => eps,
@@ -277,14 +273,12 @@ pub async fn is_session_in_whitelist(
             warn!("{}", error_msg);
             // Explicitly drop guards before returning
             drop(list_data);
-            drop(list_model);
             return (false, Some(error_msg));
         }
     };
 
     // Drop the guards as they are no longer needed
     drop(list_data);
-    drop(list_model);
 
     if endpoints.is_empty() {
         return (
@@ -612,11 +606,8 @@ fn protocol_matches(session_protocol: &str, whitelist_protocol: &Option<String>)
 pub async fn update(branch: &str, force: bool) -> Result<UpdateStatus> {
     info!("Starting whitelists update from backend");
 
-    // Acquire lock on LISTS
-    let model = LISTS.read().await;
-
-    // Perform the update
-    let status = model
+    // Perform the update directly on the model
+    let status = LISTS
         .update(branch, force, |data| {
             let whitelist_info_json: WhitelistsJSON =
                 serde_json::from_str(data).with_context(|| "Failed to parse JSON data")?;
@@ -696,11 +687,7 @@ mod tests {
         };
 
         let whitelists = Whitelists::new_from_json(test_whitelist_json);
-        LISTS
-            .write()
-            .await
-            .overwrite_with_test_data(whitelists)
-            .await;
+        LISTS.overwrite_with_test_data(whitelists).await;
     }
 
     #[tokio::test]
@@ -793,11 +780,7 @@ mod tests {
         };
 
         let whitelists = Whitelists::new_from_json(test_whitelist_json);
-        LISTS
-            .write()
-            .await
-            .overwrite_with_test_data(whitelists)
-            .await;
+        LISTS.overwrite_with_test_data(whitelists).await;
 
         // Test prefix wildcard (*.example.com)
         assert!(
@@ -876,11 +859,7 @@ mod tests {
         };
 
         let prefix_whitelists = Whitelists::new_from_json(test_prefix_whitelist_json);
-        LISTS
-            .write()
-            .await
-            .overwrite_with_test_data(prefix_whitelists)
-            .await;
+        LISTS.overwrite_with_test_data(prefix_whitelists).await;
 
         assert!(
             !is_session_in_whitelist(
@@ -1056,11 +1035,7 @@ mod tests {
         };
 
         let whitelists = Whitelists::new_from_json(test_whitelist_json);
-        LISTS
-            .write()
-            .await
-            .overwrite_with_test_data(whitelists)
-            .await;
+        LISTS.overwrite_with_test_data(whitelists).await;
 
         // Test that endpoints are correctly aggregated without infinite recursion
         assert!(
@@ -1139,11 +1114,7 @@ mod tests {
         };
 
         let whitelists = Whitelists::new_from_json(test_whitelist_json);
-        LISTS
-            .write()
-            .await
-            .overwrite_with_test_data(whitelists)
-            .await;
+        LISTS.overwrite_with_test_data(whitelists).await;
 
         // Should match based on domain even with mismatched IP and AS info
         assert!(
@@ -1188,11 +1159,7 @@ mod tests {
         };
 
         let whitelists = Whitelists::new_from_json(test_whitelist_json);
-        LISTS
-            .write()
-            .await
-            .overwrite_with_test_data(whitelists)
-            .await;
+        LISTS.overwrite_with_test_data(whitelists).await;
 
         // Should match based on IP even with mismatched AS info
         assert!(
@@ -1237,11 +1204,7 @@ mod tests {
         };
 
         let whitelists = Whitelists::new_from_json(test_whitelist_json);
-        LISTS
-            .write()
-            .await
-            .overwrite_with_test_data(whitelists)
-            .await;
+        LISTS.overwrite_with_test_data(whitelists).await;
 
         // Should match when only AS info matches
         assert!(
@@ -1304,11 +1267,7 @@ mod tests {
         };
 
         let whitelists = Whitelists::new_from_json(test_whitelist_json);
-        LISTS
-            .write()
-            .await
-            .overwrite_with_test_data(whitelists)
-            .await;
+        LISTS.overwrite_with_test_data(whitelists).await;
 
         // Should match on domain regardless of other criteria
         assert!(
@@ -1402,11 +1361,7 @@ mod tests {
         };
 
         let whitelists = Whitelists::new_from_json(test_whitelist_json);
-        LISTS
-            .write()
-            .await
-            .overwrite_with_test_data(whitelists)
-            .await;
+        LISTS.overwrite_with_test_data(whitelists).await;
 
         // Test IPv4 CIDR matching
         assert!(
@@ -1487,11 +1442,7 @@ mod tests {
         };
 
         let whitelists = Whitelists::new_from_json(test_whitelist_json);
-        LISTS
-            .write()
-            .await
-            .overwrite_with_test_data(whitelists)
-            .await;
+        LISTS.overwrite_with_test_data(whitelists).await;
 
         // Test case-insensitive protocol matching
         assert!(
@@ -1543,11 +1494,7 @@ mod tests {
         };
 
         let whitelists = Whitelists::new_from_json(test_whitelist_json);
-        LISTS
-            .write()
-            .await
-            .overwrite_with_test_data(whitelists)
-            .await;
+        LISTS.overwrite_with_test_data(whitelists).await;
 
         // Test empty whitelist behavior
         let (matches, reason) = is_session_in_whitelist(

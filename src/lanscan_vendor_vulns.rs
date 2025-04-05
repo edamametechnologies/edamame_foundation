@@ -1,7 +1,6 @@
 use crate::cloud_model::*;
 use crate::lanscan_vendor_vulns_db::*;
 use crate::lanscan_vulnerability_info::*;
-use crate::rwlock::CustomRwLock;
 use anyhow::{Context, Result};
 use dashmap::DashMap;
 use lazy_static::lazy_static;
@@ -61,20 +60,19 @@ impl VulnerabilityInfoList {
 }
 
 lazy_static! {
-    pub static ref VULNS: CustomRwLock<CloudModel<VulnerabilityInfoList>> = {
+    pub static ref VULNS: CloudModel<VulnerabilityInfoList> = {
         let model = CloudModel::initialize(VENDOR_VULNS_NAME.to_string(), VENDOR_VULNS, |data| {
             let vuln_info_json: VulnerabilityVendorInfoListJSON =
                 serde_json::from_str(data).with_context(|| "Failed to parse JSON data")?;
             Ok(VulnerabilityInfoList::new_from_json(&vuln_info_json))
         })
         .expect("Failed to initialize CloudModel");
-        CustomRwLock::new(model)
+        model
     };
 }
 
 pub async fn get_vendors() -> Vec<String> {
-    let vulns_lock = VULNS.read().await;
-    let vendors = vulns_lock
+    let vendors = VULNS
         .data
         .read()
         .await
@@ -86,8 +84,7 @@ pub async fn get_vendors() -> Vec<String> {
 }
 
 pub async fn get_description_from_vendor(vendor: &str) -> String {
-    let vulns_lock = VULNS.read().await;
-    let description = vulns_lock
+    let description = VULNS
         .data
         .read()
         .await
@@ -98,8 +95,7 @@ pub async fn get_description_from_vendor(vendor: &str) -> String {
 }
 
 pub async fn get_vulns_of_vendor(vendor: &str) -> Vec<VulnerabilityInfo> {
-    let vulns_lock = VULNS.read().await;
-    let vendor_vulns = &vulns_lock.data.read().await.vendor_vulns;
+    let vendor_vulns = &VULNS.data.read().await.vendor_vulns;
 
     let mut vendor_name = vendor.to_string();
     while !vendor_name.is_empty() {
@@ -126,8 +122,7 @@ pub async fn get_vulns_names_of_vendor(vendor: &str) -> Vec<String> {
 pub async fn update(branch: &str, force: bool) -> Result<UpdateStatus> {
     info!("Starting vendor vulns update from backend");
 
-    let vulns_lock = VULNS.read().await;
-    let status = vulns_lock
+    let status = VULNS
         .update(branch, force, |data| {
             let vuln_info_json: VulnerabilityVendorInfoListJSON = serde_json::from_str(data)?;
             Ok(VulnerabilityInfoList::new_from_json(&vuln_info_json))
@@ -197,11 +192,9 @@ mod tests {
 
         // Acquire a write lock to modify the signature
         {
-            let vulns_write = VULNS.write().await;
-            let mut data_write = vulns_write.data.write().await;
-
-            // Modify the signature to a string of zeros
-            data_write.set_signature("00000000000000000000000000000000".to_string());
+            VULNS
+                .set_signature("00000000000000000000000000000000".to_string())
+                .await;
         }
 
         // Perform the update
@@ -214,7 +207,7 @@ mod tests {
         );
 
         // Check that the signature is no longer zeros
-        let current_signature = VULNS.read().await.data.read().await.get_signature();
+        let current_signature = VULNS.get_signature().await;
         assert_ne!(
             current_signature, "00000000000000000000000000000000",
             "Signature should have been updated"
@@ -233,7 +226,7 @@ mod tests {
         let branch = "nonexistent-branch";
 
         // Get the current signature
-        let original_signature = VULNS.read().await.data.read().await.get_signature();
+        let original_signature = VULNS.get_signature().await;
 
         // Attempt to perform an update from a nonexistent branch
         let result = update(branch, false).await;
@@ -242,7 +235,7 @@ mod tests {
         assert!(result.is_err(), "Update should have failed");
 
         // Check that the signature has not changed
-        let current_signature = VULNS.read().await.data.read().await.get_signature();
+        let current_signature = VULNS.get_signature().await;
         assert_eq!(
             current_signature, original_signature,
             "Signature should not have changed after failed update"

@@ -535,11 +535,7 @@ mod tests {
         let blacklists = Blacklists::new_from_json(blacklists_json);
 
         // Override global blacklists with our test data to ensure we only have our test blacklist
-        LISTS
-            .write()
-            .await
-            .overwrite_with_test_data(blacklists.clone())
-            .await;
+        LISTS.overwrite_with_test_data(blacklists.clone()).await;
 
         // Create session data with a blacklisted IP (8.8.8.8)
         let session_data = SessionPacketData {
@@ -610,11 +606,7 @@ mod tests {
         let blacklists = Blacklists::new_from_json(blacklists_json);
 
         // Override global blacklists with our test data to ensure we only have our test blacklist
-        LISTS
-            .write()
-            .await
-            .overwrite_with_test_data(blacklists.clone())
-            .await;
+        LISTS.overwrite_with_test_data(blacklists.clone()).await;
 
         // Create session data with a non-blacklisted IP
         let session_data = SessionPacketData {

@@ -258,7 +258,7 @@ pub async fn rpc_run(
             let username = arg2;
 
             // Lock the threats object
-            let metrics = THREATS.read().await;
+            let metrics = &THREATS;
             // Get a copy of the current signature
             let current_signature = metrics.get_signature().await;
             // Force update if signature mismatch
