@@ -1,7 +1,6 @@
 use crate::cloud_model::*;
 use crate::lanscan_port_info::*;
 use crate::lanscan_profiles_db::*;
-use crate::rwlock::CustomRwLock;
 use anyhow::{Context, Result};
 use dashmap::DashMap;
 use lazy_static::lazy_static;
@@ -79,14 +78,14 @@ impl DeviceTypeList {
 }
 
 lazy_static! {
-    pub static ref PROFILES: CustomRwLock<CloudModel<DeviceTypeList>> = {
+    pub static ref PROFILES: CloudModel<DeviceTypeList> = {
         let model = CloudModel::initialize(PROFILES_NAME.to_string(), DEVICE_PROFILES, |data| {
             let profiles_list: DeviceTypeListJSON =
                 serde_json::from_str(data).with_context(|| "Failed to parse JSON data")?;
             Ok(DeviceTypeList::new_from_json(profiles_list))
         })
         .expect("Failed to initialize CloudModel");
-        CustomRwLock::new(model)
+        model
     };
 }
 
@@ -117,10 +116,8 @@ pub async fn device_type(
         .map(|info| info.banner.to_lowercase())
         .collect();
 
-    // Acquire read lock on PROFILES
-    let profiles_lock = PROFILES.read().await;
-
-    for profile in profiles_lock.data.read().await.profiles.iter() {
+    let data_lock = PROFILES.data.read().await;
+    for profile in data_lock.profiles.iter() {
         for condition in &profile.value().conditions {
             if match_condition(
                 condition,
@@ -258,8 +255,7 @@ fn match_condition(
 pub async fn update(branch: &str, force: bool) -> Result<UpdateStatus> {
     info!("Starting profiles update from backend");
 
-    let profiles_lock = PROFILES.read().await;
-    let status = profiles_lock
+    let status = PROFILES
         .update(branch, force, |data| {
             let profiles_list: DeviceTypeListJSON =
                 serde_json::from_str(data).with_context(|| "Failed to parse JSON data")?;
@@ -403,11 +399,9 @@ mod tests {
 
         // Acquire a write lock to modify the signature
         {
-            let profiles_write = PROFILES.write().await;
-            let mut data_write = profiles_write.data.write().await;
-
-            // Modify the signature to a string of zeros
-            data_write.set_signature("00000000000000000000000000000000".to_string());
+            PROFILES
+                .set_signature("00000000000000000000000000000000".to_string())
+                .await;
         }
 
         // Perform the update
@@ -420,7 +414,7 @@ mod tests {
         );
 
         // Check that the signature is no longer zeros
-        let current_signature = PROFILES.read().await.data.read().await.get_signature();
+        let current_signature = PROFILES.get_signature().await;
         assert_ne!(
             current_signature, "00000000000000000000000000000000",
             "Signature should have been updated"
@@ -439,7 +433,7 @@ mod tests {
         let branch = "nonexistent-branch";
 
         // Get the current signature
-        let original_signature = PROFILES.read().await.data.read().await.get_signature();
+        let original_signature = PROFILES.get_signature().await;
 
         // Attempt to perform an update from a nonexistent branch
         let result = update(branch, false).await;
@@ -448,7 +442,7 @@ mod tests {
         assert!(result.is_err(), "Update should have failed");
 
         // Check that the signature has not changed
-        let current_signature = PROFILES.read().await.data.read().await.get_signature();
+        let current_signature = PROFILES.get_signature().await;
         assert_eq!(
             current_signature, original_signature,
             "Signature should not have changed after failed update"

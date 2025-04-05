@@ -1,5 +1,4 @@
 use crate::cloud_model::*;
-use crate::rwlock::CustomRwLock;
 use crate::threat::*;
 use crate::threat_metrics_android::*;
 use crate::threat_metrics_ios::*;
@@ -33,8 +32,7 @@ fn get_platform() -> &'static str {
 
 lazy_static! {
     // Global THREATS variable using CloudModel and a custom RwLock
-    pub static ref THREATS: CustomRwLock<CloudModel<ThreatMetrics>> = {
-
+    pub static ref THREATS: CloudModel<ThreatMetrics> = {
         // Determine the built-in data and model name
         let builtin_data = get_builtin_version(get_platform()).expect("Unsupported platform");
         let model_name = get_model_name(get_platform()).expect("Unsupported platform");
@@ -51,7 +49,7 @@ lazy_static! {
         )
         .expect("Failed to initialize CloudModel");
 
-        CustomRwLock::new(model)
+        model
     };
 }
 
@@ -159,11 +157,9 @@ pub async fn update(branch: &str, force: bool, platform: &str) -> Result<UpdateS
         platform, branch
     );
 
-    // Acquire read lock on THREATS
-    let model = THREATS.read().await;
-
+    // Access the model directly now
     // Perform the update
-    let status = model
+    let status = THREATS
         .update(branch, force, |data| {
             let threat_metrics_json: ThreatMetricsJSON =
                 serde_json::from_str(data).with_context(|| "Failed to parse JSON data")?;
@@ -186,7 +182,7 @@ pub async fn update(branch: &str, force: bool, platform: &str) -> Result<UpdateS
 }
 
 pub async fn get_threat_metrics() -> ThreatMetrics {
-    THREATS.read().await.data.read().await.clone()
+    THREATS.data.read().await.clone()
 }
 
 // Tests
@@ -204,7 +200,7 @@ mod tests {
     #[serial]
     async fn test_builtin_version() {
         setup();
-        let builtin = THREATS.read().await.clone();
+        let builtin = THREATS.clone();
         assert!(
             !builtin.get_signature().await.is_empty(),
             "Signature should not be empty"
@@ -247,11 +243,9 @@ mod tests {
 
         // Acquire a write lock to modify the signature
         {
-            let threats_write = THREATS.write().await;
-            let mut data_write = threats_write.data.write().await;
-
-            // Modify the signature to a string of zeros
-            data_write.set_signature("00000000000000000000000000000000".to_string());
+            THREATS
+                .set_signature("00000000000000000000000000000000".to_string())
+                .await;
         }
 
         // Perform the update
@@ -265,7 +259,7 @@ mod tests {
         );
 
         // Check that the signature is no longer zeros
-        let current_signature = THREATS.read().await.data.read().await.get_signature();
+        let current_signature = THREATS.get_signature().await;
         assert_ne!(
             current_signature, "00000000000000000000000000000000",
             "Signature should have been updated"
@@ -284,7 +278,7 @@ mod tests {
         let branch = "nonexistent-branch";
 
         // Get the current signature
-        let original_signature = THREATS.read().await.data.read().await.get_signature();
+        let original_signature = THREATS.get_signature().await;
 
         // Attempt to perform an update from a nonexistent branch
         let result = update(branch, false, "").await;
@@ -293,7 +287,7 @@ mod tests {
         assert!(result.is_err(), "Update should have failed");
 
         // Check that the signature has not changed
-        let current_signature = THREATS.read().await.data.read().await.get_signature();
+        let current_signature = THREATS.get_signature().await;
         assert_eq!(
             current_signature, original_signature,
             "Signature should not have changed after failed update"

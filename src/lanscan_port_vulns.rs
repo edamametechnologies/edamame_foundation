@@ -2,7 +2,6 @@ use crate::cloud_model::*;
 use crate::lanscan_port_info::*;
 use crate::lanscan_port_vulns_db::*;
 use crate::lanscan_vulnerability_info::*;
-use crate::rwlock::CustomRwLock;
 use anyhow::{Context, Result};
 use dashmap::DashMap;
 use lazy_static::lazy_static;
@@ -81,20 +80,19 @@ impl VulnerabilityPortInfoList {
 }
 
 lazy_static! {
-    pub static ref VULNS: CustomRwLock<CloudModel<VulnerabilityPortInfoList>> = {
+    pub static ref VULNS: CloudModel<VulnerabilityPortInfoList> = {
         let model = CloudModel::initialize(PORT_VULNS_NAME.to_string(), PORT_VULNS, |data| {
             let vuln_info_json: VulnerabilityPortInfoListJSON =
                 serde_json::from_str(data).with_context(|| "Failed to parse JSON data")?;
             Ok(VulnerabilityPortInfoList::new_from_json(vuln_info_json))
         })
         .expect("Failed to initialize CloudModel");
-        CustomRwLock::new(model)
+        model
     };
 }
 
 pub async fn get_ports() -> Vec<u16> {
-    let vulns_lock = VULNS.read().await;
-    let ports = vulns_lock
+    let ports = VULNS
         .data
         .read()
         .await
@@ -110,8 +108,7 @@ pub fn get_deep_ports() -> Vec<u16> {
 }
 
 pub async fn get_description_from_port(port: u16) -> String {
-    let vulns_lock = VULNS.read().await;
-    let description = vulns_lock
+    let description = VULNS
         .data
         .read()
         .await
@@ -122,8 +119,7 @@ pub async fn get_description_from_port(port: u16) -> String {
 }
 
 pub async fn get_name_from_port(port: u16) -> String {
-    let vulns_lock = VULNS.read().await;
-    let name = vulns_lock
+    let name = VULNS
         .data
         .read()
         .await
@@ -134,8 +130,7 @@ pub async fn get_name_from_port(port: u16) -> String {
 }
 
 pub async fn get_http_ports() -> Vec<u16> {
-    let vulns_lock = VULNS.read().await;
-    let http_ports = vulns_lock
+    let http_ports = VULNS
         .data
         .read()
         .await
@@ -147,8 +142,7 @@ pub async fn get_http_ports() -> Vec<u16> {
 }
 
 pub async fn get_https_ports() -> Vec<u16> {
-    let vulns_lock = VULNS.read().await;
-    let https_ports = vulns_lock
+    let https_ports = VULNS
         .data
         .read()
         .await
@@ -160,8 +154,7 @@ pub async fn get_https_ports() -> Vec<u16> {
 }
 
 pub async fn get_vulns_of_port(port: u16) -> Vec<VulnerabilityInfo> {
-    let vulns_lock = VULNS.read().await;
-    let mut vulnerabilities = vulns_lock
+    let mut vulnerabilities = VULNS
         .data
         .read()
         .await
@@ -178,9 +171,8 @@ pub async fn get_vulns_names_of_port(port: u16) -> Vec<String> {
 }
 
 pub async fn get_device_criticality(port_info_list: &[PortInfo]) -> String {
-    // Acquire the necessary locks before the closure
-    let vulns_lock = VULNS.read().await;
-    let data_lock = vulns_lock.data.read().await;
+    // Acquire the necessary lock before the closure
+    let data_lock = VULNS.data.read().await;
 
     // Use the data inside the closure without any await
     let count_sum = port_info_list.iter().fold(0, |acc, port_info| {
@@ -192,6 +184,7 @@ pub async fn get_device_criticality(port_info_list: &[PortInfo]) -> String {
         }
     });
 
+    drop(data_lock); // Release lock as soon as possible
     if count_sum >= 10 {
         "High".to_string()
     } else if !port_info_list.is_empty() {
@@ -204,8 +197,7 @@ pub async fn get_device_criticality(port_info_list: &[PortInfo]) -> String {
 pub async fn update(branch: &str, force: bool) -> Result<UpdateStatus> {
     info!("Starting port vulns update from backend");
 
-    let vulns_lock = VULNS.read().await;
-    let status = vulns_lock
+    let status = VULNS
         .update(branch, force, |data| {
             let vuln_info_json: VulnerabilityPortInfoListJSON =
                 serde_json::from_str(data).with_context(|| "Failed to parse JSON data")?;
@@ -329,16 +321,8 @@ mod tests {
     async fn test_signature_update_after_modification() {
         setup();
         let branch = "main";
-
-        // Acquire a write lock to modify the signature
-        {
-            let vulns_write = VULNS.write().await;
-            let mut data_write = vulns_write.data.write().await;
-
-            // Modify the signature to a string of zeros
-            data_write.set_signature("00000000000000000000000000000000".to_string());
-        }
-
+        let signature = "00000000000000000000000000000000".to_string();
+        VULNS.set_signature(signature.clone()).await;
         // Perform the update
         let status = update(branch, false).await.expect("Update failed");
 
@@ -349,7 +333,7 @@ mod tests {
         );
 
         // Check that the signature is no longer zeros
-        let current_signature = VULNS.read().await.data.read().await.get_signature();
+        let current_signature = VULNS.get_signature().await;
         assert_ne!(
             current_signature, "00000000000000000000000000000000",
             "Signature should have been updated"
@@ -368,7 +352,7 @@ mod tests {
         let branch = "nonexistent-branch";
 
         // Get the current signature
-        let original_signature = VULNS.read().await.data.read().await.get_signature();
+        let original_signature = VULNS.get_signature().await;
 
         // Attempt to perform an update from a nonexistent branch
         let result = update(branch, false).await;
@@ -377,7 +361,7 @@ mod tests {
         assert!(result.is_err(), "Update should have failed");
 
         // Check that the signature has not changed
-        let current_signature = VULNS.read().await.data.read().await.get_signature();
+        let current_signature = VULNS.get_signature().await;
         assert_eq!(
             current_signature, original_signature,
             "Signature should not have changed after failed update"

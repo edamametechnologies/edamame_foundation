@@ -1,6 +1,5 @@
 use crate::blacklists_db::BLACKLISTS;
 use crate::cloud_model::*;
-use crate::rwlock::CustomRwLock;
 use anyhow::{anyhow, Context, Result};
 use dashmap::DashMap;
 use ipnet::IpNet;
@@ -145,22 +144,20 @@ impl Blacklists {
 
 // Global BLACKLIST Variable using lazy_static! and CustomRwLock
 lazy_static! {
-    pub static ref LISTS: CustomRwLock<CloudModel<Blacklists>> = {
+    pub static ref LISTS: CloudModel<Blacklists> = {
         let model = CloudModel::initialize(BLACKLISTS_FILE_NAME.to_string(), BLACKLISTS, |data| {
             let blacklist_info_json: BlacklistsJSON =
                 serde_json::from_str(data).with_context(|| "Failed to parse JSON data")?;
             Ok(Blacklists::new_from_json(blacklist_info_json))
         })
         .expect("Failed to initialize CloudModel");
-        CustomRwLock::new(model)
+        model
     };
 }
 
 /// Checks if a blacklist name exists in the current model (default or custom).
 pub async fn is_valid_blacklist(blacklist_name: &str) -> bool {
     LISTS
-        .read()
-        .await
         .data
         .read()
         .await
@@ -178,8 +175,7 @@ pub async fn is_ip_blacklisted(ip: &str) -> (bool, Vec<String>) {
     let mut matching_blacklists = Vec::new();
 
     // Access the current blacklist data (could be default or custom)
-    let list_model = LISTS.read().await;
-    let list_data = list_model.data.read().await;
+    let list_data = LISTS.data.read().await;
 
     // Check each blacklist in the current data model
     for entry in list_data.blacklists.iter() {
@@ -199,7 +195,6 @@ pub async fn is_ip_blacklisted(ip: &str) -> (bool, Vec<String>) {
 
     // Drop guards
     drop(list_data);
-    drop(list_model);
 
     let is_blacklisted = !matching_blacklists.is_empty();
 
@@ -211,11 +206,8 @@ pub async fn is_ip_blacklisted(ip: &str) -> (bool, Vec<String>) {
 pub async fn update(branch: &str, force: bool) -> Result<UpdateStatus> {
     info!("Starting blacklists update from backend");
 
-    // Acquire lock on LISTS
-    let model = LISTS.read().await;
-
-    // Perform the update
-    let status = model
+    // Perform the update directly on the model
+    let status = LISTS
         .update(branch, force, |data| {
             let blacklist_info_json: BlacklistsJSON =
                 serde_json::from_str(data).with_context(|| "Failed to parse JSON data")?;
@@ -264,11 +256,7 @@ mod tests {
         };
 
         let blacklists = Blacklists::new_from_json(test_blacklist_json);
-        LISTS
-            .write()
-            .await
-            .overwrite_with_test_data(blacklists)
-            .await;
+        LISTS.overwrite_with_test_data(blacklists).await;
     }
 
     #[tokio::test]
@@ -339,11 +327,7 @@ mod tests {
         };
 
         let blacklists = Blacklists::new_from_json(test_blacklist_json);
-        LISTS
-            .write()
-            .await
-            .overwrite_with_test_data(blacklists)
-            .await;
+        LISTS.overwrite_with_test_data(blacklists).await;
 
         // Test IPv6 in range
         let (is_blacklisted, _) = is_ip_blacklisted("2001:db8:1:2:3:4:5:6").await;
@@ -395,11 +379,7 @@ mod tests {
 
         let blacklists = Blacklists::new_from_json(test_blacklist_json);
         // Overwrite the global model directly for this test
-        LISTS
-            .write()
-            .await
-            .overwrite_with_test_data(blacklists)
-            .await;
+        LISTS.overwrite_with_test_data(blacklists).await;
 
         // Test IPv6 in blacklist range
         let (is_blacklisted, _) = is_ip_blacklisted("2001:db8:1:2:3:4:5:6").await;
@@ -417,7 +397,7 @@ mod tests {
         assert!(is_blacklisted, "IPv6 localhost should be blacklisted");
 
         // Reset LISTS back to default after the test
-        LISTS.write().await.reset_to_default().await;
+        LISTS.reset_to_default().await;
     }
 
     #[tokio::test]
