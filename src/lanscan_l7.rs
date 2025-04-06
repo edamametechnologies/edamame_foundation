@@ -45,7 +45,7 @@ pub struct ProcessCacheEntry {
 
 pub struct LANScanL7 {
     l7_map: Arc<DashMap<Session, L7Resolution>>,
-    resolver_queue: Arc<CustomRwLock<HashSet<Session>>>,
+    resolver_queue: Arc<DashMap<Session, ()>>,
     resolver_handle: Option<TaskHandle>,
     system: Arc<CustomRwLock<System>>,
     users: Arc<CustomRwLock<Users>>,
@@ -58,7 +58,7 @@ impl LANScanL7 {
     pub fn new() -> Self {
         Self {
             l7_map: Arc::new(DashMap::new()),
-            resolver_queue: Arc::new(CustomRwLock::new(HashSet::new())),
+            resolver_queue: Arc::new(DashMap::new()),
             resolver_handle: None,
             system: Arc::new(CustomRwLock::new(System::new_all())),
             users: Arc::new(CustomRwLock::new(Users::new())),
@@ -118,8 +118,15 @@ impl LANScanL7 {
             while !stop_flag_clone.load(Ordering::Relaxed) {
                 let to_resolve: Vec<Session>;
                 {
-                    let mut queue = resolver_queue.write().await;
-                    to_resolve = queue.drain().collect();
+                    to_resolve = resolver_queue
+                        .iter()
+                        .map(|entry| entry.key().clone())
+                        .collect();
+                    if !to_resolve.is_empty() {
+                        for session in &to_resolve {
+                            resolver_queue.remove(session);
+                        }
+                    }
                 }
 
                 let to_resolve_len = to_resolve.len();
@@ -332,8 +339,9 @@ impl LANScanL7 {
 
                     let failed_resolutions_len = failed_resolutions.len();
                     if failed_resolutions_len > 0 {
-                        let mut queue = resolver_queue.write().await;
-                        queue.extend(failed_resolutions);
+                        for session in failed_resolutions {
+                            resolver_queue.insert(session, ());
+                        }
                         debug!("Re-queued {} failed L7 resolutions", failed_resolutions_len);
                     }
                     let resolved_success = to_resolve_len - failed_resolutions_len;
@@ -345,14 +353,11 @@ impl LANScanL7 {
                         );
                     }
                     // Sleep for a little while to avoid overwhelming the system but keep a tight loop to ensure we're responsive to new sessions
-                    sleep(Duration::from_millis(50)).await;
+                    sleep(Duration::from_millis(500)).await;
                 } else {
                     // No sessions to resolve, sleep for a while to avoid overwhelming the system
-                    sleep(Duration::from_millis(200)).await;
+                    sleep(Duration::from_millis(1000)).await;
                 }
-
-                // Small yield to ensure we check stop_flag regularly
-                tokio::task::yield_now().await;
             }
 
             info!("L7 resolver task completed");
@@ -425,9 +430,6 @@ impl LANScanL7 {
 
                 // Sleep for a while before the next cleanup
                 sleep(Duration::from_secs(60)).await;
-
-                // Small yield to ensure we check stop_flag regularly
-                tokio::task::yield_now().await;
             }
 
             info!("L7 cache cleanup task completed");
@@ -564,7 +566,6 @@ impl LANScanL7 {
             return;
         }
 
-        self.resolver_queue.write().await.insert(connection.clone());
         self.l7_map.insert(
             connection.clone(),
             L7Resolution {
@@ -574,6 +575,8 @@ impl LANScanL7 {
                 last_retry: None,
             },
         );
+
+        self.resolver_queue.insert(connection.clone(), ());
 
         trace!("Added connection to L7 resolver queue: {:?}", connection);
     }
@@ -909,7 +912,11 @@ mod tests {
 
         lanscan_l7.add_connection_to_resolver(&connection).await;
 
-        let queue = lanscan_l7.resolver_queue.read().await;
+        let queue = lanscan_l7
+            .resolver_queue
+            .iter()
+            .map(|entry| entry.key().clone())
+            .collect::<Vec<_>>();
         assert!(queue.contains(&connection));
 
         if let Some(resolution) = lanscan_l7.l7_map.get(&connection) {

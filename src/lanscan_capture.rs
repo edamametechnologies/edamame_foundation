@@ -32,6 +32,7 @@ use pcap::Capture;
     feature = "asyncpacketcapture"
 ))]
 use pcap::{Capture, Packet, PacketCodec};
+use std::collections::HashSet;
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -598,8 +599,7 @@ impl LANScanCapture {
                     }
                 };
                 // Use the interface name (or any other unique identifier) as the key
-                self.start_capture_task_for_device(&device, &interface.name)
-                    .await;
+                self.start_capture_task_for_device(&device, interface).await;
                 at_least_one_success = true;
             }
             at_least_one_success
@@ -662,7 +662,7 @@ impl LANScanCapture {
             };
             init_local_cache(&interfaces);
 
-            self.start_capture_task_for_device(&default_device, &default_interface.name)
+            self.start_capture_task_for_device(&default_device, &default_interface)
                 .await;
         }
     }
@@ -670,7 +670,7 @@ impl LANScanCapture {
     async fn start_capture_task_for_device(
         &self,
         device: &pcap::Device,
-        interfaces_ipv4_addresses: &str,
+        interface: &LANScanInterface, // Accept LANScanInterface reference
     ) {
         // Clone shared resources for each capture task
         let sessions = self.sessions.clone();
@@ -682,7 +682,16 @@ impl LANScanCapture {
         let stop_flag_clone = stop_flag.clone();
 
         // Clone the interface name for the async move block
-        let interface_clone = interfaces_ipv4_addresses.to_string();
+        let interface_name_clone = interface.name.clone();
+
+        // Create HashSet of IPs for this specific interface
+        let mut interface_ips = HashSet::new();
+        if let Some(ipv4_info) = &interface.ipv4 {
+            interface_ips.insert(IpAddr::V4(ipv4_info.ip));
+        }
+        for ipv6_addr_type in &interface.ipv6 {
+            interface_ips.insert(IpAddr::V6(ipv6_addr_type.ip())); // Wrap in IpAddr::V6
+        }
 
         // Clone the device for the async move block
         let device_clone = device.clone();
@@ -702,13 +711,6 @@ impl LANScanCapture {
                     return;
                 }
             };
-
-            // Extract a vector of IP addresses from the device addresses
-            let self_ips: Vec<_> = device_clone
-                .addresses
-                .iter()
-                .filter_map(|addr| Some(addr.addr))
-                .collect();
 
             // Set immediate mode
             cap = cap.immediate_mode(true);
@@ -731,7 +733,7 @@ impl LANScanCapture {
             {
                 info!(
                     "Using sync capture with async processing channel for {}",
-                    interface_clone
+                    interface_name_clone
                 );
 
                 // Channel to send packet data to the processing task
@@ -740,11 +742,11 @@ impl LANScanCapture {
                 // --- Packet Processing Task ---
                 let sessions_clone = sessions.clone();
                 let current_sessions_clone = current_sessions.clone();
-                let self_ips_clone = self_ips.clone();
+                let self_ips_clone = interface_ips.clone();
                 let filter_clone = filter.clone();
                 let l7_clone = l7.clone();
                 let stop_flag_processor = stop_flag_clone.clone();
-                let interface_processor = interface_clone.clone();
+                let interface_processor = interface_name_clone.clone(); // Use cloned name for logging
 
                 let processor_handle = async_spawn(async move {
                     info!("Starting packet processor task for {}", interface_processor);
@@ -767,7 +769,7 @@ impl LANScanCapture {
                                                     &current_sessions_clone,
                                                     &self_ips_clone,
                                                     &filter_clone,
-                                                    l7_clone.as_ref(), // Pass Option<&Arc<...>>
+                                                    l7_clone.as_ref(),
                                                 )
                                                 .await;
                                             }
@@ -794,7 +796,7 @@ impl LANScanCapture {
 
                 // --- Pcap Reading Loop (Sync) ---
                 let pcap_stop_flag = stop_flag_clone.clone();
-                let interface_pcap = interface_clone.clone();
+                let interface_pcap = interface_name_clone.clone();
                 // Need to move `cap` into a blocking thread for the sync read
                 let capture_handle = std::thread::spawn(move || {
                     info!("Starting sync pcap reader thread for {}", interface_pcap);
@@ -854,7 +856,7 @@ impl LANScanCapture {
                 feature = "asyncpacketcapture"
             ))]
             {
-                info!("Using async capture for {}", interface_clone);
+                info!("Using async capture for {}", interface_name_clone);
 
                 // Required for async
                 cap = match cap.setnonblock() {
@@ -886,25 +888,26 @@ impl LANScanCapture {
                     Err(e) => {
                         error!(
                             "Failed to create packet stream on {}: {}",
-                            interface_clone, e
+                            interface_name_clone, e
                         );
                         return;
                     }
                 };
 
                 let mut interval = interval(tokio::time::Duration::from_millis(100));
+                let self_ips = interface_ips.clone();
 
-                tracing::debug!("Starting async capture task for {}", interface_clone);
+                tracing::debug!("Starting async capture task for {}", interface_name_clone);
                 loop {
                     select! {
                         _ = interval.tick() => {
                             if stop_flag_clone.load(Ordering::Relaxed) {
-                                info!("Stop flag detected in async capture task for {}, breaking loop.", interface_clone);
+                                info!("Stop flag detected in async capture task for {}, breaking loop.", interface_name_clone);
                                 break;
                             }
                         }
                         packet_owned = packet_stream.next() => {
-                            trace!("Received packet on {}", interface_clone);
+                            trace!("Received packet on {}", interface_name_clone);
                             match packet_owned {
                                 Some(Ok(packet_owned)) => match parse_packet_pcap(&packet_owned.data) {
                                     Some(ParsedPacket::SessionPacket(cp)) => {
@@ -924,25 +927,25 @@ impl LANScanCapture {
                                         }
                                     }
                                     None => {
-                                        trace!("Error parsing packet on {}", interface_clone);
+                                        trace!("Error parsing packet on {}", interface_name_clone);
                                     }
                                 }
                                 Some(Err(e)) => {
-                                    warn!("Error capturing packet on {}: {}", interface_clone, e);
+                                    warn!("Error capturing packet on {}: {}", interface_name_clone, e);
                                 }
                                 None => {
-                                    warn!("Packet stream ended for {}", interface_clone);
+                                    warn!("Packet stream ended for {}", interface_name_clone);
                                 }
                             }
                         }
                     }
                 }
             };
-            info!("Capture task for {} terminated", interface_clone);
+            info!("Capture task for {} terminated", interface_name_clone);
         });
         // Store the task handle and its stop flag
         self.capture_task_handles.insert(
-            interfaces_ipv4_addresses.to_string(),
+            interface.name.to_string(), // Use interface name as key
             TaskHandle { handle, stop_flag },
         );
     }
@@ -1721,7 +1724,8 @@ mod tests {
             flags: Some(TcpFlags::ACK),
         };
 
-        let self_ips = vec![IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))];
+        let self_ips_vec = vec![IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))];
+        let self_ips: HashSet<IpAddr> = self_ips_vec.into_iter().collect();
 
         // Process both packets
         process_parsed_packet(
@@ -1777,7 +1781,8 @@ mod tests {
         };
 
         // Get self IPs (your local IP)
-        let self_ips = vec![IpAddr::V4(Ipv4Addr::new(10, 1, 0, 40))];
+        let self_ips_vec = vec![IpAddr::V4(Ipv4Addr::new(10, 1, 0, 40))];
+        let self_ips: HashSet<IpAddr> = self_ips_vec.into_iter().collect();
 
         // Process the synthetic packet
         process_parsed_packet(
@@ -2505,7 +2510,8 @@ mod tests {
             flags: Some(TcpFlags::SYN),
         };
 
-        let self_ips = vec![IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))];
+        let self_ips_vec = vec![IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))];
+        let self_ips: HashSet<IpAddr> = self_ips_vec.into_iter().collect();
 
         // Process the packet
         process_parsed_packet(
@@ -2614,8 +2620,10 @@ mod tests {
             flags: Some(TcpFlags::SYN),
         };
 
-        let self_ips = vec![IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))];
+        let self_ips_vec = vec![IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))];
+        let self_ips: HashSet<IpAddr> = self_ips_vec.into_iter().collect();
 
+        // Process the packet
         process_parsed_packet(
             session_packet,
             &capture.sessions,
@@ -2690,7 +2698,8 @@ mod tests {
             flags: Some(TcpFlags::SYN),
         };
 
-        let self_ips = vec![IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))];
+        let self_ips_vec = vec![IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))];
+        let self_ips: HashSet<IpAddr> = self_ips_vec.into_iter().collect();
 
         // Process the packet
         process_parsed_packet(
@@ -2723,7 +2732,8 @@ mod tests {
     async fn test_custom_whitelist_recomputation() {
         let mut capture = LANScanCapture::new();
         capture.set_filter(SessionFilter::All).await;
-        let self_ips = get_self_ips();
+        let self_ips_vec = get_self_ips(); // Renamed variable for clarity
+        let self_ips_set: HashSet<IpAddr> = self_ips_vec.into_iter().collect();
 
         // Reset global state before test
         whitelists::LISTS.reset_to_default().await;
@@ -2763,7 +2773,7 @@ mod tests {
             packet_conforming_ipv4.clone(),
             &capture.sessions,
             &capture.current_sessions,
-            &self_ips,
+            &self_ips_set,
             &capture.filter,
             None,
         )
@@ -2772,7 +2782,7 @@ mod tests {
             packet_non_conforming_ipv4.clone(),
             &capture.sessions,
             &capture.current_sessions,
-            &self_ips,
+            &self_ips_set,
             &capture.filter,
             None,
         )
@@ -2783,7 +2793,7 @@ mod tests {
             packet_conforming_ipv6.clone(),
             &capture.sessions,
             &capture.current_sessions,
-            &self_ips,
+            &self_ips_set,
             &capture.filter,
             None,
         )
@@ -2792,7 +2802,7 @@ mod tests {
             packet_non_conforming_ipv6.clone(),
             &capture.sessions,
             &capture.current_sessions,
-            &self_ips,
+            &self_ips_set,
             &capture.filter,
             None,
         )
@@ -2908,7 +2918,7 @@ mod tests {
             packet_new_conforming_ipv4.clone(),
             &capture.sessions,
             &capture.current_sessions,
-            &self_ips,
+            &self_ips_set,
             &capture.filter,
             None,
         )
@@ -2917,7 +2927,7 @@ mod tests {
             packet_new_non_conforming_ipv4.clone(),
             &capture.sessions,
             &capture.current_sessions,
-            &self_ips,
+            &self_ips_set,
             &capture.filter,
             None,
         )
@@ -2926,7 +2936,7 @@ mod tests {
             packet_new_conforming_ipv6.clone(),
             &capture.sessions,
             &capture.current_sessions,
-            &self_ips,
+            &self_ips_set,
             &capture.filter,
             None,
         )
@@ -2935,7 +2945,7 @@ mod tests {
             packet_new_non_conforming_ipv6.clone(),
             &capture.sessions,
             &capture.current_sessions,
-            &self_ips,
+            &self_ips_set,
             &capture.filter,
             None,
         )
@@ -3019,7 +3029,8 @@ mod tests {
         let mut capture = LANScanCapture::new();
         capture.set_filter(SessionFilter::All).await;
         // Use an IpAddr for self_ips helper compatibility
-        let self_ips = vec![IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))];
+        let self_ips_vec = vec![IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))]; // Renamed
+        let self_ips_set: HashSet<IpAddr> = self_ips_vec.into_iter().collect();
 
         // Explicitly reset global blacklist state at the beginning of the test
         blacklists::LISTS.reset_to_default().await;
@@ -3047,7 +3058,7 @@ mod tests {
             packet_blacklisted_ipv4.clone(),
             &capture.sessions,
             &capture.current_sessions,
-            &self_ips,
+            &self_ips_set,
             &capture.filter,
             None,
         )
@@ -3056,7 +3067,7 @@ mod tests {
             packet_blacklisted_ipv6.clone(),
             &capture.sessions,
             &capture.current_sessions,
-            &self_ips,
+            &self_ips_set,
             &capture.filter,
             None,
         )
@@ -3065,7 +3076,7 @@ mod tests {
             packet_not_blacklisted.clone(),
             &capture.sessions,
             &capture.current_sessions,
-            &self_ips,
+            &self_ips_set,
             &capture.filter,
             None,
         )
@@ -3165,7 +3176,7 @@ mod tests {
             packet_new_blacklisted_ipv4.clone(),
             &capture.sessions,
             &capture.current_sessions,
-            &self_ips,
+            &self_ips_set,
             &capture.filter,
             None,
         )
@@ -3174,7 +3185,7 @@ mod tests {
             packet_new_blacklisted_ipv6.clone(),
             &capture.sessions,
             &capture.current_sessions,
-            &self_ips,
+            &self_ips_set,
             &capture.filter,
             None,
         )
@@ -3183,7 +3194,7 @@ mod tests {
             packet_new_not_blacklisted.clone(),
             &capture.sessions,
             &capture.current_sessions,
-            &self_ips,
+            &self_ips_set,
             &capture.filter,
             None,
         )
