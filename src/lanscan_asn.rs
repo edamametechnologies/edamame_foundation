@@ -1,7 +1,6 @@
 use crate::asn_db::{Db, Record};
 use crate::lanscan_asn_v4_db::*;
 use crate::lanscan_asn_v6_db::*;
-use crate::rwlock::CustomRwLock;
 use dashmap::DashMap;
 use lazy_static::lazy_static;
 use std::io::BufReader;
@@ -14,13 +13,13 @@ use tracing::warn;
 // const ASN_V6_DB_URL: &str = "https://iptoasn.com/data/ip2asn-v6.tsv.gz";
 
 lazy_static! {
-    static ref ASN_V4: Arc<CustomRwLock<Db>> = {
+    static ref ASN_V4: Arc<Db> = {
         let asn_v4 = Db::from_tsv(BufReader::new(ASN_V4_DB.as_bytes())).unwrap();
-        Arc::new(CustomRwLock::new(asn_v4))
+        Arc::new(asn_v4)
     };
-    static ref ASN_V6: Arc<CustomRwLock<Db>> = {
+    static ref ASN_V6: Arc<Db> = {
         let asn_v6 = Db::from_tsv(BufReader::new(ASN_V6_DB.as_bytes())).unwrap();
-        Arc::new(CustomRwLock::new(asn_v6))
+        Arc::new(asn_v6)
     };
 
     // Global cache for IP ASN lookups.
@@ -31,26 +30,20 @@ lazy_static! {
 // Private helper that performs the direct database lookup (without caching).
 async fn lookup_asn_no_cache(ip: IpAddr) -> Option<Record> {
     match ip {
-        IpAddr::V4(ipv4) => {
-            let asn_v4 = ASN_V4.read().await;
-            match asn_v4.lookup(IpAddr::V4(ipv4)) {
-                Some(record) => Some(record),
-                None => {
-                    warn!("Failed to lookup IPv4 address: {}", ipv4);
-                    None
-                }
+        IpAddr::V4(ipv4) => match ASN_V4.lookup(IpAddr::V4(ipv4)) {
+            Some(record) => Some(record),
+            None => {
+                warn!("Failed to lookup IPv4 address: {}", ipv4);
+                None
             }
-        }
-        IpAddr::V6(ipv6) => {
-            let asn_v6 = ASN_V6.read().await;
-            match asn_v6.lookup(IpAddr::V6(ipv6)) {
-                Some(record) => Some(record),
-                None => {
-                    warn!("Failed to lookup IPv6 address: {}", ipv6);
-                    None
-                }
+        },
+        IpAddr::V6(ipv6) => match ASN_V6.lookup(IpAddr::V6(ipv6)) {
+            Some(record) => Some(record),
+            None => {
+                warn!("Failed to lookup IPv6 address: {}", ipv6);
+                None
             }
-        }
+        },
     }
 }
 
