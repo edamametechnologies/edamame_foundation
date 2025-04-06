@@ -344,8 +344,11 @@ impl LANScanL7 {
                             resolved_success, failed_resolutions_len
                         );
                     }
+                    // Sleep for a little while to avoid overwhelming the system but keep a tight loop to ensure we're responsive to new sessions
+                    sleep(Duration::from_millis(50)).await;
                 } else {
-                    sleep(Duration::from_millis(100)).await;
+                    // No sessions to resolve, sleep for a while to avoid overwhelming the system
+                    sleep(Duration::from_millis(200)).await;
                 }
 
                 // Small yield to ensure we check stop_flag regularly
