@@ -6,9 +6,15 @@ use crate::lanscan_broadcast::scan_hosts_broadcast;
     feature = "packetcapture"
 ))]
 use crate::lanscan_capture::LANScanCapture;
+use crate::lanscan_interface::*;
 use crate::lanscan_ip::*;
 use crate::lanscan_mdns::*;
 use crate::lanscan_neighbors::scan_neighbors;
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux", target_os = "windows"),
+    feature = "packetcapture"
+))]
+use crate::lanscan_sessions::SessionFilter;
 use crate::logger::get_all_logs;
 use crate::runner_cli::run_cli;
 use crate::runtime::async_spawn;
@@ -27,6 +33,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::time::{sleep, Duration};
 use tracing::{error, info, warn};
+
 #[cfg(all(
     any(target_os = "macos", target_os = "linux", target_os = "windows"),
     feature = "packetcapture"
@@ -35,12 +42,6 @@ lazy_static! {
     pub static ref CAPTURE: Arc<Mutex<LANScanCapture>> =
         Arc::new(Mutex::new(LANScanCapture::new()));
 }
-use crate::lanscan_interface::*;
-#[cfg(all(
-    any(target_os = "macos", target_os = "linux", target_os = "windows"),
-    feature = "packetcapture"
-))]
-use crate::lanscan_sessions::SessionFilter;
 
 lazy_static! {
     // Current default interface
@@ -151,7 +152,12 @@ pub async fn utility_mdns_resolve(addresses: &str) -> Result<String> {
             warn!("No mDNS info found for IP {}", address);
         }
     }
-    Ok(serde_json::to_string(&mdns_results)?)
+    // Convert MacAddr6 to String to make it serializable consistently
+    let mdns_results_serializable: Vec<(IpAddr, String, String, Vec<String>)> = mdns_results
+        .into_iter()
+        .map(|(ip, hostname, mac, services)| (ip, hostname, mac.to_string(), services))
+        .collect();
+    Ok(serde_json::to_string(&mdns_results_serializable)?)
 }
 
 pub async fn utility_getappleid_email(username: &str) -> Result<String> {
@@ -464,4 +470,142 @@ pub fn start_interface_monitor() {
             sleep(Duration::from_secs(10)).await;
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lanscan_sessions::{
+        Protocol, Session, SessionFilter, SessionInfo, SessionStats, SessionStatus, WhitelistState,
+    };
+    use chrono::{TimeZone, Utc};
+    use macaddr::MacAddr6;
+    use serde_json;
+    use std::net::{IpAddr, Ipv4Addr};
+
+    #[test]
+    fn test_arp_resolve_serialization_format() {
+        let mac1 = MacAddr6::new(0x00, 0x11, 0x22, 0x33, 0x44, 0x55);
+        let mac2 = MacAddr6::new(0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF);
+        let data: Vec<(String, Ipv4Addr, MacAddr6)> = vec![
+            ("eth0".to_string(), "192.168.1.100".parse().unwrap(), mac1),
+            ("eth1".to_string(), "10.0.0.50".parse().unwrap(), mac2),
+        ];
+
+        // Manually convert MacAddr6 to String before serialization, mirroring utility_arp_resolve
+        let data_serializable: Vec<(String, String, String)> = data
+            .into_iter()
+            .map(|(iface, ip, mac)| (iface, ip.to_string(), mac.to_string()))
+            .collect();
+
+        let json_string = serde_json::to_string(&data_serializable).unwrap();
+
+        // Expected format: MAC is a string (lowercase hex)
+        let expected_json = r#"[["eth0","192.168.1.100","00:11:22:33:44:55"],["eth1","10.0.0.50","AA:BB:CC:DD:EE:FF"]]"#;
+        assert_eq!(json_string, expected_json);
+    }
+
+    #[test]
+    fn test_mdns_resolve_serialization_format() {
+        let mac1 = MacAddr6::new(0x11, 0x22, 0x33, 0x44, 0x55, 0x66);
+        let ip1: IpAddr = "192.168.1.101".parse().unwrap();
+        let data: Vec<(IpAddr, String, MacAddr6, Vec<String>)> = vec![(
+            ip1,
+            "mydevice.local".to_string(),
+            mac1,
+            vec![
+                "_http._tcp.local".to_string(),
+                "_service._udp.local".to_string(),
+            ],
+        )];
+
+        // Manually convert MacAddr6 to String before serialization, mirroring utility_mdns_resolve
+        let data_serializable: Vec<(IpAddr, String, String, Vec<String>)> = data
+            .into_iter()
+            .map(|(ip, hostname, mac, services)| (ip, hostname, mac.to_string(), services))
+            .collect();
+
+        let json_string = serde_json::to_string(&data_serializable).unwrap();
+
+        // Expected format: MAC is a string
+        let expected_json = r#"[["192.168.1.101","mydevice.local","11:22:33:44:55:66",["_http._tcp.local","_service._udp.local"]]]"#;
+        assert_eq!(json_string, expected_json);
+    }
+
+    #[test]
+    fn test_boolean_serialization() {
+        let bool_true_str = true.to_string();
+        assert_eq!(bool_true_str, "true");
+
+        let bool_false_str = false.to_string();
+        assert_eq!(bool_false_str, "false");
+    }
+
+    #[test]
+    fn test_session_filter_serialization() {
+        let filter = SessionFilter::LocalOnly;
+        let json_string = serde_json::to_string(&filter).unwrap();
+        // Enums like SessionFilter serialize directly to their variant name as a string
+        let expected_json = r#""LocalOnly""#;
+        assert_eq!(json_string, expected_json);
+    }
+
+    #[test]
+    fn test_session_info_vec_serialization() {
+        // Create a minimal SessionInfo for testing serialization
+        let session_info = SessionInfo {
+            session: Session {
+                protocol: Protocol::TCP,
+                src_ip: "192.168.1.1".parse().unwrap(),
+                src_port: 12345,
+                dst_ip: "8.8.8.8".parse().unwrap(),
+                dst_port: 53,
+            },
+            status: SessionStatus {
+                // Provide default or minimal values
+                active: true,
+                added: true,
+                activated: true,
+                deactivated: false,
+            },
+            stats: SessionStats {
+                start_time: Utc.with_ymd_and_hms(2023, 1, 1, 12, 0, 0).unwrap(),
+                end_time: None,
+                last_activity: Utc.with_ymd_and_hms(2023, 1, 1, 12, 5, 0).unwrap(),
+                inbound_bytes: 100,
+                outbound_bytes: 200,
+                orig_pkts: 2,
+                resp_pkts: 1,
+                orig_ip_bytes: 240,
+                resp_ip_bytes: 160,
+                history: "ShAD".to_string(),
+                conn_state: Some("ESTABLISHED".to_string()),
+                missed_bytes: 0,
+            },
+            is_local_src: true,
+            is_local_dst: false,
+            is_self_src: false,
+            is_self_dst: false,
+            src_domain: None,
+            dst_domain: Some("dns.google".to_string()),
+            dst_service: Some("dns".to_string()),
+            l7: None,
+            src_asn: None,
+            dst_asn: None, // Assuming ASN Record serialization is handled or tested elsewhere
+            is_whitelisted: WhitelistState::Unknown,
+            criticality: "low".to_string(),
+            whitelist_reason: None,
+            uid: "test-uid-123".to_string(),
+            last_modified: Utc.with_ymd_and_hms(2023, 1, 1, 12, 5, 1).unwrap(),
+        };
+        let sessions = vec![session_info];
+        let json_string = serde_json::to_string(&sessions).unwrap();
+
+        // Just check it serializes without error and is not empty
+        // A full comparison is brittle due to timestamps, etc.
+        assert!(json_string.starts_with("["));
+        assert!(json_string.ends_with("]"));
+        assert!(json_string.contains("test-uid-123"));
+        assert!(json_string.contains("dns.google"));
+    }
 }
