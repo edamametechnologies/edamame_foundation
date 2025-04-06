@@ -15,8 +15,10 @@ use pnet_packet::ipv6::Ipv6Packet;
 use pnet_packet::tcp::{TcpFlags, TcpPacket};
 use pnet_packet::udp::UdpPacket;
 use pnet_packet::Packet as PnetPacket;
+use std::collections::HashSet;
 use std::net::IpAddr;
 use std::sync::Arc;
+use tokio;
 use tracing::{trace, warn};
 use uuid::Uuid;
 
@@ -43,7 +45,7 @@ pub async fn process_parsed_packet(
     parsed_packet: SessionPacketData,
     sessions: &Arc<DashMap<Session, SessionInfo>>,
     current_sessions: &Arc<CustomRwLock<Vec<Session>>>,
-    self_ips: &Vec<IpAddr>,
+    self_ips: &HashSet<IpAddr>,
     filter: &Arc<CustomRwLock<SessionFilter>>,
     l7: Option<&Arc<LANScanL7>>,
 ) {
@@ -122,7 +124,7 @@ pub async fn process_parsed_packet(
             missed_bytes: 0,
         };
 
-        // Update session stats
+        // Update session stats based on the first packet
         if is_originator {
             stats.outbound_bytes += parsed_packet.packet_length as u64;
             stats.orig_pkts += 1;
@@ -139,89 +141,114 @@ pub async fn process_parsed_packet(
             stats.history.push(c);
         }
 
-        // Determine if the session is local
+        // Determine locality flags
         let is_local_src = is_lan_ip(&key.src_ip);
         let is_local_dst = is_lan_ip(&key.dst_ip);
 
-        trace!("New session: {:?}", key);
+        trace!("New session: {:?}. Performing lookups concurrently.", key);
 
-        // Queue the new session for L7 resolution immediately
+        // --- Perform lookups concurrently ---
+        let src_ip_lookup = key.src_ip;
+        let dst_ip_lookup = key.dst_ip;
+        let dst_port_lookup = key.dst_port;
+        // Perform string conversion once if needed for blacklist lookups
+        let src_ip_str = src_ip_lookup.to_string();
+        let dst_ip_str = dst_ip_lookup.to_string();
+
+        let (
+            src_asn_opt,
+            dst_asn_opt,
+            service_name_opt,
+            src_blacklist_result,
+            dst_blacklist_result,
+        ) = tokio::join!(
+            // Source ASN lookup (only if not local)
+            async {
+                if !is_local_src {
+                    get_asn(src_ip_lookup).await
+                } else {
+                    None
+                }
+            },
+            // Destination ASN lookup (only if not local)
+            async {
+                if !is_local_dst {
+                    get_asn(dst_ip_lookup).await
+                } else {
+                    None
+                }
+            },
+            // Destination service name lookup
+            async {
+                let name = get_name_from_port(dst_port_lookup).await;
+                if name.is_empty() {
+                    None
+                } else {
+                    Some(name)
+                }
+            },
+            // Source IP blacklist check
+            is_ip_blacklisted(&src_ip_str), // Returns (bool, Vec<String>)
+            // Destination IP blacklist check
+            is_ip_blacklisted(&dst_ip_str) // Returns (bool, Vec<String>)
+        );
+        // --- Lookups finished ---
+
+        trace!("Lookups completed for session: {:?}", key);
+
+        // Queue the new session for L7 resolution (can happen after lookups)
         if let Some(l7) = l7 {
             l7.add_connection_to_resolver(&key).await;
+            trace!("Added session {:?} to L7 resolver queue", key);
         }
-
-        // Query the ASN database for non-local addresses
-        let src_asn = if !is_lan_ip(&key.src_ip) {
-            get_asn(key.src_ip).await
-        } else {
-            None
-        };
-        let dst_asn = if !is_lan_ip(&key.dst_ip) {
-            get_asn(key.dst_ip).await
-        } else {
-            None
-        };
-
-        // Get the service from the destination port
-        let final_dst_service = get_name_from_port(key.dst_port).await;
 
         // Set initial status
         let status = SessionStatus {
-            active: true,
+            active: true, // A new session is active by definition
             added: true,
-            activated: false,
+            activated: true, // It's newly activated
             deactivated: false,
         };
 
-        // Create the SessionInfo struct
+        // Create the SessionInfo struct using the results from join!
         let mut session_info = SessionInfo {
             session: key.clone(),
             stats,
             status,
             is_local_src,
             is_local_dst,
-            is_self_src,
-            is_self_dst,
-            src_domain: None,
-            dst_domain: None,
-            dst_service: if final_dst_service.is_empty() {
-                None
-            } else {
-                Some(final_dst_service)
-            },
-            l7: None,
-            src_asn,
-            dst_asn,
-            is_whitelisted: WhitelistState::Unknown,
+            is_self_src,      // Already determined before the 'else' block
+            is_self_dst,      // Already determined before the 'else' block
+            src_domain: None, // Domain resolution happens later
+            dst_domain: None, // Domain resolution happens later
+            dst_service: service_name_opt,
+            l7: None, // L7 resolution happens later
+            src_asn: src_asn_opt,
+            dst_asn: dst_asn_opt,
+            is_whitelisted: WhitelistState::Unknown, // Whitelist check happens later
             criticality: "".to_string(),
             whitelist_reason: None,
             uid: uid,
             last_modified: Utc::now(),
         };
 
-        // Check for blacklisted IPs
-        let src_ip_str = key.src_ip.to_string();
-        let dst_ip_str = key.dst_ip.to_string();
-
-        // Combine checks for blacklist criticality
-        let (src_blacklisted, src_lists) = is_ip_blacklisted(&src_ip_str).await;
-        let (dst_blacklisted, dst_lists) = is_ip_blacklisted(&dst_ip_str).await;
+        // --- Process blacklist results ---
+        let (src_blacklisted, src_lists) = src_blacklist_result;
+        let (dst_blacklisted, dst_lists) = dst_blacklist_result;
 
         let mut criticality_parts = Vec::new();
         // Only add tags if the IP is actually blacklisted AND is not a local/LAN IP
-        if src_blacklisted && !is_lan_ip(&key.src_ip) {
+        if src_blacklisted && !is_local_src {
             criticality_parts.extend(src_lists);
         }
-        if dst_blacklisted && !is_lan_ip(&key.dst_ip) {
+        if dst_blacklisted && !is_local_dst {
             criticality_parts.extend(dst_lists);
         }
 
-        // Remove duplicates
-        criticality_parts.sort();
-        criticality_parts.dedup();
-
-        // Set criticality if any blacklists matched
+        // Remove duplicates and set criticality
         if !criticality_parts.is_empty() {
+            criticality_parts.sort();
+            criticality_parts.dedup();
             session_info.criticality = format!(
                 "{}",
                 criticality_parts
@@ -230,11 +257,22 @@ pub async fn process_parsed_packet(
                     .collect::<Vec<_>>()
                     .join(",")
             );
+            trace!(
+                "Set criticality for session {:?}: {}",
+                key,
+                session_info.criticality
+            );
         }
+        // --- End blacklist processing ---
 
+        // Insert the newly created session info into the main map
         sessions.insert(key.clone(), session_info);
-        // Add to current sessions
-        current_sessions.write().await.push(key);
+        trace!("Inserted session info for {:?} into main map", key);
+
+        // Add the key to the current sessions vector
+        // This still requires a write lock, but happens after concurrent lookups
+        current_sessions.write().await.push(key.clone());
+        trace!("Added session key {:?} to current sessions vector", key);
     }
 }
 
@@ -508,6 +546,7 @@ mod tests {
     use super::*;
     use crate::blacklists::{BlacklistInfo, Blacklists, BlacklistsJSON};
     use serial_test::serial;
+    use std::collections::HashSet;
     use std::net::{IpAddr, Ipv4Addr};
 
     #[tokio::test]
@@ -555,6 +594,7 @@ mod tests {
         let sessions = Arc::new(DashMap::new());
         let current_sessions = Arc::new(CustomRwLock::new(Vec::new()));
         let self_ips = vec![IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))];
+        let self_ips_set: HashSet<IpAddr> = self_ips.into_iter().collect();
         let filter = Arc::new(CustomRwLock::new(SessionFilter::All));
 
         // Process the packet
@@ -562,7 +602,7 @@ mod tests {
             session_data,
             &sessions,
             &current_sessions,
-            &self_ips,
+            &self_ips_set,
             &filter,
             None,
         )
@@ -626,6 +666,7 @@ mod tests {
         let sessions = Arc::new(DashMap::new());
         let current_sessions = Arc::new(CustomRwLock::new(Vec::new()));
         let self_ips = vec![IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))];
+        let self_ips_set: HashSet<IpAddr> = self_ips.into_iter().collect();
         let filter = Arc::new(CustomRwLock::new(SessionFilter::All));
 
         // Process the packet
@@ -633,7 +674,7 @@ mod tests {
             session_data,
             &sessions,
             &current_sessions,
-            &self_ips,
+            &self_ips_set,
             &filter,
             None,
         )

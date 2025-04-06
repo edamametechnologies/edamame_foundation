@@ -196,25 +196,23 @@ pub fn init_local_cache(interfaces: &LANScanInterfaces) {
 /// and consults the precomputed LAN cache for IPv6.  
 /// --------------------------------------------------------------------
 pub fn is_lan_ip(ip: &IpAddr) -> bool {
-    if KNOWN_LOCAL_IP_CACHE.len() > MAX_CACHE_SIZE {
-        cleanup_cache();
-    }
-    if !CACHE_INITIALIZED.load(Ordering::Relaxed) {
-        warn!(
-            "is_local_ip called without an initialized cache. Please run init_local_cache first."
-        );
-    }
-
-    // First, check if the IP is already in our known-local cache.
-    if KNOWN_LOCAL_IP_CACHE.contains_key(ip) {
+    // Check cache first
+    if let Some(_entry) = KNOWN_LOCAL_IP_CACHE.get(ip) {
+        // Cache hit - potentially update TTL on read if using a different cache strategy in the future.
         trace!("IP address {:?} found in known-local cache", ip);
         return true;
     }
 
+    if !CACHE_INITIALIZED.load(Ordering::Relaxed) {
+        warn!("is_lan_ip called without an initialized cache. Please run init_local_cache first.");
+        // Depending on requirements, might want to return false or error here.
+    }
+
+    // Perform the actual check if not found in cache
     let local = match ip {
         IpAddr::V4(ipv4) => is_lan_ipv4_fast(ipv4),
         IpAddr::V6(ipv6) => {
-            // Do basic IPv6 local checks.
+            // Do basic IPv6 local checks first.
             if is_local_ipv6(ipv6) {
                 true
             } else {
@@ -224,9 +222,17 @@ pub fn is_lan_ip(ip: &IpAddr) -> bool {
         }
     };
 
-    // Cache the result for faster future lookups.
+    // Cache the result only if it's determined to be local.
     if local {
-        KNOWN_LOCAL_IP_CACHE.insert(ip.clone(), std::time::Instant::now());
+        // Check cache size *before* inserting. Trigger cleanup only if full.
+        // Using >= ensures we attempt cleanup before potentially exceeding the limit.
+        if KNOWN_LOCAL_IP_CACHE.len() >= MAX_CACHE_SIZE {
+            cleanup_cache(); // Still synchronous, but called much less often.
+        }
+        // Insert the local IP into the cache.
+        // Note: If cleanup didn't remove anything (all entries fresh) and cache was full,
+        // this insert might temporarily push size slightly over MAX_CACHE_SIZE.
+        KNOWN_LOCAL_IP_CACHE.insert(*ip, std::time::Instant::now());
         trace!("IP address {:?} determined local and cached", ip);
     } else {
         trace!("IP address {:?} determined not local", ip);
@@ -251,7 +257,24 @@ pub fn apply_mask(ip_addr: Ipv4Addr, prefix: u8) -> Ipv4Addr {
 
 fn cleanup_cache() {
     let now = std::time::Instant::now();
+    let initial_size = KNOWN_LOCAL_IP_CACHE.len();
+    // Retain entries younger than CACHE_TTL
     KNOWN_LOCAL_IP_CACHE.retain(|_, v| now.duration_since(*v) < CACHE_TTL);
+    let final_size = KNOWN_LOCAL_IP_CACHE.len();
+    if initial_size > final_size {
+        trace!(
+            "Cache cleanup ran. Removed {} expired entries. Size before: {}, Size after: {}",
+            initial_size - final_size,
+            initial_size,
+            final_size
+        );
+    } else {
+        // Log even if nothing was removed, confirming cleanup ran.
+        trace!(
+            "Cache cleanup ran. No expired entries found to remove. Cache size: {}",
+            initial_size
+        );
+    }
 }
 
 #[cfg(test)]
