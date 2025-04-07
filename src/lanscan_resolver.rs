@@ -1,26 +1,15 @@
 use crate::runtime::*;
 use crate::rwlock::CustomRwLock;
-use anyhow::{Error, Result};
 use dashmap::DashMap;
 use hickory_resolver::{
-    config::{NameServerConfig, Protocol, ResolverConfig, ResolverOpts},
-    name_server::TokioConnectionProvider,
-    TokioAsyncResolver,
+    config::ResolverConfig, name_server::TokioConnectionProvider, TokioResolver,
 };
 use std::collections::VecDeque;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::time::{sleep, Duration};
-use tracing::{debug, error, info, trace, warn};
-
-// Add constants for public DNS servers to use as fallbacks
-const PUBLIC_DNS_SERVERS: &[(&str, &str, u16)] = &[
-    ("Google DNS", "8.8.8.8", 53),
-    ("Cloudflare DNS", "1.1.1.1", 53),
-    ("Quad9 DNS", "9.9.9.9", 53),
-    ("OpenDNS", "208.67.222.222", 53),
-];
+use tracing::{debug, info, trace, warn};
 
 // Add constant for resolution retry parameters
 const MAX_RESOLUTION_ATTEMPTS: usize = 3;
@@ -28,7 +17,7 @@ const RESOLUTION_RETRY_DELAY_MS: u64 = 500;
 
 #[derive(Debug)]
 pub struct LANScanResolver {
-    resolvers: Arc<CustomRwLock<Vec<TokioAsyncResolver>>>,
+    resolvers: Arc<CustomRwLock<Vec<TokioResolver>>>,
     reverse_dns: Arc<DashMap<IpAddr, String>>,
     resolver_queue: Arc<CustomRwLock<VecDeque<IpAddr>>>,
     resolver_handle: Arc<CustomRwLock<Option<TaskHandle>>>,
@@ -44,77 +33,44 @@ impl LANScanResolver {
         }
     }
 
-    fn create_resolvers() -> Vec<TokioAsyncResolver> {
+    // Create resolvers for public DNS servers
+    fn create_resolvers() -> Vec<TokioResolver> {
         let mut resolvers = Vec::new();
 
-        // Try to create resolver from system configuration first
-        match TokioAsyncResolver::from_system_conf(TokioConnectionProvider::default()) {
-            Ok(resolver) => {
-                info!("Successfully created resolver from system configuration");
-                resolvers.push(resolver);
-            }
-            Err(err) => {
-                warn!(
-                    "Failed to create resolver from system configuration: {:?}",
-                    err
-                );
-            }
-        }
+        // Google DNS
+        let mut resolver_builder = TokioResolver::builder_with_config(
+            ResolverConfig::google(),
+            TokioConnectionProvider::default(),
+        );
+        resolver_builder.options_mut().try_tcp_on_error = true;
+        let resolver = resolver_builder.build();
+        resolvers.push(resolver);
 
-        // Add resolvers for public DNS servers as fallbacks
-        for (name, ip, port) in PUBLIC_DNS_SERVERS {
-            match Self::create_resolver_with_nameserver(ip, *port) {
-                Ok(resolver) => {
-                    info!("Added fallback resolver: {}", name);
-                    resolvers.push(resolver);
-                }
-                Err(err) => {
-                    warn!("Failed to create resolver for {}: {:?}", name, err);
-                }
-            }
-        }
+        // Cloudflare DNS
+        let mut resolver_builder = TokioResolver::builder_with_config(
+            ResolverConfig::cloudflare(),
+            TokioConnectionProvider::default(),
+        );
+        resolver_builder.options_mut().try_tcp_on_error = true;
+        let resolver = resolver_builder.build();
+        resolvers.push(resolver);
 
-        if resolvers.is_empty() {
-            error!("No DNS resolvers could be created. Domain resolution will fail.");
-        }
+        // Quad9 DNS
+        let mut resolver_builder = TokioResolver::builder_with_config(
+            ResolverConfig::quad9(),
+            TokioConnectionProvider::default(),
+        );
+        resolver_builder.options_mut().try_tcp_on_error = true;
+        let resolver = resolver_builder.build();
+        resolvers.push(resolver);
 
         resolvers
-    }
-
-    fn create_resolver_with_nameserver(ip: &str, port: u16) -> Result<TokioAsyncResolver> {
-        // Parse IP address
-        let ip_addr = ip
-            .parse::<Ipv4Addr>()
-            .map_err(|e| Error::msg(format!("Invalid IP address: {}", e)))?;
-
-        let socket = SocketAddr::new(IpAddr::V4(ip_addr), port);
-
-        // Create config with a single nameserver
-        let mut config = ResolverConfig::new();
-        config.add_name_server(NameServerConfig {
-            socket_addr: socket,
-            protocol: Protocol::Udp,
-            tls_dns_name: None,
-            trust_negative_responses: true,
-            bind_addr: None,
-        });
-
-        // Create resolver options with reasonable timeouts
-        let mut opts = ResolverOpts::default();
-        opts.timeout = Duration::from_secs(3);
-        opts.attempts = 2;
-
-        Ok(TokioAsyncResolver::new(
-            config,
-            opts,
-            TokioConnectionProvider::default(),
-        ))
     }
 
     async fn perform_reverse_dns_lookup(
         ip_addr: IpAddr,
         reverse_dns: Arc<DashMap<IpAddr, String>>,
-        resolvers: Vec<TokioAsyncResolver>,
+        resolvers: Vec<TokioResolver>,
     ) {
         // Skip if already resolved
         if let Some(entry) = reverse_dns.get(&ip_addr) {
@@ -322,11 +278,11 @@ impl LANScanResolver {
         // For important IPs (e.g., connected servers), try to resolve immediately
         // instead of waiting for the background task
         if is_important {
-            if let Some(resolvers) = self.resolvers.read().await.clone().into_iter().next() {
+            if let Some(resolver) = self.resolvers.read().await.first().cloned() {
                 // Try immediate resolution in a separate task
                 let ip_copy = *ip;
                 let reverse_dns = self.reverse_dns.clone();
-                let resolvers_vec = vec![resolvers];
+                let resolvers_vec = vec![resolver];
 
                 tokio::spawn(async move {
                     Self::perform_reverse_dns_lookup(ip_copy, reverse_dns, resolvers_vec).await;

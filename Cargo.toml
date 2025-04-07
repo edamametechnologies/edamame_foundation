@@ -1,6 +1,6 @@
 [package]
 name = "edamame_foundation"
-version = "0.9.21"
+version = "0.9.24"
 edition = "2021"
 
 [lints.rust]
@@ -22,8 +22,8 @@ edamame_backend = { git = "https://github.com/edamametechnologies/edamame_backen
 
 # Sentry
 # Beware it will use reqwest with native-tls by default, not rustls
-sentry = { version = "0.36.0", default-features = false, features = ["reqwest", "rustls"] }
-sentry-tracing = "0.36.0"
+sentry = { version = "0.37.0", default-features = false, features = ["reqwest", "rustls"] }
+sentry-tracing = "0.37.0"
 
 # Global statics w/ mutex
 lazy_static = "1.5.0"
@@ -55,7 +55,7 @@ humantime = "2.1.0"
 
 # gRPC server/client
 # This uses rustls
-tonic = { version = "0.12.1", features = ["tls"] }
+tonic = { version = "0.13.0", features = ["_tls-any"] }
 prost = "0.13.1"
 
 base64 = "0.22.1"
@@ -123,11 +123,11 @@ network-interface = "2.0.0"
 # Capture on macOS, Linux, Windows
 # pcap requires libpcap-devel on Linux, and Npcap on Windows
 pcap = { version = "2.2.0" , optional = true, features = ["capture-stream"] }
-hickory-resolver = { version = "0.24.1", optional = true }
+hickory-resolver = { version = "0.25.1", optional = true }
 dns-parser = { git = "https://github.com/edamametechnologies/dns-parser", branch = "pr47", optional = true }
 pnet_packet = { version = "0.35.0", optional = true }
 # System information
-sysinfo = { version = "0.33.0", optional = true }
+sysinfo = { version = "0.34.2", optional = true }
 libc = "0.2.168"
 netstat2 = { version = "0.11.0", optional = true }
 
@@ -151,7 +151,7 @@ serial_test = "3.1.1"
 
 # Conditional compilation for build dependencies
 # protobuf->Rust compiler
-tonic-build = "0.12.1"
+tonic-build = "0.13.0"
 
 # Npcap
 # Prevent reqwest from using native-tls
