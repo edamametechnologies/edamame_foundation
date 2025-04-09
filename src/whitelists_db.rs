@@ -19,7 +19,6 @@ pub static WHITELISTS: &str = r#"{
           "description": "Connection to Mixpanel analytics"
         },
         {
-          "process": "edamame_posture",
           "domain": "api.ipify.org",
           "port": 80,
           "description": "Connection to IPify service"
