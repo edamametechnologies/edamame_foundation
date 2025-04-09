@@ -105,10 +105,10 @@ use tracing::{debug, error, info, trace, warn}; // Add this import
 static CONNECTION_ACTIVITY_TIMEOUT: ChronoDuration = ChronoDuration::seconds(60);
 // A session is considered current if it has been active in the last 180 seconds
 static CONNECTION_CURRENT_TIMEOUT: ChronoDuration = ChronoDuration::seconds(180);
-// Keep 1 hour of history
-static CONNECTION_RETENTION_TIMEOUT: ChronoDuration = ChronoDuration::seconds(60 * 60 * 1);
-// Current whitelist exceptions
-static WHITELIST_EXCEPTION_TIMEOUT: ChronoDuration = CONNECTION_RETENTION_TIMEOUT;
+// Keep 4 hours of history
+static CONNECTION_RETENTION_TIMEOUT: ChronoDuration = ChronoDuration::seconds(60 * 60 * 4);
+// Current whitelist exceptions - 3 hours (must be less than CONNECTION_RETENTION_TIMEOUT)
+static WHITELIST_EXCEPTION_TIMEOUT: ChronoDuration = ChronoDuration::seconds(60 * 60 * 3);
 
 pub struct LANScanCapture {
     interfaces: Arc<CustomRwLock<LANScanInterfaces>>,
@@ -1393,6 +1393,22 @@ impl LANScanCapture {
             .await;
         }
         debug!("LANScanCapture: check_whitelisted_destinations done");
+
+        // Final conformance check: If the flag is false, but no *current* session is non-conforming, reset the flag.
+        // This handles the case where the offending session was just removed by retention.
+        if !self.whitelist_conformance.load(Ordering::Relaxed) {
+            let has_non_conforming = self
+                .sessions
+                .iter()
+                .any(|entry| entry.value().is_whitelisted == WhitelistState::NonConforming);
+            if !has_non_conforming {
+                info!("Resetting whitelist_conformance flag as no currently tracked sessions are non-conforming.");
+                self.whitelist_conformance.store(true, Ordering::Relaxed);
+                // Optionally, clear the exceptions list as well if desired, though check_whitelisted_destinations might repopulate it later if needed.
+                // self.whitelist_exceptions.write().await.clear();
+            }
+        }
+
         debug!("LANScanCapture: update_sessions finished");
     }
 
