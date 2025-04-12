@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use std::net::IpAddr;
 
 // We define separate modules for Windows vs. other platforms.
@@ -8,7 +8,7 @@ mod platform_impl {
     use rand::random;
     use std::time::Duration;
     use tokio::time;
-    use tracing::{info, trace};
+    use tracing::{info, trace, warn};
     use windows::Win32::Foundation::HANDLE;
     use windows::Win32::NetworkManagement::IpHelper::{
         IcmpCloseHandle, IcmpCreateFile, IcmpSendEcho, ICMP_ECHO_REPLY,
@@ -116,7 +116,7 @@ mod platform_impl {
         }
 
         if responsive_ips.is_empty() {
-            return Err(anyhow!("No hosts responded to broadcast ping on Windows"));
+            warn!("No hosts responded to broadcast ping on Windows");
         }
 
         Ok(responsive_ips)
@@ -134,7 +134,7 @@ mod platform_impl {
     use std::os::fd::AsRawFd;
     use std::time::{Duration, Instant};
     use tokio::time;
-    use tracing::{info, trace};
+    use tracing::{info, trace, warn};
 
     /// Compute the classic RFC 1071 checksum for an ICMP packet.
     fn icmp_checksum(data: &[u8]) -> u16 {
@@ -284,9 +284,7 @@ mod platform_impl {
         }
 
         if responsive_ips.is_empty() {
-            return Err(anyhow!(
-                "No hosts responded to broadcast ping on Unix-like system"
-            ));
+            warn!("No hosts responded to broadcast ping on Unix-like system");
         }
 
         Ok(responsive_ips)

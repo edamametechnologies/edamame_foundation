@@ -9,6 +9,7 @@ use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::net::IpAddr;
+use std::sync::Arc;
 use tracing::{info, trace, warn};
 
 // Constants
@@ -48,7 +49,7 @@ pub struct WhitelistsJSON {
 pub struct Whitelists {
     pub date: String,
     pub signature: Option<String>,
-    pub whitelists: DashMap<String, WhitelistInfo>,
+    pub whitelists: Arc<DashMap<String, WhitelistInfo>>,
 }
 
 impl From<Whitelists> for WhitelistsJSON {
@@ -79,7 +80,7 @@ impl Whitelists {
     pub fn new_from_json(whitelist_info: WhitelistsJSON) -> Self {
         info!("Loading whitelists from JSON");
 
-        let whitelists = DashMap::new();
+        let whitelists = Arc::new(DashMap::new());
 
         for info in whitelist_info.whitelists {
             whitelists.insert(info.name.clone(), info);
@@ -96,7 +97,7 @@ impl Whitelists {
 
     // Create a whitelist from a list of sessions
     pub fn new_from_sessions(sessions: &Vec<SessionInfo>) -> Self {
-        let whitelists = DashMap::new();
+        let whitelists = Arc::new(DashMap::new());
 
         // Create a whitelist with the current sessions
         let mut endpoints = Vec::new();
@@ -221,12 +222,8 @@ lazy_static! {
 
 /// Checks if a whitelist name exists in the current model (default or custom).
 pub async fn is_valid_whitelist(whitelist_name: &str) -> bool {
-    LISTS
-        .data
-        .read()
-        .await
-        .whitelists
-        .contains_key(whitelist_name)
+    let whitelists_map = LISTS.data.read().await.whitelists.clone();
+    whitelists_map.contains_key(whitelist_name)
 }
 
 /// Checks if a given session is in the specified whitelist.
@@ -260,10 +257,10 @@ pub async fn is_session_in_whitelist(
     let mut visited = HashSet::new();
     visited.insert(whitelist_name.to_string());
 
-    // Access the current whitelist data (could be default or custom)
-    let list_data = LISTS.data.read().await;
+    // Clone the Arc to avoid holding the lock during processing
+    let list_data_instance = LISTS.data.read().await.clone();
 
-    let endpoints = match list_data.get_all_endpoints(whitelist_name, &mut visited) {
+    let endpoints = match list_data_instance.get_all_endpoints(whitelist_name, &mut visited) {
         Ok(eps) => eps,
         Err(err) => {
             let error_msg = format!(
@@ -271,14 +268,9 @@ pub async fn is_session_in_whitelist(
                 whitelist_name, err
             );
             warn!("{}", error_msg);
-            // Explicitly drop guards before returning
-            drop(list_data);
             return (false, Some(error_msg));
         }
     };
-
-    // Drop the guards as they are no longer needed
-    drop(list_data);
 
     if endpoints.is_empty() {
         return (

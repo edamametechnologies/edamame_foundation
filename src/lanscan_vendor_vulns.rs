@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 use dashmap::DashMap;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use tracing::{info, warn};
 
 const VENDOR_VULNS_NAME: &str = "lanscan-vendor-vulns-db.json";
@@ -27,7 +28,7 @@ pub struct VulnerabilityVendorInfoListJSON {
 pub struct VulnerabilityInfoList {
     pub date: String,
     pub signature: String,
-    pub vendor_vulns: DashMap<String, VulnerabilityVendorInfo>,
+    pub vendor_vulns: Arc<DashMap<String, VulnerabilityVendorInfo>>,
 }
 
 impl CloudSignature for VulnerabilityInfoList {
@@ -43,7 +44,7 @@ impl VulnerabilityInfoList {
     pub fn new_from_json(vuln_info: &VulnerabilityVendorInfoListJSON) -> Self {
         info!("Loading vendor info list from JSON");
 
-        let vendor_vulns = DashMap::new();
+        let vendor_vulns = Arc::new(DashMap::new());
 
         for vendor_info in &vuln_info.vulnerabilities {
             vendor_vulns.insert(vendor_info.vendor.clone(), vendor_info.clone());
@@ -72,34 +73,26 @@ lazy_static! {
 }
 
 pub async fn get_vendors() -> Vec<String> {
-    let vendors = VULNS
-        .data
-        .read()
-        .await
-        .vendor_vulns
+    let vendors_map = VULNS.data.read().await.vendor_vulns.clone();
+    vendors_map
         .iter()
         .map(|entry| entry.key().clone())
-        .collect::<Vec<_>>();
-    vendors
+        .collect::<Vec<_>>()
 }
 
 pub async fn get_description_from_vendor(vendor: &str) -> String {
-    let description = VULNS
-        .data
-        .read()
-        .await
-        .vendor_vulns
+    let vendors_map = VULNS.data.read().await.vendor_vulns.clone();
+    vendors_map
         .get(vendor)
-        .map_or_else(|| "".to_string(), |v| v.vendor.clone());
-    description
+        .map_or_else(|| "".to_string(), |v| v.vendor.clone())
 }
 
 pub async fn get_vulns_of_vendor(vendor: &str) -> Vec<VulnerabilityInfo> {
-    let vendor_vulns = &VULNS.data.read().await.vendor_vulns;
+    let vendors_map = VULNS.data.read().await.vendor_vulns.clone();
 
     let mut vendor_name = vendor.to_string();
     while !vendor_name.is_empty() {
-        if let Some(vendor_info) = vendor_vulns.get(&vendor_name) {
+        if let Some(vendor_info) = vendors_map.get(&vendor_name) {
             let mut vulnerabilities = vendor_info.vulnerabilities.clone();
             // Sort by reverse order of name (therefore date)
             vulnerabilities.sort_by(|a, b| b.name.cmp(&a.name));
