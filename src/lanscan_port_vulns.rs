@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use dashmap::DashMap;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use tracing::{info, warn};
 
 const PORT_VULNS_NAME: &str = "lanscan-port-vulns-db.json";
@@ -40,18 +41,18 @@ impl CloudSignature for VulnerabilityPortInfoList {
 pub struct VulnerabilityPortInfoList {
     pub date: String,
     pub signature: String,
-    pub port_vulns: DashMap<u16, VulnerabilityPortInfo>,
-    pub http_ports: DashMap<u16, VulnerabilityPortInfo>,
-    pub https_ports: DashMap<u16, VulnerabilityPortInfo>,
+    pub port_vulns: Arc<DashMap<u16, VulnerabilityPortInfo>>,
+    pub http_ports: Arc<DashMap<u16, VulnerabilityPortInfo>>,
+    pub https_ports: Arc<DashMap<u16, VulnerabilityPortInfo>>,
 }
 
 impl VulnerabilityPortInfoList {
     pub fn new_from_json(vuln_info: VulnerabilityPortInfoListJSON) -> Self {
         info!("Loading port info list from JSON");
 
-        let port_vulns = DashMap::new();
-        let http_ports = DashMap::new();
-        let https_ports = DashMap::new();
+        let port_vulns = Arc::new(DashMap::new());
+        let http_ports = Arc::new(DashMap::new());
+        let https_ports = Arc::new(DashMap::new());
 
         for port_info in vuln_info.vulnerabilities {
             if port_info.protocol == "http" {
@@ -92,15 +93,9 @@ lazy_static! {
 }
 
 pub async fn get_ports() -> Vec<u16> {
-    let ports = VULNS
-        .data
-        .read()
-        .await
-        .port_vulns
-        .iter()
-        .map(|entry| *entry.key())
-        .collect();
-    ports
+    // Clone the Arc to the DashMap so we don't need to hold the lock during iteration
+    let ports_map = VULNS.data.read().await.port_vulns.clone();
+    ports_map.iter().map(|entry| *entry.key()).collect()
 }
 
 pub fn get_deep_ports() -> Vec<u16> {
@@ -108,57 +103,32 @@ pub fn get_deep_ports() -> Vec<u16> {
 }
 
 pub async fn get_description_from_port(port: u16) -> String {
-    let description = VULNS
-        .data
-        .read()
-        .await
-        .port_vulns
+    let ports_map = VULNS.data.read().await.port_vulns.clone();
+    ports_map
         .get(&port)
-        .map_or_else(|| "".to_string(), |port_info| port_info.description.clone());
-    description
+        .map_or_else(|| "".to_string(), |port_info| port_info.description.clone())
 }
 
 pub async fn get_name_from_port(port: u16) -> String {
-    let name = VULNS
-        .data
-        .read()
-        .await
-        .port_vulns
+    let ports_map = VULNS.data.read().await.port_vulns.clone();
+    ports_map
         .get(&port)
-        .map_or_else(|| "".to_string(), |port_info| port_info.name.clone());
-    name
+        .map_or_else(|| "".to_string(), |port_info| port_info.name.clone())
 }
 
 pub async fn get_http_ports() -> Vec<u16> {
-    let http_ports = VULNS
-        .data
-        .read()
-        .await
-        .http_ports
-        .iter()
-        .map(|entry| *entry.key())
-        .collect();
-    http_ports
+    let http_ports_map = VULNS.data.read().await.http_ports.clone();
+    http_ports_map.iter().map(|entry| *entry.key()).collect()
 }
 
 pub async fn get_https_ports() -> Vec<u16> {
-    let https_ports = VULNS
-        .data
-        .read()
-        .await
-        .https_ports
-        .iter()
-        .map(|entry| *entry.key())
-        .collect();
-    https_ports
+    let https_ports_map = VULNS.data.read().await.https_ports.clone();
+    https_ports_map.iter().map(|entry| *entry.key()).collect()
 }
 
 pub async fn get_vulns_of_port(port: u16) -> Vec<VulnerabilityInfo> {
-    let mut vulnerabilities = VULNS
-        .data
-        .read()
-        .await
-        .port_vulns
+    let ports_map = VULNS.data.read().await.port_vulns.clone();
+    let mut vulnerabilities = ports_map
         .get(&port)
         .map_or_else(Vec::new, |port_info| port_info.vulnerabilities.clone());
     vulnerabilities.sort_by(|a, b| b.name.cmp(&a.name));
@@ -171,12 +141,12 @@ pub async fn get_vulns_names_of_port(port: u16) -> Vec<String> {
 }
 
 pub async fn get_device_criticality(port_info_list: &[PortInfo]) -> String {
-    // Acquire the necessary lock before the closure
-    let data_lock = VULNS.data.read().await;
+    // Clone the Arc to avoid holding the lock during iteration
+    let ports_map = VULNS.data.read().await.port_vulns.clone();
 
-    // Use the data inside the closure without any await
+    // Use the cloned Arc without any await
     let count_sum = port_info_list.iter().fold(0, |acc, port_info| {
-        let known_port_info = data_lock.port_vulns.get(&port_info.port);
+        let known_port_info = ports_map.get(&port_info.port);
         if let Some(info) = known_port_info {
             acc + info.count
         } else {
@@ -184,7 +154,6 @@ pub async fn get_device_criticality(port_info_list: &[PortInfo]) -> String {
         }
     });
 
-    drop(data_lock); // Release lock as soon as possible
     if count_sum >= 10 {
         "High".to_string()
     } else if !port_info_list.is_empty() {

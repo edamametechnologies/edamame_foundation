@@ -4,6 +4,7 @@ use edamame_backend::lanscan_device_info_backend::*;
 use edamame_backend::lanscan_dislike_device_info_backend::DislikeDeviceInfoBackend;
 use edamame_backend::pwned_breach_backend::BreachDetailBackend;
 use edamame_backend::score_backend::*;
+use edamame_backend::session_info_backend::SessionInfoBackend;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -111,4 +112,10 @@ pub trait Backend {
         &self,
         dislike_device_info_backend: &DislikeDeviceInfoBackend,
     ) -> Result<()>;
+
+    async fn get_remediation_session(
+        &self,
+        language: &str,
+        session_info: &SessionInfoBackend,
+    ) -> Result<String>;
 }

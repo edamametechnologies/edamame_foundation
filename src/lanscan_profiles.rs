@@ -6,6 +6,7 @@ use dashmap::DashMap;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::sync::Arc;
 use tracing::{info, trace, warn};
 
 // Constants for repository and file names
@@ -57,14 +58,14 @@ impl CloudSignature for DeviceTypeList {
 pub struct DeviceTypeList {
     pub date: String,
     pub signature: String,
-    pub profiles: DashMap<String, DeviceTypeRule>,
+    pub profiles: Arc<DashMap<String, DeviceTypeRule>>,
 }
 
 impl DeviceTypeList {
     pub fn new_from_json(device_info: DeviceTypeListJSON) -> Self {
         info!("Loading device profiles from JSON");
 
-        let profiles = DashMap::new();
+        let profiles = Arc::new(DashMap::new());
         for profile in device_info.profiles {
             profiles.insert(profile.device_type.clone(), profile);
         }
@@ -116,8 +117,10 @@ pub async fn device_type(
         .map(|info| info.banner.to_lowercase())
         .collect();
 
-    let data_lock = PROFILES.data.read().await;
-    for profile in data_lock.profiles.iter() {
+    // Clone the Arc to avoid holding the lock during iteration
+    let profiles_map = PROFILES.data.read().await.profiles.clone();
+
+    for profile in profiles_map.iter() {
         for condition in &profile.value().conditions {
             if match_condition(
                 condition,

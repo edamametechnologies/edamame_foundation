@@ -229,7 +229,7 @@ pub async fn utility_stop_capture() -> Result<String> {
 ))]
 pub async fn utility_restart_capture() -> Result<String> {
     if !CAPTURE.lock().await.is_capturing().await {
-        return order_error("capture not running", false);
+        return order_error("restart capture: capture not running", false);
     }
     let interfaces = INTERFACES.lock().await.clone();
     CAPTURE.lock().await.restart(&interfaces).await;

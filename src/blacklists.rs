@@ -6,6 +6,7 @@ use ipnet::IpNet;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
+use std::sync::Arc;
 use tracing::{info, trace, warn};
 
 // Constants
@@ -33,9 +34,9 @@ pub struct BlacklistsJSON {
 pub struct Blacklists {
     pub date: String,
     pub signature: String,
-    pub blacklists: DashMap<String, BlacklistInfo>,
+    pub blacklists: Arc<DashMap<String, BlacklistInfo>>,
     // Cache for parsed IP ranges for performance
-    pub parsed_ranges: DashMap<String, Vec<IpNet>>,
+    pub parsed_ranges: Arc<DashMap<String, Vec<IpNet>>>,
 }
 
 impl From<Blacklists> for BlacklistsJSON {
@@ -66,8 +67,8 @@ impl Blacklists {
     pub fn new_from_json(blacklist_info: BlacklistsJSON) -> Self {
         info!("Loading blacklists from JSON");
 
-        let blacklists = DashMap::new();
-        let parsed_ranges = DashMap::new();
+        let blacklists = Arc::new(DashMap::new());
+        let parsed_ranges = Arc::new(DashMap::new());
 
         for info in blacklist_info.blacklists {
             let list_name = info.name.clone();
@@ -157,12 +158,8 @@ lazy_static! {
 
 /// Checks if a blacklist name exists in the current model (default or custom).
 pub async fn is_valid_blacklist(blacklist_name: &str) -> bool {
-    LISTS
-        .data
-        .read()
-        .await
-        .blacklists
-        .contains_key(blacklist_name)
+    let blacklists_map = LISTS.data.read().await.blacklists.clone();
+    blacklists_map.contains_key(blacklist_name)
 }
 
 /// Checks if a given IP is blacklisted.
@@ -174,13 +171,18 @@ pub async fn is_ip_blacklisted(ip: &str) -> (bool, Vec<String>) {
 
     let mut matching_blacklists = Vec::new();
 
-    // Access the current blacklist data (could be default or custom)
+    // Clone the Arc to avoid holding the lock during iteration
     let list_data = LISTS.data.read().await;
+    let blacklists_map = list_data.blacklists.clone();
+    let list_data_instance = list_data.clone();
+
+    // Drop the original read lock
+    drop(list_data);
 
     // Check each blacklist in the current data model
-    for entry in list_data.blacklists.iter() {
+    for entry in blacklists_map.iter() {
         let blacklist_name = entry.key();
-        let result = list_data.is_ip_in_blacklist(ip, blacklist_name);
+        let result = list_data_instance.is_ip_in_blacklist(ip, blacklist_name);
 
         match result {
             Ok(true) => {
@@ -192,9 +194,6 @@ pub async fn is_ip_blacklisted(ip: &str) -> (bool, Vec<String>) {
             }
         }
     }
-
-    // Drop guards
-    drop(list_data);
 
     let is_blacklisted = !matching_blacklists.is_empty();
 
