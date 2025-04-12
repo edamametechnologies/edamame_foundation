@@ -5,6 +5,7 @@ use std::net::IpAddr;
 #[cfg(target_os = "windows")]
 mod platform_impl {
     use super::*;
+    use anyhow::anyhow;
     use rand::random;
     use std::time::Duration;
     use tokio::time;
