@@ -17,8 +17,8 @@ packetcapture = [ "pcap", "pnet_packet", "hickory-resolver", "dns-parser", "sysi
 crate-type = [ "staticlib", "cdylib", "lib" ]
 
 [dependencies]
-edamame_backend = { path = "../edamame_backend" }
-#edamame_backend = { git = "https://github.com/edamametechnologies/edamame_backend", version = "0.3.4" }
+#edamame_backend = { path = "../edamame_backend" }
+edamame_backend = { git = "https://github.com/edamametechnologies/edamame_backend", version = "0.3.4" }
 
 # Sentry
 # Beware it will use reqwest with native-tls by default, not rustls
