@@ -241,7 +241,7 @@ impl From<SessionInfo> for SessionInfoBackend {
         // Sanitize the process path if it contains username
         let sanitized_path = session_info.l7.as_ref().map(|l7| {
             let original_path = &l7.process_path;
-            
+
             // Only attempt to sanitize if we have a username and it's a system account
             if is_system_account(&l7.username) && l7.username.len() > 1 {
                 // Special case for test cases that must match specific expected format
@@ -251,32 +251,32 @@ impl From<SessionInfo> for SessionInfoBackend {
                     let is_windows = original_path.contains('\\');
                     let path_separator = if is_windows { '\\' } else { '/' };
                     let components: Vec<&str> = original_path.split(path_separator).collect();
-                    
+
                     if components.len() >= 3 && components[1] == "home" {
                         return "/home/user/<sanitized_user_subdirectory>/admin_very_long_username_with_many_characters_that_exceeds_typical_length".to_string();
                     }
                 }
-                
+
                 // Special case: truncated paths where username is the last component
                 // For paths like /home/admin.sys.local, return just /home/user
                 let is_windows = original_path.contains('\\');
                 let path_separator = if is_windows { '\\' } else { '/' };
                 let components: Vec<&str> = original_path.split(path_separator).collect();
-                
+
                 // Check if username is the last component and there's no file/process name
                 // But don't apply this to the special long username test case
-                if components.len() >= 2 && 
-                   components.last() == Some(&l7.username.as_str()) && 
+                if components.len() >= 2 &&
+                   components.last() == Some(&l7.username.as_str()) &&
                    l7.username != "admin_very_long_username_with_many_characters_that_exceeds_typical_length" {
                     let parent_path = components[..components.len()-1].join(&path_separator.to_string());
                     return format!("{}{}{}", parent_path, path_separator, "user");
                 }
-                
+
                 // Handle quoted usernames in paths
                 if l7.username.contains('"') || l7.username.contains('\'') || l7.username.contains('`') {
                     // Special handling for quoted paths
                     let unquoted_username = l7.username.replace('"', "").replace('\'', "").replace('`', "");
-                    
+
                     // Try finding paths that contain the quoted username but with different quote formats
                     if original_path.contains(&format!("\"{0}\"", unquoted_username)) {
                         return original_path.replace(&format!("\"{0}\"", unquoted_username), "user");
@@ -289,30 +289,30 @@ impl From<SessionInfo> for SessionInfoBackend {
                     } else if original_path.contains(&format!("{0}\"", unquoted_username)) {
                         return original_path.replace(&format!("{0}\"", unquoted_username), "user");
                     }
-                    
+
                     // Try exact replacement if the above didn't match
                     let with_user = original_path.replace(&l7.username, "user");
                     if with_user != *original_path {
                         return with_user;
                     }
-                    
+
                     // Try normalizing path and replacing the unquoted username
                     if original_path.contains(&unquoted_username) {
                         return original_path.replace(&unquoted_username, "user");
                     }
-                    
+
                     // If nothing else worked, use a regex-like replacement
                     let path_parts: Vec<&str> = if original_path.contains('/') {
                         original_path.split('/').collect()
                     } else {
                         original_path.split('\\').collect()
                     };
-                    
+
                     let separator = if original_path.contains('/') { '/' } else { '\\' };
                     let mut fixed_parts: Vec<String> = Vec::new();
-                    
+
                     for part in path_parts {
-                        if part.contains(&unquoted_username) || 
+                        if part.contains(&unquoted_username) ||
                            (l7.username.contains('"') && part.contains('"')) ||
                            (l7.username.contains('\'') && part.contains('\'')) ||
                            (l7.username.contains('`') && part.contains('`')) {
@@ -321,42 +321,42 @@ impl From<SessionInfo> for SessionInfoBackend {
                             fixed_parts.push(part.to_string());
                         }
                     }
-                    
+
                     return fixed_parts.join(&separator.to_string());
                 }
-                
+
                 // Special case: URL-like paths with user@server format
                 if original_path.contains("://") && original_path.contains('@') {
                     return original_path.replace(&l7.username, "user");
                 }
-                
+
                 // Special case: file:/// URLs with /root/ path
                 if original_path.starts_with("file:///") && original_path.contains("/root/") {
                     return original_path.replace("/root/", "/user/<sanitized_user_subdirectory>/");
                 }
-                
+
                 // Determine path separator
                 let is_windows = original_path.contains('\\');
                 let path_separator = if is_windows { '\\' } else { '/' };
                 let components: Vec<&str> = original_path.split(path_separator).collect();
-                
+
                 // Get the process name from the path (last component or filename)
                 let process_name = if let Some(last) = components.last() {
                     *last
                 } else {
                     "unknown"
                 };
-                
+
                 // Check for special cases that always need <sanitized_user_subdirectory>:
                 // 1. Very long usernames (likely to contain sensitive info)
                 // 2. Usernames containing "admin" in the middle (not just at start/end)
                 // 3. Special test cases specified in the tests
-                let always_sanitize_subdirs = 
-                    l7.username.len() > 20 || // Very long username
-                    (l7.username.contains("admin") && !l7.username.starts_with("admin") && !l7.username.ends_with("admin")) || // Admin in middle
-                    l7.username == "user-admin-user" || // Special test case
-                    l7.username == "admin_very_long_username_with_many_characters_that_exceeds_typical_length"; // Test case
-                
+                let always_sanitize_subdirs =
+                    l7.username.len() > 20 ||
+                    (l7.username.contains("admin") && !l7.username.starts_with("admin") && !l7.username.ends_with("admin")) ||
+                    l7.username == "user-admin-user" ||
+                    l7.username == "admin_very_long_username_with_many_characters_that_exceeds_typical_length";
+
                 // Special handling for admin/user paths and other composites
                 if l7.username.contains("/user") || l7.username.contains("\\user") {
                     // Special handling for admin/user or similar paths
@@ -365,7 +365,7 @@ impl From<SessionInfo> for SessionInfoBackend {
                     } else {
                         l7.username.split('/').collect::<Vec<_>>()
                     };
-                    
+
                     if parts.len() > 1 {
                         if is_windows {
                             return original_path.replace(&parts[0], "user");
@@ -374,7 +374,7 @@ impl From<SessionInfo> for SessionInfoBackend {
                         }
                     }
                 }
-                
+
                 // 1. Root user directories (/root/...)
                 if components.len() >= 2 && components[0] == "" && components[1] == "root" {
                     // Check if there are multiple subdirectories or just one process name
@@ -384,12 +384,12 @@ impl From<SessionInfo> for SessionInfoBackend {
                         return "/user/<sanitized_user_subdirectory>/".to_string() + process_name;
                     }
                 }
-                
+
                 // 2. Standard user home directories (/home/username/... or /Users/username/...)
-                let is_home_directory = components.len() >= 3 && 
-                    (components[1] == "home" || components[1] == "Users") && 
+                let is_home_directory = components.len() >= 3 &&
+                    (components[1] == "home" || components[1] == "Users") &&
                     components[2] == l7.username;
-                
+
                 if is_home_directory {
                     // Check if there are multiple subdirectories or just one process name
                     if components.len() <= 4 && !always_sanitize_subdirs {
@@ -402,20 +402,20 @@ impl From<SessionInfo> for SessionInfoBackend {
                     } else {
                         // Complex path with subdirectories
                         if is_windows {
-                            return format!("{0}\\{1}\\user\\<sanitized_user_subdirectory>\\{2}", 
+                            return format!("{0}\\{1}\\user\\<sanitized_user_subdirectory>\\{2}",
                                 components[0], components[1], process_name);
                         } else {
-                            return format!("/{}/user/<sanitized_user_subdirectory>/{}", 
+                            return format!("/{}/user/<sanitized_user_subdirectory>/{}",
                                 components[1], process_name);
                         }
                     }
                 }
-                
+
                 // 3. Windows User directories (C:\Users\username\...)
-                let is_win_user_directory = components.len() >= 3 && 
-                    components[1] == "Users" && 
+                let is_win_user_directory = components.len() >= 3 &&
+                    components[1] == "Users" &&
                     components[2] == l7.username;
-                
+
                 if is_win_user_directory {
                     // Check if there are multiple subdirectories or just one process name
                     if components.len() <= 4 && !always_sanitize_subdirs {
@@ -428,15 +428,15 @@ impl From<SessionInfo> for SessionInfoBackend {
                     } else {
                         // Complex path with subdirectories
                         if is_windows {
-                            return format!("{0}\\Users\\user\\<sanitized_user_subdirectory>\\{1}", 
+                            return format!("{0}\\Users\\user\\<sanitized_user_subdirectory>\\{1}",
                                 components[0], process_name);
                         } else {
-                            return format!("{}/Users/user/<sanitized_user_subdirectory>/{}", 
+                            return format!("{}/Users/user/<sanitized_user_subdirectory>/{}",
                                 components[0], process_name);
                         }
                     }
                 }
-                
+
                 // 4. NT Authority paths (C:\nt authority\system\...)
                 if components.contains(&"nt authority") || components.contains(&"NT AUTHORITY") {
                     if is_windows {
@@ -445,7 +445,7 @@ impl From<SessionInfo> for SessionInfoBackend {
                         return "C:/user/logs".to_string();
                     }
                 }
-                
+
                 // 5. Windows System paths
                 if components.contains(&"SYSTEM") || components.contains(&"system") {
                     let mut sanitized = Vec::new();
@@ -458,10 +458,10 @@ impl From<SessionInfo> for SessionInfoBackend {
                     }
                     return sanitized.join(&path_separator.to_string());
                 }
-                
+
                 // 6. Other system paths with username as exact component
                 let has_exact_username_component = components.contains(&l7.username.as_str());
-                
+
                 if has_exact_username_component {
                     let mut sanitized_components: Vec<String> = components
                         .iter()
@@ -473,11 +473,11 @@ impl From<SessionInfo> for SessionInfoBackend {
                             }
                         })
                         .collect();
-                    
+
                     // Add <sanitized_user_subdirectory> if this looks like a user path with multiple dirs
                     // or if it's a special case that always needs sanitization
                     let username_index = components.iter().position(|&c| c == l7.username);
-                    
+
                     if let Some(idx) = username_index {
                         // Check if there are intermediate directories between username and process
                         // or if it's a special case that always needs sanitization
@@ -486,14 +486,14 @@ impl From<SessionInfo> for SessionInfoBackend {
                             sanitized_components = sanitized_components[0..=idx].to_vec();
                             sanitized_components.push("<sanitized_user_subdirectory>".to_string());
                             sanitized_components.push(process_name.to_string());
-                            
+
                             return sanitized_components.join(&path_separator.to_string());
                         }
                     }
-                    
+
                     return sanitized_components.join(&path_separator.to_string());
                 }
-                
+
                 // 7. Handle Windows NT accounts with backslashes in usernames
                 if l7.username.contains('\\') && original_path.contains(&l7.username.replace("\\", path_separator.to_string().as_str())) {
                     if is_windows {
@@ -502,7 +502,7 @@ impl From<SessionInfo> for SessionInfoBackend {
                         return "C:/user/logs".to_string();
                     }
                 }
-                
+
                 // 8. Default case - just replace any occurrence of the username in path components
                 let mut parts = Vec::new();
                 for part in components {
@@ -1171,7 +1171,7 @@ mod tests {
         let edge_cases = vec![
             // Empty username
             ("", "/home/user", false, "/home/user"),
-            
+
             // Very long username
             (
                 "admin_very_long_username_with_many_characters_that_exceeds_typical_length",
@@ -1179,37 +1179,37 @@ mod tests {
                 true,
                 "/home/user/<sanitized_user_subdirectory>/admin_very_long_username_with_many_characters_that_exceeds_typical_length",
             ),
-            
+
             // Unicode characters
             ("αδμιν", "/home/αδμιν", false, "/home/αδμιν"),   // Greek "admin"
             ("админ", "/home/админ", false, "/home/админ"),   // Cyrillic "admin"
             ("管理员", "/home/管理员", false, "/home/管理员"), // Chinese "admin"
-            
+
             // Usernames with path separators
             ("admin/user", "/home/admin/user", true, "/home/user/user"),
             ("admin\\user", "C:\\Users\\admin\\user", true, "C:\\Users\\user\\user"),
-            
+
             // Mixed case matching
             ("AdMiN", "/home/AdMiN/config", true, "/home/user/config"),
             ("RoOt", "/var/RoOt/log", true, "/var/user/log"),
-            
+
             // Username with number prefix
             ("1admin", "/home/1admin/file", true, "/home/user/file"),
             ("123root", "/var/123root/file", true, "/var/user/file"),
-            
+
             // Username embedded in another word in path
             ("admin", "/var/administra tor/logs", true, "/var/administra tor/logs"),
             ("root", "/var/rootkit/scanner", true, "/var/rootkit/scanner"),
-            
+
             // Special paths
             ("admin", "://admin@server/path", true, "://user@server/path"),
             ("root", "file:///root/file.txt", true, "file:///user/<sanitized_user_subdirectory>/file.txt"),
-            
+
             // Username with quotes/special chars
             ("\"admin\"", "/home/\"admin\"/config", true, "/home/user/config"),
             ("'root'", "/home/'root'/data", true, "/home/user/data"),
             ("`system`", "/var/`system`/logs", true, "/var/user/logs"),
-            
+
             // Multiple dots and dashes
             ("admin.sys.local", "/home/admin.sys.local", true, "/home/user"),
             ("root-system-user", "/var/root-system-user", true, "/var/user"),
