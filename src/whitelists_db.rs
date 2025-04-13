@@ -1,345 +1,424 @@
 // Built in default whitelists db
 pub static WHITELISTS: &str = r#"{
-  "date": "November 05th 2024",
+  "date": "April 11th 2025",
+  "signature": "5198c7bb3e4a4b9886a63823a2a96b2448f4e1ea16842d55672f3825e5ff75ab",
   "whitelists": [
     {
-      "name": "edamame",
-      "extends": null,
       "endpoints": [
         {
-          "process": "edamame_posture",
+          "description": "IP-API",
           "domain": "ip-api.com",
-          "port": 80,
-          "description": "IP-API"
+          "port": 80
         },
         {
-          "process": "edamame_posture",
+          "description": "Connection to IPify service",
+          "domain": "api.ipify.org",
+          "port": 80
+        },
+        {
+          "description": "Connection to Mixpanel analytics",
           "domain": "api.mixpanel.com",
           "port": 443,
-          "description": "Connection to Mixpanel analytics"
+          "process": "edamame_posture"
         },
         {
-          "domain": "api.ipify.org",
-          "port": 80,
-          "description": "Connection to IPify service"
-        },
-        {
-          "process": "edamame_posture",
+          "description": "EDAMAME backend",
           "domain": "*.execute-api.eu-west-1.amazonaws.com",
           "port": 443,
-          "description": "EDAMAME backend"
+          "process": "edamame_posture"
         },
         {
-          "process": "edamame_posture",
+          "description": "EDAMAME website",
+          "domain": "www.edamame.tech",
+          "port": 443,
+          "process": "edamame_posture"
+        },
+        {
+          "description": "EDAMAME backend",
           "domain": "*.compute-1.amazonaws.com",
           "port": 443,
-          "description": "EDAMAME backend"
+          "process": "edamame_posture"
         },
         {
-          "process": "edamame_posture",
+          "description": "EDAMAME backend",
           "domain": "*.compute.amazonaws.com",
           "port": 443,
-          "description": "EDAMAME backend"
+          "process": "edamame_posture"
         },
         {
-          "process": "edamame_posture",
+          "description": "Azure Front Door",
           "domain": "*.azurefd.net",
           "port": 443,
-          "description": "Azure Front Door"
+          "process": "edamame_posture"
         },
         {
-          "process": "edamame_posture",
+          "description": "Azure Blob Storage",
           "domain": "*.blob.core.windows.net",
           "port": 443,
-          "description": "Azure Blob Storage"
+          "process": "edamame_posture"
         },
         {
-          "process": "edamame_posture",
+          "description": "Google Cloud Platform services",
           "domain": "*.bc.googleusercontent.com",
           "port": 443,
-          "description": "Google Cloud Platform services"
+          "process": "edamame_posture"
+        },
+        {
+          "as_number": 13335,
+          "description": "Cloudflare (https)",
+          "port": 443,
+          "process": "edamame_posture"
+        },
+        {
+          "as_number": 13335,
+          "description": "Cloudflare (http)",
+          "port": 80,
+          "process": "edamame_posture"
+        },
+        {
+          "description": "GlobalSign",
+          "domain": "*.globalsign.com",
+          "port": 80,
+          "process": "edamame_posture"
         }
-      ]
+      ],
+      "extends": null,
+      "name": "edamame"
     },
     {
-      "name": "builder",
-      "extends": [
-        "edamame"
-      ],
       "endpoints": [
         {
-          "port": 123,
-          "description": "Connection to NTP"
+          "description": "Connection to NTP",
+          "port": 123
         },
         {
-          "process": "dart",
+          "description": "Connection to Dart/Flutter package repository",
           "domain": "pub.dev",
           "port": 443,
-          "description": "Connection to Dart/Flutter package repository"
+          "process": "dart"
         },
         {
+          "description": "Connection to Chromium source code repository",
           "domain": "chromium.googlesource.com",
-          "port": 443,
-          "description": "Connection to Chromium source code repository"
+          "port": 443
         },
         {
-          "process": "gem",
+          "description": "Connection to Ruby package repository",
           "domain": "rubygems.org",
-          "port": 443,
-          "description": "Connection to Ruby package repository"
+          "port": 443
         },
         {
+          "description": "Connection to Fastly (https)",
           "domain": "*.fastly.net",
-          "port": 443,
-          "description": "Connection to Fastly (https)"
+          "port": 443
         },
         {
+          "description": "Connection to CloudFront (https)",
           "domain": "*.cloudfront.net",
-          "port": 443,
-          "description": "Connection to CloudFront (https)"
+          "port": 443
         },
         {
+          "description": "Connection to AWS services",
           "domain": "*.amazonaws.com",
-          "port": 443,
-          "description": "Connection to AWS services"
+          "port": 443
         },
         {
           "as_number": 396982,
-          "port": 443,
-          "description": "Connection to Google Cloud Platform (https) (ASN: 396982, Country: US, Owner: GOOGLE-CLOUD-PLATFORM)"
+          "description": "Connection to Google Cloud Platform (https) (ASN: 396982, Country: US, Owner: GOOGLE-CLOUD-PLATFORM)",
+          "port": 443
         },
         {
           "as_number": 15169,
-          "port": 443,
-          "description": "Connection to Google services (https) (ASN: 15169, Country: US, Owner: GOOGLE)"
+          "description": "Connection to Google services (https) (ASN: 15169, Country: US, Owner: GOOGLE)",
+          "port": 443
         },
         {
           "as_number": 16509,
-          "port": 443,
-          "description": "Connection to Amazon services (https) (ASN: 16509, Country: US, Owner: AMAZON-02)"
+          "description": "Connection to Amazon services (https) (ASN: 16509, Country: US, Owner: AMAZON-02)",
+          "port": 443
         },
         {
           "as_number": 54113,
-          "port": 443,
-          "description": "Connection to Fastly services (https) (ASN: 54113, Country: US, Owner: FASTLY)"
+          "description": "Connection to Fastly services (https) (ASN: 54113, Country: US, Owner: FASTLY)",
+          "port": 443
         },
         {
+          "description": "Connection to Google DNS over TLS",
           "domain": "dns.google",
-          "port": 853,
-          "description": "Connection to Google DNS over TLS"
+          "port": 853
         },
         {
+          "description": "Connection to Google DNS over HTTPS",
           "domain": "dns.google",
-          "port": 443,
-          "description": "Connection to Google DNS over HTTPS"
+          "port": 443
         },
         {
+          "description": "Connection to Google Play Developer API",
           "domain": "androidpublisher.googleapis.com",
-          "port": 443,
-          "description": "Connection to Google Play Developer API"
+          "port": 443
+        },
+        {
+          "description": "Connection to Adoptium API",
+          "domain": "api.adoptium.net",
+          "port": 443
+        },
+        {
+          "description": "Connection to Gradle plugins artifacts",
+          "domain": "plugins-artifacts.gradle.org",
+          "port": 443
+        },
+        {
+          "description": "Connection to CocoaPods",
+          "domain": "cdn.cocoapods.org",
+          "port": 443
+        },
+        {
+          "description": "Connection to GlobalSign",
+          "domain": "*.globalsign.com",
+          "port": 443
+        },
+        {
+          "description": "Connection to DigiCert",
+          "domain": "*.digicert.com",
+          "port": 443
         }
-      ]
+      ],
+      "extends": [
+        "edamame"
+      ],
+      "name": "builder"
     },
     {
-      "name": "github",
+      "endpoints": [
+        {
+          "description": "Connection to GitHub",
+          "domain": "github.com",
+          "port": 443
+        },
+        {
+          "description": "Connection to GitHub",
+          "domain": "*.github.com",
+          "port": 443
+        },
+        {
+          "description": "Connection to GitHub Container Registry",
+          "domain": "ghcr.io",
+          "port": 443
+        },
+        {
+          "description": "Connection to GitHub raw content",
+          "domain": "raw.githubusercontent.com",
+          "port": 443
+        },
+        {
+          "description": "Connection to GitHub Actions",
+          "domain": "*.actions.githubusercontent.com",
+          "port": 443
+        },
+        {
+          "description": "Connection to GitHub Actions launch service",
+          "domain": "launch.actions.githubusercontent.com",
+          "port": 443
+        },
+        {
+          "description": "Azure DNS and health probe",
+          "ip": "168.63.129.16",
+          "port": 80
+        },
+        {
+          "description": "Azure health probe",
+          "ip": "168.63.129.16",
+          "port": 32526
+        },
+        {
+          "as_number": 8075,
+          "description": "Connection to Microsoft (https) (ASN: 8075, Country: US, Owner: MICROSOFT-CORP-MSN-AS-BLOCK)",
+          "port": 443
+        },
+        {
+          "as_number": 8075,
+          "description": "Connection to Microsoft (23456) (ASN: 8075, Country: US, Owner: MICROSOFT-CORP-MSN-AS-BLOCK)",
+          "port": 23456
+        },
+        {
+          "description": "Connection to Microsoft Edge services",
+          "domain": "*.t-msedge.net",
+          "port": 443
+        }
+      ],
       "extends": [
         "builder"
       ],
-      "endpoints": [
-        {
-          "domain": "github.com",
-          "port": 443,
-          "description": "Connection to GitHub"
-        },
-        {
-          "domain": "*.github.com",
-          "port": 443,
-          "description": "Connection to GitHub"
-        },
-        {
-          "domain": "raw.githubusercontent.com",
-          "port": 443,
-          "description": "Connection to GitHub raw content"
-        },
-        {
-          "domain": "*.actions.githubusercontent.com",
-          "port": 443,
-          "description": "Connection to GitHub Actions"
-        },
-        {
-          "domain": "launch.actions.githubusercontent.com",
-          "port": 443,
-          "description": "Connection to GitHub Actions launch service"
-        },
-        {
-          "ip": "168.63.129.16",
-          "port": 80,
-          "description": "Azure DNS and health probe"
-        },
-        {
-          "ip": "168.63.129.16",
-          "port": 32526,
-          "description": "Azure health probe"
-        },
-        {
-          "as_number": 8075,
-          "port": 443,
-          "description": "Connection to Microsoft (https) (ASN: 8075, Country: US, Owner: MICROSOFT-CORP-MSN-AS-BLOCK)"
-        },
-        {
-          "as_number": 8075,
-          "port": 23456,
-          "description": "Connection to Microsoft (23456) (ASN: 8075, Country: US, Owner: MICROSOFT-CORP-MSN-AS-BLOCK)"
-        },
-        {
-          "domain": "*.t-msedge.net",
-          "port": 443,
-          "description": "Connection to Microsoft Edge services"
-        }
-      ]
+      "name": "github"
     },
     {
-      "name": "github_macos",
-      "extends": [
-        "github"
-      ],
       "endpoints": [
         {
+          "description": "Connection to Homebrew (https)",
           "domain": "homebrew.github.io",
-          "port": 443,
-          "description": "Connection to Homebrew (https)"
+          "port": 443
         },
         {
+          "description": "Connection to Apple services (https)",
           "domain": "*.aaplimg.com",
-          "port": 443,
-          "description": "Connection to Apple services (https)"
+          "port": 443
         },
         {
+          "description": "Connection to Apple DNS",
           "domain": "*.apple-dns.net",
-          "port": 443,
-          "description": "Connection to Apple DNS"
+          "port": 443
         },
         {
+          "description": "Connection to Apple DNS",
           "domain": "*.idms-apple.com.akadns.net",
-          "port": 443,
-          "description": "Connection to Apple DNS"
+          "port": 443
         },
         {
+          "description": "Connection to Apple DNS",
           "domain": "*.push-apple.com.akadns.net",
-          "port": 5223,
-          "description": "Connection to Apple DNS"
+          "port": 5223
         },
         {
+          "description": "Connection to Apple services via Akamai DNS",
           "domain": "*.apple.com.akadns.net",
-          "port": 443,
-          "description": "Connection to Apple services via Akamai DNS"
+          "port": 443
         },
         {
+          "description": "Connection to Apple DNS",
           "domain": "*.itunes-apple.com.akadns.net",
-          "port": 443,
-          "description": "Connection to Apple DNS"
+          "port": 443
         },
         {
+          "description": "Connection to Apple services (https)",
           "domain": "*.apple.com",
-          "port": 443,
-          "description": "Connection to Apple services (https)"
+          "port": 443
         },
         {
+          "description": "Connection to Apple certificate services (http)",
           "domain": "certs.apple.com",
-          "port": 80,
-          "description": "Connection to Apple certificate services (http)"
+          "port": 80
         },
         {
           "as_number": 714,
-          "port": 443,
-          "description": "Connection to Apple Engineering services (https) (ASN: 714, Country: US, Owner: APPLE-ENGINEERING)"
+          "description": "Connection to Apple Engineering services (https) (ASN: 714, Country: US, Owner: APPLE-ENGINEERING)",
+          "port": 443
         },
         {
           "as_number": 714,
-          "port": 5223,
-          "description": "Connection to Apple push services (ASN: 714, Country: US, Owner: APPLE-ENGINEERING)"
+          "description": "Connection to Apple push services (ASN: 714, Country: US, Owner: APPLE-ENGINEERING)",
+          "port": 5223
         },
         {
           "as_number": 6185,
-          "port": 443,
-          "description": "Connection to Apple Austin services (https) (ASN: 6185, Country: US, Owner: APPLE-AUSTIN)"
+          "description": "Connection to Apple Austin services (https) (ASN: 6185, Country: US, Owner: APPLE-AUSTIN)",
+          "port": 443
+        },
+        {
+          "description": "Connection to GitHub",
+          "ip": "192.168.64.0/24",
+          "port": 52616
+        },
+        {
+          "description": "Connection to Apple timestamp service",
+          "domain": "timestamp.apple.com",
+          "port": 80
         }
-      ]
-    },
-    {
-      "name": "github_linux",
+      ],
       "extends": [
         "github"
       ],
+      "name": "github_macos"
+    },
+    {
       "endpoints": [
         {
+          "description": "Connection to Ubuntu",
           "domain": "*.ubuntu.com",
-          "port": 443,
-          "description": "Connection to Ubuntu"
+          "port": 443
         },
         {
+          "description": "Connection to Alpine Linux",
+          "domain": "*.alpinelinux.org",
+          "port": 80
+        },
+        {
+          "description": "Connection to Snapcraft",
           "domain": "api.snapcraft.io",
-          "port": 443,
-          "description": "Connection to Snapcraft"
+          "port": 443
         },
         {
+          "description": "Connection to Microsoft Azure cloud mirror",
           "domain": "cloud-mirror-lb.*.cloudapp.azure.com",
-          "port": 80,
-          "description": "Connection to Microsoft Azure cloud mirror"
+          "port": 80
         },
         {
+          "description": "Connection to Ubuntu Azure mirror",
           "domain": "azure.archive.ubuntu.com",
-          "port": 80,
-          "description": "Connection to Ubuntu Azure mirror"
+          "port": 80
         },
         {
+          "description": "Connection to Microsoft package repository",
           "domain": "packages.microsoft.com",
-          "port": 443,
-          "description": "Connection to Microsoft package repository"
+          "port": 443
         },
         {
+          "description": "Connection to Ubuntu ESM",
           "domain": "esm.ubuntu.com",
-          "port": 443,
-          "description": "Connection to Ubuntu ESM"
+          "port": 443
         },
         {
           "as_number": 41231,
-          "port": 443,
-          "description": "Connection to Canonical services (https) (ASN: 41231, Country: GB, Owner: CANONICAL-AS)"
+          "description": "Connection to Canonical services (https) (ASN: 41231, Country: GB, Owner: CANONICAL-AS)",
+          "port": 443
         },
         {
-          "process": "_apt",
+          "as_number": 41231,
+          "description": "Connection to Canonical services (http) (ASN: 41231, Country: GB, Owner: CANONICAL-AS)",
+          "port": 80,
+          "process": "edamame_posture"
+        },
+        {
+          "description": "Connection to Canonical mirrors",
+          "domain": "*.canonical.com",
+          "port": 80,
+          "process": "edamame_posture"
+        },
+        {
+          "description": "Connection to Ubuntu ESM for package updates",
           "domain": "esm.ubuntu.com",
           "port": 443,
-          "description": "Connection to Ubuntu ESM for package updates"
+          "process": "_apt"
         },
         {
-          "process": "_apt",
+          "description": "Connection to Microsoft Edge services for package updates",
           "domain": "*.t-msedge.net",
           "port": 443,
-          "description": "Connection to Microsoft Edge services for package updates"
+          "process": "_apt"
         },
         {
-          "process": "systemd-resolve",
+          "description": "Connection to Microsoft Edge services for DNS resolution",
           "domain": "*.t-msedge.net",
           "port": 443,
-          "description": "Connection to Microsoft Edge services for DNS resolution"
+          "process": "systemd-resolve"
         },
         {
-          "process": "systemd-network",
+          "description": "Connection to Microsoft Edge services for network operations",
           "domain": "*.t-msedge.net",
           "port": 443,
-          "description": "Connection to Microsoft Edge services for network operations"
+          "process": "systemd-network"
         }
-      ]
-    },
-    {
-      "name": "github_windows",
+      ],
       "extends": [
         "github"
       ],
-      "endpoints": []
+      "name": "github_linux"
+    },
+    {
+      "endpoints": [],
+      "extends": [
+        "github"
+      ],
+      "name": "github_windows"
     }
-  ],
-  "signature": "b89a00841cd48f467ee4c231ca02381369c8c609a6a4ab52dac294ef1aa645d7"
+  ]
 }"#;
