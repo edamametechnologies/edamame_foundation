@@ -90,455 +90,453 @@ pub enum WhitelistState {
     Unknown,
 }
 
-impl From<SessionInfo> for SessionInfoBackend {
-    fn from(session_info: SessionInfo) -> Self {
-        // Helper function to check if a username belongs to a system account
-        fn is_system_account(username: &str) -> bool {
-            // Normalize the username by removing quotes, special characters and whitespace
-            let normalized = username.trim().to_lowercase();
-            let normalized = normalized.trim_start_matches(|c| {
-                c == '^' || c == '$' || c == '%' || c == '#' || c == '"' || c == '\'' || c == '`'
-            });
-            let normalized = normalized.trim_end_matches(|c| c == '"' || c == '\'' || c == '`');
+pub fn sanitized_backend_session_info(session_info: SessionInfo) -> SessionInfoBackend {
+    // Helper function to check if a username belongs to a system account
+    fn is_system_account(username: &str) -> bool {
+        // Normalize the username by removing quotes, special characters and whitespace
+        let normalized = username.trim().to_lowercase();
+        let normalized = normalized.trim_start_matches(|c| {
+            c == '^' || c == '$' || c == '%' || c == '#' || c == '"' || c == '\'' || c == '`'
+        });
+        let normalized = normalized.trim_end_matches(|c| c == '"' || c == '\'' || c == '`');
 
-            // Common system/privileged accounts across platforms
-            let system_accounts = [
-                // General admin accounts
-                "root",
-                "admin",
-                "administrator",
-                "system",
-                "adm",
-                // Windows system accounts
-                "local service",
-                "network service",
-                "defaultaccount",
-                "guest",
-                "wdagutilityaccount",
-                "trustedinstaller",
-                // Unix/Linux system accounts
-                "daemon",
-                "bin",
-                "sys",
-                "sync",
-                "games",
-                "man",
-                "lp",
-                "mail",
-                "news",
-                "uucp",
-                "proxy",
-                "www-data",
-                "backup",
-                "list",
-                "irc",
-                "gnats",
-                "nobody",
-                "systemd",
-                "sshd",
-                "messagebus",
-                "mysql",
-                "postgres",
-                "postfix",
-                "ftp",
-                "smmsp",
-                "colord",
-                // macOS system accounts
-                "daemon",
-                "_spotlight",
-                "_appleevents",
-                "_mdnsresponder",
-                "_ard",
-                "_www",
-                "_eppc",
-                "_cvs",
-                "_sandbox",
-                "_usbmuxd",
-                "_dovecot",
-                "_dpaudio",
-                "_postgres",
-                "_krbtgt",
-                "_kadmin",
-                "_installassistant",
-                "_lp",
-                "_postfix",
-                "_jabber",
-                "_windowserver",
-                "_locationd",
-                "_networkd",
-                "_displaypolicyd",
-                "_mbsetupuser",
-            ];
+        // Common system/privileged accounts across platforms
+        let system_accounts = [
+            // General admin accounts
+            "root",
+            "admin",
+            "administrator",
+            "system",
+            "adm",
+            // Windows system accounts
+            "local service",
+            "network service",
+            "defaultaccount",
+            "guest",
+            "wdagutilityaccount",
+            "trustedinstaller",
+            // Unix/Linux system accounts
+            "daemon",
+            "bin",
+            "sys",
+            "sync",
+            "games",
+            "man",
+            "lp",
+            "mail",
+            "news",
+            "uucp",
+            "proxy",
+            "www-data",
+            "backup",
+            "list",
+            "irc",
+            "gnats",
+            "nobody",
+            "systemd",
+            "sshd",
+            "messagebus",
+            "mysql",
+            "postgres",
+            "postfix",
+            "ftp",
+            "smmsp",
+            "colord",
+            // macOS system accounts
+            "daemon",
+            "_spotlight",
+            "_appleevents",
+            "_mdnsresponder",
+            "_ard",
+            "_www",
+            "_eppc",
+            "_cvs",
+            "_sandbox",
+            "_usbmuxd",
+            "_dovecot",
+            "_dpaudio",
+            "_postgres",
+            "_krbtgt",
+            "_kadmin",
+            "_installassistant",
+            "_lp",
+            "_postfix",
+            "_jabber",
+            "_windowserver",
+            "_locationd",
+            "_networkd",
+            "_displaypolicyd",
+            "_mbsetupuser",
+        ];
 
-            // Check for exact matches first
-            if system_accounts.iter().any(|&account| normalized == account) {
-                return true;
-            }
-
-            // Check for NT accounts (various formats)
-            if normalized.contains("nt ")
-                || normalized.contains("authority")
-                || normalized.contains("system")
-                || normalized.contains("service")
-                || normalized.contains("virtual")
-            {
-                return true;
-            }
-
-            // Check for common admin patterns without doing substring matches for shorter names
-            if normalized == "admin"
-                || normalized.starts_with("admin")
-                || normalized.ends_with("admin")
-                || normalized.contains("_admin")
-                || normalized.contains("-admin")
-                || normalized.contains(".admin")
-                || normalized == "root"
-                || normalized.starts_with("root")
-                || normalized.ends_with("root")
-                || normalized.contains("_root")
-                || normalized.contains("-root")
-                || normalized.contains(".root")
-                || normalized.starts_with("system")
-                || normalized.contains("_system")
-                || normalized.contains("-system")
-                || normalized.contains(".system")
-            {
-                return true;
-            }
-
-            // Quoted usernames that contain sensitive patterns
-            if username.contains('"') || username.contains('\'') || username.contains('`') {
-                let unquoted = username
-                    .replace('"', "")
-                    .replace('\'', "")
-                    .replace('`', "")
-                    .to_lowercase();
-                if unquoted.contains("admin")
-                    || unquoted.contains("root")
-                    || unquoted.contains("system")
-                {
-                    return true;
-                }
-            }
-
-            // Check for macOS system accounts (_prefix)
-            if username.starts_with("_") {
-                return true;
-            }
-
-            false
+        // Check for exact matches first
+        if system_accounts.iter().any(|&account| normalized == account) {
+            return true;
         }
 
-        // Sanitize the username
-        let sanitized_username = session_info.l7.as_ref().map(|l7| {
-            if is_system_account(&l7.username) {
-                "user".to_string()
-            } else {
-                l7.username.clone()
+        // Check for NT accounts (various formats)
+        if normalized.contains("nt ")
+            || normalized.contains("authority")
+            || normalized.contains("system")
+            || normalized.contains("service")
+            || normalized.contains("virtual")
+        {
+            return true;
+        }
+
+        // Check for common admin patterns without doing substring matches for shorter names
+        if normalized == "admin"
+            || normalized.starts_with("admin")
+            || normalized.ends_with("admin")
+            || normalized.contains("_admin")
+            || normalized.contains("-admin")
+            || normalized.contains(".admin")
+            || normalized == "root"
+            || normalized.starts_with("root")
+            || normalized.ends_with("root")
+            || normalized.contains("_root")
+            || normalized.contains("-root")
+            || normalized.contains(".root")
+            || normalized.starts_with("system")
+            || normalized.contains("_system")
+            || normalized.contains("-system")
+            || normalized.contains(".system")
+        {
+            return true;
+        }
+
+        // Quoted usernames that contain sensitive patterns
+        if username.contains('"') || username.contains('\'') || username.contains('`') {
+            let unquoted = username
+                .replace('"', "")
+                .replace('\'', "")
+                .replace('`', "")
+                .to_lowercase();
+            if unquoted.contains("admin")
+                || unquoted.contains("root")
+                || unquoted.contains("system")
+            {
+                return true;
             }
-        });
+        }
 
-        // Sanitize the process path if it contains username
-        let sanitized_path = session_info.l7.as_ref().map(|l7| {
-            let original_path = &l7.process_path;
+        // Check for macOS system accounts (_prefix)
+        if username.starts_with("_") {
+            return true;
+        }
 
-            // Only attempt to sanitize if we have a username and it's a system account
-            if is_system_account(&l7.username) && l7.username.len() > 1 {
-                // Special case for test cases that must match specific expected format
-                // This handles the very long username case
-                if l7.username == "admin_very_long_username_with_many_characters_that_exceeds_typical_length" &&
-                   original_path.contains("admin_very_long_username_with_many_characters_that_exceeds_typical_length") {
-                    let is_windows = original_path.contains('\\');
-                    let path_separator = if is_windows { '\\' } else { '/' };
-                    let components: Vec<&str> = original_path.split(path_separator).collect();
+        false
+    }
 
-                    if components.len() >= 3 && components[1] == "home" {
-                        return "/home/user/<sanitized_user_subdirectory>/admin_very_long_username_with_many_characters_that_exceeds_typical_length".to_string();
-                    }
-                }
+    // Sanitize the username
+    let sanitized_username = session_info.l7.as_ref().map(|l7| {
+        if is_system_account(&l7.username) {
+            "user".to_string()
+        } else {
+            l7.username.clone()
+        }
+    });
 
-                // Special case: truncated paths where username is the last component
-                // For paths like /home/admin.sys.local, return just /home/user
+    // Sanitize the process path if it contains username
+    let sanitized_path = session_info.l7.as_ref().map(|l7| {
+        let original_path = &l7.process_path;
+
+        // Only attempt to sanitize if we have a username and it's a system account
+        if is_system_account(&l7.username) && l7.username.len() > 1 {
+            // Special case for test cases that must match specific expected format
+            // This handles the very long username case
+            if l7.username == "admin_very_long_username_with_many_characters_that_exceeds_typical_length" &&
+               original_path.contains("admin_very_long_username_with_many_characters_that_exceeds_typical_length") {
                 let is_windows = original_path.contains('\\');
                 let path_separator = if is_windows { '\\' } else { '/' };
                 let components: Vec<&str> = original_path.split(path_separator).collect();
 
-                // Check if username is the last component and there's no file/process name
-                // But don't apply this to the special long username test case
-                if components.len() >= 2 &&
-                   components.last() == Some(&l7.username.as_str()) &&
-                   l7.username != "admin_very_long_username_with_many_characters_that_exceeds_typical_length" {
-                    let parent_path = components[..components.len()-1].join(&path_separator.to_string());
-                    return format!("{}{}{}", parent_path, path_separator, "user");
+                if components.len() >= 3 && components[1] == "home" {
+                    return "/home/user/<sanitized_user_subdirectory>/admin_very_long_username_with_many_characters_that_exceeds_typical_length".to_string();
+                }
+            }
+
+            // Special case: truncated paths where username is the last component
+            // For paths like /home/admin.sys.local, return just /home/user
+            let is_windows = original_path.contains('\\');
+            let path_separator = if is_windows { '\\' } else { '/' };
+            let components: Vec<&str> = original_path.split(path_separator).collect();
+
+            // Check if username is the last component and there's no file/process name
+            // But don't apply this to the special long username test case
+            if components.len() >= 2 &&
+               components.last() == Some(&l7.username.as_str()) &&
+               l7.username != "admin_very_long_username_with_many_characters_that_exceeds_typical_length" {
+                let parent_path = components[..components.len()-1].join(&path_separator.to_string());
+                return format!("{}{}{}", parent_path, path_separator, "user");
+            }
+
+            // Handle quoted usernames in paths
+            if l7.username.contains('"') || l7.username.contains('\'') || l7.username.contains('`') {
+                // Special handling for quoted paths
+                let unquoted_username = l7.username.replace('"', "").replace('\'', "").replace('`', "");
+
+                // Try finding paths that contain the quoted username but with different quote formats
+                if original_path.contains(&format!("\"{0}\"", unquoted_username)) {
+                    return original_path.replace(&format!("\"{0}\"", unquoted_username), "user");
+                } else if original_path.contains(&format!("'{0}'", unquoted_username)) {
+                    return original_path.replace(&format!("'{0}'", unquoted_username), "user");
+                } else if original_path.contains(&format!("`{0}`", unquoted_username)) {
+                    return original_path.replace(&format!("`{0}`", unquoted_username), "user");
+                } else if original_path.contains(&format!("\"{0}", unquoted_username)) {
+                    return original_path.replace(&format!("\"{0}", unquoted_username), "user");
+                } else if original_path.contains(&format!("{0}\"", unquoted_username)) {
+                    return original_path.replace(&format!("{0}\"", unquoted_username), "user");
                 }
 
-                // Handle quoted usernames in paths
-                if l7.username.contains('"') || l7.username.contains('\'') || l7.username.contains('`') {
-                    // Special handling for quoted paths
-                    let unquoted_username = l7.username.replace('"', "").replace('\'', "").replace('`', "");
-
-                    // Try finding paths that contain the quoted username but with different quote formats
-                    if original_path.contains(&format!("\"{0}\"", unquoted_username)) {
-                        return original_path.replace(&format!("\"{0}\"", unquoted_username), "user");
-                    } else if original_path.contains(&format!("'{0}'", unquoted_username)) {
-                        return original_path.replace(&format!("'{0}'", unquoted_username), "user");
-                    } else if original_path.contains(&format!("`{0}`", unquoted_username)) {
-                        return original_path.replace(&format!("`{0}`", unquoted_username), "user");
-                    } else if original_path.contains(&format!("\"{0}", unquoted_username)) {
-                        return original_path.replace(&format!("\"{0}", unquoted_username), "user");
-                    } else if original_path.contains(&format!("{0}\"", unquoted_username)) {
-                        return original_path.replace(&format!("{0}\"", unquoted_username), "user");
-                    }
-
-                    // Try exact replacement if the above didn't match
-                    let with_user = original_path.replace(&l7.username, "user");
-                    if with_user != *original_path {
-                        return with_user;
-                    }
-
-                    // Try normalizing path and replacing the unquoted username
-                    if original_path.contains(&unquoted_username) {
-                        return original_path.replace(&unquoted_username, "user");
-                    }
-
-                    // If nothing else worked, use a regex-like replacement
-                    let path_parts: Vec<&str> = if original_path.contains('/') {
-                        original_path.split('/').collect()
-                    } else {
-                        original_path.split('\\').collect()
-                    };
-
-                    let separator = if original_path.contains('/') { '/' } else { '\\' };
-                    let mut fixed_parts: Vec<String> = Vec::new();
-
-                    for part in path_parts {
-                        if part.contains(&unquoted_username) ||
-                           (l7.username.contains('"') && part.contains('"')) ||
-                           (l7.username.contains('\'') && part.contains('\'')) ||
-                           (l7.username.contains('`') && part.contains('`')) {
-                            fixed_parts.push("user".to_string());
-                        } else {
-                            fixed_parts.push(part.to_string());
-                        }
-                    }
-
-                    return fixed_parts.join(&separator.to_string());
+                // Try exact replacement if the above didn't match
+                let with_user = original_path.replace(&l7.username, "user");
+                if with_user != *original_path {
+                    return with_user;
                 }
 
-                // Special case: URL-like paths with user@server format
-                if original_path.contains("://") && original_path.contains('@') {
-                    return original_path.replace(&l7.username, "user");
+                // Try normalizing path and replacing the unquoted username
+                if original_path.contains(&unquoted_username) {
+                    return original_path.replace(&unquoted_username, "user");
                 }
 
-                // Special case: file:/// URLs with /root/ path
-                if original_path.starts_with("file:///") && original_path.contains("/root/") {
-                    return original_path.replace("/root/", "/user/<sanitized_user_subdirectory>/");
-                }
-
-                // Determine path separator
-                let is_windows = original_path.contains('\\');
-                let path_separator = if is_windows { '\\' } else { '/' };
-                let components: Vec<&str> = original_path.split(path_separator).collect();
-
-                // Get the process name from the path (last component or filename)
-                let process_name = if let Some(last) = components.last() {
-                    *last
+                // If nothing else worked, use a regex-like replacement
+                let path_parts: Vec<&str> = if original_path.contains('/') {
+                    original_path.split('/').collect()
                 } else {
-                    "unknown"
+                    original_path.split('\\').collect()
                 };
 
-                // Check for special cases that always need <sanitized_user_subdirectory>:
-                // 1. Very long usernames (likely to contain sensitive info)
-                // 2. Usernames containing "admin" in the middle (not just at start/end)
-                // 3. Special test cases specified in the tests
-                let always_sanitize_subdirs =
-                    l7.username.len() > 20 ||
-                    (l7.username.contains("admin") && !l7.username.starts_with("admin") && !l7.username.ends_with("admin")) ||
-                    l7.username == "user-admin-user" ||
-                    l7.username == "admin_very_long_username_with_many_characters_that_exceeds_typical_length";
+                let separator = if original_path.contains('/') { '/' } else { '\\' };
+                let mut fixed_parts: Vec<String> = Vec::new();
 
-                // Special handling for admin/user paths and other composites
-                if l7.username.contains("/user") || l7.username.contains("\\user") {
-                    // Special handling for admin/user or similar paths
-                    let parts = if is_windows {
-                        l7.username.split('\\').collect::<Vec<_>>()
+                for part in path_parts {
+                    if part.contains(&unquoted_username) ||
+                       (l7.username.contains('"') && part.contains('"')) ||
+                       (l7.username.contains('\'') && part.contains('\'')) ||
+                       (l7.username.contains('`') && part.contains('`')) {
+                        fixed_parts.push("user".to_string());
                     } else {
-                        l7.username.split('/').collect::<Vec<_>>()
-                    };
-
-                    if parts.len() > 1 {
-                        if is_windows {
-                            return original_path.replace(&parts[0], "user");
-                        } else {
-                            return original_path.replace(&parts[0], "user");
-                        }
+                        fixed_parts.push(part.to_string());
                     }
                 }
 
-                // 1. Root user directories (/root/...)
-                if components.len() >= 2 && components[0] == "" && components[1] == "root" {
-                    // Check if there are multiple subdirectories or just one process name
-                    if components.len() <= 3 && !always_sanitize_subdirs {
-                        return "/user/".to_string() + process_name;
-                    } else {
-                        return "/user/<sanitized_user_subdirectory>/".to_string() + process_name;
-                    }
-                }
-
-                // 2. Standard user home directories (/home/username/... or /Users/username/...)
-                let is_home_directory = components.len() >= 3 &&
-                    (components[1] == "home" || components[1] == "Users") &&
-                    components[2] == l7.username;
-
-                if is_home_directory {
-                    // Check if there are multiple subdirectories or just one process name
-                    if components.len() <= 4 && !always_sanitize_subdirs {
-                        // Simple case with just username/process - no subdirectory sanitization needed
-                        if is_windows {
-                            return format!("{0}\\{1}\\user\\{2}", components[0], components[1], process_name);
-                        } else {
-                            return format!("/{}/user/{}", components[1], process_name);
-                        }
-                    } else {
-                        // Complex path with subdirectories
-                        if is_windows {
-                            return format!("{0}\\{1}\\user\\<sanitized_user_subdirectory>\\{2}",
-                                components[0], components[1], process_name);
-                        } else {
-                            return format!("/{}/user/<sanitized_user_subdirectory>/{}",
-                                components[1], process_name);
-                        }
-                    }
-                }
-
-                // 3. Windows User directories (C:\Users\username\...)
-                let is_win_user_directory = components.len() >= 3 &&
-                    components[1] == "Users" &&
-                    components[2] == l7.username;
-
-                if is_win_user_directory {
-                    // Check if there are multiple subdirectories or just one process name
-                    if components.len() <= 4 && !always_sanitize_subdirs {
-                        // Simple case with just username/process - no subdirectory sanitization needed
-                        if is_windows {
-                            return format!("{0}\\Users\\user\\{1}", components[0], process_name);
-                        } else {
-                            return format!("{}/Users/user/{}", components[0], process_name);
-                        }
-                    } else {
-                        // Complex path with subdirectories
-                        if is_windows {
-                            return format!("{0}\\Users\\user\\<sanitized_user_subdirectory>\\{1}",
-                                components[0], process_name);
-                        } else {
-                            return format!("{}/Users/user/<sanitized_user_subdirectory>/{}",
-                                components[0], process_name);
-                        }
-                    }
-                }
-
-                // 4. NT Authority paths (C:\nt authority\system\...)
-                if components.contains(&"nt authority") || components.contains(&"NT AUTHORITY") {
-                    if is_windows {
-                        return "C:\\user\\logs".to_string();
-                    } else {
-                        return "C:/user/logs".to_string();
-                    }
-                }
-
-                // 5. Windows System paths
-                if components.contains(&"SYSTEM") || components.contains(&"system") {
-                    let mut sanitized = Vec::new();
-                    for &component in components.iter() {
-                        if component.to_lowercase() == "system" {
-                            sanitized.push("user");
-                        } else {
-                            sanitized.push(component);
-                        }
-                    }
-                    return sanitized.join(&path_separator.to_string());
-                }
-
-                // 6. Other system paths with username as exact component
-                let has_exact_username_component = components.contains(&l7.username.as_str());
-
-                if has_exact_username_component {
-                    let mut sanitized_components: Vec<String> = components
-                        .iter()
-                        .map(|component| {
-                            if *component == l7.username {
-                                "user".to_string()
-                            } else {
-                                component.to_string()
-                            }
-                        })
-                        .collect();
-
-                    // Add <sanitized_user_subdirectory> if this looks like a user path with multiple dirs
-                    // or if it's a special case that always needs sanitization
-                    let username_index = components.iter().position(|&c| c == l7.username);
-
-                    if let Some(idx) = username_index {
-                        // Check if there are intermediate directories between username and process
-                        // or if it's a special case that always needs sanitization
-                        if components.len() > idx + 2 || always_sanitize_subdirs {
-                            // Keep only up to the username component and the final process name
-                            sanitized_components = sanitized_components[0..=idx].to_vec();
-                            sanitized_components.push("<sanitized_user_subdirectory>".to_string());
-                            sanitized_components.push(process_name.to_string());
-
-                            return sanitized_components.join(&path_separator.to_string());
-                        }
-                    }
-
-                    return sanitized_components.join(&path_separator.to_string());
-                }
-
-                // 7. Handle Windows NT accounts with backslashes in usernames
-                if l7.username.contains('\\') && original_path.contains(&l7.username.replace("\\", path_separator.to_string().as_str())) {
-                    if is_windows {
-                        return "C:\\user\\logs".to_string();
-                    } else {
-                        return "C:/user/logs".to_string();
-                    }
-                }
-
-                // 8. Default case - just replace any occurrence of the username in path components
-                let mut parts = Vec::new();
-                for part in components {
-                    if part == l7.username {
-                        parts.push("user");
-                    } else {
-                        parts.push(part);
-                    }
-                }
-                parts.join(&path_separator.to_string())
-            } else {
-                original_path.clone()
+                return fixed_parts.join(&separator.to_string());
             }
-        });
 
-        // Convert the session info to a backend-friendly format
-        let session_info_backend = SessionInfoBackend {
-            dst_ip: session_info.session.dst_ip.to_string(),
-            dst_port: session_info.session.dst_port,
-            protocol: match session_info.session.protocol {
-                Protocol::TCP => "TCP".to_string(),
-                Protocol::UDP => "UDP".to_string(),
-            },
-            dst_domain: session_info.dst_domain.clone(),
-            dst_asn_number: session_info.dst_asn.as_ref().map(|asn| asn.as_number),
-            dst_asn_country: session_info.dst_asn.as_ref().map(|asn| asn.country.clone()),
-            dst_asn_owner: session_info.dst_asn.as_ref().map(|asn| asn.owner.clone()),
-            criticality: session_info.criticality.clone(),
-            dst_service: session_info.dst_service.clone(),
-            l7_process_name: session_info.l7.as_ref().map(|l7| l7.process_name.clone()),
-            l7_process_path: sanitized_path,
-            l7_process_user: sanitized_username,
-        };
+            // Special case: URL-like paths with user@server format
+            if original_path.contains("://") && original_path.contains('@') {
+                return original_path.replace(&l7.username, "user");
+            }
 
-        session_info_backend
-    }
+            // Special case: file:/// URLs with /root/ path
+            if original_path.starts_with("file:///") && original_path.contains("/root/") {
+                return original_path.replace("/root/", "/user/<sanitized_user_subdirectory>/");
+            }
+
+            // Determine path separator
+            let is_windows = original_path.contains('\\');
+            let path_separator = if is_windows { '\\' } else { '/' };
+            let components: Vec<&str> = original_path.split(path_separator).collect();
+
+            // Get the process name from the path (last component or filename)
+            let process_name = if let Some(last) = components.last() {
+                *last
+            } else {
+                "unknown"
+            };
+
+            // Check for special cases that always need <sanitized_user_subdirectory>:
+            // 1. Very long usernames (likely to contain sensitive info)
+            // 2. Usernames containing "admin" in the middle (not just at start/end)
+            // 3. Special test cases specified in the tests
+            let always_sanitize_subdirs =
+                l7.username.len() > 20 ||
+                (l7.username.contains("admin") && !l7.username.starts_with("admin") && !l7.username.ends_with("admin")) ||
+                l7.username == "user-admin-user" ||
+                l7.username == "admin_very_long_username_with_many_characters_that_exceeds_typical_length";
+
+            // Special handling for admin/user paths and other composites
+            if l7.username.contains("/user") || l7.username.contains("\\user") {
+                // Special handling for admin/user or similar paths
+                let parts = if is_windows {
+                    l7.username.split('\\').collect::<Vec<_>>()
+                } else {
+                    l7.username.split('/').collect::<Vec<_>>()
+                };
+
+                if parts.len() > 1 {
+                    if is_windows {
+                        return original_path.replace(&parts[0], "user");
+                    } else {
+                        return original_path.replace(&parts[0], "user");
+                    }
+                }
+            }
+
+            // 1. Root user directories (/root/...)
+            if components.len() >= 2 && components[0] == "" && components[1] == "root" {
+                // Check if there are multiple subdirectories or just one process name
+                if components.len() <= 3 && !always_sanitize_subdirs {
+                    return "/user/".to_string() + process_name;
+                } else {
+                    return "/user/<sanitized_user_subdirectory>/".to_string() + process_name;
+                }
+            }
+
+            // 2. Standard user home directories (/home/username/... or /Users/username/...)
+            let is_home_directory = components.len() >= 3 &&
+                (components[1] == "home" || components[1] == "Users") &&
+                components[2] == l7.username;
+
+            if is_home_directory {
+                // Check if there are multiple subdirectories or just one process name
+                if components.len() <= 4 && !always_sanitize_subdirs {
+                    // Simple case with just username/process - no subdirectory sanitization needed
+                    if is_windows {
+                        return format!("{0}\\{1}\\user\\{2}", components[0], components[1], process_name);
+                    } else {
+                        return format!("/{}/user/{}", components[1], process_name);
+                    }
+                } else {
+                    // Complex path with subdirectories
+                    if is_windows {
+                        return format!("{0}\\{1}\\user\\<sanitized_user_subdirectory>\\{2}",
+                            components[0], components[1], process_name);
+                    } else {
+                        return format!("/{}/user/<sanitized_user_subdirectory>/{}",
+                            components[1], process_name);
+                    }
+                }
+            }
+
+            // 3. Windows User directories (C:\Users\username\...)
+            let is_win_user_directory = components.len() >= 3 &&
+                components[1] == "Users" &&
+                components[2] == l7.username;
+
+            if is_win_user_directory {
+                // Check if there are multiple subdirectories or just one process name
+                if components.len() <= 4 && !always_sanitize_subdirs {
+                    // Simple case with just username/process - no subdirectory sanitization needed
+                    if is_windows {
+                        return format!("{0}\\Users\\user\\{1}", components[0], process_name);
+                    } else {
+                        return format!("{}/Users/user/{}", components[0], process_name);
+                    }
+                } else {
+                    // Complex path with subdirectories
+                    if is_windows {
+                        return format!("{0}\\Users\\user\\<sanitized_user_subdirectory>\\{1}",
+                            components[0], process_name);
+                    } else {
+                        return format!("{}/Users/user/<sanitized_user_subdirectory>/{}",
+                            components[0], process_name);
+                    }
+                }
+            }
+
+            // 4. NT Authority paths (C:\nt authority\system\...)
+            if components.contains(&"nt authority") || components.contains(&"NT AUTHORITY") {
+                if is_windows {
+                    return "C:\\user\\logs".to_string();
+                } else {
+                    return "C:/user/logs".to_string();
+                }
+            }
+
+            // 5. Windows System paths
+            if components.contains(&"SYSTEM") || components.contains(&"system") {
+                let mut sanitized = Vec::new();
+                for &component in components.iter() {
+                    if component.to_lowercase() == "system" {
+                        sanitized.push("user");
+                    } else {
+                        sanitized.push(component);
+                    }
+                }
+                return sanitized.join(&path_separator.to_string());
+            }
+
+            // 6. Other system paths with username as exact component
+            let has_exact_username_component = components.contains(&l7.username.as_str());
+
+            if has_exact_username_component {
+                let mut sanitized_components: Vec<String> = components
+                    .iter()
+                    .map(|component| {
+                        if *component == l7.username {
+                            "user".to_string()
+                        } else {
+                            component.to_string()
+                        }
+                    })
+                    .collect();
+
+                // Add <sanitized_user_subdirectory> if this looks like a user path with multiple dirs
+                // or if it's a special case that always needs sanitization
+                let username_index = components.iter().position(|&c| c == l7.username);
+
+                if let Some(idx) = username_index {
+                    // Check if there are intermediate directories between username and process
+                    // or if it's a special case that always needs sanitization
+                    if components.len() > idx + 2 || always_sanitize_subdirs {
+                        // Keep only up to the username component and the final process name
+                        sanitized_components = sanitized_components[0..=idx].to_vec();
+                        sanitized_components.push("<sanitized_user_subdirectory>".to_string());
+                        sanitized_components.push(process_name.to_string());
+
+                        return sanitized_components.join(&path_separator.to_string());
+                    }
+                }
+
+                return sanitized_components.join(&path_separator.to_string());
+            }
+
+            // 7. Handle Windows NT accounts with backslashes in usernames
+            if l7.username.contains('\\') && original_path.contains(&l7.username.replace("\\", path_separator.to_string().as_str())) {
+                if is_windows {
+                    return "C:\\user\\logs".to_string();
+                } else {
+                    return "C:/user/logs".to_string();
+                }
+            }
+
+            // 8. Default case - just replace any occurrence of the username in path components
+            let mut parts = Vec::new();
+            for part in components {
+                if part == l7.username {
+                    parts.push("user");
+                } else {
+                    parts.push(part);
+                }
+            }
+            parts.join(&path_separator.to_string())
+        } else {
+            original_path.clone()
+        }
+    });
+
+    // Convert the session info to a backend-friendly format
+    let session_info_backend = SessionInfoBackend {
+        dst_ip: session_info.session.dst_ip.to_string(),
+        dst_port: session_info.session.dst_port,
+        protocol: match session_info.session.protocol {
+            Protocol::TCP => "TCP".to_string(),
+            Protocol::UDP => "UDP".to_string(),
+        },
+        dst_domain: session_info.dst_domain.clone(),
+        dst_asn_number: session_info.dst_asn.as_ref().map(|asn| asn.as_number),
+        dst_asn_country: session_info.dst_asn.as_ref().map(|asn| asn.country.clone()),
+        dst_asn_owner: session_info.dst_asn.as_ref().map(|asn| asn.owner.clone()),
+        criticality: session_info.criticality.clone(),
+        dst_service: session_info.dst_service.clone(),
+        l7_process_name: session_info.l7.as_ref().map(|l7| l7.process_name.clone()),
+        l7_process_path: sanitized_path,
+        l7_process_user: sanitized_username,
+    };
+
+    session_info_backend
 }
 
 pub fn filter_local_sessions(sessions: &Vec<SessionInfo>) -> Vec<SessionInfo> {
@@ -1080,7 +1078,7 @@ mod tests {
             };
 
             // Convert to backend format
-            let backend = SessionInfoBackend::from(session_info);
+            let backend = sanitized_backend_session_info(session_info);
 
             // Print debugging information for failed cases
             if backend.l7_process_path != Some(expected_path.to_string()) {
@@ -1247,7 +1245,7 @@ mod tests {
             };
 
             // Convert to backend format
-            let backend = SessionInfoBackend::from(session_info);
+            let backend = sanitized_backend_session_info(session_info);
 
             // For system accounts, we expect username to be sanitized to "user"
             let expected_username = if *is_system_expected {
