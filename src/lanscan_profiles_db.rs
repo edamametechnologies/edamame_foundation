@@ -1,14 +1,11 @@
 // Built in default profile db
 pub static DEVICE_PROFILES: &str = r#"{
-  "date": "October 04th 2024",
-  "signature": "62e7b39962b1db2bfbb9f912b91e67ed4450cb9216f601f75169aaba8155b3b1",
+  "date": "April 11th 2025",
   "profiles": [
     {
-      "device_type": "Printer",
       "conditions": [
         {
           "Node": {
-            "type": "OR",
             "sub_conditions": [
               {
                 "Leaf": {
@@ -39,17 +36,17 @@ pub static DEVICE_PROFILES: &str = r#"{
                   ]
                 }
               }
-            ]
+            ],
+            "type": "OR"
           }
         }
-      ]
+      ],
+      "device_type": "Printer"
     },
     {
-      "device_type": "RaspberryPi",
       "conditions": [
         {
           "Node": {
-            "type": "OR",
             "sub_conditions": [
               {
                 "Leaf": {
@@ -65,17 +62,17 @@ pub static DEVICE_PROFILES: &str = r#"{
                   ]
                 }
               }
-            ]
+            ],
+            "type": "OR"
           }
         }
-      ]
+      ],
+      "device_type": "RaspberryPi"
     },
     {
-      "device_type": "SmartSpeaker",
       "conditions": [
         {
           "Node": {
-            "type": "OR",
             "sub_conditions": [
               {
                 "Leaf": {
@@ -115,17 +112,17 @@ pub static DEVICE_PROFILES: &str = r#"{
                   ]
                 }
               }
-            ]
+            ],
+            "type": "OR"
           }
         }
-      ]
+      ],
+      "device_type": "SmartSpeaker"
     },
     {
-      "device_type": "Router",
       "conditions": [
         {
           "Node": {
-            "type": "OR",
             "sub_conditions": [
               {
                 "Leaf": {
@@ -134,17 +131,17 @@ pub static DEVICE_PROFILES: &str = r#"{
                   ]
                 }
               }
-            ]
+            ],
+            "type": "OR"
           }
         }
-      ]
+      ],
+      "device_type": "Router"
     },
     {
-      "device_type": "iPhone",
       "conditions": [
         {
           "Node": {
-            "type": "OR",
             "sub_conditions": [
               {
                 "Leaf": {
@@ -155,7 +152,6 @@ pub static DEVICE_PROFILES: &str = r#"{
               },
               {
                 "Node": {
-                  "type": "AND",
                   "sub_conditions": [
                     {
                       "Leaf": {
@@ -172,20 +168,21 @@ pub static DEVICE_PROFILES: &str = r#"{
                         ]
                       }
                     }
-                  ]
+                  ],
+                  "type": "AND"
                 }
               }
-            ]
+            ],
+            "type": "OR"
           }
         }
-      ]
+      ],
+      "device_type": "iPhone"
     },
     {
-      "device_type": "Apple PC",
       "conditions": [
         {
           "Node": {
-            "type": "OR",
             "sub_conditions": [
               {
                 "Leaf": {
@@ -194,17 +191,17 @@ pub static DEVICE_PROFILES: &str = r#"{
                   ]
                 }
               }
-            ]
+            ],
+            "type": "OR"
           }
         }
-      ]
+      ],
+      "device_type": "Apple PC"
     },
     {
-      "device_type": "Smartphone",
       "conditions": [
         {
           "Node": {
-            "type": "OR",
             "sub_conditions": [
               {
                 "Leaf": {
@@ -216,17 +213,17 @@ pub static DEVICE_PROFILES: &str = r#"{
                   ]
                 }
               }
-            ]
+            ],
+            "type": "OR"
           }
         }
-      ]
+      ],
+      "device_type": "Smartphone"
     },
     {
-      "device_type": "PC",
       "conditions": [
         {
           "Node": {
-            "type": "AND",
             "sub_conditions": [
               {
                 "Leaf": {
@@ -241,23 +238,23 @@ pub static DEVICE_PROFILES: &str = r#"{
               },
               {
                 "Leaf": {
+                  "negate": true,
                   "open_ports": [
                     53
-                  ],
-                  "negate": true
+                  ]
                 }
               }
-            ]
+            ],
+            "type": "AND"
           }
         }
-      ]
+      ],
+      "device_type": "PC"
     },
     {
-      "device_type": "NAS",
       "conditions": [
         {
           "Node": {
-            "type": "OR",
             "sub_conditions": [
               {
                 "Leaf": {
@@ -270,17 +267,17 @@ pub static DEVICE_PROFILES: &str = r#"{
                   ]
                 }
               }
-            ]
+            ],
+            "type": "OR"
           }
         }
-      ]
+      ],
+      "device_type": "NAS"
     },
     {
-      "device_type": "GameConsole",
       "conditions": [
         {
           "Node": {
-            "type": "OR",
             "sub_conditions": [
               {
                 "Leaf": {
@@ -300,17 +297,17 @@ pub static DEVICE_PROFILES: &str = r#"{
                   ]
                 }
               }
-            ]
+            ],
+            "type": "OR"
           }
         }
-      ]
+      ],
+      "device_type": "GameConsole"
     },
     {
-      "device_type": "IoT",
       "conditions": [
         {
           "Node": {
-            "type": "OR",
             "sub_conditions": [
               {
                 "Leaf": {
@@ -348,17 +345,17 @@ pub static DEVICE_PROFILES: &str = r#"{
                   ]
                 }
               }
-            ]
+            ],
+            "type": "OR"
           }
         }
-      ]
+      ],
+      "device_type": "IoT"
     },
     {
-      "device_type": "SmartTV",
       "conditions": [
         {
           "Node": {
-            "type": "OR",
             "sub_conditions": [
               {
                 "Leaf": {
@@ -408,17 +405,17 @@ pub static DEVICE_PROFILES: &str = r#"{
                   ]
                 }
               }
-            ]
+            ],
+            "type": "OR"
           }
         }
-      ]
+      ],
+      "device_type": "SmartTV"
     },
     {
-      "device_type": "Camera",
       "conditions": [
         {
           "Node": {
-            "type": "OR",
             "sub_conditions": [
               {
                 "Leaf": {
@@ -440,17 +437,17 @@ pub static DEVICE_PROFILES: &str = r#"{
                   ]
                 }
               }
-            ]
+            ],
+            "type": "OR"
           }
         }
-      ]
+      ],
+      "device_type": "Camera"
     },
     {
-      "device_type": "NetworkDevice",
       "conditions": [
         {
           "Node": {
-            "type": "OR",
             "sub_conditions": [
               {
                 "Leaf": {
@@ -477,10 +474,13 @@ pub static DEVICE_PROFILES: &str = r#"{
                   ]
                 }
               }
-            ]
+            ],
+            "type": "OR"
           }
         }
-      ]
+      ],
+      "device_type": "NetworkDevice"
     }
-  ]
+  ],
+  "signature": "668dface3a45fc82f044dfb25618000ffbcfb773b9d3891e4345c459b1916184"
 }"#;
