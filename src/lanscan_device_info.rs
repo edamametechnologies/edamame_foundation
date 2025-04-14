@@ -213,17 +213,6 @@ impl DeviceInfo {
         device_backend
     }
 
-    pub async fn sanitized_backend_device_key(&self) -> String {
-        let sanitized_device = DeviceInfo::sanitized_backend_device_info(self).await;
-        format!(
-            "{}{}{}{}",
-            sanitized_device.device_vendor,
-            sanitized_device.mdns_services.join(""),
-            sanitized_device.vulnerabilities.len(),
-            sanitized_device.open_ports.len()
-        )
-    }
-
     // Check if devices in the device list shall be merged based on
     //  (1) same (non empty) hostname
     //  (2) same (non empty) IP v4
