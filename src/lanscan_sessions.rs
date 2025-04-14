@@ -539,6 +539,20 @@ pub fn sanitized_backend_session_info(session_info: SessionInfo) -> SessionInfoB
     session_info_backend
 }
 
+pub async fn sanitized_backend_session_key(&self) -> String {
+    let sanitized_session = SessionInfo::sanitized_backend_session_info(self).await;
+    format!(
+        "{}{}{}{}{}{}",
+        sanitized_session.dst_ip,
+        sanitized_session.dst_port,
+        sanitized_session.protocol,
+        sanitized_session.l7_process_user,
+        sanitized_session.l7_process_path,
+        sanitized_session.l7_process_name,
+        sanitized_session.criticality
+    )
+}
+
 pub fn filter_local_sessions(sessions: &Vec<SessionInfo>) -> Vec<SessionInfo> {
     filter_sessions(sessions, SessionFilter::LocalOnly)
 }
