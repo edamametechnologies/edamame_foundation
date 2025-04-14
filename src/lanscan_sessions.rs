@@ -539,10 +539,10 @@ pub fn sanitized_backend_session_info(session_info: SessionInfo) -> SessionInfoB
     session_info_backend
 }
 
-pub async fn sanitized_backend_session_key(&self) -> String {
-    let sanitized_session = SessionInfo::sanitized_backend_session_info(self).await;
+pub fn sanitized_backend_session_key(session_info: SessionInfo) -> String {
+    let sanitized_session = sanitized_backend_session_info(session_info);
     format!(
-        "{}{}{}{}{}{}",
+        "{}{}{}{:?}{:?}{:?}{}",
         sanitized_session.dst_ip,
         sanitized_session.dst_port,
         sanitized_session.protocol,
