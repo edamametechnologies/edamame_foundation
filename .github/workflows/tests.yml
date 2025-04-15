@@ -368,16 +368,12 @@ jobs:
         shell: alpine.sh --root {0}
 
       - name: Setup EDAMAME Posture
-        uses: edamametechnologies/edamame_posture_action@v0
-        with:
-          edamame_user: ${{ vars.EDAMAME_POSTURE_USER }}
-          edamame_domain: ${{ vars.EDAMAME_POSTURE_DOMAIN }}
-          edamame_pin: ${{ secrets.EDAMAME_POSTURE_PIN }}
-          edamame_id: ${{ github.run_id }}-alpine-${{ matrix.arch }}
-          # Don't checkout the repo, as we will do manual checkout
-          checkout: false
-          wait_for_api: true
-          wait_for_https: true
+        run: |
+          # Download edamame_posture for MUSL
+          wget https://raw.githubusercontent.com/edamametechnologies/edamame_posture_cli/refs/heads/main/linux/edamame_setup.sh -O edamame_setup.sh
+          chmod +x edamame_setup.sh
+          ./edamame_setup.sh ${{ vars.EDAMAME_POSTURE_USER }} ${{ vars.EDAMAME_POSTURE_DOMAIN }} ${{ secrets.EDAMAME_POSTURE_PIN }} ${{ github.run_id }}-alpine-${{ matrix.arch }}
+        shell: alpine.sh {0}
 
       # Set VERGEN_GIT_BRANCH to current branch
       - name: Set VERGEN_GIT_BRANCH
