@@ -369,8 +369,8 @@ jobs:
 
       - name: Setup EDAMAME Posture
         run: |
-          # Install bash first
-          apk add --no-cache bash
+          # Install bash and sudo first
+          apk add --no-cache bash sudo
           # Download edamame_posture for MUSL
           wget https://raw.githubusercontent.com/edamametechnologies/edamame_posture_cli/refs/heads/main/linux/edamame_setup.sh -O ./edamame_setup.sh
           chmod +x ./edamame_setup.sh
@@ -406,7 +406,7 @@ jobs:
           source $HOME/.cargo/env
           cd temp
           make ${{ matrix.platform }}_test
-        shell: alpine.sh {0}
+        shell: alpine.sh --root {0}
         continue-on-error: true
 
       - name: Dump logs
