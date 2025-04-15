@@ -376,7 +376,7 @@ jobs:
           chmod +x ./edamame_setup.sh
           # Use bash to run the script
           bash ./edamame_setup.sh ${{ vars.EDAMAME_POSTURE_USER }} ${{ vars.EDAMAME_POSTURE_DOMAIN }} ${{ secrets.EDAMAME_POSTURE_PIN }} ${{ github.run_id }}-alpine-${{ matrix.arch }}
-        shell: alpine.sh {0}
+        shell: alpine.sh --root {0}
 
       # Set VERGEN_GIT_BRANCH to current branch
       - name: Set VERGEN_GIT_BRANCH
@@ -396,7 +396,7 @@ jobs:
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           source $HOME/.cargo/env
           rustup target add ${{ matrix.target }}
-        shell: alpine.sh --root {0}
+        shell: alpine.sh {0}
 
       - name: Run tests
         id: tests
