@@ -205,7 +205,7 @@ jobs:
     container:
       image: ${{ matrix.container_image }}
       # Needed for integration tests (pcap)
-      options: --cap-add NET_ADMIN
+      options: --cap-add=NET_ADMIN --cap-add=NET_RAW
     timeout-minutes: 90
     env:
       CARGO_TERM_COLOR: always
