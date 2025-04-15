@@ -370,8 +370,8 @@ jobs:
       - name: Setup EDAMAME Posture
         run: |
           # Download edamame_posture for MUSL
-          wget https://raw.githubusercontent.com/edamametechnologies/edamame_posture_cli/refs/heads/main/linux/edamame_setup.sh -O edamame_setup.sh
-          chmod +x edamame_setup.sh
+          wget https://raw.githubusercontent.com/edamametechnologies/edamame_posture_cli/refs/heads/main/linux/edamame_setup.sh -O ./edamame_setup.sh
+          chmod +x ./edamame_setup.sh
           ./edamame_setup.sh ${{ vars.EDAMAME_POSTURE_USER }} ${{ vars.EDAMAME_POSTURE_DOMAIN }} ${{ secrets.EDAMAME_POSTURE_PIN }} ${{ github.run_id }}-alpine-${{ matrix.arch }}
         shell: alpine.sh {0}
 
