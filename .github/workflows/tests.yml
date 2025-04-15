@@ -386,6 +386,8 @@ jobs:
       # Manual checkout for Alpine
       - name: Manual checkout for Alpine
         run: |
+          mkdir temp
+          cd temp
           git clone https://github.com/${{ github.repository }}.git .
           git checkout ${{ github.ref_name }}
         shell: alpine.sh {0}
@@ -402,6 +404,7 @@ jobs:
         id: tests
         run: |
           source $HOME/.cargo/env
+          cd temp
           make ${{ matrix.platform }}_test
         shell: alpine.sh {0}
         continue-on-error: true
