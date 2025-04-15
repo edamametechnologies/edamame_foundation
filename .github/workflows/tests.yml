@@ -236,7 +236,7 @@ jobs:
         run: |
           apt-get install -y tcpdump
           # We check if we have the right permissions to run tcpdump and therefore have permission to use pcap
-          sudo tcpdump -c 10
+          tcpdump -c 10
 
       - name: Setup EDAMAME Posture
         uses: edamametechnologies/edamame_posture_action@v0
