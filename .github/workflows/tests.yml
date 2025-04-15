@@ -231,13 +231,6 @@ jobs:
           apt-get install -y git curl
           git config --global --add safe.directory '*'
 
-      - name: Test tcpdump
-        shell: bash
-        run: |
-          apt-get install -y tcpdump
-          # We check if we have the right permissions to run tcpdump and therefore have permission to use pcap
-          tcpdump -c 10
-
       - name: Setup EDAMAME Posture
         uses: edamametechnologies/edamame_posture_action@v0
         with:
@@ -387,7 +380,7 @@ jobs:
 
       # Set VERGEN_GIT_BRANCH to current branch
       - name: Set VERGEN_GIT_BRANCH
-        run: echo "VERGEN_GIT_BRANCH=${{ github.ref_name }}" >> $GITHUB_ENV
+        run: export VERGEN_GIT_BRANCH=${{ github.ref_name }}
         shell: alpine.sh {0}
 
       # Manual checkout for Alpine
