@@ -26,7 +26,7 @@ env:
   LAMBDA_SIGNATURE: ${{ secrets.LAMBDA_SIGNATURE }}
 
 jobs:
-  build:
+  test-native:
     strategy:
       fail-fast: false
       matrix:
@@ -61,6 +61,7 @@ jobs:
 
       - name: Set ignored paths
         id: set-ignored-paths
+        shell: bash
         run: |
           if [ "${{ matrix.os }}" = "ubuntu-latest" ] && [ "${{ matrix.platform }}" != "android" ]; then
             echo "IGNORED_PATHS<<EOF" >> $GITHUB_OUTPUT
@@ -134,28 +135,38 @@ jobs:
             echo ".github/workflows/*ios*.yml" >> $GITHUB_OUTPUT
             echo "EOF" >> $GITHUB_OUTPUT
           fi
-        shell: bash
 
       - name: iOS add-ons
         if: matrix.platform == 'ios'
+        shell: bash
         run: |
           rustup target add aarch64-apple-ios
 
       - name: Android add-ons
         if: matrix.platform == 'android'
+        shell: bash
         run: |
           rustup target add x86_64-linux-android
           cargo install cross --git https://github.com/cross-rs/cross
 
       - name: Install protobuf
+        shell: bash
         run: ${{ matrix.protobuf_install }}
 
       - name: Run tests
         id: tests
+        shell: bash
         run: |
           make ${{ matrix.platform }}_test
-        shell: bash
         continue-on-error: true
+
+      - name: Dump logs
+        if: always()
+        shell: bash
+        run: |
+          echo "--- Dumping Native Logs (${{ matrix.os }}-${{ matrix.platform }}) --- "
+          find "$HOME/" -name "edamame_*.*" -exec echo "--- {} ---" \; -exec cat {} \; || echo "No logs found in HOME"
+          echo "--- Native Log Dump Complete ---"
 
       - name: Slack alerts
         if: steps.tests.outcome != 'success'
@@ -168,6 +179,261 @@ jobs:
 
       - name: Fail job if tests failed
         if: steps.tests.outcome != 'success'
+        shell: bash
         run: |
+          echo "## Test Results Summary (Native - ${{ matrix.os }}-${{ matrix.platform }})"
+          echo "- Tests: ${{ steps.tests.outcome == 'success' && '✅ Success' || '❌ Failed' }}"
+          echo ""
           echo "Forcing job to fail because tests did not succeed."
           exit 1
+
+  test-container:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Container-based tests for older Ubuntu versions
+          - os: ubuntu-latest
+            container_image: ubuntu:20.04
+            container_name: ubuntu-20.04
+            platform: linux
+          - os: ubuntu-latest
+            container_image: ubuntu:18.04
+            container_name: ubuntu-18.04
+            platform: linux
+    runs-on: ${{ matrix.os }}
+    container:
+      image: ${{ matrix.container_image }}
+      # Needed for integration tests (pcap)
+      options: --cap-add NET_ADMIN
+    timeout-minutes: 90
+    env:
+      CARGO_TERM_COLOR: always
+      EDAMAME_TARGET: ${{ secrets.EDAMAME_TARGET }}
+      EDAMAME_SERVER: ${{ secrets.EDAMAME_SERVER }}
+      EDAMAME_SERVER_PEM: ${{ secrets.EDAMAME_SERVER_PEM }}
+      EDAMAME_SERVER_KEY: ${{ secrets.EDAMAME_SERVER_KEY }}
+      EDAMAME_CA_PEM: ${{ secrets.EDAMAME_CA_PEM }}
+      EDAMAME_CLIENT_PEM: ${{ secrets.EDAMAME_CLIENT_PEM }}
+      EDAMAME_CLIENT_KEY: ${{ secrets.EDAMAME_CLIENT_KEY }}
+      EDAMAME_CLIENT_CA_PEM: ${{ secrets.EDAMAME_CLIENT_CA_PEM }}
+      LAMBDA_SIGNATURE: ${{ secrets.LAMBDA_SIGNATURE }}
+      # Debug mode
+      EDAMAME_LOG_LEVEL: debug
+      
+    steps:
+      # Needed when we are running in a container
+      - name: Setup permissions for git and install missing packages
+        shell: bash
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update -y
+          apt-get install -y git curl
+          git config --global --add safe.directory '*'
+
+      - name: Setup EDAMAME Posture
+        uses: edamametechnologies/edamame_posture_action@v0
+        with:
+          edamame_user: ${{ vars.EDAMAME_POSTURE_USER }}
+          edamame_domain: ${{ vars.EDAMAME_POSTURE_DOMAIN }}
+          edamame_pin: ${{ secrets.EDAMAME_POSTURE_PIN }}
+          edamame_id: ${{ github.run_id }}-container-${{ matrix.container_name }}
+          # Don't checkout the repo, as we will do that in the next step
+          checkout: false
+          wait_for_api: true
+          wait_for_https: true
+        # Will fail on 18.04 because of glibc version
+        continue-on-error: true
+
+      # Manual checkout for containers (actions/checkout@v4 requires node20 which is not supported on older Ubuntu containers)
+      - name: Manual checkout for containers
+        shell: bash
+        run: |
+          git clone https://github.com/${{ github.repository }}.git .
+          git checkout ${{ github.ref_name }}
+
+      - name: Install additional packages
+        shell: bash
+        run: |
+          apt-get update
+          apt-get install -y protobuf-compiler libpcap-dev
+
+      # Install Rust in container
+      - name: Install Rust in container
+        shell: bash
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          # Add rust to path for subsequent steps
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Run tests
+        id: tests
+        shell: bash
+        run: |
+          # Ensure cargo is in path
+          export PATH="$HOME/.cargo/bin:$PATH"
+          make ${{ matrix.platform }}_test
+        continue-on-error: true
+
+      - name: Dump logs
+        if: always()
+        shell: bash
+        run: |
+          echo "--- Dumping Container Logs (${{ matrix.container_name }}) --- "
+          find "$HOME/" -name "edamame_*.*" -exec echo "--- {} ---" \; -exec cat {} \; || echo "No logs found in HOME"
+          echo "--- Container Log Dump Complete ---"
+
+      - name: Slack alerts
+        # Won't work on 18.04 because of glibc version
+        if: steps.tests.outcome != 'success' && !contains(matrix.container_name, '18.04')
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          channel-id: 'C072J0U9TH7'
+          slack-message: |
+            *Container Test Results for ${{ github.repository }} (${{ matrix.container_name }})*:
+            - Tests: ${{ steps.tests.outcome == 'success' && '✅ Success' || '❌ Failed' }}
+            Branch: ${{ github.ref }}
+            More details: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+
+      - name: Fail job if tests failed
+        if: steps.tests.outcome != 'success'
+        shell: bash
+        run: |
+          echo "## Test Results Summary (Container - ${{ matrix.container_name }})"
+          echo "- Tests: ${{ steps.tests.outcome == 'success' && '✅ Success' || '❌ Failed' }}"
+          echo ""
+          echo "Forcing container job to fail because tests did not succeed."
+          exit 1
+
+  test-alpine:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            arch: x86_64
+            target: x86_64-unknown-linux-musl
+            platform: linux
+          - os: ubuntu-latest
+            arch: aarch64
+            target: aarch64-unknown-linux-musl
+            platform: linux
+
+    runs-on: ${{ matrix.os }}
+    # We need to wait a long time for musl aarch64 due to the use of qemu
+    timeout-minutes: 180
+    env:
+      CARGO_TERM_COLOR: always
+      EDAMAME_TARGET: ${{ secrets.EDAMAME_TARGET }}
+      EDAMAME_SERVER: ${{ secrets.EDAMAME_SERVER }}
+      EDAMAME_SERVER_PEM: ${{ secrets.EDAMAME_SERVER_PEM }}
+      EDAMAME_SERVER_KEY: ${{ secrets.EDAMAME_SERVER_KEY }}
+      EDAMAME_CA_PEM: ${{ secrets.EDAMAME_CA_PEM }}
+      EDAMAME_CLIENT_PEM: ${{ secrets.EDAMAME_CLIENT_PEM }}
+      EDAMAME_CLIENT_KEY: ${{ secrets.EDAMAME_CLIENT_KEY }}
+      EDAMAME_CLIENT_CA_PEM: ${{ secrets.EDAMAME_CLIENT_CA_PEM }}
+      LAMBDA_SIGNATURE: ${{ secrets.LAMBDA_SIGNATURE }}
+      # Debug mode
+      EDAMAME_LOG_LEVEL: debug
+
+    steps:
+      # Set up QEMU for aarch64 emulation
+      - name: Set up QEMU
+        if: matrix.arch == 'aarch64'
+        uses: docker/setup-qemu-action@v2
+        with:
+          platforms: arm64
+
+      # Setup Alpine Linux
+      - name: Setup Alpine Linux
+        uses: jirutka/setup-alpine@v1
+        with:
+          arch: ${{ matrix.arch }}
+          branch: v3.15
+
+      # Install dependencies with apk
+      - name: Install dependencies with apk
+        run: |
+          apk add --no-cache \
+            build-base \
+            protobuf-dev \
+            libpcap-dev \
+            git \
+            curl \
+            pkgconf \
+            eudev-dev \
+            perl
+        shell: alpine.sh --root {0}
+
+      - name: Setup EDAMAME Posture
+        uses: edamametechnologies/edamame_posture_action@v0
+        with:
+          edamame_user: ${{ vars.EDAMAME_POSTURE_USER }}
+          edamame_domain: ${{ vars.EDAMAME_POSTURE_DOMAIN }}
+          edamame_pin: ${{ secrets.EDAMAME_POSTURE_PIN }}
+          edamame_id: ${{ github.run_id }}-alpine-${{ matrix.arch }}
+          # Don't checkout the repo, as we will do manual checkout
+          checkout: false
+          wait_for_api: true
+          wait_for_https: true
+
+      # Set VERGEN_GIT_BRANCH to current branch
+      - name: Set VERGEN_GIT_BRANCH
+        run: echo "VERGEN_GIT_BRANCH=${{ github.ref_name }}" >> $GITHUB_ENV
+        shell: alpine.sh {0}
+
+      # Manual checkout for Alpine
+      - name: Manual checkout for Alpine
+        run: |
+          git clone https://github.com/${{ github.repository }}.git .
+          git checkout ${{ github.ref_name }}
+        shell: alpine.sh {0}
+
+      # Install Rust
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          source $HOME/.cargo/env
+          rustup target add ${{ matrix.target }}
+        shell: alpine.sh --root {0}
+
+      - name: Run tests
+        id: tests
+        run: |
+          source $HOME/.cargo/env
+          make ${{ matrix.platform }}_test
+        shell: alpine.sh {0}
+        continue-on-error: true
+
+      - name: Dump logs
+        if: always()
+        shell: bash
+        run: |
+          echo "--- Dumping Alpine Logs (${{ matrix.arch }}) --- "
+          find "$HOME/" -name "edamame_*.*" -exec echo "--- {} ---" \; -exec cat {} \; || echo "No logs found in HOME"
+          echo "--- Alpine Log Dump Complete ---"
+
+      - name: Slack alerts
+        if: steps.tests.outcome != 'success'
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          channel-id: 'C072J0U9TH7'
+          slack-message: |
+            *Alpine Test Results for ${{ github.repository }} (${{ matrix.arch }})*:
+            - Tests: ${{ steps.tests.outcome == 'success' && '✅ Success' || '❌ Failed' }}
+            Branch: ${{ github.ref }}
+            More details: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+
+      - name: Fail job if tests failed
+        if: steps.tests.outcome != 'success'
+        run: |
+          echo "## Test Results Summary (Alpine - ${{ matrix.arch }})"
+          echo "- Tests: ${{ steps.tests.outcome == 'success' && '✅ Success' || '❌ Failed' }}"
+          echo ""
+          echo "Forcing alpine job to fail because tests did not succeed."
+          exit 1
+        shell: alpine.sh {0}
