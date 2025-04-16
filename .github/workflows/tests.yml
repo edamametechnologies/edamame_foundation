@@ -409,11 +409,6 @@ jobs:
           bash ./edamame_setup.sh ${{ vars.EDAMAME_POSTURE_USER }} ${{ vars.EDAMAME_POSTURE_DOMAIN }} ${{ secrets.EDAMAME_POSTURE_PIN }} ${{ github.run_id }}-alpine-${{ matrix.arch }}
         shell: alpine.sh --root {0}
 
-      # Set VERGEN_GIT_BRANCH to current branch
-      - name: Set VERGEN_GIT_BRANCH
-        run: export VERGEN_GIT_BRANCH=${{ github.ref_name }}
-        shell: alpine.sh {0}
-
       # Manual checkout for Alpine
       - name: Manual checkout for Alpine
         run: |
@@ -439,6 +434,8 @@ jobs:
           make ${{ matrix.platform }}_test
         shell: alpine.sh --root {0}
         continue-on-error: true
+        env:
+          VERGEN_GIT_BRANCH: ${{ github.ref_name }}
 
       - name: Dump logs
         if: always()
