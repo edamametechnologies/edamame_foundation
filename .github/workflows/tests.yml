@@ -442,11 +442,11 @@ jobs:
 
       - name: Dump logs
         if: always()
-        shell: bash
         run: |
           echo "--- Dumping Alpine Logs (${{ matrix.arch }}) --- "
           find "$HOME/" -name "edamame_*.*" -exec echo "--- {} ---" \; -exec cat {} \; || echo "No logs found in HOME"
           echo "--- Alpine Log Dump Complete ---"
+        shell: alpine.sh --root {0}
 
       - name: Slack alerts
         if: steps.tests.outcome != 'success'
