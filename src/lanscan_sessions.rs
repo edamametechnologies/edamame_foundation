@@ -228,9 +228,9 @@ pub fn sanitized_backend_session_info(session_info: SessionInfo) -> SessionInfoB
         false
     }
 
-    // Sanitize the username
+    // Sanitize the username if it's not a system account
     let sanitized_username = session_info.l7.as_ref().map(|l7| {
-        if is_system_account(&l7.username) {
+        if !is_system_account(&l7.username) {
             "user".to_string()
         } else {
             l7.username.clone()
@@ -241,40 +241,29 @@ pub fn sanitized_backend_session_info(session_info: SessionInfo) -> SessionInfoB
     let sanitized_path = session_info.l7.as_ref().map(|l7| {
         let original_path = &l7.process_path;
 
-        // Only attempt to sanitize if we have a username and it's a system account
-        if is_system_account(&l7.username) && l7.username.len() > 1 {
-            // Special case for test cases that must match specific expected format
-            // This handles the very long username case
-            if l7.username == "admin_very_long_username_with_many_characters_that_exceeds_typical_length" &&
-               original_path.contains("admin_very_long_username_with_many_characters_that_exceeds_typical_length") {
-                let is_windows = original_path.contains('\\');
-                let path_separator = if is_windows { '\\' } else { '/' };
-                let components: Vec<&str> = original_path.split(path_separator).collect();
-
-                if components.len() >= 3 && components[1] == "home" {
-                    return "/home/user/<sanitized_user_subdirectory>/admin_very_long_username_with_many_characters_that_exceeds_typical_length".to_string();
-                }
-            }
-
+        // Only attempt to sanitize if we have a username and it's not a system account
+        if !is_system_account(&l7.username) && l7.username.len() > 1 {
             // Special case: truncated paths where username is the last component
-            // For paths like /home/admin.sys.local, return just /home/user
             let is_windows = original_path.contains('\\');
             let path_separator = if is_windows { '\\' } else { '/' };
             let components: Vec<&str> = original_path.split(path_separator).collect();
 
             // Check if username is the last component and there's no file/process name
-            // But don't apply this to the special long username test case
-            if components.len() >= 2 &&
-               components.last() == Some(&l7.username.as_str()) &&
-               l7.username != "admin_very_long_username_with_many_characters_that_exceeds_typical_length" {
-                let parent_path = components[..components.len()-1].join(&path_separator.to_string());
+            if components.len() >= 2 && components.last() == Some(&l7.username.as_str()) {
+                let parent_path =
+                    components[..components.len() - 1].join(&path_separator.to_string());
                 return format!("{}{}{}", parent_path, path_separator, "user");
             }
 
             // Handle quoted usernames in paths
-            if l7.username.contains('"') || l7.username.contains('\'') || l7.username.contains('`') {
+            if l7.username.contains('"') || l7.username.contains('\'') || l7.username.contains('`')
+            {
                 // Special handling for quoted paths
-                let unquoted_username = l7.username.replace('"', "").replace('\'', "").replace('`', "");
+                let unquoted_username = l7
+                    .username
+                    .replace('"', "")
+                    .replace('\'', "")
+                    .replace('`', "");
 
                 // Try finding paths that contain the quoted username but with different quote formats
                 if original_path.contains(&format!("\"{0}\"", unquoted_username)) {
@@ -307,14 +296,19 @@ pub fn sanitized_backend_session_info(session_info: SessionInfo) -> SessionInfoB
                     original_path.split('\\').collect()
                 };
 
-                let separator = if original_path.contains('/') { '/' } else { '\\' };
+                let separator = if original_path.contains('/') {
+                    '/'
+                } else {
+                    '\\'
+                };
                 let mut fixed_parts: Vec<String> = Vec::new();
 
                 for part in path_parts {
-                    if part.contains(&unquoted_username) ||
-                       (l7.username.contains('"') && part.contains('"')) ||
-                       (l7.username.contains('\'') && part.contains('\'')) ||
-                       (l7.username.contains('`') && part.contains('`')) {
+                    if part.contains(&unquoted_username)
+                        || (l7.username.contains('"') && part.contains('"'))
+                        || (l7.username.contains('\'') && part.contains('\''))
+                        || (l7.username.contains('`') && part.contains('`'))
+                    {
                         fixed_parts.push("user".to_string());
                     } else {
                         fixed_parts.push(part.to_string());
@@ -350,29 +344,11 @@ pub fn sanitized_backend_session_info(session_info: SessionInfo) -> SessionInfoB
             // 1. Very long usernames (likely to contain sensitive info)
             // 2. Usernames containing "admin" in the middle (not just at start/end)
             // 3. Special test cases specified in the tests
-            let always_sanitize_subdirs =
-                l7.username.len() > 20 ||
-                (l7.username.contains("admin") && !l7.username.starts_with("admin") && !l7.username.ends_with("admin")) ||
-                l7.username == "user-admin-user" ||
-                l7.username == "admin_very_long_username_with_many_characters_that_exceeds_typical_length";
-
-            // Special handling for admin/user paths and other composites
-            if l7.username.contains("/user") || l7.username.contains("\\user") {
-                // Special handling for admin/user or similar paths
-                let parts = if is_windows {
-                    l7.username.split('\\').collect::<Vec<_>>()
-                } else {
-                    l7.username.split('/').collect::<Vec<_>>()
-                };
-
-                if parts.len() > 1 {
-                    if is_windows {
-                        return original_path.replace(&parts[0], "user");
-                    } else {
-                        return original_path.replace(&parts[0], "user");
-                    }
-                }
-            }
+            let always_sanitize_subdirs = l7.username.len() > 20
+                || (l7.username.contains("admin")
+                    && !l7.username.starts_with("admin")
+                    && !l7.username.ends_with("admin"))
+                || l7.username == "user-admin-user";
 
             // 1. Root user directories (/root/...)
             if components.len() >= 2 && components[0] == "" && components[1] == "root" {
@@ -385,35 +361,41 @@ pub fn sanitized_backend_session_info(session_info: SessionInfo) -> SessionInfoB
             }
 
             // 2. Standard user home directories (/home/username/... or /Users/username/...)
-            let is_home_directory = components.len() >= 3 &&
-                (components[1] == "home" || components[1] == "Users") &&
-                components[2] == l7.username;
+            let is_home_directory = components.len() >= 3
+                && (components[1] == "home" || components[1] == "Users")
+                && components[2] == l7.username;
 
             if is_home_directory {
                 // Check if there are multiple subdirectories or just one process name
                 if components.len() <= 4 && !always_sanitize_subdirs {
                     // Simple case with just username/process - no subdirectory sanitization needed
                     if is_windows {
-                        return format!("{0}\\{1}\\user\\{2}", components[0], components[1], process_name);
+                        return format!(
+                            "{0}\\{1}\\user\\{2}",
+                            components[0], components[1], process_name
+                        );
                     } else {
                         return format!("/{}/user/{}", components[1], process_name);
                     }
                 } else {
                     // Complex path with subdirectories
                     if is_windows {
-                        return format!("{0}\\{1}\\user\\<sanitized_user_subdirectory>\\{2}",
-                            components[0], components[1], process_name);
+                        return format!(
+                            "{0}\\{1}\\user\\<sanitized_user_subdirectory>\\{2}",
+                            components[0], components[1], process_name
+                        );
                     } else {
-                        return format!("/{}/user/<sanitized_user_subdirectory>/{}",
-                            components[1], process_name);
+                        return format!(
+                            "/{}/user/<sanitized_user_subdirectory>/{}",
+                            components[1], process_name
+                        );
                     }
                 }
             }
 
             // 3. Windows User directories (C:\Users\username\...)
-            let is_win_user_directory = components.len() >= 3 &&
-                components[1] == "Users" &&
-                components[2] == l7.username;
+            let is_win_user_directory =
+                components.len() >= 3 && components[1] == "Users" && components[2] == l7.username;
 
             if is_win_user_directory {
                 // Check if there are multiple subdirectories or just one process name
@@ -427,11 +409,15 @@ pub fn sanitized_backend_session_info(session_info: SessionInfo) -> SessionInfoB
                 } else {
                     // Complex path with subdirectories
                     if is_windows {
-                        return format!("{0}\\Users\\user\\<sanitized_user_subdirectory>\\{1}",
-                            components[0], process_name);
+                        return format!(
+                            "{0}\\Users\\user\\<sanitized_user_subdirectory>\\{1}",
+                            components[0], process_name
+                        );
                     } else {
-                        return format!("{}/Users/user/<sanitized_user_subdirectory>/{}",
-                            components[0], process_name);
+                        return format!(
+                            "{}/Users/user/<sanitized_user_subdirectory>/{}",
+                            components[0], process_name
+                        );
                     }
                 }
             }
@@ -494,7 +480,12 @@ pub fn sanitized_backend_session_info(session_info: SessionInfo) -> SessionInfoB
             }
 
             // 7. Handle Windows NT accounts with backslashes in usernames
-            if l7.username.contains('\\') && original_path.contains(&l7.username.replace("\\", path_separator.to_string().as_str())) {
+            if l7.username.contains('\\')
+                && original_path.contains(
+                    &l7.username
+                        .replace("\\", path_separator.to_string().as_str()),
+                )
+            {
                 if is_windows {
                     return "C:\\user\\logs".to_string();
                 } else {
@@ -798,247 +789,242 @@ mod tests {
         // Test cases with different usernames and expected sanitization results
         // Format: (username, expected_sanitized_username, path_with_username, expected_sanitized_path)
         let test_cases = vec![
-            // Regular user cases - should remain unchanged
-            ("john", "john", "/home/john/app", "/home/john/app"),
+            // Regular user cases - should be anonymized to "user"
+            ("john", "user", "/home/john/app", "/home/user/app"),
             (
                 "alice",
-                "alice",
+                "user",
                 "/Users/alice/Documents",
-                "/Users/alice/Documents",
+                "/Users/user/Documents",
             ),
             (
                 "regularuser",
-                "regularuser",
+                "user",
                 "C:\\Users\\regularuser\\Desktop",
-                "C:\\Users\\regularuser\\Desktop",
+                "C:\\Users\\user\\Desktop",
             ),
             (
                 "user-1234",
-                "user-1234",
+                "user",
                 "/home/user-1234/projects",
-                "/home/user-1234/projects",
+                "/home/user/projects",
             ),
             (
                 "user.name",
-                "user.name",
+                "user",
                 "C:\\Users\\user.name",
-                "C:\\Users\\user.name",
+                "C:\\Users\\user",
             ),
-            // User directories with complex subdirectories (we expect sanitization)
+            // User directories with complex subdirectories (we expect sanitization for non-system accounts)
             (
                 "admin",
-                "user",
+                "admin",
                 "/home/admin/projects/secret/work/admin-tool",
-                "/home/user/<sanitized_user_subdirectory>/admin-tool",
+                "/home/admin/projects/secret/work/admin-tool",
             ),
             (
                 "root",
-                "user",
+                "root",
                 "/root/private/configs/ssh/security/root-config",
-                "/user/<sanitized_user_subdirectory>/root-config",
+                "/root/private/configs/ssh/security/root-config",
             ),
             (
                 "Administrator",
-                "user",
+                "Administrator",
                 "C:\\Users\\Administrator\\AppData\\Local\\Config\\admin-tool.exe",
-                "C:\\Users\\user\\<sanitized_user_subdirectory>\\admin-tool.exe",
+                "C:\\Users\\Administrator\\AppData\\Local\\Config\\admin-tool.exe",
             ),
             // Linux/Unix system accounts
-            (
-                "root",
-                "user",
-                "/root/.ssh/config",
-                "/user/<sanitized_user_subdirectory>/config",
-            ),
+            ("root", "root", "/root/.ssh/config", "/root/.ssh/config"),
             (
                 "daemon",
-                "user",
+                "daemon",
                 "/var/lib/daemon/data",
-                "/var/lib/user/data", // Non-user directory path
+                "/var/lib/daemon/data",
             ),
             (
                 "www-data",
-                "user",
+                "www-data",
                 "/var/www/www-data/html",
-                "/var/www/user/html", // Non-user directory path
+                "/var/www/www-data/html",
             ),
-            ("nobody", "user", "/tmp/nobody/cache", "/tmp/user/cache"), // Non-user directory path
+            ("nobody", "nobody", "/tmp/nobody/cache", "/tmp/nobody/cache"),
             (
                 "postgres",
-                "user",
+                "postgres",
                 "/var/lib/postgresql/data",
-                "/var/lib/postgresql/data", // Username not in path
+                "/var/lib/postgresql/data",
             ),
             // macOS system accounts
             (
                 "_spotlight",
-                "user",
+                "_spotlight",
                 "/Users/_spotlight/Library/Caches/spotlight-index",
-                "/Users/user/<sanitized_user_subdirectory>/spotlight-index",
+                "/Users/_spotlight/Library/Caches/spotlight-index",
             ),
             (
                 "_mdnsresponder",
-                "user",
+                "_mdnsresponder",
                 "/Library/Logs/_mdnsresponder",
-                "/Library/Logs/user", // Non-user directory path
+                "/Library/Logs/_mdnsresponder",
             ),
             (
                 "_locationd",
-                "user",
+                "_locationd",
                 "/var/_locationd/data.db",
-                "/var/user/data.db", // Non-user directory path
+                "/var/_locationd/data.db",
             ),
             // Windows system accounts
             (
                 "Administrator",
-                "user",
+                "Administrator",
                 "C:\\Users\\Administrator\\Desktop\\admin-tools\\config.exe",
-                "C:\\Users\\user\\<sanitized_user_subdirectory>\\config.exe",
+                "C:\\Users\\Administrator\\Desktop\\admin-tools\\config.exe",
             ),
             (
                 "ADMIN",
-                "user",
+                "ADMIN",
                 "C:\\Users\\ADMIN\\Documents\\passwords.txt",
-                "C:\\Users\\user\\<sanitized_user_subdirectory>\\passwords.txt",
+                "C:\\Users\\ADMIN\\Documents\\passwords.txt",
             ),
             (
                 "admin",
-                "user",
+                "admin",
                 "/Users/admin/Documents/notes.app",
-                "/Users/user/<sanitized_user_subdirectory>/notes.app",
+                "/Users/admin/Documents/notes.app",
             ),
             (
                 "SYSTEM",
-                "user",
+                "SYSTEM",
                 "C:\\Windows\\System32\\config\\SYSTEM",
-                "C:\\Windows\\System32\\config\\user", // Non-user directory path
+                "C:\\Windows\\System32\\config\\SYSTEM",
             ),
             (
                 "LOCAL SERVICE",
-                "user",
+                "LOCAL SERVICE",
                 "C:\\LocalService\\logs",
-                "C:\\LocalService\\logs", // Username not in path
+                "C:\\LocalService\\logs",
             ),
             (
                 "nt authority\\system",
-                "user",
+                "nt authority\\system",
                 "C:\\nt authority\\system\\logs",
-                "C:\\user\\logs", // NT authority path
+                "C:\\nt authority\\system\\logs",
             ),
             (
                 "NT AUTHORITY\\SYSTEM",
-                "user",
+                "NT AUTHORITY\\SYSTEM",
                 "C:\\Windows\\SYSTEM\\temp",
-                "C:\\Windows\\user\\temp", // System component replacement
+                "C:\\Windows\\SYSTEM\\temp",
             ),
             (
                 "NT SERVICE\\ProfSvc",
-                "user",
+                "NT SERVICE\\ProfSvc",
                 "C:\\Windows\\ProfSvc\\logs",
-                "C:\\Windows\\ProfSvc\\logs", // No exact path component match
+                "C:\\Windows\\ProfSvc\\logs",
             ),
             (
                 "NT VIRTUAL MACHINE\\user",
-                "user",
+                "NT VIRTUAL MACHINE\\user",
                 "D:\\VM\\logs",
-                "D:\\VM\\logs", // No exact path component match
+                "D:\\VM\\logs",
             ),
             // Windows accounts with special prefixes
             (
                 "^Administrator",
-                "user",
+                "^Administrator",
                 "C:\\Users\\^Administrator\\Desktop\\config.dll",
-                "C:\\Users\\user\\<sanitized_user_subdirectory>\\config.dll",
+                "C:\\Users\\^Administrator\\Desktop\\config.dll",
             ),
             (
                 "^SYSTEM",
-                "user",
+                "^SYSTEM",
                 "C:\\^SYSTEM\\logs",
-                "C:\\user\\logs", // Non-user directory path
+                "C:\\^SYSTEM\\logs",
             ),
             (
                 "%SystemAdmin",
-                "user",
+                "%SystemAdmin",
                 "/var/log/%SystemAdmin/app.log",
-                "/var/log/user/app.log", // Non-user directory path
+                "/var/log/%SystemAdmin/app.log",
             ),
             (
                 "#admin",
-                "user",
+                "#admin",
                 "D:\\#admin\\config",
-                "D:\\user\\config", // Non-user directory path
+                "D:\\#admin\\config",
             ),
             (
                 "$system_svc",
-                "user",
+                "$system_svc",
                 "C:\\services\\$system_svc",
-                "C:\\services\\user", // Non-user directory path
+                "C:\\services\\$system_svc",
             ),
             // Edge cases
-            ("adm", "user", "/var/adm/logs", "/var/user/logs"), // Non-user directory path
+            ("adm", "adm", "/var/adm/logs", "/var/adm/logs"),
             (
                 "administrator123",
-                "user",
+                "administrator123",
                 "/home/administrator123/data/secrets/tool",
-                "/home/user/<sanitized_user_subdirectory>/tool",
+                "/home/administrator123/data/secrets/tool",
             ),
             (
                 "sys.admin",
-                "user",
+                "sys.admin",
                 "C:\\sys.admin\\config",
-                "C:\\user\\config", // Non-user directory path
+                "C:\\sys.admin\\config",
             ),
             (
                 "user-admin-user",
-                "user",
+                "user-admin-user",
                 "/home/user-admin-user/app",
-                "/home/user/<sanitized_user_subdirectory>/app",
+                "/home/user-admin-user/app",
             ),
             // Complex paths with multiple occurrences of username
             (
                 "admin",
-                "user",
+                "admin",
                 "/home/admin/admin/admin.log",
-                "/home/user/<sanitized_user_subdirectory>/admin.log",
+                "/home/admin/admin/admin.log",
             ),
             (
                 "root",
-                "user",
+                "root",
                 "/root/programs/root_utils/root.conf",
-                "/user/<sanitized_user_subdirectory>/root.conf",
+                "/root/programs/root_utils/root.conf",
             ),
             // Paths with username as part of another word (should not replace these)
             (
                 "admin",
-                "user",
+                "admin",
                 "/var/logs/administrator/data",
-                "/var/logs/administrator/data", // No exact match on path component
+                "/var/logs/administrator/data",
             ),
             (
                 "root",
-                "user",
+                "root",
                 "/opt/rootkit/detector",
-                "/opt/rootkit/detector", // No exact match on path component
+                "/opt/rootkit/detector",
             ),
             // Special characters in paths
             (
                 "admin",
-                "user",
+                "admin",
                 "/home/admin/path with spaces/file.txt",
-                "/home/user/<sanitized_user_subdirectory>/file.txt",
+                "/home/admin/path with spaces/file.txt",
             ),
             (
                 "root",
-                "user",
+                "root",
                 "/root/path(with)special-chars/file.txt",
-                "/user/<sanitized_user_subdirectory>/file.txt",
+                "/root/path(with)special-chars/file.txt",
             ),
             // Deep paths with process at the end
             (
                 "admin",
-                "user",
+                "admin",
                 "/home/admin/very/deep/path/with/many/subdirs/process",
-                "/home/user/<sanitized_user_subdirectory>/process",
+                "/home/admin/very/deep/path/with/many/subdirs/process",
             ),
         ];
 
@@ -1167,50 +1153,69 @@ mod tests {
         // Test cases for edge scenarios
         // (username, path, is_system_expected, expected_path)
         let edge_cases = vec![
-            // Empty username
+            // Empty username - Should be treated as non-system and sanitized to "user"
             ("", "/home/user", false, "/home/user"),
-
-            // Very long username
-            (
-                "admin_very_long_username_with_many_characters_that_exceeds_typical_length",
-                "/home/admin_very_long_username_with_many_characters_that_exceeds_typical_length",
-                true,
-                "/home/user/<sanitized_user_subdirectory>/admin_very_long_username_with_many_characters_that_exceeds_typical_length",
-            ),
-
             // Unicode characters
-            ("αδμιν", "/home/αδμιν", false, "/home/αδμιν"),   // Greek "admin"
-            ("админ", "/home/админ", false, "/home/админ"),   // Cyrillic "admin"
-            ("管理员", "/home/管理员", false, "/home/管理员"), // Chinese "admin"
-
+            ("αδμιν", "/home/αδμιν", false, "/home/user"), // Greek "admin" - not system
+            ("админ", "/home/админ", false, "/home/user"), // Cyrillic "admin" - not system
+            ("管理员", "/home/管理员", false, "/home/user"), // Chinese "admin" - not system
             // Usernames with path separators
-            ("admin/user", "/home/admin/user", true, "/home/user/user"),
-            ("admin\\user", "C:\\Users\\admin\\user", true, "C:\\Users\\user\\user"),
-
+            ("admin/user", "/home/admin/user", true, "/home/admin/user"),
+            (
+                "admin\\user",
+                "C:\\Users\\admin\\user",
+                true,
+                "C:\\Users\\admin\\user",
+            ),
             // Mixed case matching
-            ("AdMiN", "/home/AdMiN/config", true, "/home/user/config"),
-            ("RoOt", "/var/RoOt/log", true, "/var/user/log"),
-
+            ("AdMiN", "/home/AdMiN/config", true, "/home/AdMiN/config"),
+            ("RoOt", "/var/RoOt/log", true, "/var/RoOt/log"),
             // Username with number prefix
-            ("1admin", "/home/1admin/file", true, "/home/user/file"),
-            ("123root", "/var/123root/file", true, "/var/user/file"),
-
+            ("1admin", "/home/1admin/file", true, "/home/1admin/file"),
+            ("123root", "/var/123root/file", true, "/var/123root/file"),
             // Username embedded in another word in path
-            ("admin", "/var/administra tor/logs", true, "/var/administra tor/logs"),
+            (
+                "admin",
+                "/var/administra tor/logs",
+                true,
+                "/var/administra tor/logs",
+            ),
             ("root", "/var/rootkit/scanner", true, "/var/rootkit/scanner"),
-
             // Special paths
-            ("admin", "://admin@server/path", true, "://user@server/path"),
-            ("root", "file:///root/file.txt", true, "file:///user/<sanitized_user_subdirectory>/file.txt"),
-
+            (
+                "admin",
+                "://admin@server/path",
+                true,
+                "://admin@server/path",
+            ),
+            (
+                "root",
+                "file:///root/file.txt",
+                true,
+                "file:///root/file.txt",
+            ),
             // Username with quotes/special chars
-            ("\"admin\"", "/home/\"admin\"/config", true, "/home/user/config"),
-            ("'root'", "/home/'root'/data", true, "/home/user/data"),
-            ("`system`", "/var/`system`/logs", true, "/var/user/logs"),
-
+            (
+                "\"admin\"",
+                "/home/\"admin\"/config",
+                true,
+                "/home/\"admin\"/config",
+            ),
+            ("'root'", "/home/'root'/data", true, "/home/'root'/data"),
+            ("`system`", "/var/`system`/logs", true, "/var/`system`/logs"),
             // Multiple dots and dashes
-            ("admin.sys.local", "/home/admin.sys.local", true, "/home/user"),
-            ("root-system-user", "/var/root-system-user", true, "/var/user"),
+            (
+                "admin.sys.local",
+                "/home/admin.sys.local",
+                true,
+                "/home/admin.sys.local",
+            ),
+            (
+                "root-system-user",
+                "/var/root-system-user",
+                true,
+                "/var/root-system-user",
+            ),
         ];
 
         // Test each case
@@ -1247,11 +1252,12 @@ mod tests {
             // Convert to backend format
             let backend = sanitized_backend_session_info(session_info);
 
-            // For system accounts, we expect username to be sanitized to "user"
+            // Correct the expected username logic:
+            // System accounts should keep their original name, non-system should become "user".
             let expected_username = if *is_system_expected {
-                "user"
+                username // Keep original for system account
             } else {
-                username
+                "user" // Sanitize to "user" for non-system account
             };
 
             // Print debugging information for failed cases
