@@ -2303,8 +2303,35 @@ mod tests {
         println!("Starting capture...");
         capture.start(&interfaces).await;
         assert!(capture.is_capturing().await, "Capture should be running");
-        println!("Capture started. Waiting 60s for initial session capture...");
-        sleep(Duration::from_secs(60)).await;
+
+        // Generate traffic instead of waiting 60 seconds
+        println!("Generating traffic to trigger session capture...");
+        let target_domain = "2.na.dl.wireshark.org";
+        let client = reqwest::Client::builder()
+            .danger_accept_invalid_certs(true)
+            .timeout(Duration::from_secs(10))
+            .build()
+            .expect("Failed to build reqwest client");
+
+        let target_url = format!("https://{}", target_domain);
+        match client.get(&target_url).send().await {
+            Ok(response) => {
+                println!(
+                    "Traffic generation request successful (Status: {}). Reading response body...",
+                    response.status()
+                );
+                // Consume the body to ensure the connection completes
+                let _ = response.bytes().await;
+                println!("Response body consumed.");
+            }
+            Err(e) => {
+                println!("WARN: Traffic generation request failed: {}. Test will continue, but may not capture sessions.", e);
+            }
+        }
+
+        // Wait a short time for the traffic to be captured
+        println!("Waiting 15s for traffic to be captured...");
+        sleep(Duration::from_secs(15)).await;
 
         // --- Initial Session Check ---
         println!("Performing initial session check...");
