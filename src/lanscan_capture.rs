@@ -2304,8 +2304,8 @@ mod tests {
         capture.start(&interfaces).await;
         assert!(capture.is_capturing().await, "Capture should be running");
 
-        // Wait 120 seconds to allow for initial session capture
-        sleep(Duration::from_secs(120)).await;
+        // Wait 180 seconds to allow for initial session capture
+        sleep(Duration::from_secs(180)).await;
 
         // --- Initial Session Check ---
         println!("Performing initial session check...");

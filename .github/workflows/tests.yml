@@ -24,6 +24,10 @@ env:
   EDAMAME_CLIENT_KEY: ${{ secrets.EDAMAME_CLIENT_KEY }}
   EDAMAME_CLIENT_CA_PEM: ${{ secrets.EDAMAME_CLIENT_CA_PEM }}
   LAMBDA_SIGNATURE: ${{ secrets.LAMBDA_SIGNATURE }}
+  # Debug mode
+  EDAMAME_LOG_LEVEL: debug
+  # Set the git branch for vergen as our tests with / without sudo disrupt vergen's git detection
+  VERGEN_GIT_BRANCH: ${{ github.ref_name }}
 
 jobs:
   test-native:
@@ -251,7 +255,9 @@ jobs:
       LAMBDA_SIGNATURE: ${{ secrets.LAMBDA_SIGNATURE }}
       # Debug mode
       EDAMAME_LOG_LEVEL: debug
-      
+      # Set the git branch for vergen as our tests with / without sudo disrupt vergen's git detection
+      VERGEN_GIT_BRANCH: ${{ github.ref_name }}
+
     steps:
       # Needed when we are running in a container
       - name: Setup permissions for git and install missing packages
@@ -368,6 +374,8 @@ jobs:
       LAMBDA_SIGNATURE: ${{ secrets.LAMBDA_SIGNATURE }}
       # Debug mode
       EDAMAME_LOG_LEVEL: debug
+      # Set the git branch for vergen as our tests with / without sudo disrupt vergen's git detection
+      VERGEN_GIT_BRANCH: ${{ github.ref_name }}
 
     steps:
       # Set up QEMU for aarch64 emulation
@@ -429,13 +437,11 @@ jobs:
       - name: Run tests
         id: tests
         run: |
-          source $HOME/.cargo/env
           cd temp
+          source $HOME/.cargo/env
           make ${{ matrix.platform }}_test
         shell: alpine.sh --root {0}
         continue-on-error: true
-        env:
-          VERGEN_GIT_BRANCH: ${{ github.ref_name }}
 
       - name: Dump logs
         if: always()
