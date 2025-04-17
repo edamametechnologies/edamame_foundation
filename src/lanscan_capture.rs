@@ -2398,7 +2398,7 @@ mod tests {
             }
         }
         // Allow a percentage of non-conforming/unknown due to timing/new connections
-        let max_allowed_non_conforming = std::cmp::max(5, sessions_after_whitelist.len() * 0.7); // Allow up to 70% or 5, whichever is higher
+        let max_allowed_non_conforming = std::cmp::max(5, (sessions_after_whitelist.len() as f64 * 0.7).round() as usize); // Allow up to 70% or 5, whichever is higher
         assert!(non_conforming_count <= max_allowed_non_conforming, "Expected few non-conforming sessions (<= {}) after applying generated whitelist, found {}", max_allowed_non_conforming, non_conforming_count);
         assert!(
             unknown_count == 0,
