@@ -26,8 +26,6 @@ env:
   LAMBDA_SIGNATURE: ${{ secrets.LAMBDA_SIGNATURE }}
   # Debug mode
   EDAMAME_LOG_LEVEL: debug
-  # Set the git branch for vergen as our tests with / without sudo disrupt vergen's git detection
-  VERGEN_GIT_BRANCH: ${{ github.ref_name }}
 
 jobs:
   test-native:
@@ -255,8 +253,6 @@ jobs:
       LAMBDA_SIGNATURE: ${{ secrets.LAMBDA_SIGNATURE }}
       # Debug mode
       EDAMAME_LOG_LEVEL: debug
-      # Set the git branch for vergen as our tests with / without sudo disrupt vergen's git detection
-      VERGEN_GIT_BRANCH: ${{ github.ref_name }}
 
     steps:
       # Needed when we are running in a container
@@ -374,8 +370,6 @@ jobs:
       LAMBDA_SIGNATURE: ${{ secrets.LAMBDA_SIGNATURE }}
       # Debug mode
       EDAMAME_LOG_LEVEL: debug
-      # Set the git branch for vergen as our tests with / without sudo disrupt vergen's git detection
-      VERGEN_GIT_BRANCH: ${{ github.ref_name }}
 
     steps:
       # Set up QEMU for aarch64 emulation
