@@ -1712,7 +1712,8 @@ mod tests {
         let mut capture = LANScanCapture::new();
         capture.set_filter(SessionFilter::All).await;
 
-        // Simulate an outbound packet
+        // Simulate an outbound packet - Note this has port 12345 to 80 which will always be recognized as
+        // client->server due to well-known port detection
         let session_packet = SessionPacketData {
             session: Session {
                 protocol: Protocol::TCP,
@@ -1769,6 +1770,8 @@ mod tests {
         let session_info = sessions[0].clone();
         let stats = session_info.stats;
 
+        // With our improved logic, the session direction should be preserved correctly
+        // because port 80 is a well-known HTTP port
         assert_eq!(stats.outbound_bytes, 100);
         assert_eq!(stats.inbound_bytes, 150);
         assert_eq!(stats.orig_pkts, 1);
@@ -1782,12 +1785,13 @@ mod tests {
         capture.set_whitelist("github").await;
         capture.set_filter(SessionFilter::All).await; // Include all sessions in the filter
 
-        // Create a synthetic packet that should be inverted TCP 168.63.129.16:32526 -> 10.1.0.40:44442
+        // Create a synthetic packet from Azure's IP to a random high port
+        // Using high ports (44441, 44442) for both source and destination so service port logic doesn't apply
         let session_packet = SessionPacketData {
             session: Session {
                 protocol: Protocol::TCP,
                 src_ip: IpAddr::V4(Ipv4Addr::new(168, 63, 129, 16)),
-                src_port: 32526,
+                src_port: 44441,
                 dst_ip: IpAddr::V4(Ipv4Addr::new(10, 1, 0, 40)),
                 dst_port: 44442,
             },
@@ -1820,16 +1824,24 @@ mod tests {
         let session = session_info.session.clone();
         let stats = session_info.stats.clone();
 
-        // Check that the session has been inverted
-        assert_eq!(session.src_ip, IpAddr::V4(Ipv4Addr::new(10, 1, 0, 40)));
-        assert_eq!(session.dst_ip, IpAddr::V4(Ipv4Addr::new(168, 63, 129, 16)));
-        // Since the packet is from remote to local, we expect inbound_bytes to be updated
-        assert_eq!(stats.outbound_bytes, 0);
-        assert_eq!(stats.inbound_bytes, 100);
-        assert_eq!(stats.orig_pkts, 0);
-        assert_eq!(stats.resp_pkts, 1);
-        // The history should be 's' because it's a SYN from the responder
-        assert_eq!(stats.history, "s");
+        // In our implementation, the session direction is determined by who initiated the connection,
+        // not by whether the IP is local or remote.
+        // The remote IP (168.63.129.16) sent a SYN, so it's the originator.
+        // The session key should maintain this direction.
+        assert_eq!(session.src_ip, IpAddr::V4(Ipv4Addr::new(168, 63, 129, 16)));
+        assert_eq!(session.dst_ip, IpAddr::V4(Ipv4Addr::new(10, 1, 0, 40)));
+
+        // In our connection-centric model:
+        // 1. Traffic from the originator (initiator) is counted as outbound
+        // 2. Traffic from the responder is counted as inbound
+        // Since this is the first packet from the originator (remote IP), we expect:
+        assert_eq!(stats.outbound_bytes, 100);
+        assert_eq!(stats.inbound_bytes, 0);
+        assert_eq!(stats.orig_pkts, 1);
+        assert_eq!(stats.resp_pkts, 0);
+
+        // The history should be 'S' (uppercase) because it's a SYN from the originator
+        assert_eq!(stats.history, "S");
     }
 
     #[tokio::test]
@@ -1865,6 +1877,17 @@ mod tests {
             history: String::new(),
             conn_state: None,
             missed_bytes: 0,
+
+            // Add the new fields
+            average_packet_size: 0.0,
+            inbound_outbound_ratio: 0.0,
+            segment_count: 0,
+            current_segment_start: Utc::now(), // Use Utc::now() when no 'now' variable is available
+            last_segment_end: None,
+            segment_interarrival: 0.0,
+            total_segment_interarrival: 0.0,
+            in_segment: false,
+            segment_timeout: 5.0,
         };
 
         let session_info = SessionInfo {
@@ -1958,6 +1981,17 @@ mod tests {
             history: String::new(),
             conn_state: None,
             missed_bytes: 0,
+
+            // Add the new fields
+            average_packet_size: 0.0,
+            inbound_outbound_ratio: 0.0,
+            segment_count: 0,
+            current_segment_start: now, // Using existing now variable
+            last_segment_end: None,
+            segment_interarrival: 0.0,
+            total_segment_interarrival: 0.0,
+            in_segment: false,
+            segment_timeout: 5.0,
         };
 
         let session_info = SessionInfo {
@@ -2154,6 +2188,17 @@ mod tests {
                 history: String::new(),
                 conn_state: None,
                 missed_bytes: 0,
+
+                // Add the new fields
+                average_packet_size: 0.0,
+                inbound_outbound_ratio: 0.0,
+                segment_count: 0,
+                current_segment_start: Utc::now(), // Use Utc::now() when no 'now' variable is available
+                last_segment_end: None,
+                segment_interarrival: 0.0,
+                total_segment_interarrival: 0.0,
+                in_segment: false,
+                segment_timeout: 5.0,
             };
 
             let session_info = SessionInfo {
@@ -2304,7 +2349,6 @@ mod tests {
         capture.start(&interfaces).await;
         assert!(capture.is_capturing().await, "Capture should be running");
 
-
         let target_domain = "www.google.com";
         println!("Generating traffic from {}...", target_domain);
         let client = reqwest::Client::builder()
@@ -2325,7 +2369,10 @@ mod tests {
                 println!("Response body consumed.");
             }
             Err(e) => {
-                println!("WARN: Traffic generation request failed: {}. Test will continue.", e);
+                println!(
+                    "WARN: Traffic generation request failed: {}. Test will continue.",
+                    e
+                );
             }
         }
 
@@ -2398,7 +2445,10 @@ mod tests {
             }
         }
         // Allow a percentage of non-conforming/unknown due to timing/new connections
-        let max_allowed_non_conforming = std::cmp::max(5, (sessions_after_whitelist.len() as f64 * 0.7).round() as usize); // Allow up to 70% or 5, whichever is higher
+        let max_allowed_non_conforming = std::cmp::max(
+            5,
+            (sessions_after_whitelist.len() as f64 * 0.7).round() as usize,
+        ); // Allow up to 70% or 5, whichever is higher
         assert!(non_conforming_count <= max_allowed_non_conforming, "Expected few non-conforming sessions (<= {}) after applying generated whitelist, found {}", max_allowed_non_conforming, non_conforming_count);
         assert!(
             unknown_count == 0,
@@ -2459,7 +2509,10 @@ mod tests {
                 println!("Response body consumed.");
             }
             Err(e) => {
-                println!("WARN: Traffic generation request failed: {}. Test will continue.", e);
+                println!(
+                    "WARN: Traffic generation request failed: {}. Test will continue.",
+                    e
+                );
             }
         }
 

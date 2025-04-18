@@ -2,6 +2,7 @@ use crate::asn_db::Record;
 use chrono::{DateTime, Utc};
 use edamame_backend::session_info_backend::SessionInfoBackend;
 use serde::{Deserialize, Serialize};
+use std::hash::Hash;
 use std::net::IpAddr;
 use strum_macros::Display;
 
@@ -28,7 +29,7 @@ pub struct SessionL7 {
     pub username: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Ord, PartialOrd)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, PartialOrd)]
 pub struct SessionInfo {
     pub session: Session,
     pub status: SessionStatus,
@@ -59,21 +60,30 @@ pub struct SessionStatus {
     pub deactivated: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, Ord, PartialOrd)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, PartialOrd)]
 pub struct SessionStats {
-    // TCP specific
     pub start_time: DateTime<Utc>,
     pub end_time: Option<DateTime<Utc>>,
     pub last_activity: DateTime<Utc>,
-    pub inbound_bytes: u64,         // Bytes from responder to originator
-    pub outbound_bytes: u64,        // Bytes from originator to responder
-    pub orig_pkts: u64,             // Packets from originator to responder
-    pub resp_pkts: u64,             // Packets from responder to originator
-    pub orig_ip_bytes: u64,         // IP bytes from originator to responder
-    pub resp_ip_bytes: u64,         // IP bytes from responder to originator
-    pub history: String,            // Sequence of observed flags
-    pub conn_state: Option<String>, // Final session state
-    pub missed_bytes: u64,          // Number of bytes missed
+    pub inbound_bytes: u64,          // Bytes from responder to originator
+    pub outbound_bytes: u64,         // Bytes from originator to responder
+    pub orig_pkts: u64,              // Packets from originator to responder
+    pub resp_pkts: u64,              // Packets from responder to originator
+    pub orig_ip_bytes: u64,          // IP bytes from originator to responder
+    pub resp_ip_bytes: u64,          // IP bytes from responder to originator
+    pub history: String,             // Sequence of observed flags
+    pub conn_state: Option<String>,  // Final session state
+    pub missed_bytes: u64,           // Number of bytes missed
+    pub average_packet_size: f64,    // Average size of all packets in bytes
+    pub inbound_outbound_ratio: f64, // Ratio of inbound to outbound traffic
+    pub segment_count: u32,          // Number of segments (application-level message boundaries)
+    pub current_segment_start: DateTime<Utc>, // When the current segment started
+    pub last_segment_end: Option<DateTime<Utc>>, // When the last segment ended
+    pub segment_interarrival: f64,   // Average time between segments in seconds
+    pub total_segment_interarrival: f64, // Total of all segment interarrival times for calculating average
+    pub in_segment: bool,                // Whether we're currently in a segment
+    // Configuration for segment detection
+    pub segment_timeout: f64, // Timeout in seconds to consider a segment ended (default 5s)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, Ord, PartialOrd, Display)]
@@ -509,19 +519,40 @@ pub fn sanitized_backend_session_info(session_info: SessionInfo) -> SessionInfoB
     });
 
     // Convert the session info to a backend-friendly format
+    // Use the egress destination IP and port (non local)
+    let ip = if !session_info.is_local_dst {
+        session_info.session.dst_ip.to_string()
+    } else {
+        session_info.session.src_ip.to_string()
+    };
+    let port = if !session_info.is_local_dst {
+        session_info.session.dst_port
+    } else {
+        session_info.session.src_port
+    };
+    let domain = if !session_info.is_local_dst {
+        session_info.dst_domain.clone()
+    } else {
+        session_info.src_domain.clone()
+    };
+    let asn = if !session_info.is_local_dst {
+        session_info.dst_asn.clone()
+    } else {
+        session_info.src_asn.clone()
+    };
     let session_info_backend = SessionInfoBackend {
-        dst_ip: session_info.session.dst_ip.to_string(),
-        dst_port: session_info.session.dst_port,
+        ip: ip,
+        port: port,
         protocol: match session_info.session.protocol {
             Protocol::TCP => "TCP".to_string(),
             Protocol::UDP => "UDP".to_string(),
         },
-        dst_domain: session_info.dst_domain.clone(),
-        dst_asn_number: session_info.dst_asn.as_ref().map(|asn| asn.as_number),
-        dst_asn_country: session_info.dst_asn.as_ref().map(|asn| asn.country.clone()),
-        dst_asn_owner: session_info.dst_asn.as_ref().map(|asn| asn.owner.clone()),
+        domain: domain,
+        asn_number: asn.as_ref().map(|asn| asn.as_number),
+        asn_country: asn.as_ref().map(|asn| asn.country.clone()),
+        asn_owner: asn.as_ref().map(|asn| asn.owner.clone()),
         criticality: session_info.criticality.clone(),
-        dst_service: session_info.dst_service.clone(),
+        service: session_info.dst_service.clone(),
         l7_process_name: session_info.l7.as_ref().map(|l7| l7.process_name.clone()),
         l7_process_path: sanitized_path,
         l7_process_user: sanitized_username,
@@ -777,6 +808,15 @@ mod tests {
             history: "ShADadfF".to_string(),
             conn_state: Some("ESTABLISHED".to_string()),
             missed_bytes: 0,
+            average_packet_size: 0.0,
+            inbound_outbound_ratio: 0.0,
+            segment_count: 0,
+            current_segment_start: Utc::now(),
+            last_segment_end: None,
+            segment_interarrival: 0.0,
+            total_segment_interarrival: 0.0,
+            in_segment: false,
+            segment_timeout: 5.0,
         };
 
         let basic_status = SessionStatus {
@@ -1141,6 +1181,15 @@ mod tests {
             history: String::new(),
             conn_state: None,
             missed_bytes: 0,
+            average_packet_size: 0.0,
+            inbound_outbound_ratio: 0.0,
+            segment_count: 0,
+            current_segment_start: Utc::now(),
+            last_segment_end: None,
+            segment_interarrival: 0.0,
+            total_segment_interarrival: 0.0,
+            in_segment: false,
+            segment_timeout: 5.0,
         };
 
         let basic_status = SessionStatus {
@@ -1351,6 +1400,15 @@ mod tests {
                 history: "ShADadfF".to_string(),
                 conn_state: Some("ESTABLISHED".to_string()),
                 missed_bytes: 0,
+                average_packet_size: 0.0,
+                inbound_outbound_ratio: 0.0,
+                segment_count: 0,
+                current_segment_start: Utc::now(),
+                last_segment_end: None,
+                segment_interarrival: 0.0,
+                total_segment_interarrival: 0.0,
+                in_segment: false,
+                segment_timeout: 5.0,
             },
             is_local_src: true,
             is_local_dst: true,
@@ -1396,6 +1454,15 @@ mod tests {
                 history: "Dd".to_string(),
                 conn_state: Some("FINISHED".to_string()),
                 missed_bytes: 0,
+                average_packet_size: 0.0,
+                inbound_outbound_ratio: 0.0,
+                segment_count: 0,
+                current_segment_start: Utc::now(),
+                last_segment_end: None,
+                segment_interarrival: 0.0,
+                total_segment_interarrival: 0.0,
+                in_segment: false,
+                segment_timeout: 5.0,
             },
             is_local_src: true,
             is_local_dst: false,
@@ -1464,6 +1531,15 @@ mod tests {
                 history: "ShADadfF".to_string(),
                 conn_state: Some("ESTABLISHED".to_string()),
                 missed_bytes: 0,
+                average_packet_size: 0.0,
+                inbound_outbound_ratio: 0.0,
+                segment_count: 0,
+                current_segment_start: Utc::now(),
+                last_segment_end: None,
+                segment_interarrival: 0.0,
+                total_segment_interarrival: 0.0,
+                in_segment: false,
+                segment_timeout: 5.0,
             },
             is_local_src: true,
             is_local_dst: false,
@@ -1540,6 +1616,17 @@ mod tests {
                 history: "ShADadfF".to_string(),
                 conn_state: Some("CLOSED".to_string()),
                 missed_bytes: 0,
+                average_packet_size: 0.0,
+                inbound_outbound_ratio: 0.0,
+                segment_count: 0,
+                current_segment_start: Utc::now(),
+                last_segment_end: None,
+                segment_interarrival: 0.0,
+                total_segment_interarrival: 0.0,
+                in_segment: false,
+
+                // Configuration for segment detection
+                segment_timeout: 5.0,
             },
             is_local_src: true,
             is_local_dst: false,
