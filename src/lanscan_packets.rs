@@ -77,20 +77,19 @@ pub async fn process_parsed_packet(
             dst_port: parsed_packet.session.src_port,
         }
     } else if src_is_service_port && dst_is_service_port {
-        // Both are service ports (unusual), use TCP flags to determine direction if available
-        // SYN without ACK typically indicates initiation
+        // Both are service ports - first try TCP flags, then use port numbers as tiebreaker
         if let Some(flags) = parsed_packet.flags {
             if parsed_packet.session.protocol == Protocol::TCP
                 && flags & TcpFlags::SYN != 0
                 && flags & TcpFlags::ACK == 0
             {
-                // This is a SYN packet - keep original client->server direction
+                // SYN without ACK - keep original direction
                 parsed_packet.session.clone()
             } else if parsed_packet.session.protocol == Protocol::TCP
                 && flags & TcpFlags::SYN != 0
                 && flags & TcpFlags::ACK != 0
             {
-                // This is a SYN+ACK response - swap to make initiator the source
+                // SYN+ACK - swap direction
                 Session {
                     protocol: parsed_packet.session.protocol.clone(),
                     src_ip: parsed_packet.session.dst_ip,
@@ -99,12 +98,37 @@ pub async fn process_parsed_packet(
                     dst_port: parsed_packet.session.src_port,
                 }
             } else {
-                // Default to original direction for other flag combinations
-                parsed_packet.session.clone()
+                // For other flag combinations, use port numbers as tiebreaker
+                // Lower port number is likely to be the more canonical service
+                if parsed_packet.session.src_port < parsed_packet.session.dst_port {
+                    // Source has the smaller port, so it's likely the server - swap direction
+                    Session {
+                        protocol: parsed_packet.session.protocol.clone(),
+                        src_ip: parsed_packet.session.dst_ip,
+                        src_port: parsed_packet.session.dst_port,
+                        dst_ip: parsed_packet.session.src_ip,
+                        dst_port: parsed_packet.session.src_port,
+                    }
+                } else {
+                    // Destination has smaller port, keep original direction
+                    parsed_packet.session.clone()
+                }
             }
         } else {
-            // No flags (e.g., UDP), keep original direction
-            parsed_packet.session.clone()
+            // No flags (e.g., UDP), use port numbers as tiebreaker
+            if parsed_packet.session.src_port < parsed_packet.session.dst_port {
+                // Source has the smaller port, so it's likely the server - swap direction
+                Session {
+                    protocol: parsed_packet.session.protocol.clone(),
+                    src_ip: parsed_packet.session.dst_ip,
+                    src_port: parsed_packet.session.dst_port,
+                    dst_ip: parsed_packet.session.src_ip,
+                    dst_port: parsed_packet.session.src_port,
+                }
+            } else {
+                // Destination has smaller port, keep original direction
+                parsed_packet.session.clone()
+            }
         }
     } else {
         // Keep original direction
