@@ -1712,9 +1712,11 @@ mod tests {
         let mut capture = LANScanCapture::new();
         capture.set_filter(SessionFilter::All).await;
 
-        // Simulate an outbound packet - Note this has port 12345 to 80 which will always be recognized as
-        // client->server due to well-known port detection
-        let session_packet = SessionPacketData {
+        // Simulate a clear client-server connection with well-known service port
+        // Client (12345) -> Server (80) - this direction is unambiguous
+
+        // First packet: client SYN to server
+        let client_syn = SessionPacketData {
             session: Session {
                 protocol: Protocol::TCP,
                 src_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
@@ -1727,8 +1729,8 @@ mod tests {
             flags: Some(TcpFlags::SYN),
         };
 
-        // Simulate an inbound packet (response)
-        let response_packet = SessionPacketData {
+        // Second packet: server SYN+ACK to client
+        let server_synack = SessionPacketData {
             session: Session {
                 protocol: Protocol::TCP,
                 src_ip: IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)),
@@ -1738,15 +1740,29 @@ mod tests {
             },
             packet_length: 150,
             ip_packet_length: 170,
+            flags: Some(TcpFlags::SYN | TcpFlags::ACK),
+        };
+
+        // Third packet: client ACK to server
+        let client_ack = SessionPacketData {
+            session: Session {
+                protocol: Protocol::TCP,
+                src_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
+                src_port: 12345,
+                dst_ip: IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)),
+                dst_port: 80,
+            },
+            packet_length: 90,
+            ip_packet_length: 110,
             flags: Some(TcpFlags::ACK),
         };
 
         let self_ips_vec = vec![IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))];
         let self_ips: HashSet<IpAddr> = self_ips_vec.into_iter().collect();
 
-        // Process both packets
+        // Process all three packets in a valid TCP handshake sequence
         process_parsed_packet(
-            session_packet,
+            client_syn,
             &capture.sessions,
             &capture.current_sessions,
             &self_ips,
@@ -1756,7 +1772,7 @@ mod tests {
         .await;
 
         process_parsed_packet(
-            response_packet,
+            server_synack,
             &capture.sessions,
             &capture.current_sessions,
             &self_ips,
@@ -1765,17 +1781,76 @@ mod tests {
         )
         .await;
 
-        // Check the statistics
+        process_parsed_packet(
+            client_ack,
+            &capture.sessions,
+            &capture.current_sessions,
+            &self_ips,
+            &capture.filter,
+            capture.l7.as_ref(),
+        )
+        .await;
+
+        // Get the sessions and verify we have exactly one
         let sessions = capture.get_sessions().await;
-        let session_info = sessions[0].clone();
-        let stats = session_info.stats;
+        assert_eq!(
+            sessions.len(),
+            1,
+            "Should have exactly one session after three packets in TCP handshake"
+        );
 
-        // With our improved logic, the session direction should be preserved correctly
-        // because port 80 is a well-known HTTP port
-        assert_eq!(stats.outbound_bytes, 100);
-        assert_eq!(stats.inbound_bytes, 150);
-        assert_eq!(stats.orig_pkts, 1);
-        assert_eq!(stats.resp_pkts, 1);
+        // Since we have only one session, we can directly access it
+        let session = &sessions[0];
+
+        // Verify session has the proper direction (client -> server)
+        assert_eq!(
+            session.session.src_port, 12345,
+            "Source port should be client port"
+        );
+        assert_eq!(
+            session.session.dst_port, 80,
+            "Destination port should be server port"
+        );
+
+        // Verify both inbound and outbound packets are accounted for
+        assert_eq!(
+            session.stats.outbound_bytes, 190,
+            "Outbound bytes should be 100+90 from client packets"
+        );
+        assert_eq!(
+            session.stats.inbound_bytes, 150,
+            "Inbound bytes should be 150 from server packet"
+        );
+
+        // Verify packet counts
+        assert_eq!(
+            session.stats.orig_pkts, 2,
+            "Should have 2 originator packets (SYN, ACK)"
+        );
+        assert_eq!(
+            session.stats.resp_pkts, 1,
+            "Should have 1 responder packet (SYN+ACK)"
+        );
+
+        // Verify history string contains expected handshake sequence
+        assert!(
+            session.stats.history.contains('S'),
+            "History should contain SYN from client"
+        );
+        assert!(
+            session.stats.history.contains('h'),
+            "History should contain SYN+ACK from server"
+        );
+
+        // Since the client ACK packet has data (non-zero length), it's classified as '>' not 'A'
+        // in the map_tcp_flags function
+        assert!(
+            session.stats.history.contains('>'),
+            "History should contain data from client (was expecting '>')"
+        );
+
+        // Print history for debugging if needed
+        println!("Session history: {}", session.stats.history);
     }
 
     #[tokio::test]

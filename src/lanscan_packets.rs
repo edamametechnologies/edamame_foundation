@@ -143,7 +143,7 @@ pub async fn process_parsed_packet(
             stats.resp_ip_bytes += parsed_packet.ip_packet_length as u64;
         }
 
-        // Update average packet size
+        // Calculate average packet size after adding bytes
         let total_packets = stats.orig_pkts + stats.resp_pkts;
         let total_bytes = stats.inbound_bytes + stats.outbound_bytes;
         stats.average_packet_size = if total_packets > 0 {
@@ -215,7 +215,6 @@ pub async fn process_parsed_packet(
     } else {
         // New session
         let uid = Uuid::new_v4().to_string();
-        let packet_size = parsed_packet.packet_length as u64;
 
         let mut stats = SessionStats {
             start_time: now,
@@ -232,8 +231,8 @@ pub async fn process_parsed_packet(
             missed_bytes: 0,
 
             // Initialize new traffic statistics
-            average_packet_size: packet_size as f64, // First packet size is our initial average
-            inbound_outbound_ratio: 0.0,             // Will update after we add bytes
+            average_packet_size: 0.0, // Initialize to 0, will be updated after we add bytes
+            inbound_outbound_ratio: 0.0, // Will update after we add bytes
 
             // Initialize segment tracking
             segment_count: 0,
@@ -257,6 +256,15 @@ pub async fn process_parsed_packet(
             stats.resp_pkts += 1;
             stats.resp_ip_bytes += parsed_packet.ip_packet_length as u64;
         }
+
+        // Calculate average packet size after adding bytes
+        let total_packets = stats.orig_pkts + stats.resp_pkts;
+        let total_bytes = stats.inbound_bytes + stats.outbound_bytes;
+        stats.average_packet_size = if total_packets > 0 {
+            total_bytes as f64 / total_packets as f64
+        } else {
+            0.0
+        };
 
         // Calculate inbound/outbound ratio (might be 0.0 or infinity initially)
         stats.inbound_outbound_ratio = if stats.outbound_bytes > 0 {
