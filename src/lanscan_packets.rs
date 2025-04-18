@@ -709,6 +709,45 @@ mod tests {
     use std::collections::HashSet;
     use std::net::{IpAddr, Ipv4Addr};
 
+    // Add this helper function for the test
+    async fn ensure_port_is_service_port(port: u16, name: &str) {
+        use crate::lanscan_port_vulns::*;
+
+        // Check if the port is already recognized
+        let service_name = get_name_from_port(port).await;
+
+        if service_name.is_empty() {
+            println!("DEBUG: Port {} is not recognized as a service port", port);
+            println!("DEBUG: Temporarily fixing by adding port to VULNS for test");
+
+            // Create a temporary port info
+            let port_info = VulnerabilityPortInfo {
+                port,
+                name: name.to_string(),
+                description: format!("Test port {}", port),
+                vulnerabilities: Vec::new(),
+                count: 1,
+                protocol: "tcp".to_string(),
+            };
+
+            // Add it to the VULNS data model
+            let data = VULNS.data.read().await;
+            data.port_vulns.insert(port, port_info);
+
+            // Verify it worked
+            let updated_name = get_name_from_port(port).await;
+            println!(
+                "DEBUG: After fix: Port {} service name: '{}'",
+                port, updated_name
+            );
+        } else {
+            println!(
+                "DEBUG: Port {} is recognized as service: '{}'",
+                port, service_name
+            );
+        }
+    }
+
     #[tokio::test]
     #[serial]
     async fn test_blacklisted_ip_criticality() {
@@ -1084,6 +1123,9 @@ mod tests {
         let self_ips = vec![src_ip];
         let self_ips_set: HashSet<IpAddr> = self_ips.into_iter().collect();
 
+        // *** IMPORTANT: Ensure port 80 is recognized as HTTP service ***
+        ensure_port_is_service_port(80, "HTTP").await;
+
         // Set up session storage
         let sessions = Arc::new(DashMap::new());
         let current_sessions = Arc::new(CustomRwLock::new(Vec::new()));
@@ -1151,6 +1193,21 @@ mod tests {
             flags: Some(TcpFlags::ACK),
         };
 
+        // Debug check direction swapping logic
+        let src_service_name = get_name_from_port(packet2.session.src_port).await;
+        let dst_service_name = get_name_from_port(packet2.session.dst_port).await;
+        println!(
+            "DEBUG: Inbound packet - src port {} service: '{}', dst port {} service: '{}'",
+            packet2.session.src_port, src_service_name, packet2.session.dst_port, dst_service_name
+        );
+
+        let src_is_service_port = !src_service_name.is_empty();
+        let dst_is_service_port = !dst_service_name.is_empty();
+        println!(
+            "DEBUG: src_is_service_port: {}, dst_is_service_port: {}",
+            src_is_service_port, dst_is_service_port
+        );
+
         process_parsed_packet(
             packet2,
             &sessions,
@@ -1160,6 +1217,23 @@ mod tests {
             None,
         )
         .await;
+
+        // Debug session map contents
+        println!("DEBUG: After packet 2, sessions in map: {}", sessions.len());
+        for entry in sessions.iter() {
+            let key = entry.key();
+            let value = entry.value();
+            println!(
+                "DEBUG: Session key: {}:{} -> {}:{}, bytes: inbound={}, outbound={}, avg_size={}",
+                key.src_ip,
+                key.src_port,
+                key.dst_ip,
+                key.dst_port,
+                value.stats.inbound_bytes,
+                value.stats.outbound_bytes,
+                value.stats.average_packet_size
+            );
+        }
 
         // Check updated statistics
         {
