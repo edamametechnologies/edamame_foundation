@@ -12,7 +12,7 @@ use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
-use sysinfo::{Process, ProcessRefreshKind, RefreshKind, System, Uid, Users};
+use sysinfo::{Pid, Process, ProcessRefreshKind, RefreshKind, System, Uid, Users};
 use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info, trace, warn};
 
@@ -215,9 +215,12 @@ impl LANScanL7 {
                             continue;
                         }
 
-                        let from_host_cache =
-                            Self::try_resolve_from_host_cache(&connection, &host_service_cache)
-                                .await;
+                        let from_host_cache = Self::try_resolve_from_host_cache(
+                            &connection,
+                            &host_service_cache,
+                            &*system_read,
+                        )
+                        .await;
 
                         if let Some(l7_data) = from_host_cache {
                             trace!(
@@ -281,9 +284,12 @@ impl LANScanL7 {
                             Err(e) => {
                                 trace!("Standard resolution failed for {:?}: {:?}", connection, e);
 
-                                let cache_resolution =
-                                    Self::try_resolve_from_cache(&connection, &port_process_cache)
-                                        .await;
+                                let cache_resolution = Self::try_resolve_from_cache(
+                                    &connection,
+                                    &port_process_cache,
+                                    &*system_read,
+                                )
+                                .await;
 
                                 if let Some(cached_l7) = cache_resolution {
                                     debug!(
@@ -353,10 +359,10 @@ impl LANScanL7 {
                         );
                     }
                     // Sleep for a little while to avoid overwhelming the system but keep a tight loop to ensure we're responsive to new sessions
-                    sleep(Duration::from_millis(500)).await;
+                    sleep(Duration::from_millis(250)).await;
                 } else {
                     // No sessions to resolve, sleep for a while to avoid overwhelming the system
-                    sleep(Duration::from_millis(1000)).await;
+                    sleep(Duration::from_millis(500)).await;
                 }
             }
 
@@ -484,6 +490,7 @@ impl LANScanL7 {
     async fn try_resolve_from_cache(
         connection: &Session,
         port_process_cache: &DashMap<(u16, Protocol), ProcessCacheEntry>,
+        system: &System,
     ) -> Option<SessionL7> {
         let protocol = connection.protocol.clone();
         let cache_keys = [
@@ -493,10 +500,22 @@ impl LANScanL7 {
 
         for key in &cache_keys {
             if let Some(mut cached_entry) = port_process_cache.get_mut(key) {
-                cached_entry.value_mut().last_seen = Instant::now();
-                cached_entry.value_mut().hit_count += 1;
-
-                return Some(cached_entry.value().l7.clone());
+                if system
+                    .process(Pid::from_u32(cached_entry.value().l7.pid))
+                    .is_some()
+                {
+                    cached_entry.value_mut().last_seen = Instant::now();
+                    cached_entry.value_mut().hit_count += 1;
+                    return Some(cached_entry.value().l7.clone());
+                } else {
+                    debug!(
+                        "Removing stale cache entry for {:?}: PID {} no longer exists",
+                        key,
+                        cached_entry.value().l7.pid
+                    );
+                    port_process_cache.remove(key);
+                    continue;
+                }
             }
         }
 
@@ -541,6 +560,7 @@ impl LANScanL7 {
     async fn try_resolve_from_host_cache(
         connection: &Session,
         host_service_cache: &DashMap<String, Vec<(u16, Protocol, SessionL7)>>,
+        system: &System,
     ) -> Option<SessionL7> {
         let local_connection = is_private_ip(connection.src_ip) || is_private_ip(connection.dst_ip);
 
@@ -553,7 +573,15 @@ impl LANScanL7 {
                 if (connection.src_port == *service_port || connection.dst_port == *service_port)
                     && connection.protocol == *service_protocol
                 {
-                    return Some(l7_data.clone());
+                    if system.process(Pid::from_u32(l7_data.pid)).is_some() {
+                        return Some(l7_data.clone());
+                    } else {
+                        debug!(
+                            "Skipping stale host cache entry for port {}, protocol {:?}: PID {} no longer exists",
+                            service_port, service_protocol, l7_data.pid
+                        );
+                        continue;
+                    }
                 }
             }
         }
