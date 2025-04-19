@@ -199,31 +199,45 @@ pub async fn process_parsed_packet(
         } || (stats.in_segment
             && time_since_last_activity >= stats.segment_timeout);
 
-        // If we're starting a new segment
+        // If we're starting a new segment (because we weren't in one before this packet)
         if !stats.in_segment {
             stats.in_segment = true;
-            stats.current_segment_start = now;
+            stats.current_segment_start = now; // Start of the *new* segment
         }
 
         // If this packet ends a segment
-        if is_segment_end && stats.in_segment {
+        if is_segment_end && stats.in_segment { // Check in_segment *again* ensures we only process the end of the *current* segment
+            let previous_segment_end_time = stats.last_segment_end; // Store the *previous* end time
+
             stats.segment_count += 1;
             stats.in_segment = false; // End current segment
-            stats.last_segment_end = Some(now);
+            stats.last_segment_end = Some(now); // Update with the end time of the *current* segment
 
-            // Calculate interarrival time if we've had a previous segment
-            if let Some(prev_end) = stats.last_segment_end {
-                if stats.segment_count > 1 {
-                    let segment_interarrival =
-                        (stats.current_segment_start - prev_end).num_milliseconds() as f64 / 1000.0;
+            // Calculate interarrival time using the *previous* end time
+            if let Some(prev_end) = previous_segment_end_time {
+                // Interarrival is time between previous end and current start
+                let segment_interarrival =
+                    (stats.current_segment_start - prev_end).num_milliseconds() as f64 / 1000.0;
+
+                if segment_interarrival >= 0.0 { // Only add non-negative interarrivals
                     stats.total_segment_interarrival += segment_interarrival;
+                    // Calculate average interarrival time over (segment_count - 1) intervals
                     stats.segment_interarrival = if stats.segment_count > 1 {
                         stats.total_segment_interarrival / (stats.segment_count - 1) as f64
                     } else {
-                        0.0
+                        0.0 // First interarrival time IS the average
                     };
-                }
+                 } else {
+                     warn!(
+                         "Negative segment interarrival calculated ({}ms). Current start: {:?}, Previous end: {:?}. Skipping.",
+                         (stats.current_segment_start - prev_end).num_milliseconds(),
+                         stats.current_segment_start,
+                         prev_end
+                     );
+                     // Keep the previous average if the new calculation is invalid
+                 }
             }
+            // No 'else' needed here - if previous_segment_end_time is None, it's the first segment ending, no interarrival yet.
         }
 
         // Update last activity AFTER segment processing uses the previous value
