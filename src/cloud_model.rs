@@ -265,8 +265,11 @@ where
         match parser(&json_text) {
             Ok(mut new_data) => {
                 new_data.set_signature(new_signature);
-                let mut data = self.data.write().await;
-                *data = new_data;
+                // Only hold the write lock for the minimum time needed to update the data
+                {
+                    let mut data = self.data.write().await;
+                    *data = new_data;
+                }
                 info!("Successfully updated file: '{}'", self.file_name);
                 Ok(UpdateStatus::Updated)
             }
