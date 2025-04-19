@@ -153,7 +153,6 @@ pub async fn process_parsed_packet(
 
     if let Some(mut info) = sessions.get_mut(&key) {
         let stats = &mut info.stats;
-        stats.last_activity = now;
 
         if is_originator {
             // Packet from originator to responder
@@ -226,6 +225,9 @@ pub async fn process_parsed_packet(
                 }
             }
         }
+
+        // Update last activity AFTER segment processing uses the previous value
+        stats.last_activity = now;
 
         // Update history with correct direction
         if let Some(flags) = parsed_packet.flags {
