@@ -234,7 +234,7 @@ pub async fn is_ip_blacklisted(ip: &str) -> (bool, Vec<String>) {
     // Check each blacklist in the current data model
     for entry in blacklists_map.iter() {
         let blacklist_name = entry.key();
-        info!("Checking blacklist: {} for IP: {}", blacklist_name, ip);
+        debug!("Checking blacklist: {} for IP: {}", blacklist_name, ip);
 
         let result = list_data_instance.is_ip_in_blacklist(ip, blacklist_name);
 
@@ -253,10 +253,12 @@ pub async fn is_ip_blacklisted(ip: &str) -> (bool, Vec<String>) {
     }
 
     let is_blacklisted = !matching_blacklists.is_empty();
-    info!(
-        "IP {} blacklisted: {}, matching lists: {:?}",
-        ip, is_blacklisted, matching_blacklists
-    );
+    if is_blacklisted {
+        info!(
+            "IP {} blacklisted: {}, matching lists: {:?}",
+            ip, is_blacklisted, matching_blacklists
+        );
+    }
 
     (is_blacklisted, matching_blacklists)
 }
