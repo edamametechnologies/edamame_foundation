@@ -76,7 +76,18 @@ impl Blacklists {
             // Parse and cache IP ranges
             let mut ranges = Vec::new();
             for ip_range_str in &info.ip_ranges {
-                match ip_range_str.parse::<IpNet>() {
+                let ip_str_to_parse = if let Ok(ip) = ip_range_str.parse::<IpAddr>() {
+                    // If this is a plain IP address without CIDR notation, add the appropriate mask
+                    match ip {
+                        IpAddr::V4(_) => format!("{}/32", ip_range_str), // Single IPv4 address
+                        IpAddr::V6(_) => format!("{}/128", ip_range_str), // Single IPv6 address
+                    }
+                } else {
+                    // Already in CIDR or another format, try parsing as is
+                    ip_range_str.clone()
+                };
+                
+                match ip_str_to_parse.parse::<IpNet>() {
                     Ok(net) => ranges.push(net),
                     Err(e) => {
                         warn!("Failed to parse IP range {}: {}", ip_range_str, e);
@@ -121,24 +132,44 @@ impl Blacklists {
 
     /// Checks if a given IP is in the blacklist.
     pub fn is_ip_in_blacklist(&self, ip_str: &str, blacklist_name: &str) -> Result<bool> {
-        let ip = ip_str
-            .parse::<IpAddr>()
-            .map_err(|e| anyhow!("Invalid IP address: {}", e))?;
+        // Add detailed logging for IP checking
+        info!("Checking if IP '{}' is in blacklist '{}'", ip_str, blacklist_name);
+        
+        let ip = match ip_str.parse::<IpAddr>() {
+            Ok(addr) => addr,
+            Err(e) => {
+                warn!("Invalid IP address '{}': {}", ip_str, e);
+                return Err(anyhow!("Invalid IP address: {}", e));
+            }
+        };
 
-        let ranges = self.get_all_ip_ranges(blacklist_name)?;
+        let ranges = match self.get_all_ip_ranges(blacklist_name) {
+            Ok(r) => r,
+            Err(e) => {
+                warn!("Error getting ranges for blacklist '{}': {}", blacklist_name, e);
+                return Err(e);
+            }
+        };
+        
+        info!("Found {} IP ranges in blacklist '{}'", ranges.len(), blacklist_name);
+        
+        // Debug print all ranges
+        for (i, range) in ranges.iter().enumerate().take(10) {  // Only print first 10 to avoid log spam
+            info!("  Range {}: {}", i+1, range);
+        }
+        if ranges.len() > 10 {
+            info!("  ... and {} more ranges", ranges.len() - 10);
+        }
 
         for range in ranges {
+            info!("Checking if IP '{}' is in range '{}'", ip, range);
             if range.contains(&ip) {
-                trace!(
-                    "IP {} matched blacklist {} with range {}",
-                    ip_str,
-                    blacklist_name,
-                    range
-                );
+                info!("✓ MATCH: IP '{}' matched blacklist '{}' with range '{}'", ip_str, blacklist_name, range);
                 return Ok(true);
             }
         }
 
+        info!("✗ NO MATCH: IP '{}' is not in any range for blacklist '{}'", ip_str, blacklist_name);
         Ok(false)
     }
 }
@@ -167,7 +198,8 @@ pub async fn is_valid_blacklist(blacklist_name: &str) -> bool {
 /// - The boolean indicates whether the IP is blacklisted in any list
 /// - The Vec<String> contains the names of all blacklists that match
 pub async fn is_ip_blacklisted(ip: &str) -> (bool, Vec<String>) {
-    trace!("Checking if IP: {} is blacklisted", ip);
+    // Add more verbose debug logging for blacklist issues
+    info!("Checking if IP: {} is blacklisted", ip);
 
     let mut matching_blacklists = Vec::new();
 
@@ -182,13 +214,18 @@ pub async fn is_ip_blacklisted(ip: &str) -> (bool, Vec<String>) {
     // Check each blacklist in the current data model
     for entry in blacklists_map.iter() {
         let blacklist_name = entry.key();
+        info!("Checking blacklist: {} for IP: {}", blacklist_name, ip);
+        
         let result = list_data_instance.is_ip_in_blacklist(ip, blacklist_name);
 
         match result {
             Ok(true) => {
+                info!("IP {} matched blacklist {}", ip, blacklist_name);
                 matching_blacklists.push(blacklist_name.clone());
             }
-            Ok(false) => {}
+            Ok(false) => {
+                info!("IP {} did NOT match blacklist {}", ip, blacklist_name);
+            }
             Err(e) => {
                 warn!("Error checking blacklist {}: {}", blacklist_name, e);
             }
@@ -196,6 +233,7 @@ pub async fn is_ip_blacklisted(ip: &str) -> (bool, Vec<String>) {
     }
 
     let is_blacklisted = !matching_blacklists.is_empty();
+    info!("IP {} blacklisted: {}, matching lists: {:?}", ip, is_blacklisted, matching_blacklists);
 
     (is_blacklisted, matching_blacklists)
 }
@@ -411,5 +449,57 @@ mod tests {
             !is_blacklisted,
             "Empty blacklist name check (behavior test)"
         );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_direct_ip_without_cidr() {
+        // Test blacklist with direct IPs without CIDR notation
+        let test_blacklist_json = BlacklistsJSON {
+            date: "2025-03-29".to_string(),
+            signature: "test_signature".to_string(),
+            blacklists: vec![BlacklistInfo {
+                name: "direct_ip_blacklist".to_string(),
+                description: Some("Direct IP test blacklist".to_string()),
+                last_updated: Some("2025-03-29".to_string()),
+                source_url: None,
+                ip_ranges: vec![
+                    "192.168.1.1".to_string(),           // IPv4 without CIDR
+                    "2001:db8::1".to_string(),           // IPv6 without CIDR
+                    "10.0.0.0/8".to_string(),            // IPv4 with CIDR
+                    "2001:db8:1::/64".to_string(),       // IPv6 with CIDR
+                ],
+            }],
+        };
+
+        let blacklists = Blacklists::new_from_json(test_blacklist_json);
+        LISTS.overwrite_with_test_data(blacklists).await;
+
+        // Test direct IPv4 without CIDR
+        let (is_blacklisted, matching_lists) = is_ip_blacklisted("192.168.1.1").await;
+        assert!(is_blacklisted, "IPv4 without CIDR should be blacklisted");
+        assert!(matching_lists.contains(&"direct_ip_blacklist".to_string()));
+
+        // Test direct IPv6 without CIDR
+        let (is_blacklisted, matching_lists) = is_ip_blacklisted("2001:db8::1").await;
+        assert!(is_blacklisted, "IPv6 without CIDR should be blacklisted");
+        assert!(matching_lists.contains(&"direct_ip_blacklist".to_string()));
+
+        // Test IPv4 with CIDR
+        let (is_blacklisted, matching_lists) = is_ip_blacklisted("10.1.2.3").await;
+        assert!(is_blacklisted, "IPv4 in CIDR range should be blacklisted");
+        assert!(matching_lists.contains(&"direct_ip_blacklist".to_string()));
+
+        // Test IPv6 with CIDR
+        let (is_blacklisted, matching_lists) = is_ip_blacklisted("2001:db8:1::abc").await;
+        assert!(is_blacklisted, "IPv6 in CIDR range should be blacklisted");
+        assert!(matching_lists.contains(&"direct_ip_blacklist".to_string()));
+
+        // Test IPs not in blacklist
+        let (is_blacklisted, _) = is_ip_blacklisted("192.168.1.2").await;
+        assert!(!is_blacklisted, "IPv4 not in blacklist should not be blacklisted");
+
+        let (is_blacklisted, _) = is_ip_blacklisted("2001:db8::2").await;
+        assert!(!is_blacklisted, "IPv6 not in blacklist should not be blacklisted");
     }
 }
