@@ -7,7 +7,7 @@ use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
 use std::sync::Arc;
-use tracing::{info, warn};
+use tracing::{debug, info, trace, warn};
 
 // Constants
 const BLACKLISTS_FILE_NAME: &str = "blacklists-db.json";
@@ -133,7 +133,7 @@ impl Blacklists {
     /// Checks if a given IP is in the blacklist.
     pub fn is_ip_in_blacklist(&self, ip_str: &str, blacklist_name: &str) -> Result<bool> {
         // Add detailed logging for IP checking
-        info!(
+        trace!(
             "Checking if IP '{}' is in blacklist '{}'",
             ip_str, blacklist_name
         );
@@ -173,7 +173,7 @@ impl Blacklists {
         }
 
         for range in ranges {
-            info!("Checking if IP '{}' is in range '{}'", ip, range);
+            trace!("Checking if IP '{}' is in range '{}'", ip, range);
             if range.contains(&ip) {
                 info!(
                     "✓ MATCH: IP '{}' matched blacklist '{}' with range '{}'",
@@ -216,7 +216,7 @@ pub async fn is_valid_blacklist(blacklist_name: &str) -> bool {
 /// - The Vec<String> contains the names of all blacklists that match
 pub async fn is_ip_blacklisted(ip: &str) -> (bool, Vec<String>) {
     // Add more verbose debug logging for blacklist issues
-    info!("Checking if IP: {} is blacklisted", ip);
+    debug!("Checking if IP: {} is blacklisted", ip);
 
     let mut matching_blacklists = Vec::new();
 
@@ -237,11 +237,11 @@ pub async fn is_ip_blacklisted(ip: &str) -> (bool, Vec<String>) {
 
         match result {
             Ok(true) => {
-                info!("IP {} matched blacklist {}", ip, blacklist_name);
+                debug!("IP {} matched blacklist {}", ip, blacklist_name);
                 matching_blacklists.push(blacklist_name.clone());
             }
             Ok(false) => {
-                info!("IP {} did NOT match blacklist {}", ip, blacklist_name);
+                debug!("IP {} did NOT match blacklist {}", ip, blacklist_name);
             }
             Err(e) => {
                 warn!("Error checking blacklist {}: {}", blacklist_name, e);
