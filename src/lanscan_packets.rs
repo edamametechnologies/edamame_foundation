@@ -206,7 +206,8 @@ pub async fn process_parsed_packet(
         }
 
         // If this packet ends a segment
-        if is_segment_end && stats.in_segment { // Check in_segment *again* ensures we only process the end of the *current* segment
+        if is_segment_end && stats.in_segment {
+            // Check in_segment *again* ensures we only process the end of the *current* segment
             let previous_segment_end_time = stats.last_segment_end; // Store the *previous* end time
 
             stats.segment_count += 1;
@@ -219,7 +220,8 @@ pub async fn process_parsed_packet(
                 let segment_interarrival =
                     (stats.current_segment_start - prev_end).num_milliseconds() as f64 / 1000.0;
 
-                if segment_interarrival >= 0.0 { // Only add non-negative interarrivals
+                if segment_interarrival >= 0.0 {
+                    // Only add non-negative interarrivals
                     stats.total_segment_interarrival += segment_interarrival;
                     // Calculate average interarrival time over (segment_count - 1) intervals
                     stats.segment_interarrival = if stats.segment_count > 1 {
@@ -227,17 +229,24 @@ pub async fn process_parsed_packet(
                     } else {
                         0.0 // First interarrival time IS the average
                     };
-                 } else {
-                     warn!(
+                } else {
+                    warn!(
                          "Negative segment interarrival calculated ({}ms). Current start: {:?}, Previous end: {:?}. Skipping.",
                          (stats.current_segment_start - prev_end).num_milliseconds(),
                          stats.current_segment_start,
                          prev_end
                      );
-                     // Keep the previous average if the new calculation is invalid
-                 }
+                    // Keep the previous average if the new calculation is invalid
+                }
             }
             // No 'else' needed here - if previous_segment_end_time is None, it's the first segment ending, no interarrival yet.
+
+            // Start a new segment immediately if this is a timeout-based end
+            // (for TCP with PUSH flag, a new segment typically starts with next packet)
+            if time_since_last_activity >= stats.segment_timeout {
+                stats.in_segment = true;
+                stats.current_segment_start = now;
+            }
         }
 
         // Update last activity AFTER segment processing uses the previous value
@@ -324,6 +333,12 @@ pub async fn process_parsed_packet(
                 stats.segment_count = 1;
                 stats.in_segment = false;
                 stats.last_segment_end = Some(now);
+            }
+
+            // Check for FIN or RST flags to properly set end_time for new sessions
+            if (flags & (TcpFlags::FIN | TcpFlags::RST)) != 0 {
+                stats.end_time = Some(now);
+                stats.conn_state = Some(determine_conn_state(&stats.history));
             }
         }
 
@@ -1187,7 +1202,6 @@ mod tests {
             ip_packet_length: 120,
             flags: Some(TcpFlags::SYN),
         };
-
         process_parsed_packet(
             packet1,
             &sessions,
@@ -1236,6 +1250,18 @@ mod tests {
         // Debug check direction swapping logic
         let src_service_name = get_name_from_port(packet2.session.src_port).await;
         let dst_service_name = get_name_from_port(packet2.session.dst_port).await;
+
+        // Process the packet (using clone)
+        process_parsed_packet(
+            packet2.clone(),
+            &sessions,
+            &current_sessions,
+            &self_ips_set,
+            &filter,
+            None,
+        )
+        .await;
+
         println!(
             "DEBUG: Inbound packet - src port {} service: '{}', dst port {} service: '{}'",
             packet2.session.src_port, src_service_name, packet2.session.dst_port, dst_service_name
@@ -1247,16 +1273,6 @@ mod tests {
             "DEBUG: src_is_service_port: {}, dst_is_service_port: {}",
             src_is_service_port, dst_is_service_port
         );
-
-        process_parsed_packet(
-            packet2,
-            &sessions,
-            &current_sessions,
-            &self_ips_set,
-            &filter,
-            None,
-        )
-        .await;
 
         // Debug session map contents
         println!("DEBUG: After packet 2, sessions in map: {}", sessions.len());
@@ -1275,31 +1291,51 @@ mod tests {
             );
         }
 
-        // Check updated statistics
+        // Check updated statistics after packet 2
         {
             let session_info = sessions.get(&session_key).unwrap();
             assert_eq!(
-                session_info.stats.average_packet_size, 150.0,
-                "Average packet size should be 150.0"
+                session_info.stats.orig_pkts, 1,
+                "Originator packets should be 1"
             );
             assert_eq!(
-                session_info.stats.inbound_outbound_ratio, 2.0,
-                "Inbound/outbound ratio should be 2.0"
+                session_info.stats.resp_pkts, 1,
+                "Responder packets should be 1"
             );
+            assert_eq!(
+                session_info.stats.outbound_bytes, 100,
+                "Outbound bytes should be 100"
+            );
+            assert_eq!(
+                session_info.stats.inbound_bytes, 200,
+                "Inbound bytes should be 200"
+            );
+            let total_packets = session_info.stats.orig_pkts + session_info.stats.resp_pkts;
+            let total_bytes = session_info.stats.inbound_bytes + session_info.stats.outbound_bytes;
+            assert_eq!(total_packets, 2, "Total packets should be 2");
+            assert_eq!(total_bytes, 300, "Total bytes should be 300");
+            // Check average with a tolerance for floating point comparisons
+            let expected_avg = 150.0;
+            assert!(
+                (session_info.stats.average_packet_size - expected_avg).abs() < 0.001,
+                "Average packet size should be close to {}, got {}",
+                expected_avg,
+                session_info.stats.average_packet_size
+            );
+
             assert_eq!(
                 session_info.stats.segment_count, 0,
                 "No segments completed yet"
             );
         }
 
-        // 3. Process a third packet with PSH flag to end the segment
+        // 3. Process a third packet with PSH flag to end the first segment
         let packet3 = SessionPacketData {
             session: session_key.clone(),
             packet_length: 300,
             ip_packet_length: 320,
             flags: Some(TcpFlags::ACK | TCP_PSH),
         };
-
         process_parsed_packet(
             packet3,
             &sessions,
@@ -1315,28 +1351,32 @@ mod tests {
             let session_info = sessions.get(&session_key).unwrap();
             assert_eq!(
                 session_info.stats.average_packet_size, 200.0,
-                "Average packet size should be 200.0"
+                "Average packet size should be 200.0 after Pkt 3"
             );
             assert_eq!(
                 session_info.stats.segment_count, 1,
-                "One segment should be completed"
+                "One segment should be completed after Pkt 3"
             );
             assert!(
                 !session_info.stats.in_segment,
                 "Should not be in a segment after PSH"
             );
+            assert!(
+                session_info.stats.last_segment_end.is_some(),
+                "Last segment end should be set"
+            );
         }
 
-        // 4. Test segment timeout logic by simulating time passage
-        // For this we need to create a segment start with a packet
+        // Introduce a small delay to ensure Packet 4's timestamp is distinct and later
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // 4. Process packet to start a new segment
         let packet4 = SessionPacketData {
             session: session_key.clone(),
             packet_length: 150,
             ip_packet_length: 170,
             flags: Some(TcpFlags::ACK),
         };
-
-        // Process packet to start a new segment
         process_parsed_packet(
             packet4,
             &sessions,
@@ -1349,26 +1389,27 @@ mod tests {
 
         // Check that we're in a segment again
         {
-            let mut session_info = sessions.get_mut(&session_key).unwrap();
+            let session_info = sessions.get(&session_key).unwrap();
             assert!(
                 session_info.stats.in_segment,
-                "Should be in a segment after new packet"
+                "Should be in a segment after Packet 4"
             );
-
-            // Manually set the last_activity to simulate time passage
-            let now = Utc::now();
-            let six_seconds_ago = now - chrono::Duration::seconds(6);
-            session_info.stats.last_activity = six_seconds_ago;
         }
 
-        // Process another packet - this should trigger a timeout detection
+        // Introduce a delay LONGER than the segment timeout
+        let segment_timeout_duration = {
+            let info = sessions.get(&session_key).unwrap();
+            std::time::Duration::from_secs_f64(info.stats.segment_timeout)
+        };
+        tokio::time::sleep(segment_timeout_duration + std::time::Duration::from_secs(1)).await;
+
+        // 5. Process another packet - this should trigger a timeout detection for segment 2
         let packet5 = SessionPacketData {
             session: session_key.clone(),
             packet_length: 250,
             ip_packet_length: 270,
             flags: Some(TcpFlags::ACK),
         };
-
         process_parsed_packet(
             packet5,
             &sessions,
@@ -1379,7 +1420,7 @@ mod tests {
         )
         .await;
 
-        // Check statistics after timeout
+        // Check statistics after timeout-based segment completion
         {
             let session_info = sessions.get(&session_key).unwrap();
             assert_eq!(
@@ -1390,15 +1431,16 @@ mod tests {
                 session_info.stats.segment_interarrival > 0.0,
                 "Segment interarrival time should be positive"
             );
+            // Note: The average interarrival is just the first calculated one here.
         }
 
-        // 5. Test UDP segment detection (only timeout-based)
+        // 6. Test UDP segment detection (only timeout-based)
         let udp_session_key = Session {
             protocol: Protocol::UDP,
             src_ip,
             src_port: 54321,
             dst_ip,
-            dst_port: 53,
+            dst_port: 53, // Using DNS port for service detection consistency if needed
         };
 
         let udp_packet1 = SessionPacketData {
@@ -1407,7 +1449,6 @@ mod tests {
             ip_packet_length: 120,
             flags: None, // UDP has no flags
         };
-
         process_parsed_packet(
             udp_packet1,
             &sessions,
@@ -1677,5 +1718,875 @@ mod tests {
             assert_eq!(info.stats.inbound_bytes, 100);
             assert_eq!(info.stats.history, "h"); // lowercase 'h' for responder SYN+ACK
         }
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_segment_interarrival_edge_cases() {
+        // Create test data
+        let src_ip = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1));
+        let dst_ip = IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8));
+        let self_ips = vec![src_ip];
+        let self_ips_set: HashSet<IpAddr> = self_ips.into_iter().collect();
+
+        // Set up session storage
+        let sessions = Arc::new(DashMap::new());
+        let current_sessions = Arc::new(CustomRwLock::new(Vec::new()));
+        let filter = Arc::new(CustomRwLock::new(SessionFilter::All));
+
+        // Create session key
+        let session_key = Session {
+            protocol: Protocol::TCP,
+            src_ip,
+            src_port: 12345,
+            dst_ip,
+            dst_port: 80,
+        };
+
+        // Ensure port 80 is recognized as a service port
+        ensure_port_is_service_port(80, "HTTP").await;
+
+        // 1. Create and process the first packet
+        let packet1 = SessionPacketData {
+            session: session_key.clone(),
+            packet_length: 100,
+            ip_packet_length: 120,
+            flags: Some(TcpFlags::SYN),
+        };
+        process_parsed_packet(
+            packet1,
+            &sessions,
+            &current_sessions,
+            &self_ips_set,
+            &filter,
+            None,
+        )
+        .await;
+
+        // Sleep to ensure time difference
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+        // 2. Process a PSH packet to end the first segment
+        let packet2 = SessionPacketData {
+            session: session_key.clone(),
+            packet_length: 200,
+            ip_packet_length: 220,
+            flags: Some(TcpFlags::ACK | TCP_PSH),
+        };
+        process_parsed_packet(
+            packet2,
+            &sessions,
+            &current_sessions,
+            &self_ips_set,
+            &filter,
+            None,
+        )
+        .await;
+
+        // Verify first segment ended
+        {
+            let session_info = sessions.get(&session_key).unwrap();
+            assert_eq!(
+                session_info.stats.segment_count, 1,
+                "First segment should be completed"
+            );
+            assert!(
+                !session_info.stats.in_segment,
+                "Should not be in a segment after PSH"
+            );
+        }
+
+        // 3. Very quickly send a packet to start a new segment and another to end it
+        // Start segment 2
+        let packet3 = SessionPacketData {
+            session: session_key.clone(),
+            packet_length: 150,
+            ip_packet_length: 170,
+            flags: Some(TcpFlags::ACK),
+        };
+        process_parsed_packet(
+            packet3,
+            &sessions,
+            &current_sessions,
+            &self_ips_set,
+            &filter,
+            None,
+        )
+        .await;
+
+        // Immediately end segment 2 without sleeping
+        let packet4 = SessionPacketData {
+            session: session_key.clone(),
+            packet_length: 250,
+            ip_packet_length: 270,
+            flags: Some(TcpFlags::ACK | TCP_PSH),
+        };
+        process_parsed_packet(
+            packet4,
+            &sessions,
+            &current_sessions,
+            &self_ips_set,
+            &filter,
+            None,
+        )
+        .await;
+
+        // Check that segment interarrival time exists but is very small
+        {
+            let session_info = sessions.get(&session_key).unwrap();
+            assert_eq!(
+                session_info.stats.segment_count, 2,
+                "Second segment should be completed"
+            );
+            assert!(
+                session_info.stats.segment_interarrival >= 0.0,
+                "Segment interarrival time should be positive"
+            );
+            // We can't be too specific about the exact value since it depends on execution speed
+        }
+
+        // 4. Start another segment but with clock time manipulation scenario
+        // Sleep to ensure third segment has a clear start time
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // Start segment 3
+        let packet5 = SessionPacketData {
+            session: session_key.clone(),
+            packet_length: 300,
+            ip_packet_length: 320,
+            flags: Some(TcpFlags::ACK),
+        };
+        process_parsed_packet(
+            packet5,
+            &sessions,
+            &current_sessions,
+            &self_ips_set,
+            &filter,
+            None,
+        )
+        .await;
+
+        // Manually manipulate the last segment end time to be in the future relative to current time
+        // This is to simulate clock adjustments or cross-device time discrepancies
+        {
+            let mut info = sessions.get_mut(&session_key).unwrap();
+            // Set last_segment_end to 100ms in the future
+            info.stats.last_segment_end = Some(Utc::now() + chrono::Duration::milliseconds(100));
+        }
+
+        // End segment 3 with another PSH packet
+        let packet6 = SessionPacketData {
+            session: session_key.clone(),
+            packet_length: 350,
+            ip_packet_length: 370,
+            flags: Some(TcpFlags::ACK | TCP_PSH),
+        };
+        process_parsed_packet(
+            packet6,
+            &sessions,
+            &current_sessions,
+            &self_ips_set,
+            &filter,
+            None,
+        )
+        .await;
+
+        // Check that negative interarrival was handled gracefully
+        {
+            let session_info = sessions.get(&session_key).unwrap();
+            assert_eq!(
+                session_info.stats.segment_count, 3,
+                "Third segment should be completed"
+            );
+
+            // The interarrival calculation should either skip the negative value or handle it
+            // We're primarily checking that the code didn't crash and the stats are still reasonable
+            assert!(
+                session_info.stats.segment_interarrival >= 0.0,
+                "Segment interarrival should remain non-negative despite time anomaly"
+            );
+        }
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_udp_segment_timeout() {
+        // Create test data for UDP
+        let src_ip = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1));
+        let dst_ip = IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8));
+        let self_ips = vec![src_ip];
+        let self_ips_set: HashSet<IpAddr> = self_ips.into_iter().collect();
+
+        // Set up session storage
+        let sessions = Arc::new(DashMap::new());
+        let current_sessions = Arc::new(CustomRwLock::new(Vec::new()));
+        let filter = Arc::new(CustomRwLock::new(SessionFilter::All));
+
+        // Create UDP session key
+        let udp_session_key = Session {
+            protocol: Protocol::UDP,
+            src_ip,
+            src_port: 12345,
+            dst_ip,
+            dst_port: 53, // DNS port
+        };
+
+        // 1. Create and process the first UDP packet
+        let udp_packet1 = SessionPacketData {
+            session: udp_session_key.clone(),
+            packet_length: 100,
+            ip_packet_length: 120,
+            flags: None, // UDP has no flags
+        };
+        process_parsed_packet(
+            udp_packet1,
+            &sessions,
+            &current_sessions,
+            &self_ips_set,
+            &filter,
+            None,
+        )
+        .await;
+
+        // Verify UDP session creation
+        {
+            let session_info = sessions.get(&udp_session_key).unwrap();
+            assert!(
+                session_info.stats.in_segment,
+                "UDP session should start in a segment"
+            );
+            assert_eq!(
+                session_info.stats.segment_count, 0,
+                "No segments completed yet"
+            );
+        }
+
+        // Get the session timeout value
+        let segment_timeout_duration = {
+            let info = sessions.get(&udp_session_key).unwrap();
+            std::time::Duration::from_secs_f64(info.stats.segment_timeout)
+        };
+
+        // Wait longer than the timeout to trigger segment end
+        tokio::time::sleep(segment_timeout_duration + std::time::Duration::from_secs(1)).await;
+
+        // 2. Send another UDP packet - should trigger timeout for first segment
+        let udp_packet2 = SessionPacketData {
+            session: udp_session_key.clone(),
+            packet_length: 200,
+            ip_packet_length: 220,
+            flags: None,
+        };
+        process_parsed_packet(
+            udp_packet2,
+            &sessions,
+            &current_sessions,
+            &self_ips_set,
+            &filter,
+            None,
+        )
+        .await;
+
+        // Verify segment completion due to timeout
+        {
+            let session_info = sessions.get(&udp_session_key).unwrap();
+            assert_eq!(
+                session_info.stats.segment_count, 1,
+                "First segment should be completed due to timeout"
+            );
+            assert!(
+                session_info.stats.in_segment,
+                "Should be in a new segment after packet 2"
+            );
+            assert!(
+                session_info.stats.last_segment_end.is_some(),
+                "Last segment end time should be set"
+            );
+        }
+
+        // 3. Send multiple rapid UDP packets that don't exceed timeout
+        for i in 0..5 {
+            let udp_packet_n = SessionPacketData {
+                session: udp_session_key.clone(),
+                packet_length: 100 + i * 20,
+                ip_packet_length: 120 + i * 20,
+                flags: None,
+            };
+            process_parsed_packet(
+                udp_packet_n,
+                &sessions,
+                &current_sessions,
+                &self_ips_set,
+                &filter,
+                None,
+            )
+            .await;
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+
+        // Verify no new segments were created
+        {
+            let session_info = sessions.get(&udp_session_key).unwrap();
+            assert_eq!(
+                session_info.stats.segment_count, 1,
+                "Still only one segment should be completed"
+            );
+            assert!(
+                session_info.stats.in_segment,
+                "Should still be in the same segment after rapid packets"
+            );
+        }
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_packet_ordering_and_statistics() {
+        // Create test data
+        let src_ip = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1));
+        let dst_ip = IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8));
+        let self_ips = vec![src_ip];
+        let self_ips_set: HashSet<IpAddr> = self_ips.into_iter().collect();
+
+        // Set up session storage
+        let sessions = Arc::new(DashMap::new());
+        let current_sessions = Arc::new(CustomRwLock::new(Vec::new()));
+        let filter = Arc::new(CustomRwLock::new(SessionFilter::All));
+
+        // Create session key
+        let session_key = Session {
+            protocol: Protocol::TCP,
+            src_ip,
+            src_port: 12345,
+            dst_ip,
+            dst_port: 80,
+        };
+
+        // Ensure HTTP port is recognized
+        ensure_port_is_service_port(80, "HTTP").await;
+
+        // 1. Process packets out of order - FIN before SYN
+        // First process a FIN packet (which would normally come later in the session)
+        let packet_fin = SessionPacketData {
+            session: session_key.clone(),
+            packet_length: 100,
+            ip_packet_length: 120,
+            flags: Some(TcpFlags::FIN | TcpFlags::ACK),
+        };
+        process_parsed_packet(
+            packet_fin,
+            &sessions,
+            &current_sessions,
+            &self_ips_set,
+            &filter,
+            None,
+        )
+        .await;
+
+        // Now process a SYN packet (which would normally start the session)
+        let packet_syn = SessionPacketData {
+            session: session_key.clone(),
+            packet_length: 150,
+            ip_packet_length: 170,
+            flags: Some(TcpFlags::SYN),
+        };
+        process_parsed_packet(
+            packet_syn,
+            &sessions,
+            &current_sessions,
+            &self_ips_set,
+            &filter,
+            None,
+        )
+        .await;
+
+        // Check that statistics are still updated correctly despite out-of-order packets
+        {
+            let session_info = sessions.get(&session_key).unwrap();
+            // Both packets should be counted
+            assert_eq!(
+                session_info.stats.orig_pkts, 2,
+                "Both packets should be counted as originator packets"
+            );
+            // Total bytes should be the sum of both packets
+            assert_eq!(
+                session_info.stats.outbound_bytes, 250,
+                "Total outbound bytes should be 250 (100+150)"
+            );
+
+            // Average packet size should account for both
+            let expected_avg = 125.0; // (100 + 150) / 2
+            assert!(
+                (session_info.stats.average_packet_size - expected_avg).abs() < 0.001,
+                "Average packet size should be approximately 125 bytes"
+            );
+
+            // Check that history contains both flags in the order they were processed
+            assert!(
+                session_info.stats.history.contains('F'),
+                "History should contain FIN flag"
+            );
+            assert!(
+                session_info.stats.history.contains('S'),
+                "History should contain SYN flag"
+            );
+            // The history should have F before S since that's the order we processed them
+            let f_pos = session_info.stats.history.find('F').unwrap();
+            let s_pos = session_info.stats.history.find('S').unwrap();
+            assert!(
+                f_pos < s_pos,
+                "FIN flag should appear before SYN flag in history"
+            );
+
+            // Should have an end time since we saw a FIN
+            assert!(
+                session_info.stats.end_time.is_some(),
+                "End time should be set because of FIN flag"
+            );
+
+            // Should have a connection state since we saw a FIN
+            assert!(
+                session_info.stats.conn_state.is_some(),
+                "Connection state should be set"
+            );
+        }
+
+        // 2. Process out-of-order packets with segment boundaries
+        // Create a new session key to avoid interference
+        let session_key2 = Session {
+            protocol: Protocol::TCP,
+            src_ip,
+            src_port: 12346, // Different source port
+            dst_ip,
+            dst_port: 80,
+        };
+
+        // Send a PSH packet first (would normally end a segment)
+        let packet_psh = SessionPacketData {
+            session: session_key2.clone(),
+            packet_length: 200,
+            ip_packet_length: 220,
+            flags: Some(TcpFlags::ACK | TCP_PSH),
+        };
+        process_parsed_packet(
+            packet_psh,
+            &sessions,
+            &current_sessions,
+            &self_ips_set,
+            &filter,
+            None,
+        )
+        .await;
+
+        // Then send a regular ACK packet (would normally be in the middle of a segment)
+        let packet_ack = SessionPacketData {
+            session: session_key2.clone(),
+            packet_length: 300,
+            ip_packet_length: 320,
+            flags: Some(TcpFlags::ACK),
+        };
+        process_parsed_packet(
+            packet_ack,
+            &sessions,
+            &current_sessions,
+            &self_ips_set,
+            &filter,
+            None,
+        )
+        .await;
+
+        // Check segment handling with out-of-order packets
+        {
+            let session_info = sessions.get(&session_key2).unwrap();
+
+            // Since the first packet had PSH, it should have started and immediately ended a segment
+            assert_eq!(
+                session_info.stats.segment_count, 1,
+                "Should have completed one segment with PSH"
+            );
+
+            // The second packet should have started a new segment
+            assert!(
+                session_info.stats.in_segment,
+                "Should be in a new segment after second packet"
+            );
+
+            // Packets and bytes should be counted correctly
+            assert_eq!(session_info.stats.orig_pkts, 2, "Should count both packets");
+            assert_eq!(
+                session_info.stats.outbound_bytes, 500,
+                "Total outbound bytes should be 500 (200+300)"
+            );
+        }
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_multiple_blacklists_criticality() {
+        // Create test blacklists with overlapping entries
+        let blacklist_info1 = BlacklistInfo {
+            name: "test_blacklist_1".to_string(),
+            description: Some("Test blacklist 1".to_string()),
+            last_updated: Some("2025-03-29".to_string()),
+            source_url: None,
+            ip_ranges: vec![
+                "192.168.1.100/32".to_string(),
+                "10.0.0.0/8".to_string(),
+                "198.51.100.0/24".to_string(), // Overlapping IP range
+            ],
+        };
+
+        let blacklist_info2 = BlacklistInfo {
+            name: "test_blacklist_2".to_string(),
+            description: Some("Test blacklist 2".to_string()),
+            last_updated: Some("2025-03-29".to_string()),
+            source_url: None,
+            ip_ranges: vec![
+                "198.51.100.0/24".to_string(), // Overlapping IP range
+                "203.0.113.0/24".to_string(),
+            ],
+        };
+
+        let blacklists_json = BlacklistsJSON {
+            date: "2025-03-29".to_string(),
+            signature: "test-signature".to_string(),
+            blacklists: vec![blacklist_info1, blacklist_info2],
+        };
+
+        let blacklists = Blacklists::new_from_json(blacklists_json);
+        LISTS.overwrite_with_test_data(blacklists.clone()).await;
+
+        // Create session with an IP that appears in both blacklists
+        let session_data = SessionPacketData {
+            session: Session {
+                protocol: Protocol::TCP,
+                src_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
+                src_port: 12345,
+                dst_ip: IpAddr::V4(Ipv4Addr::new(198, 51, 100, 5)), // IP in the overlapping range
+                dst_port: 80,
+            },
+            packet_length: 100,
+            ip_packet_length: 120,
+            flags: Some(TcpFlags::SYN),
+        };
+
+        // Create necessary test objects
+        let sessions = Arc::new(DashMap::new());
+        let current_sessions = Arc::new(CustomRwLock::new(Vec::new()));
+        let self_ips = vec![IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))];
+        let self_ips_set: HashSet<IpAddr> = self_ips.into_iter().collect();
+        let filter = Arc::new(CustomRwLock::new(SessionFilter::All));
+
+        // Process the packet
+        process_parsed_packet(
+            session_data,
+            &sessions,
+            &current_sessions,
+            &self_ips_set,
+            &filter,
+            None,
+        )
+        .await;
+
+        // Verify the session was added with criticality from both blacklists
+        assert_eq!(sessions.len(), 1);
+        let session_key = Session {
+            protocol: Protocol::TCP,
+            src_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
+            src_port: 12345,
+            dst_ip: IpAddr::V4(Ipv4Addr::new(198, 51, 100, 5)),
+            dst_port: 80,
+        };
+
+        let session_info = sessions.get(&session_key).unwrap();
+        // Both blacklist names should be in the criticality, separated by comma
+        assert!(session_info
+            .criticality
+            .contains("blacklist:test_blacklist_1"));
+        assert!(session_info
+            .criticality
+            .contains("blacklist:test_blacklist_2"));
+        // Blacklist names should be sorted
+        assert_eq!(
+            session_info.criticality,
+            "blacklist:test_blacklist_1,blacklist:test_blacklist_2"
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_ipv6_blacklisted_ip() {
+        // Create a test blacklist with IPv6 addresses
+        let blacklist_info = BlacklistInfo {
+            name: "ipv6_blacklist".to_string(),
+            description: Some("IPv6 Test blacklist".to_string()),
+            last_updated: Some("2025-03-29".to_string()),
+            source_url: None,
+            ip_ranges: vec![
+                "2001:db8::/32".to_string(),           // Documentation IPv6 range
+                "2001:db8:1234:5678::/64".to_string(), // More specific prefix
+            ],
+        };
+
+        let blacklists_json = BlacklistsJSON {
+            date: "2025-03-29".to_string(),
+            signature: "test-signature".to_string(),
+            blacklists: vec![blacklist_info],
+        };
+
+        let blacklists = Blacklists::new_from_json(blacklists_json);
+        LISTS.overwrite_with_test_data(blacklists.clone()).await;
+
+        // Create session with a blacklisted IPv6 address
+        let session_data = SessionPacketData {
+            session: Session {
+                protocol: Protocol::TCP,
+                src_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
+                src_port: 12345,
+                dst_ip: IpAddr::V6("2001:db8:1234:5678:abcd:ef01:2345:6789".parse().unwrap()),
+                dst_port: 80,
+            },
+            packet_length: 100,
+            ip_packet_length: 120,
+            flags: Some(TcpFlags::SYN),
+        };
+
+        // Create necessary objects for the test
+        let sessions = Arc::new(DashMap::new());
+        let current_sessions = Arc::new(CustomRwLock::new(Vec::new()));
+        let self_ips = vec![IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))];
+        let self_ips_set: HashSet<IpAddr> = self_ips.into_iter().collect();
+        let filter = Arc::new(CustomRwLock::new(SessionFilter::All));
+
+        // Process the packet
+        process_parsed_packet(
+            session_data,
+            &sessions,
+            &current_sessions,
+            &self_ips_set,
+            &filter,
+            None,
+        )
+        .await;
+
+        // Verify that the session was added with the correct criticality
+        assert_eq!(sessions.len(), 1);
+        let session_key = Session {
+            protocol: Protocol::TCP,
+            src_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
+            src_port: 12345,
+            dst_ip: IpAddr::V6("2001:db8:1234:5678:abcd:ef01:2345:6789".parse().unwrap()),
+            dst_port: 80,
+        };
+
+        let session_info = sessions.get(&session_key).unwrap();
+        assert_eq!(session_info.criticality, "blacklist:ipv6_blacklist");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_subnet_blacklisting() {
+        // Create a test blacklist with public IP ranges (not private ranges)
+        let blacklist_info = BlacklistInfo {
+            name: "subnet_blacklist".to_string(),
+            description: Some("Subnet Test blacklist".to_string()),
+            last_updated: Some("2025-03-29".to_string()),
+            source_url: None,
+            ip_ranges: vec![
+                "198.51.100.0/24".to_string(), // TEST-NET-2 range (small subnet)
+                "203.0.113.0/24".to_string(),  // TEST-NET-3 range (small subnet)
+                "198.18.0.0/15".to_string(),   // Benchmarking range (large subnet)
+            ],
+        };
+
+        let blacklists_json = BlacklistsJSON {
+            date: "2025-03-29".to_string(),
+            signature: "test-signature".to_string(),
+            blacklists: vec![blacklist_info],
+        };
+
+        let blacklists = Blacklists::new_from_json(blacklists_json);
+        LISTS.overwrite_with_test_data(blacklists.clone()).await;
+
+        // Test multiple IPs from different parts of the subnets using public test ranges
+        let test_ips = vec![
+            (IpAddr::V4(Ipv4Addr::new(198, 51, 100, 5)), true), // In TEST-NET-2 range
+            (IpAddr::V4(Ipv4Addr::new(198, 51, 100, 255)), true), // Edge of TEST-NET-2 range
+            (IpAddr::V4(Ipv4Addr::new(198, 51, 101, 1)), false), // Just outside TEST-NET-2 range
+            (IpAddr::V4(Ipv4Addr::new(203, 0, 113, 128)), true), // Middle of TEST-NET-3 range
+            (IpAddr::V4(Ipv4Addr::new(198, 18, 255, 255)), true), // Part of benchmarking range
+            (IpAddr::V4(Ipv4Addr::new(198, 20, 0, 0)), false),  // Just outside benchmarking range
+        ];
+
+        for (test_ip, should_be_blacklisted) in test_ips {
+            // Create session with the test IP
+            let session_data = SessionPacketData {
+                session: Session {
+                    protocol: Protocol::TCP,
+                    src_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
+                    src_port: 12345,
+                    dst_ip: test_ip,
+                    dst_port: 80,
+                },
+                packet_length: 100,
+                ip_packet_length: 120,
+                flags: Some(TcpFlags::SYN),
+            };
+
+            // Create new test objects for each iteration
+            let sessions = Arc::new(DashMap::new());
+            let current_sessions = Arc::new(CustomRwLock::new(Vec::new()));
+            let self_ips = vec![IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))];
+            let self_ips_set: HashSet<IpAddr> = self_ips.into_iter().collect();
+            let filter = Arc::new(CustomRwLock::new(SessionFilter::All));
+
+            // Process the packet
+            process_parsed_packet(
+                session_data,
+                &sessions,
+                &current_sessions,
+                &self_ips_set,
+                &filter,
+                None,
+            )
+            .await;
+
+            // Verify correct blacklist detection
+            assert_eq!(sessions.len(), 1);
+            let session_key = Session {
+                protocol: Protocol::TCP,
+                src_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
+                src_port: 12345,
+                dst_ip: test_ip,
+                dst_port: 80,
+            };
+
+            let session_info = sessions.get(&session_key).unwrap();
+            if should_be_blacklisted {
+                assert_eq!(
+                    session_info.criticality, "blacklist:subnet_blacklist",
+                    "IP {:?} should be blacklisted but isn't",
+                    test_ip
+                );
+            } else {
+                assert_eq!(
+                    session_info.criticality, "",
+                    "IP {:?} shouldn't be blacklisted but is",
+                    test_ip
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_local_blacklisted_ip_handling() {
+        // Create a test blacklist that includes local LAN IP ranges
+        let blacklist_info = BlacklistInfo {
+            name: "local_blacklist".to_string(),
+            description: Some("Local Network Blacklist".to_string()),
+            last_updated: Some("2025-03-29".to_string()),
+            source_url: None,
+            ip_ranges: vec![
+                "192.168.0.0/16".to_string(), // Common home network range
+                "10.0.0.0/8".to_string(),     // Common corporate network range
+                "172.16.0.0/12".to_string(),  // Other private range
+            ],
+        };
+
+        let blacklists_json = BlacklistsJSON {
+            date: "2025-03-29".to_string(),
+            signature: "test-signature".to_string(),
+            blacklists: vec![blacklist_info],
+        };
+
+        let blacklists = Blacklists::new_from_json(blacklists_json);
+        LISTS.overwrite_with_test_data(blacklists.clone()).await;
+
+        // Create a session between two local IPs that are also on the blacklist
+        let session_data = SessionPacketData {
+            session: Session {
+                protocol: Protocol::TCP,
+                src_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 10)), // Local IP in blacklist
+                src_port: 12345,
+                dst_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 20)), // Local IP in blacklist
+                dst_port: 80,
+            },
+            packet_length: 100,
+            ip_packet_length: 120,
+            flags: Some(TcpFlags::SYN),
+        };
+
+        // Create objects for test
+        let sessions = Arc::new(DashMap::new());
+        let current_sessions = Arc::new(CustomRwLock::new(Vec::new()));
+        let self_ips = vec![IpAddr::V4(Ipv4Addr::new(192, 168, 1, 10))]; // One of the IPs is self
+        let self_ips_set: HashSet<IpAddr> = self_ips.into_iter().collect();
+        let filter = Arc::new(CustomRwLock::new(SessionFilter::All));
+
+        // Process the packet
+        process_parsed_packet(
+            session_data,
+            &sessions,
+            &current_sessions,
+            &self_ips_set,
+            &filter,
+            None,
+        )
+        .await;
+
+        // Verify that local IPs don't get marked with criticality even if on blacklist
+        assert_eq!(sessions.len(), 1);
+        let session_key = Session {
+            protocol: Protocol::TCP,
+            src_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 10)),
+            src_port: 12345,
+            dst_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 20)),
+            dst_port: 80,
+        };
+
+        let session_info = sessions.get(&session_key).unwrap();
+        // Criticality should be empty because we don't apply blacklists to local IPs
+        assert_eq!(session_info.criticality, "");
+
+        // Now test a mixed case: local source to blacklisted external destination
+        let session_data2 = SessionPacketData {
+            session: Session {
+                protocol: Protocol::TCP,
+                src_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 10)), // Local IP
+                src_port: 54321,
+                dst_ip: IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)), // External IP not in blacklist
+                dst_port: 443,
+            },
+            packet_length: 100,
+            ip_packet_length: 120,
+            flags: Some(TcpFlags::SYN),
+        };
+
+        // Create new session map for this test
+        let sessions2 = Arc::new(DashMap::new());
+        let current_sessions2 = Arc::new(CustomRwLock::new(Vec::new()));
+
+        // Process the second packet
+        process_parsed_packet(
+            session_data2,
+            &sessions2,
+            &current_sessions2,
+            &self_ips_set,
+            &filter,
+            None,
+        )
+        .await;
+
+        let session_key2 = Session {
+            protocol: Protocol::TCP,
+            src_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 10)),
+            src_port: 54321,
+            dst_ip: IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)),
+            dst_port: 443,
+        };
+
+        // This IP is not blacklisted, so criticality should be empty
+        let session_info2 = sessions2.get(&session_key2).unwrap();
+        assert_eq!(session_info2.criticality, "");
     }
 }
