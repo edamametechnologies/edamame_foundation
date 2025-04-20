@@ -183,9 +183,9 @@ update_whitelists_db() {
     echo -e $trailer >> "$target"
 }
 
-update_blacklist_db() {
+update_blacklists_db() {
     local is_local=${1:-false}
-    local target=./src/blacklist_db.rs
+    local target=./src/blacklists_db.rs
     local header="// Built in default blacklist db\npub static BLACKLISTS: &str = r#\""
     local trailer="\"#;"
 
@@ -246,7 +246,7 @@ if [ -n "$SPECIFIC_OS" ]; then
     update_lanscan_port_vulns $USE_LOCAL
     update_lanscan_vendor_vulns $USE_LOCAL
     update_whitelists_db $USE_LOCAL
-    update_blacklist_db $USE_LOCAL
+    update_blacklists_db $USE_LOCAL
 else
     # Loop through all targets
     for os in "${targets[@]}"; do
@@ -256,5 +256,5 @@ else
     update_lanscan_port_vulns $USE_LOCAL
     update_lanscan_vendor_vulns $USE_LOCAL
     update_whitelists_db $USE_LOCAL
-    update_blacklist_db $USE_LOCAL
+    update_blacklists_db $USE_LOCAL
 fi
