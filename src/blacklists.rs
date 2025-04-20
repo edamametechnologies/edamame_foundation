@@ -135,7 +135,8 @@ impl Blacklists {
         // Add detailed logging for IP checking
         trace!(
             "Checking if IP '{}' is in blacklist '{}'",
-            ip_str, blacklist_name
+            ip_str,
+            blacklist_name
         );
 
         let ip = match ip_str.parse::<IpAddr>() {
@@ -157,7 +158,7 @@ impl Blacklists {
             }
         };
 
-        info!(
+        trace!(
             "Found {} IP ranges in blacklist '{}'",
             ranges.len(),
             blacklist_name
@@ -166,24 +167,26 @@ impl Blacklists {
         // Debug print all ranges
         for (i, range) in ranges.iter().enumerate().take(10) {
             // Only print first 10 to avoid log spam
-            info!("  Range {}: {}", i + 1, range);
+            trace!("  Range {}: {}", i + 1, range);
         }
         if ranges.len() > 10 {
-            info!("  ... and {} more ranges", ranges.len() - 10);
+            trace!("  ... and {} more ranges", ranges.len() - 10);
         }
 
         for range in ranges {
             trace!("Checking if IP '{}' is in range '{}'", ip, range);
             if range.contains(&ip) {
-                info!(
+                trace!(
                     "✓ MATCH: IP '{}' matched blacklist '{}' with range '{}'",
-                    ip_str, blacklist_name, range
+                    ip_str,
+                    blacklist_name,
+                    range
                 );
                 return Ok(true);
             }
         }
 
-        info!(
+        debug!(
             "✗ NO MATCH: IP '{}' is not in any range for blacklist '{}'",
             ip_str, blacklist_name
         );
