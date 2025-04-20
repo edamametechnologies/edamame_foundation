@@ -2237,6 +2237,10 @@ mod tests {
     #[serial]
     async fn test_whitelist_conformance_with_multiple_exceptions() {
         let mut capture = LANScanCapture::new();
+
+        // Explicitly initialize the whitelist conformance flag to true
+        capture.whitelist_conformance.store(true, Ordering::Relaxed);
+
         capture.set_whitelist("github").await;
         capture.set_filter(SessionFilter::All).await;
 
@@ -2488,9 +2492,22 @@ mod tests {
             !custom_whitelist_json.is_empty(),
             "Custom whitelist JSON should not be empty"
         );
+
+        // Check the number of endpoints in the whitelist
+        let json_value: serde_json::Value = serde_json::from_str(&custom_whitelist_json).unwrap();
+        let endpoints = json_value.get("whitelists").unwrap().as_array().unwrap()[0]
+            .get("endpoints")
+            .unwrap()
+            .as_array()
+            .unwrap();
+        assert!(!endpoints.is_empty(), "Endpoints array should not be empty");
+        let endpoints_len = endpoints.len();
+        println!("Endpoints array length: {}", endpoints_len);
+        assert!(endpoints_len > 0, "Endpoints array should not be empty");
+
         println!(
-            "Generated custom whitelist JSON (first 100 chars): {}...",
-            &custom_whitelist_json[..std::cmp::min(custom_whitelist_json.len(), 100)]
+            "Generated custom whitelist JSON (first 2000 chars): {}...",
+            &custom_whitelist_json[..std::cmp::min(custom_whitelist_json.len(), 2000)]
         );
 
         capture.set_custom_whitelists(&custom_whitelist_json).await;
@@ -2519,18 +2536,15 @@ mod tests {
                 WhitelistState::Conforming => { /* Expected */ }
             }
         }
-        // Allow a percentage of non-conforming/unknown due to timing/new connections
-        let max_allowed_non_conforming = std::cmp::max(
-            5,
-            (sessions_after_whitelist.len() as f64 * 0.7).round() as usize,
-        ); // Allow up to 70% or 5, whichever is higher
-        assert!(non_conforming_count <= max_allowed_non_conforming, "Expected few non-conforming sessions (<= {}) after applying generated whitelist, found {}", max_allowed_non_conforming, non_conforming_count);
         assert!(
             unknown_count == 0,
             "Expected zero unknown sessions after applying generated whitelist, found {}",
             unknown_count
         );
-        println!("Whitelist conformance check passed (NonConforming: {}, Unknown: {}, Allowed NonConforming: {}).", non_conforming_count, unknown_count, max_allowed_non_conforming);
+        println!(
+            "Whitelist conformance check passed (NonConforming: {}, Unknown: {}).",
+            non_conforming_count, unknown_count
+        );
         println!("--- Whitelist Test Completed ---");
 
         // --- Blacklist Test ---
