@@ -409,11 +409,11 @@ pub async fn utility_get_whitelist_exceptions() -> Result<String> {
     any(target_os = "macos", target_os = "linux", target_os = "windows"),
     feature = "packetcapture"
 ))]
-pub async fn utility_get_blacklist_status() -> Result<String> {
+pub async fn utility_get_blacklisted_status() -> Result<String> {
     let status = CAPTURE
         .lock()
         .await
-        .get_blacklist_status()
+        .get_blacklisted_status()
         .await
         .to_string();
     info!("Returning blacklist status: {}", status);
