@@ -121,6 +121,7 @@ pub struct LANScanCapture {
     whitelist_conformance: Arc<AtomicBool>,
     last_whitelist_exception_time: Arc<CustomRwLock<DateTime<Utc>>>,
     whitelist_exceptions: Arc<CustomRwLock<Vec<Session>>>,
+    blacklisted_sessions: Arc<CustomRwLock<Vec<Session>>>,
     filter: Arc<CustomRwLock<SessionFilter>>,
     dns_packet_processor: Option<Arc<DnsPacketProcessor>>,
 }
@@ -140,6 +141,7 @@ impl LANScanCapture {
                 std::time::UNIX_EPOCH,
             ))),
             whitelist_exceptions: Arc::new(CustomRwLock::new(Vec::new())),
+            blacklisted_sessions: Arc::new(CustomRwLock::new(Vec::new())),
             filter: Arc::new(CustomRwLock::new(SessionFilter::GlobalOnly)),
             dns_packet_processor: None,
         }
@@ -1378,7 +1380,11 @@ impl LANScanCapture {
         }
         debug!("LANScanCapture: populate_domain_names done");
 
-        // Finally update whitelist information
+        // Update blacklist information and recalculate criticality
+        self.recalculate_blacklist_criticality().await;
+        debug!("LANScanCapture: recalculate_blacklist_criticality done");
+
+        // Update whitelist information
         let whitelist_name = self.whitelist_name.read().await.clone();
         // Check name or if model is custom
         let list_model = &whitelists::LISTS;
@@ -1503,6 +1509,32 @@ impl LANScanCapture {
         exceptions
     }
 
+    pub async fn get_blacklisted_sessions(&self) -> Vec<SessionInfo> {
+        // First update all sessions
+        self.update_sessions().await;
+
+        // Get the sessions from the blacklisted_sessions list
+        let blacklisted_session_keys = self.blacklisted_sessions.read().await.clone();
+        let mut blacklisted_sessions = Vec::with_capacity(blacklisted_session_keys.len());
+
+        // Retrieve the full SessionInfo for each blacklisted session key
+        for session_key in blacklisted_session_keys {
+            if let Some(entry) = self.sessions.get(&session_key) {
+                blacklisted_sessions.push(entry.value().clone());
+            }
+        }
+
+        blacklisted_sessions
+    }
+
+    pub async fn get_blacklisted_status(&self) -> bool {
+        // First update all sessions
+        self.update_sessions().await;
+
+        // Return true if there are any blacklisted sessions
+        !self.blacklisted_sessions.read().await.is_empty()
+    }
+
     // Enrich dns resolutions with DNS packet processor information
     async fn integrate_dns_with_resolver(&self) {
         if self.dns_packet_processor.is_none() || self.resolver.is_none() {
@@ -1569,6 +1601,9 @@ impl LANScanCapture {
         // Get all sessions
         let sessions = self.sessions.clone();
 
+        // For storing updated blacklisted sessions
+        let mut updated_blacklisted_sessions = Vec::new();
+
         // For each session, check both source and destination IPs against the current blacklists
         for mut session_entry in sessions.iter_mut() {
             let session_info = session_entry.value_mut(); // Get mutable ref
@@ -1628,6 +1663,9 @@ impl LANScanCapture {
                     .map(|name| format!("blacklist:{}", name))
                     .collect();
                 final_tags_vec.extend(new_blacklist_tags);
+
+                // Add to blacklisted sessions list if it has a blacklist tag
+                updated_blacklisted_sessions.push(session_info.session.clone());
             }
 
             // Sort and deduplicate the final list
@@ -1648,6 +1686,17 @@ impl LANScanCapture {
                 );
             }
         }
+
+        // Update the blacklisted sessions
+        {
+            let mut blacklisted_sessions = self.blacklisted_sessions.write().await;
+            *blacklisted_sessions = updated_blacklisted_sessions;
+            trace!(
+                "Updated blacklisted sessions list, count: {}",
+                blacklisted_sessions.len()
+            );
+        }
+
         // Drop the lock AFTER the loop finishes
         drop(current_blacklist_data);
     }
@@ -1666,6 +1715,7 @@ impl Clone for LANScanCapture {
             whitelist_conformance: self.whitelist_conformance.clone(),
             last_whitelist_exception_time: self.last_whitelist_exception_time.clone(),
             whitelist_exceptions: self.whitelist_exceptions.clone(),
+            blacklisted_sessions: self.blacklisted_sessions.clone(),
             filter: self.filter.clone(),
             dns_packet_processor: self.dns_packet_processor.clone(),
         }
@@ -2719,35 +2769,247 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_blacklist_functionality() {
+        // Initialize a capture instance
         let mut capture = LANScanCapture::new();
 
-        // Verify we can set custom blacklists using the new method
-        let blacklist_info = BlacklistInfo {
-            name: "another_test_blacklist".to_string(),
-            description: Some("Another test blacklist".to_string()),
-            last_updated: Some("2025-03-29".to_string()),
-            source_url: None,
-            ip_ranges: vec!["192.168.5.0/24".to_string(), "10.10.10.0/24".to_string()],
+        // Set whitelist so we can verify no Unknown whitelist states
+        capture.set_whitelist("github").await;
+
+        // Create a custom blacklist
+        let blacklist_ip = "192.168.25.5";
+        let list_json = format!(
+            r#"
+            {{
+                "date": "2023-04-01T00:00:00Z",
+                "signature": "test-signature",
+                "blacklists": [
+                    {{
+                        "name": "test_blacklist",
+                        "description": "Test Blacklist",
+                        "last_updated": "2023-04-01",
+                        "source_url": "https://example.com",
+                        "ip_ranges": ["{}/32"]
+                    }}
+                ]
+            }}
+            "#,
+            blacklist_ip
+        );
+
+        // Apply the custom blacklist
+        capture.set_custom_blacklists(&list_json).await;
+
+        // Create a session that should be blacklisted
+        let blacklisted_session = Session {
+            protocol: Protocol::TCP,
+            src_ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)), // Local IP
+            src_port: 12345,
+            dst_ip: IpAddr::V4(Ipv4Addr::from_str(blacklist_ip).unwrap()), // Blacklisted IP
+            dst_port: 443,
         };
 
-        let blacklists_json = BlacklistsJSON {
-            date: "2025-03-29".to_string(),
-            signature: "test-signature".to_string(),
-            blacklists: vec![blacklist_info],
+        // Create SessionInfo
+        let blacklisted_session_info = SessionInfo {
+            session: blacklisted_session.clone(),
+            stats: SessionStats {
+                start_time: Utc::now(),
+                end_time: None,
+                last_activity: Utc::now(),
+                inbound_bytes: 100,
+                outbound_bytes: 200,
+                orig_pkts: 2,
+                resp_pkts: 3,
+                orig_ip_bytes: 300,
+                resp_ip_bytes: 400,
+                history: "Sh".to_string(),
+                conn_state: Some("S1".to_string()),
+                missed_bytes: 0,
+                average_packet_size: 100.0,
+                inbound_outbound_ratio: 0.5,
+                segment_count: 1,
+                current_segment_start: Utc::now(),
+                last_segment_end: None,
+                segment_interarrival: 0.0,
+                total_segment_interarrival: 0.0,
+                in_segment: true,
+                segment_timeout: 5.0,
+            },
+            status: SessionStatus {
+                active: true,
+                added: true,
+                activated: false,
+                deactivated: false,
+            },
+            is_local_src: true,
+            is_local_dst: false,
+            is_self_src: false,
+            is_self_dst: false,
+            src_domain: None,
+            dst_domain: None,
+            dst_service: None,
+            l7: None,
+            src_asn: None,
+            dst_asn: None,
+            is_whitelisted: WhitelistState::Unknown, // Start with Unknown state
+            criticality: String::new(),
+            whitelist_reason: None,
+            uid: Uuid::new_v4().to_string(),
+            last_modified: Utc::now(),
         };
 
-        let json_str = serde_json::to_string(&blacklists_json).unwrap();
+        // Add the session to the capture
+        capture
+            .sessions
+            .insert(blacklisted_session.clone(), blacklisted_session_info);
 
-        // Set the custom blacklist
-        capture.set_custom_blacklists(&json_str).await;
+        // Create a session that should NOT be blacklisted
+        let normal_session = Session {
+            protocol: Protocol::TCP,
+            src_ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            src_port: 54321,
+            dst_ip: IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)), // Google DNS
+            dst_port: 443,
+        };
 
-        // Verify the custom blacklist exists in the CloudModel
-        assert!(&blacklists::LISTS.is_custom().await);
+        // Create SessionInfo
+        let normal_session_info = SessionInfo {
+            session: normal_session.clone(),
+            stats: SessionStats {
+                start_time: Utc::now(),
+                end_time: None,
+                last_activity: Utc::now(),
+                inbound_bytes: 100,
+                outbound_bytes: 200,
+                orig_pkts: 2,
+                resp_pkts: 3,
+                orig_ip_bytes: 300,
+                resp_ip_bytes: 400,
+                history: "Sh".to_string(),
+                conn_state: Some("S1".to_string()),
+                missed_bytes: 0,
+                average_packet_size: 100.0,
+                inbound_outbound_ratio: 0.5,
+                segment_count: 1,
+                current_segment_start: Utc::now(),
+                last_segment_end: None,
+                segment_interarrival: 0.0,
+                total_segment_interarrival: 0.0,
+                in_segment: true,
+                segment_timeout: 5.0,
+            },
+            status: SessionStatus {
+                active: true,
+                added: true,
+                activated: false,
+                deactivated: false,
+            },
+            is_local_src: true,
+            is_local_dst: false,
+            is_self_src: false,
+            is_self_dst: false,
+            src_domain: None,
+            dst_domain: None,
+            dst_service: None,
+            l7: None,
+            src_asn: None,
+            dst_asn: None,
+            is_whitelisted: WhitelistState::Unknown, // Start with Unknown state
+            criticality: String::new(),
+            whitelist_reason: None,
+            uid: Uuid::new_v4().to_string(),
+            last_modified: Utc::now(),
+        };
 
-        // Clear custom blacklists
-        capture.set_custom_blacklists("").await;
+        // Add the session to the capture
+        capture
+            .sessions
+            .insert(normal_session.clone(), normal_session_info);
 
-        assert!(!&blacklists::LISTS.is_custom().await);
+        // Add both sessions to current_sessions to ensure they are processed
+        {
+            let mut current_sessions = capture.current_sessions.write().await;
+            current_sessions.push(blacklisted_session.clone());
+            current_sessions.push(normal_session.clone());
+        }
+
+        // Update the sessions (this should trigger blacklist and whitelist checking)
+        capture.update_sessions().await;
+
+        // Get the updated session infos
+        let blacklisted_info = capture
+            .sessions
+            .get(&blacklisted_session)
+            .unwrap()
+            .value()
+            .clone();
+        let normal_info = capture
+            .sessions
+            .get(&normal_session)
+            .unwrap()
+            .value()
+            .clone();
+
+        // Check criticality tag for blacklisted session
+        assert!(
+            blacklisted_info
+                .criticality
+                .contains("blacklist:test_blacklist"),
+            "Blacklisted session should have blacklist tag"
+        );
+
+        // Check criticality tag for normal session
+        assert!(
+            !normal_info.criticality.contains("blacklist:"),
+            "Normal session should not have blacklist tag"
+        );
+
+        // Check the maintained list of blacklisted sessions
+        let blacklisted_sessions = capture.blacklisted_sessions.read().await;
+        assert_eq!(
+            blacklisted_sessions.len(),
+            1,
+            "Should have 1 blacklisted session"
+        );
+        assert_eq!(
+            blacklisted_sessions[0], blacklisted_session,
+            "Blacklisted session in list should match"
+        );
+
+        // Verify get_blacklisted_sessions works correctly
+        let api_blacklisted_sessions = capture.get_blacklisted_sessions().await;
+        assert_eq!(
+            api_blacklisted_sessions.len(),
+            1,
+            "API should return 1 blacklisted session"
+        );
+        assert_eq!(
+            api_blacklisted_sessions[0].session, blacklisted_session,
+            "API returned session should match"
+        );
+
+        // Verify get_blacklisted_status returns true
+        assert!(
+            capture.get_blacklisted_status().await,
+            "get_blacklisted_status should return true"
+        );
+
+        // Verify the blacklisted session doesn't have Unknown whitelist state
+        assert_ne!(
+            api_blacklisted_sessions[0].is_whitelisted,
+            WhitelistState::Unknown,
+            "Blacklisted session should not have Unknown whitelist state"
+        );
+
+        // Verify all other sessions from get_sessions also don't have Unknown whitelist state
+        let all_sessions = capture.get_sessions().await;
+        for session in all_sessions {
+            assert_ne!(
+                session.is_whitelisted,
+                WhitelistState::Unknown,
+                "Session with UID {} should not have Unknown whitelist state",
+                session.uid
+            );
+        }
     }
 
     #[tokio::test]
@@ -3590,5 +3852,247 @@ mod tests {
 
         // Cleanup global state
         whitelists::LISTS.reset_to_default().await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_blacklisted_sessions_list_maintenance() {
+        // Create a new capture instance
+        let mut capture = LANScanCapture::new();
+        capture.set_whitelist("github").await;
+        capture.set_filter(SessionFilter::All).await;
+
+        // Create a custom blacklist that blacklists a specific IP
+        let current_date_iso = Utc::now().to_rfc3339();
+        let current_date_short = Utc::now().format("%Y-%m-%d").to_string();
+        let blacklist_ip = "192.168.10.10";
+        let blacklist_json = format!(
+            r#"{{
+                "date": "{}",
+                "signature": "test-signature",
+                "blacklists": [
+                    {{
+                        "name": "test_blacklist",
+                        "description": "Test blacklist for unit test",
+                        "last_updated": "{}",
+                        "source_url": "",
+                        "ip_ranges": ["{}"]
+                    }}
+                ]
+            }}"#,
+            current_date_iso, current_date_short, blacklist_ip
+        );
+
+        // Apply the custom blacklist
+        capture.set_custom_blacklists(&blacklist_json).await;
+
+        // Create a session with the blacklisted IP
+        let blacklisted_session = Session {
+            protocol: Protocol::TCP,
+            src_ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            src_port: 12345,
+            dst_ip: IpAddr::V4(Ipv4Addr::from_str(blacklist_ip).unwrap()),
+            dst_port: 443,
+        };
+
+        // Create SessionInfo with proper fields
+        let session_info = SessionInfo {
+            session: blacklisted_session.clone(),
+            stats: SessionStats {
+                start_time: Utc::now(),
+                end_time: None,
+                last_activity: Utc::now(),
+                inbound_bytes: 0,
+                outbound_bytes: 0,
+                orig_pkts: 0,
+                resp_pkts: 0,
+                orig_ip_bytes: 0,
+                resp_ip_bytes: 0,
+                history: String::new(),
+                conn_state: None,
+                missed_bytes: 0,
+                average_packet_size: 0.0,
+                inbound_outbound_ratio: 0.0,
+                segment_count: 0,
+                current_segment_start: Utc::now(),
+                last_segment_end: None,
+                segment_interarrival: 0.0,
+                total_segment_interarrival: 0.0,
+                in_segment: false,
+                segment_timeout: 5.0,
+            },
+            status: SessionStatus {
+                active: true,
+                added: true,
+                activated: false,
+                deactivated: false,
+            },
+            is_local_src: false,
+            is_local_dst: false,
+            is_self_src: false,
+            is_self_dst: false,
+            src_domain: None,
+            dst_domain: None,
+            dst_service: None,
+            l7: None,
+            src_asn: None,
+            dst_asn: None,
+            is_whitelisted: WhitelistState::Unknown, // Start with Unknown state
+            criticality: String::new(),
+            whitelist_reason: None,
+            uid: Uuid::new_v4().to_string(),
+            last_modified: Utc::now(),
+        };
+
+        // Add the session to the capture
+        capture
+            .sessions
+            .insert(blacklisted_session.clone(), session_info);
+
+        // Now add a non-blacklisted session
+        let normal_session = Session {
+            protocol: Protocol::TCP,
+            src_ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            src_port: 54321,
+            dst_ip: IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)), // Google DNS, not blacklisted
+            dst_port: 443,
+        };
+
+        let normal_session_info = SessionInfo {
+            session: normal_session.clone(),
+            stats: SessionStats {
+                start_time: Utc::now(),
+                end_time: None,
+                last_activity: Utc::now(),
+                inbound_bytes: 0,
+                outbound_bytes: 0,
+                orig_pkts: 0,
+                resp_pkts: 0,
+                orig_ip_bytes: 0,
+                resp_ip_bytes: 0,
+                history: String::new(),
+                conn_state: None,
+                missed_bytes: 0,
+                average_packet_size: 0.0,
+                inbound_outbound_ratio: 0.0,
+                segment_count: 0,
+                current_segment_start: Utc::now(),
+                last_segment_end: None,
+                segment_interarrival: 0.0,
+                total_segment_interarrival: 0.0,
+                in_segment: false,
+                segment_timeout: 5.0,
+            },
+            status: SessionStatus {
+                active: true,
+                added: true,
+                activated: false,
+                deactivated: false,
+            },
+            is_local_src: false,
+            is_local_dst: false,
+            is_self_src: false,
+            is_self_dst: false,
+            src_domain: None,
+            dst_domain: None,
+            dst_service: None,
+            l7: None,
+            src_asn: None,
+            dst_asn: None,
+            is_whitelisted: WhitelistState::Unknown, // Start with Unknown state
+            criticality: String::new(),
+            whitelist_reason: None,
+            uid: Uuid::new_v4().to_string(),
+            last_modified: Utc::now(),
+        };
+
+        capture
+            .sessions
+            .insert(normal_session.clone(), normal_session_info);
+
+        // Force session update to trigger blacklist and whitelist checking
+        capture.update_sessions().await;
+
+        // Add both sessions to current_sessions to ensure they are processed
+        {
+            let mut current_sessions = capture.current_sessions.write().await;
+            current_sessions.push(blacklisted_session.clone());
+            current_sessions.push(normal_session.clone());
+        }
+
+        // Verify that the blacklisted_sessions list contains only the blacklisted session
+        {
+            let blacklisted_sessions = capture.blacklisted_sessions.read().await;
+            assert_eq!(
+                blacklisted_sessions.len(),
+                1,
+                "Should have exactly one blacklisted session"
+            );
+            assert_eq!(
+                blacklisted_sessions[0], blacklisted_session,
+                "The blacklisted session should be in the list"
+            );
+        }
+
+        // Get blacklisted sessions via the public API
+        let blacklisted_sessions = capture.get_blacklisted_sessions().await;
+
+        // Verify we got back one session
+        assert_eq!(
+            blacklisted_sessions.len(),
+            1,
+            "get_blacklisted_sessions should return one session"
+        );
+
+        // Verify the blacklisted session has the proper criticality tag
+        assert!(
+            blacklisted_sessions[0]
+                .criticality
+                .contains("blacklist:test_blacklist"),
+            "Blacklisted session should have the test_blacklist tag"
+        );
+
+        // Verify that the blacklisted session doesn't have Unknown whitelist state
+        assert_ne!(
+            blacklisted_sessions[0].is_whitelisted,
+            WhitelistState::Unknown,
+            "Blacklisted session should not have Unknown whitelist state"
+        );
+
+        // Verify blacklisted_status is true
+        let blacklisted_status = capture.get_blacklisted_status().await;
+        assert!(
+            blacklisted_status,
+            "get_blacklisted_status should return true when blacklisted sessions exist"
+        );
+
+        // Remove the blacklisted session and verify status updates
+        capture.sessions.remove(&blacklisted_session);
+        capture.update_sessions().await;
+
+        // Verify blacklisted_sessions list is now empty
+        {
+            let blacklisted_sessions = capture.blacklisted_sessions.read().await;
+            assert_eq!(
+                blacklisted_sessions.len(),
+                0,
+                "blacklisted_sessions should be empty after removing the session"
+            );
+        }
+
+        // Verify status reflects the change
+        let blacklisted_status = capture.get_blacklisted_status().await;
+        assert!(
+            !blacklisted_status,
+            "get_blacklisted_status should return false when no blacklisted sessions exist"
+        );
+
+        // Verify get_blacklisted_sessions returns empty list
+        let blacklisted_sessions = capture.get_blacklisted_sessions().await;
+        assert_eq!(
+            blacklisted_sessions.len(),
+            0,
+            "get_blacklisted_sessions should return empty list after removing the session"
+        );
     }
 }
