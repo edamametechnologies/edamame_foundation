@@ -409,6 +409,41 @@ pub async fn utility_get_whitelist_exceptions() -> Result<String> {
     any(target_os = "macos", target_os = "linux", target_os = "windows"),
     feature = "packetcapture"
 ))]
+pub async fn utility_get_blacklist_status() -> Result<String> {
+    let status = CAPTURE
+        .lock()
+        .await
+        .get_blacklist_status()
+        .await
+        .to_string();
+    info!("Returning blacklist status: {}", status);
+    Ok(status)
+}
+
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux", target_os = "windows"),
+    feature = "packetcapture"
+))]
+pub async fn utility_get_blacklisted_sessions() -> Result<String> {
+    let sessions = CAPTURE.lock().await.get_blacklisted_sessions().await;
+    let json_sessions = match serde_json::to_string(&sessions) {
+        Ok(json) => json,
+        Err(e) => {
+            error!("Error serializing blacklisted sessions to JSON: {}", e);
+            return order_error(
+                &format!("error serializing blacklisted sessions to JSON: {}", e),
+                false,
+            );
+        }
+    };
+    info!("Returning {} blacklisted sessions", sessions.len());
+    Ok(json_sessions)
+}
+
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux", target_os = "windows"),
+    feature = "packetcapture"
+))]
 pub async fn utility_get_whitelists() -> Result<String> {
     let json = CAPTURE.lock().await.get_whitelists().await;
     info!("Returning whitelists JSON");
