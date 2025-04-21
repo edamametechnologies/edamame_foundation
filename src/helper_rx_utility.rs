@@ -416,7 +416,7 @@ pub async fn utility_get_blacklisted_status() -> Result<String> {
         .get_blacklisted_status()
         .await
         .to_string();
-    info!("Returning blacklist status: {}", status);
+    info!("Returning blacklisted status: {}", status);
     Ok(status)
 }
 
