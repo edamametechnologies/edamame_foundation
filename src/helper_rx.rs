@@ -455,6 +455,16 @@ pub async fn rpc_run(
                 any(target_os = "macos", target_os = "linux", target_os = "windows"),
                 feature = "packetcapture"
             ))]
+            "get_blacklisted_status" => utility_get_blacklisted_status().await,
+            #[cfg(all(
+                any(target_os = "macos", target_os = "linux", target_os = "windows"),
+                feature = "packetcapture"
+            ))]
+            "get_blacklisted_sessions" => utility_get_blacklisted_sessions().await,
+            #[cfg(all(
+                any(target_os = "macos", target_os = "linux", target_os = "windows"),
+                feature = "packetcapture"
+            ))]
             "get_whitelist_name" => utility_get_whitelist_name().await,
             _ => order_error(
                 &format!("unknown or unimplemented utilityorder {}", subordertype),
