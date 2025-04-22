@@ -359,10 +359,10 @@ impl LANScanL7 {
                         );
                     }
                     // Sleep for a little while to avoid overwhelming the system but keep a tight loop to ensure we're responsive to new sessions
-                    sleep(Duration::from_millis(250)).await;
+                    sleep(Duration::from_millis(100)).await;
                 } else {
                     // No sessions to resolve, sleep for a while to avoid overwhelming the system
-                    sleep(Duration::from_millis(500)).await;
+                    sleep(Duration::from_millis(200)).await;
                 }
             }
 
