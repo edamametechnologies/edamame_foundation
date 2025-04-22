@@ -186,7 +186,7 @@ impl Blacklists {
             }
         }
 
-        debug!(
+        trace!(
             "✗ NO MATCH: IP '{}' is not in any range for blacklist '{}'",
             ip_str, blacklist_name
         );
