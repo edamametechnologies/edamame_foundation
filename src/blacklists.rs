@@ -188,7 +188,8 @@ impl Blacklists {
 
         trace!(
             "✗ NO MATCH: IP '{}' is not in any range for blacklist '{}'",
-            ip_str, blacklist_name
+            ip_str,
+            blacklist_name
         );
         Ok(false)
     }
@@ -219,7 +220,7 @@ pub async fn is_valid_blacklist(blacklist_name: &str) -> bool {
 /// - The Vec<String> contains the names of all blacklists that match
 pub async fn is_ip_blacklisted(ip: &str) -> (bool, Vec<String>) {
     // Add more verbose debug logging for blacklist issues
-    debug!("Checking if IP: {} is blacklisted", ip);
+    trace!("Checking if IP: {} is blacklisted", ip);
 
     let mut matching_blacklists = Vec::new();
 
@@ -234,7 +235,7 @@ pub async fn is_ip_blacklisted(ip: &str) -> (bool, Vec<String>) {
     // Check each blacklist in the current data model
     for entry in blacklists_map.iter() {
         let blacklist_name = entry.key();
-        debug!("Checking blacklist: {} for IP: {}", blacklist_name, ip);
+        trace!("Checking blacklist: {} for IP: {}", blacklist_name, ip);
 
         let result = list_data_instance.is_ip_in_blacklist(ip, blacklist_name);
 
@@ -244,7 +245,7 @@ pub async fn is_ip_blacklisted(ip: &str) -> (bool, Vec<String>) {
                 matching_blacklists.push(blacklist_name.clone());
             }
             Ok(false) => {
-                debug!("IP {} did NOT match blacklist {}", ip, blacklist_name);
+                trace!("IP {} did NOT match blacklist {}", ip, blacklist_name);
             }
             Err(e) => {
                 warn!("Error checking blacklist {}: {}", blacklist_name, e);
