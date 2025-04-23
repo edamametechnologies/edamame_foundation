@@ -7,6 +7,7 @@ use dashmap::DashMap;
 use netstat2::{
     get_sockets_info, AddressFamilyFlags, ProtocolFlags, ProtocolSocketInfo, SocketInfo,
 };
+use once_cell::sync::Lazy;
 use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -26,7 +27,7 @@ use windows::{
 };
 
 // Add a constant for ephemeral connection retry timing
-static EPHEMERAL_RETRY_MS: u64 = 50; // Very quick retry for ephemeral connections
+static EPHEMERAL_RETRY_MS: u64 = 10; // Very quick retry for ephemeral connections
 
 #[derive(Debug, Clone)]
 pub struct L7Resolution {
@@ -41,6 +42,7 @@ pub struct ProcessCacheEntry {
     pub l7: SessionL7,
     pub last_seen: Instant,
     pub hit_count: usize,
+    pub termination_time: Option<Instant>,
 }
 
 pub struct LANScanL7 {
@@ -359,10 +361,10 @@ impl LANScanL7 {
                         );
                     }
                     // Sleep for a little while to avoid overwhelming the system but keep a tight loop to ensure we're responsive to new sessions
-                    sleep(Duration::from_millis(100)).await;
+                    sleep(Duration::from_millis(50)).await;
                 } else {
                     // No sessions to resolve, sleep for a while to avoid overwhelming the system
-                    sleep(Duration::from_millis(200)).await;
+                    sleep(Duration::from_millis(100)).await;
                 }
             }
 
@@ -480,6 +482,7 @@ impl LANScanL7 {
                         l7: l7_data.clone(),
                         last_seen: Instant::now(),
                         hit_count: 1,
+                        termination_time: None,
                     },
                 );
                 debug!("Cached L7 data for port {:?}: {:?}", cache_key, l7_data);
@@ -498,23 +501,55 @@ impl LANScanL7 {
             (connection.dst_port, protocol.clone()),
         ];
 
+        // Define grace period for terminated processes
+        let termination_grace_period = Duration::from_secs(10);
+
         for key in &cache_keys {
             if let Some(mut cached_entry) = port_process_cache.get_mut(key) {
                 if system
                     .process(Pid::from_u32(cached_entry.value().l7.pid))
                     .is_some()
                 {
+                    // Process still exists, update cache and return
                     cached_entry.value_mut().last_seen = Instant::now();
                     cached_entry.value_mut().hit_count += 1;
+                    cached_entry.value_mut().termination_time = None;
                     return Some(cached_entry.value().l7.clone());
                 } else {
-                    debug!(
-                        "Removing stale cache entry for {:?}: PID {} no longer exists",
-                        key,
-                        cached_entry.value().l7.pid
-                    );
-                    port_process_cache.remove(key);
-                    continue;
+                    // Process no longer exists
+                    if let Some(termination_time) = cached_entry.value().termination_time {
+                        // Check if we're still within grace period
+                        if termination_time.elapsed() < termination_grace_period {
+                            // Still within grace period, use the cached data
+                            cached_entry.value_mut().hit_count += 1;
+                            debug!(
+                                "Using recently terminated process data for {:?} (PID: {}), terminated {:?} ago",
+                                key,
+                                cached_entry.value().l7.pid,
+                                termination_time.elapsed()
+                            );
+                            return Some(cached_entry.value().l7.clone());
+                        } else {
+                            // Grace period expired, remove cache entry
+                            debug!(
+                                "Grace period expired for {:?}: PID {} terminated {:?} ago",
+                                key,
+                                cached_entry.value().l7.pid,
+                                termination_time.elapsed()
+                            );
+                            port_process_cache.remove(key);
+                        }
+                    } else {
+                        // First time seeing process termination, mark termination time
+                        debug!(
+                            "Process for {:?}: PID {} no longer exists, starting grace period",
+                            key,
+                            cached_entry.value().l7.pid
+                        );
+                        cached_entry.value_mut().termination_time = Some(Instant::now());
+                        cached_entry.value_mut().hit_count += 1;
+                        return Some(cached_entry.value().l7.clone());
+                    }
                 }
             }
         }
@@ -568,19 +603,46 @@ impl LANScanL7 {
             return None;
         }
 
+        // Define the same grace period for terminated processes as in try_resolve_from_cache
+        static TERMINATION_GRACE_PERIOD: Duration = Duration::from_secs(60);
+
+        // Keep track of terminated PIDs we've seen recently
+        static TERMINATED_PIDS: Lazy<DashMap<u32, Instant>> = Lazy::new(|| DashMap::new());
+
         if let Some(localhost_services) = host_service_cache.get("localhost") {
             for (service_port, service_protocol, l7_data) in localhost_services.value() {
                 if (connection.src_port == *service_port || connection.dst_port == *service_port)
                     && connection.protocol == *service_protocol
                 {
                     if system.process(Pid::from_u32(l7_data.pid)).is_some() {
+                        // Process still exists, remove from terminated list if present
+                        TERMINATED_PIDS.remove(&l7_data.pid);
                         return Some(l7_data.clone());
                     } else {
-                        debug!(
-                            "Skipping stale host cache entry for port {}, protocol {:?}: PID {} no longer exists",
-                            service_port, service_protocol, l7_data.pid
-                        );
-                        continue;
+                        // Process terminated - check if in grace period
+                        let now = Instant::now();
+                        let in_grace_period = TERMINATED_PIDS
+                            .entry(l7_data.pid)
+                            .or_insert_with(|| now)
+                            .value()
+                            .elapsed()
+                            < TERMINATION_GRACE_PERIOD;
+
+                        if in_grace_period {
+                            debug!(
+                                "Using recently terminated host cache data for port {}, protocol {:?}: PID {} terminated {:?} ago",
+                                service_port, service_protocol, l7_data.pid,
+                                TERMINATED_PIDS.get(&l7_data.pid).unwrap().value().elapsed()
+                            );
+                            return Some(l7_data.clone());
+                        } else {
+                            debug!(
+                                "Grace period expired for host cache entry: port {}, protocol {:?}, PID {}",
+                                service_port, service_protocol, l7_data.pid
+                            );
+                            TERMINATED_PIDS.remove(&l7_data.pid);
+                            continue;
+                        }
                     }
                 }
             }
@@ -1061,6 +1123,7 @@ mod tests {
                 l7: l7_data.clone(),
                 last_seen: Instant::now(),
                 hit_count: 0,
+                termination_time: None,
             },
         );
 
