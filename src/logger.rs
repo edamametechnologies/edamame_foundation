@@ -104,14 +104,6 @@ impl MemoryWriter {
 
         drop(locked_data);
 
-        // Catch the error logs and send them to Sentry by catching "ERROR" in the log line
-        if log_line_formatted.contains("ERROR")
-            && (!log_line_formatted.contains("libp2p")
-                || (!log_line_formatted.contains("Socket is not connected")))
-        {
-            sentry::capture_message(&log_line_formatted, sentry::Level::Error);
-        }
-
         Ok(())
     }
 }
