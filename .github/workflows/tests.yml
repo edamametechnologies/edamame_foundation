@@ -400,19 +400,30 @@ jobs:
             perl
         shell: alpine.sh --root {0}
 
-      - name: Setup EDAMAME Posture
-        run: |
-          # Install bash and sudo first
-          apk add --no-cache bash sudo
-          # Download edamame_posture for MUSL
-          wget https://raw.githubusercontent.com/edamametechnologies/edamame_posture_cli/refs/heads/main/linux/edamame_setup.sh -O ./edamame_setup.sh
-          chmod +x ./edamame_setup.sh
-          # Use bash to run the script
-          bash ./edamame_setup.sh ${{ vars.EDAMAME_POSTURE_USER }} ${{ vars.EDAMAME_POSTURE_DOMAIN }} ${{ secrets.EDAMAME_POSTURE_PIN }} ${{ github.run_id }}-alpine-${{ matrix.arch }}
-        shell: alpine.sh --root {0}
+      # We need to setup edamame_posture outside of the Alpine VM as otherwise IP address detection will fail and access will not be granted
+      #- name: Setup EDAMAME Posture
+      #  run: |
+      #    # Install bash and sudo first
+      #    apk add --no-cache bash sudo
+      #    # Download edamame_posture for MUSL
+      #    wget https://raw.githubusercontent.com/edamametechnologies/edamame_posture_cli/refs/heads/main/linux/edamame_setup.sh -O ./edamame_setup.sh
+      #    chmod +x ./edamame_setup.sh
+      #    # Use bash to run the script
+      #   bash ./edamame_setup.sh ${{ vars.EDAMAME_POSTURE_USER }} ${{ vars.EDAMAME_POSTURE_DOMAIN }} ${{ secrets.EDAMAME_POSTURE_PIN }} ${{ github.run_id }}-alpine-${{ matrix.arch }}
+      #  shell: alpine.sh --root {0}
 
-      # Manual checkout for Alpine
-      - name: Manual checkout for Alpine
+      # Setup EDAMAME Posture in host environment
+      - name: Setup EDAMAME Posture
+        uses: edamametechnologies/edamame_posture_action@v0
+        with:
+          edamame_user: ${{ vars.EDAMAME_POSTURE_USER }}
+          edamame_domain: ${{ vars.EDAMAME_POSTURE_DOMAIN }}
+          edamame_pin: ${{ secrets.EDAMAME_POSTURE_PIN }}
+          edamame_id: ${{ github.run_id }}-alpine-${{ matrix.arch }}
+          checkout: false
+
+      # Manual checkout in Alpine VM
+      - name: Manual checkout
         run: |
           mkdir temp
           cd temp
@@ -420,7 +431,7 @@ jobs:
           git checkout ${{ github.ref_name }}
         shell: alpine.sh {0}
 
-      # Install Rust
+      # Install Rust in Alpine VM
       - name: Install Rust
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
@@ -428,6 +439,7 @@ jobs:
           rustup target add ${{ matrix.target }}
         shell: alpine.sh {0}
 
+      # Must be in the Alpine VM
       - name: Run tests
         id: tests
         run: |
@@ -436,7 +448,10 @@ jobs:
           make ${{ matrix.platform }}_test
         shell: alpine.sh --root {0}
         continue-on-error: true
+        env:
+          VERGEN_GIT_BRANCH: ${{ github.ref_name }}
 
+      # Must be in the Alpine VM
       - name: Dump logs
         if: always()
         run: |
@@ -445,6 +460,7 @@ jobs:
           echo "--- Alpine Log Dump Complete ---"
         shell: alpine.sh --root {0}
 
+      # Must be in the host environment
       - name: Slack alerts
         if: steps.tests.outcome != 'success'
         uses: slackapi/slack-github-action@v1.26.0
@@ -458,6 +474,7 @@ jobs:
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
 
+      # Must be in the host environment
       - name: Fail job if tests failed
         if: steps.tests.outcome != 'success'
         run: |
@@ -466,4 +483,3 @@ jobs:
           echo ""
           echo "Forcing alpine job to fail because tests did not succeed."
           exit 1
-        shell: alpine.sh {0}
