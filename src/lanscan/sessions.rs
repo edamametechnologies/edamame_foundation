@@ -3,8 +3,9 @@ use chrono::{DateTime, Utc};
 use edamame_backend::session_info_backend::SessionInfoBackend;
 use serde::{Deserialize, Serialize};
 use std::hash::Hash;
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr};
 use strum_macros::Display;
+use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Display, Serialize, Deserialize, Ord, PartialOrd)]
 pub enum Protocol {
@@ -60,7 +61,7 @@ pub struct SessionStatus {
     pub deactivated: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, PartialOrd)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, PartialOrd)]
 pub struct SessionStats {
     pub start_time: DateTime<Utc>,
     pub end_time: Option<DateTime<Utc>>,
@@ -86,6 +87,80 @@ pub struct SessionStats {
     pub segment_timeout: f64, // Timeout in seconds to consider a segment ended (default 5s)
 }
 
+// Implementation for SessionStats::new for tests
+impl SessionStats {
+    pub fn new(now: DateTime<Utc>) -> Self {
+        Self {
+            start_time: now,
+            end_time: None,
+            last_activity: now,
+            inbound_bytes: 0,
+            outbound_bytes: 0,
+            orig_pkts: 0,
+            resp_pkts: 0,
+            orig_ip_bytes: 0,
+            resp_ip_bytes: 0,
+            history: String::new(),
+            conn_state: None,
+            missed_bytes: 0,
+            average_packet_size: 0.0,
+            inbound_outbound_ratio: 0.0,
+            segment_count: 0,
+            current_segment_start: now,
+            last_segment_end: None,
+            segment_interarrival: 0.0,
+            total_segment_interarrival: 0.0,
+            in_segment: false,
+            segment_timeout: 5.0,
+        }
+    }
+}
+
+// Implementation of Default for SessionStatus
+impl Default for SessionStatus {
+    fn default() -> Self {
+        Self {
+            active: false,
+            added: false,
+            activated: false,
+            deactivated: false,
+        }
+    }
+}
+
+// Implementation of Default for SessionInfo
+impl Default for SessionInfo {
+    fn default() -> Self {
+        let now = Utc::now();
+        Self {
+            session: Session {
+                protocol: Protocol::TCP,
+                src_ip: IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+                src_port: 0,
+                dst_ip: IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+                dst_port: 0,
+            },
+            stats: SessionStats::new(now),
+            status: SessionStatus::default(),
+            is_local_src: false,
+            is_local_dst: false,
+            is_self_src: false,
+            is_self_dst: false,
+            src_domain: None,
+            dst_domain: None,
+            dst_service: None,
+            l7: None,
+            src_asn: None,
+            dst_asn: None,
+            is_whitelisted: WhitelistState::Unknown,
+            criticality: "".to_string(),
+            whitelist_reason: None,
+            uid: Uuid::new_v4().to_string(),
+            last_modified: now,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, Ord, PartialOrd, Display)]
 pub enum SessionFilter {
     LocalOnly,
@@ -93,7 +168,9 @@ pub enum SessionFilter {
     All,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Ord, PartialOrd, Display)]
+#[derive(
+    Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Ord, PartialOrd, Display,
+)]
 pub enum WhitelistState {
     Conforming,
     NonConforming,
@@ -573,15 +650,15 @@ pub mod session_macros {
 
     macro_rules! is_local_session {
         ($entry:expr) => {
-            crate::lanscan_ip::is_lan_ip(&$entry.session.src_ip)
-                && crate::lanscan_ip::is_lan_ip(&$entry.session.dst_ip)
+            crate::lanscan::ip::is_lan_ip(&$entry.session.src_ip)
+                && crate::lanscan::ip::is_lan_ip(&$entry.session.dst_ip)
         };
     }
 
     macro_rules! is_global_session {
         ($entry:expr) => {
-            !crate::lanscan_ip::is_lan_ip(&$entry.session.src_ip)
-                || !crate::lanscan_ip::is_lan_ip(&$entry.session.dst_ip)
+            !crate::lanscan::ip::is_lan_ip(&$entry.session.src_ip)
+                || !crate::lanscan::ip::is_lan_ip(&$entry.session.dst_ip)
         };
     }
 
@@ -780,7 +857,7 @@ pub fn format_sessions_log(sessions: &Vec<SessionInfo>) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lanscan_ip::is_lan_ip;
+    use crate::lanscan::ip::is_lan_ip;
     use chrono::{TimeZone, Utc};
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 

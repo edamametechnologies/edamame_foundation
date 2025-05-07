@@ -1,6 +1,5 @@
+use crate::customlock::*;
 use crate::runtime::*;
-use crate::rwlock::CustomRwLock;
-use dashmap::DashMap;
 use hickory_resolver::{
     config::ResolverConfig, name_server::TokioConnectionProvider, TokioResolver,
 };
@@ -18,7 +17,7 @@ const RESOLUTION_RETRY_DELAY_MS: u64 = 500;
 #[derive(Debug)]
 pub struct LANScanResolver {
     resolvers: Arc<CustomRwLock<Vec<TokioResolver>>>,
-    reverse_dns: Arc<DashMap<IpAddr, String>>,
+    reverse_dns: Arc<CustomDashMap<IpAddr, String>>,
     resolver_queue: Arc<CustomRwLock<VecDeque<IpAddr>>>,
     resolver_handle: Arc<CustomRwLock<Option<TaskHandle>>>,
 }
@@ -27,7 +26,7 @@ impl LANScanResolver {
     pub fn new() -> Self {
         Self {
             resolvers: Arc::new(CustomRwLock::new(Vec::new())),
-            reverse_dns: Arc::new(DashMap::new()),
+            reverse_dns: Arc::new(CustomDashMap::new("Reverse DNS")),
             resolver_queue: Arc::new(CustomRwLock::new(VecDeque::new())),
             resolver_handle: Arc::new(CustomRwLock::new(None)),
         }
@@ -69,7 +68,7 @@ impl LANScanResolver {
 
     async fn perform_reverse_dns_lookup(
         ip_addr: IpAddr,
-        reverse_dns: Arc<DashMap<IpAddr, String>>,
+        reverse_dns: Arc<CustomDashMap<IpAddr, String>>,
         resolvers: Vec<TokioResolver>,
     ) {
         // Skip if already resolved
@@ -211,7 +210,65 @@ impl LANScanResolver {
     }
 
     // Add a new method to integrate DNS resolutions from packet capture
-    pub fn add_dns_resolutions(&self, dns_resolutions: &DashMap<IpAddr, String>) -> usize {
+    pub fn add_dns_resolutions(&self, dns_resolutions: &CustomDashMap<IpAddr, String>) -> usize {
+        let mut added_count = 0;
+
+        for entry in dns_resolutions.iter() {
+            let ip = *entry.key();
+            let domain = entry.value().clone();
+
+            // Only use captured DNS if it looks like a proper domain
+            // Skip .local and .arpa domains which are typically not useful for user display
+            if domain.contains('.') && !domain.ends_with(".local") && !domain.ends_with(".arpa") {
+                let should_update = match self.reverse_dns.get(&ip) {
+                    Some(existing) => {
+                        let existing_value = existing.value();
+                        // Always update if current value is "Unknown" or "Resolving"
+                        if existing_value == "Unknown" || existing_value == "Resolving" {
+                            true
+                        } else {
+                            if domain != existing_value.as_str() {
+                                // For other values (likely from reverse DNS), prefer forward DNS
+                                // but log that we're replacing the value
+                                debug!(
+                                    "Replacing reverse DNS {} with forward DNS {} for IP {}",
+                                    existing_value, domain, ip
+                                );
+                                true
+                            } else {
+                                false
+                            }
+                        }
+                    }
+                    None => true, // No existing entry, so add it
+                };
+
+                if should_update {
+                    debug!(
+                        "Adding forward DNS resolution to resolver cache: {} -> {}",
+                        ip, domain
+                    );
+                    self.reverse_dns.insert(ip, domain);
+                    added_count += 1;
+                }
+            }
+        }
+
+        if added_count > 0 {
+            info!(
+                "Integrated {} DNS resolutions from packet capture",
+                added_count
+            );
+        }
+
+        added_count
+    }
+
+    // Add a specialized method for CustomDashMap
+    pub fn add_dns_resolutions_custom(
+        &self,
+        dns_resolutions: &Arc<CustomDashMap<IpAddr, String>>,
+    ) -> usize {
         let mut added_count = 0;
 
         for entry in dns_resolutions.iter() {
@@ -420,7 +477,7 @@ mod tests {
         assert!(reverse_domain.contains("dns"));
 
         // Now simulate a forward DNS resolution from captured DNS packets
-        let dns_resolutions = DashMap::new();
+        let dns_resolutions = CustomDashMap::new("DNS Resolutions");
         let forward_domain = "forward-dns-resolution.example.com";
         dns_resolutions.insert(ip_addr, forward_domain.to_string());
 

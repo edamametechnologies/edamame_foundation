@@ -13,8 +13,8 @@ The EDAMAME blacklist system provides a flexible and powerful way to block malic
 struct Blacklists {
     date: String,                    // Creation/update date
     signature: String,               // Cryptographic signature
-    blacklists: DashMap<String, BlacklistInfo>, // Named blacklist collection
-    parsed_ranges: DashMap<String, Vec<IpNet>> // Cache for parsed IP ranges
+    blacklists: CustomDashMap<String, BlacklistInfo>, // Named blacklist collection
+    parsed_ranges: CustomDashMap<String, Vec<IpNet>> // Cache for parsed IP ranges
 }
 
 // Individual blacklist definition

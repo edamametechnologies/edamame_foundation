@@ -28,6 +28,34 @@ const MAX_LOG_LINES: usize = 20000;
 
 lazy_static! {
     static ref LOGGER: Mutex<Option<Arc<Logger>>> = Mutex::new(None);
+    // Pre-compile the sanitization regex once so it can be reused for every log line.
+    // The pattern dynamically embeds all sensitive keywords and performs a single pass
+    // over the input instead of iterating and recompiling per-keyword.
+    static ref SANITIZE_REGEX: Regex = {
+        // Keep this list in sync with the one used in `handle_log`.
+        let keywords = [
+            "id",
+            "uuid",
+            "pin",
+            "device",
+            "password",
+            "key",
+            "Device ID",
+            "device_id",
+            "code",
+        ];
+        // Join the escaped keywords with `|` to build the alternation part of the regex.
+        let joined = keywords
+            .iter()
+            .map(|k| regex::escape(k))
+            .collect::<Vec<_>>()
+            .join("|");
+        let pattern = format!(
+            r#"(?P<key>"?(?:\b(?:{})\b)"?\s*[:=]?\s*)("(?P<val1>[^"]+)"|(?P<val2>\b[^\s",}}]+))"#,
+            joined
+        );
+        Regex::new(&pattern).expect("Failed to compile sanitization regex")
+    };
 }
 
 pub struct MemoryWriterData {
@@ -59,22 +87,13 @@ impl MemoryWriter {
     }
 
     fn handle_log(&self, log_line: &str) -> io::Result<()> {
-        let keywords = vec![
-            "id",
-            "uuid",
-            "pin",
-            "device",
-            "password",
-            "key",
-            "Device ID",
-            "device_id",
-            "code",
-        ];
-        // Sanitize the log line (not in debug mode)
+        // Sanitize the log line (not in debug mode). All sensitive keywords are handled
+        // by the pre-compiled regex inside `sanitize_keywords`, so we don't need to allocate
+        // a keywords vector on every call.
         let log_line_sanitized = if cfg!(debug_assertions) {
             log_line.to_string()
         } else {
-            sanitize_keywords(log_line, &keywords)
+            sanitize_keywords(log_line, &[])
         };
         // Remove all escape codes (x1b\[[0-9;]*m) from the log line before storing it in the log buffer x1b\[[0-9;]*m
         let re = Regex::new(r"\x1b\[[0-9;]*m").unwrap();
@@ -132,30 +151,18 @@ impl<'a> Write for MemoryWriterGuard<'a> {
     }
 }
 
-fn sanitize_keywords(input: &str, keywords: &[&str]) -> String {
-    let mut output = input.to_string();
+fn sanitize_keywords(input: &str, _keywords: &[&str]) -> String {
+    SANITIZE_REGEX
+        .replace_all(input, |caps: &regex::Captures| {
+            let key = &caps["key"];
+            let val1 = caps.name("val1").map_or("", |m| m.as_str());
+            let val2 = caps.name("val2").map_or("", |m| m.as_str());
+            let val = if !val1.is_empty() { val1 } else { val2 };
+            let quotes = if !val1.is_empty() { "\"" } else { "" };
 
-    for &keyword in keywords {
-        let re = Regex::new(&format!(
-            r#"(?P<key>"?(\b{})"?\s*[:=]?\s*)("(?P<val1>[^"]+)"|(?P<val2>\b[^\s",}}]+))"#,
-            regex::escape(keyword)
-        ))
-        .unwrap();
-
-        output = re
-            .replace_all(&output, |caps: &regex::Captures| {
-                let key = &caps["key"];
-                let val1 = caps.name("val1").map_or("", |m| m.as_str());
-                let val2 = caps.name("val2").map_or("", |m| m.as_str());
-                let val = if !val1.is_empty() { val1 } else { val2 };
-                let quotes = if !val1.is_empty() { "\"" } else { "" };
-
-                format!("{}{}{}{}", key, quotes, "*".repeat(val.len()), quotes)
-            })
-            .to_string();
-    }
-
-    output
+            format!("{}{}{}{}", key, quotes, "*".repeat(val.len()), quotes)
+        })
+        .to_string()
 }
 
 pub struct Logger {
@@ -325,12 +332,10 @@ pub fn init_logger(
         if cfg!(target_os = "macos") || cfg!(target_os = "ios") {
             #[cfg(any(target_os = "ios", target_os = "macos"))]
             {
-                // Add Tokio Console Layer
-                //let console_layer = console_subscriber::spawn();
-
                 if !matches!(executable_type, "helper") && !matches!(executable_type, "cli") {
                     // OsLogger if not an helper or a posture
                     let os_logger = OsLogger::new("com.edamametech.edamame", "");
+                    #[cfg(feature = "tokio-console")]
                     match tracing_subscriber::registry()
                         .with(filter_layer)
                         .with(fmt::layer().with_writer(file_writer.0))
@@ -339,14 +344,46 @@ pub fn init_logger(
                         // Must be here when using sentry
                         .with(fmt::layer().with_writer(stdout_writer.0))
                         .with(os_logger)
-                        // Use console layer for edamame_cli or edamame_app
-                        //.with(console_layer)
+                        .with(console_subscriber::spawn())
+                        .try_init()
+                    {
+                        Ok(_) => {}
+                        Err(e) => eprintln!("Logger initialization failed: {}", e),
+                    }
+                    #[cfg(not(feature = "tokio-console"))]
+                    match tracing_subscriber::registry()
+                        .with(filter_layer)
+                        .with(fmt::layer().with_writer(file_writer.0))
+                        .with(fmt::layer().with_writer(logger.memory_writer.clone()))
+                        .with(sentry_layer)
+                        // Must be here when using sentry
+                        .with(fmt::layer().with_writer(stdout_writer.0))
+                        .with(os_logger)
                         .try_init()
                     {
                         Ok(_) => {}
                         Err(e) => eprintln!("Logger initialization failed: {}", e),
                     }
                 } else {
+                    // Tokio Console
+                    #[cfg(feature = "tokio-console")]
+                    match tracing_subscriber::registry()
+                        .with(filter_layer)
+                        .with(fmt::layer().with_writer(file_writer.0))
+                        .with(fmt::layer().with_writer(logger.memory_writer.clone()))
+                        .with(sentry_layer)
+                        // Must be here when using sentry
+                        .with(fmt::layer().with_writer(stdout_writer.0))
+                        // Use console layer for edamame_helper
+                        .with(console_subscriber::spawn())
+                        .try_init()
+                    {
+                        Ok(_) => {}
+                        Err(e) => {
+                            eprintln!("Logger initialization with tokio console failed: {}", e)
+                        }
+                    }
+                    #[cfg(not(feature = "tokio-console"))]
                     match tracing_subscriber::registry()
                         .with(filter_layer)
                         .with(fmt::layer().with_writer(file_writer.0))

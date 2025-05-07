@@ -425,12 +425,18 @@ pub async fn rpc_run(
                 any(target_os = "macos", target_os = "linux", target_os = "windows"),
                 feature = "packetcapture"
             ))]
-            "get_sessions" => utility_get_sessions().await,
+            "get_sessions" => {
+                let incremental: bool = serde_json::from_str(arg1).unwrap_or(false);
+                utility_get_sessions(incremental).await
+            }
             #[cfg(all(
                 any(target_os = "macos", target_os = "linux", target_os = "windows"),
                 feature = "packetcapture"
             ))]
-            "get_current_sessions" => utility_get_current_sessions().await,
+            "get_current_sessions" => {
+                let incremental: bool = serde_json::from_str(arg1).unwrap_or(false);
+                utility_get_current_sessions(incremental).await
+            }
             #[cfg(all(
                 any(target_os = "macos", target_os = "linux", target_os = "windows"),
                 feature = "packetcapture"
@@ -440,7 +446,10 @@ pub async fn rpc_run(
                 any(target_os = "macos", target_os = "linux", target_os = "windows"),
                 feature = "packetcapture"
             ))]
-            "get_whitelist_exceptions" => utility_get_whitelist_exceptions().await,
+            "get_whitelist_exceptions" => {
+                let incremental: bool = serde_json::from_str(arg1).unwrap_or(false);
+                utility_get_whitelist_exceptions(incremental).await
+            }
             #[cfg(all(
                 any(target_os = "macos", target_os = "linux", target_os = "windows"),
                 feature = "packetcapture"
@@ -460,7 +469,10 @@ pub async fn rpc_run(
                 any(target_os = "macos", target_os = "linux", target_os = "windows"),
                 feature = "packetcapture"
             ))]
-            "get_blacklisted_sessions" => utility_get_blacklisted_sessions().await,
+            "get_blacklisted_sessions" => {
+                let incremental: bool = serde_json::from_str(arg1).unwrap_or(false);
+                utility_get_blacklisted_sessions(incremental).await
+            }
             #[cfg(all(
                 any(target_os = "macos", target_os = "linux", target_os = "windows"),
                 feature = "packetcapture"

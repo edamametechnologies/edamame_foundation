@@ -338,7 +338,7 @@ mod platform_impl {
 mod tests {
     use super::*;
     use crate::admin::get_admin_status;
-    use crate::lanscan_interface::get_default_interface;
+    use crate::lanscan::interface::get_default_interface;
 
     // Converted test to async. Requires you to run with a test runtime (e.g. cargo test -- --test-threads=1 under tokio).
     #[tokio::test]

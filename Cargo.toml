@@ -1,6 +1,6 @@
 [package]
 name = "edamame_foundation"
-version = "0.9.29"
+version = "0.9.32"
 edition = "2021"
 
 [lints.rust]
@@ -10,6 +10,7 @@ async_fn_in_trait = "allow"
 default = []
 asyncpacketcapture = []
 packetcapture = [ "pcap", "pnet_packet", "hickory-resolver", "dns-parser", "sysinfo", "netstat2" ]
+tokio-console = []
 
 [lib]
 # Dynamic lib version is not used on apple platforms as it's painful, but we must use it on Windows, Linux and Android
@@ -70,9 +71,8 @@ parking_lot = "0.12.3"
 futures = "0.3.30"
 futures-util = "0.3.30"
 tokio = { version = "1.39.2", features = ["full", "tracing"] }
+console-subscriber = "0.4.0"
 dashmap = "6.0.1"
-# For tokio debugging
-#console-subscriber = "0.4.0"
 
 # Advanced time
 chrono = { version = "0.4.38", features = ["serde"] }
