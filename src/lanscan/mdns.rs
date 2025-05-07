@@ -4,7 +4,7 @@ use lazy_static::lazy_static;
 use macaddr::MacAddr6;
 use regex::Regex;
 use sorted_vec::SortedVec;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::Ipv6Addr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{net::IpAddr, sync::Arc};
@@ -277,16 +277,16 @@ async fn fetch_mdns_info_task() {
         let hosts = services.hosts();
         trace!("Response: {:#?}", services);
         trace!("Hosts: {:#?}", hosts);
-        // Only do services once
-        let mut done_service = Vec::new();
+        // Only process each service once per iteration using a HashSet for O(1) look-ups
+        let mut done_service: HashSet<String> = HashSet::new();
         for service in hosts {
-            if done_service.contains(&service.name) {
+            // insert returns false when the key was already present
+            if !done_service.insert(service.name.clone()) {
                 continue;
             }
             let service_name = service.name.clone();
             let service_name_clone = service_name.clone();
             trace!("Found service: {}", service_name);
-            done_service.push(service_name.clone());
             // Now discover all the instances of this service
             let responses = match wez_mdns::resolve(
                 service_name.clone(),

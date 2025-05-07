@@ -1,4 +1,4 @@
-use crate::lanscan_ip::{apply_mask, is_link_local_ipv6, is_local_ipv6};
+use crate::lanscan::ip::{apply_mask, is_link_local_ipv6, is_local_ipv6};
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 use ipnet::{ipv4_mask_to_prefix, ipv6_mask_to_prefix};
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]

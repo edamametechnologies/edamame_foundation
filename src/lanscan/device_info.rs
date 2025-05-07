@@ -1,6 +1,6 @@
-use crate::lanscan_port_info::*;
-use crate::lanscan_port_vulns::*;
-use crate::lanscan_vendor_vulns::*;
+use crate::lanscan::port_info::*;
+use crate::lanscan::port_vulns::*;
+use crate::lanscan::vendor_vulns::*;
 use chrono::{DateTime, Utc};
 use edamame_backend::lanscan_device_info_backend::*;
 use edamame_backend::lanscan_port_info_backend::*;
@@ -310,6 +310,13 @@ impl DeviceInfo {
                 {
                     // Merge the devices
                     DeviceInfo::merge(device, &new_device);
+                    debug!(
+                        "[merge_vec] After merge: {:?} last_seen: {:?} is_local: {:?} active: {:?}",
+                        device.get_ip_address(),
+                        device.last_seen,
+                        device.is_local,
+                        device.active
+                    );
                     found = true;
                     break;
                 }
@@ -318,6 +325,7 @@ impl DeviceInfo {
             // If no match was found, add the new device
             if !found {
                 devices.push(new_device.clone());
+                debug!("[merge_vec] New device added: {:?} last_seen: {:?} is_local: {:?} active: {:?}", new_device.get_ip_address(), new_device.last_seen, new_device.is_local, new_device.active);
             }
         }
 
@@ -500,6 +508,13 @@ impl DeviceInfo {
 
         // Update the last seen time only if the new device is local
         if new_device.is_local && new_device.last_seen > device.last_seen {
+            debug!(
+                "[merge] Updating last_seen for {:?} from {:?} to {:?} (is_local: {:?})",
+                device.get_ip_address(),
+                device.last_seen,
+                new_device.last_seen,
+                new_device.is_local
+            );
             device.last_seen = new_device.last_seen;
         }
 

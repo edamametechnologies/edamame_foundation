@@ -305,7 +305,7 @@ pub use platform_impl::scan_hosts_broadcast;
 mod tests {
     use super::*;
     use crate::admin::get_admin_status;
-    use crate::lanscan_interface::get_default_interface;
+    use crate::lanscan::interface::get_default_interface;
     use std::net::Ipv4Addr;
     use std::str::FromStr;
 

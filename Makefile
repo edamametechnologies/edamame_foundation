@@ -37,8 +37,8 @@ windows_test:
 unix_test:
 	cargo test -- --nocapture
 	# Use sudo for capture tests - on Linux need to pass cargo path
-	$(shell which sudo) -E $(shell which cargo) test --features packetcapture,asyncpacketcapture -- --nocapture
-	$(shell which sudo) -E $(shell which cargo) test --features packetcapture -- --nocapture
+	$(shell which sudo) -E $(shell which cargo) test --features packetcapture,asyncpacketcapture -- --nocapture --test-threads=1
+	$(shell which sudo) -E $(shell which cargo) test --features packetcapture -- --nocapture --test-threads=1
 
 linux_test: unix_test
 

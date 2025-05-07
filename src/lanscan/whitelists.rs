@@ -1,16 +1,21 @@
 use crate::cloud_model::*;
-use crate::lanscan_sessions::SessionInfo;
-use crate::whitelists_db::WHITELISTS;
+use crate::customlock::*;
+use crate::lanscan::sessions::{Session, SessionInfo, WhitelistState};
+use crate::lanscan::whitelists_db::WHITELISTS;
+use crate::runtime::async_spawn_blocking;
 use anyhow::{anyhow, Context, Result};
 use chrono;
-use dashmap::DashMap;
+use chrono::{DateTime, Utc};
+use dashmap::DashSet;
 use ipnet::IpNet;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::net::IpAddr;
-use std::sync::Arc;
-use tracing::{info, trace, warn};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use tracing::{error, info, trace, warn};
 
 // Constants
 const WHITELISTS_FILE_NAME: &str = "whitelists-db.json";
@@ -49,7 +54,7 @@ pub struct WhitelistsJSON {
 pub struct Whitelists {
     pub date: String,
     pub signature: Option<String>,
-    pub whitelists: Arc<DashMap<String, WhitelistInfo>>,
+    pub whitelists: Arc<CustomDashMap<String, WhitelistInfo>>,
 }
 
 impl From<Whitelists> for WhitelistsJSON {
@@ -80,7 +85,7 @@ impl Whitelists {
     pub fn new_from_json(whitelist_info: WhitelistsJSON) -> Self {
         info!("Loading whitelists from JSON");
 
-        let whitelists = Arc::new(DashMap::new());
+        let whitelists = Arc::new(CustomDashMap::new("Whitelists"));
 
         for info in whitelist_info.whitelists {
             whitelists.insert(info.name.clone(), info);
@@ -97,7 +102,7 @@ impl Whitelists {
 
     // Create a whitelist from a list of sessions
     pub fn new_from_sessions(sessions: &Vec<SessionInfo>) -> Self {
-        let whitelists = Arc::new(DashMap::new());
+        let whitelists = Arc::new(CustomDashMap::new("Whitelists"));
 
         // Create a whitelist with the current sessions
         let mut endpoints = Vec::new();
@@ -207,9 +212,8 @@ impl Whitelists {
     }
 }
 
-// Global LISTS Variable using lazy_static! and Tokio's RwLock
 lazy_static! {
-    pub static ref LISTS: CloudModel<Whitelists> = {
+    static ref LISTS: CloudModel<Whitelists> = {
         let model = CloudModel::initialize(WHITELISTS_FILE_NAME.to_string(), WHITELISTS, |data| {
             let whitelist_info_json: WhitelistsJSON =
                 serde_json::from_str(data).with_context(|| "Failed to parse JSON data")?;
@@ -218,12 +222,29 @@ lazy_static! {
         .expect("Failed to initialize CloudModel");
         model
     };
+
+    // Cache aggregated endpoints per whitelist per signature
+    static ref ENDPOINT_CACHE: CustomDashMap<String, Arc<Vec<WhitelistEndpoint>>> = CustomDashMap::new("Whitelist Endpoint Cache");
+
+    // Tracks whitelists currently being flattened so that concurrent callers
+    // can wait instead of spawning duplicate expensive work ("single-flight").
+    static ref ENDPOINT_PENDING: DashSet<String> = DashSet::new();
+
+    static ref LAST_WHITELIST_RUN: Mutex<DateTime<Utc>> =
+        Mutex::new(DateTime::<Utc>::from(std::time::UNIX_EPOCH));
+
+    // Flag indicating a full whitelist recompute is required.
+    static ref NEED_FULL_RECOMPUTE_WHITELIST: AtomicBool = AtomicBool::new(false);
 }
 
 /// Checks if a whitelist name exists in the current model (default or custom).
 pub async fn is_valid_whitelist(whitelist_name: &str) -> bool {
-    let whitelists_map = LISTS.data.read().await.whitelists.clone();
-    whitelists_map.contains_key(whitelist_name)
+    LISTS
+        .data
+        .read()
+        .await
+        .whitelists
+        .contains_key(whitelist_name)
 }
 
 /// Checks if a given session is in the specified whitelist.
@@ -257,22 +278,52 @@ pub async fn is_session_in_whitelist(
     let mut visited = HashSet::new();
     visited.insert(whitelist_name.to_string());
 
-    // Clone the Arc to avoid holding the lock during processing
-    let list_data_instance = LISTS.data.read().await.clone();
+    // Pre-snapshot the model once to avoid holding async locks during flatten
+    let model_clone = LISTS.data.read().await.clone();
+    // Try cache first
+    let endpoints_arc = if let Some(entry) = ENDPOINT_CACHE.get(whitelist_name) {
+        entry.clone()
+    } else {
+        // Single-flight guard: if another task is already building this cache, wait.
+        let key = whitelist_name.to_string();
+        if ENDPOINT_PENDING.insert(key.clone()) {
+            // We are the first – do the expensive flatten.
+            let spawn_key = key.clone();
+            let mut visited_clone = visited.clone();
+            let eps_result = async_spawn_blocking(move || {
+                model_clone.get_all_endpoints(&spawn_key, &mut visited_clone)
+            })
+            .await;
 
-    let endpoints = match list_data_instance.get_all_endpoints(whitelist_name, &mut visited) {
-        Ok(eps) => eps,
-        Err(err) => {
-            let error_msg = format!(
-                "Error retrieving endpoints for whitelist '{}': {}",
-                whitelist_name, err
-            );
-            warn!("{}", error_msg);
-            return (false, Some(error_msg));
+            let eps = eps_result
+                .unwrap_or_else(|e| {
+                    warn!("Join error flattening whitelist '{}': {}", key, e);
+                    Err(anyhow!("flatten join error"))
+                })
+                .unwrap_or_else(|err| {
+                    warn!(
+                        "Error retrieving endpoints for whitelist '{}': {}",
+                        key, err
+                    );
+                    Vec::new()
+                });
+
+            let arc_eps = Arc::new(eps);
+            ENDPOINT_CACHE.insert(key.clone(), arc_eps.clone());
+            ENDPOINT_PENDING.remove(&key);
+            arc_eps
+        } else {
+            // Somebody else is working; spin-wait (very short) until cache filled.
+            loop {
+                if let Some(entry) = ENDPOINT_CACHE.get(whitelist_name) {
+                    break entry.clone();
+                }
+                tokio::task::yield_now().await;
+            }
         }
     };
 
-    if endpoints.is_empty() {
+    if endpoints_arc.is_empty() {
         return (
             false,
             Some(format!(
@@ -283,7 +334,7 @@ pub async fn is_session_in_whitelist(
     }
 
     // Match the session against the endpoints
-    for endpoint in &endpoints {
+    for endpoint in endpoints_arc.iter() {
         let (matches, _reason) = endpoint_matches_with_reason(
             session_domain,
             session_ip,
@@ -607,6 +658,11 @@ pub async fn update(branch: &str, force: bool) -> Result<UpdateStatus> {
         })
         .await?;
 
+    // Clear cache whenever we update underlying data
+    ENDPOINT_CACHE.clear();
+    // Signal downstream that a full whitelist recomputation is needed
+    NEED_FULL_RECOMPUTE_WHITELIST.store(true, Ordering::SeqCst);
+
     match status {
         UpdateStatus::Updated => info!("Whitelists were successfully updated."),
         UpdateStatus::NotUpdated => info!("Whitelists are already up to date."),
@@ -617,6 +673,300 @@ pub async fn update(branch: &str, force: bool) -> Result<UpdateStatus> {
     }
 
     Ok(status)
+}
+
+/// Sets custom whitelist data, replacing the current data (default or previous custom).
+/// Clears the endpoint cache upon successful update or reset.
+pub async fn set_custom_whitelists(whitelist_json: &str) -> Result<(), anyhow::Error> {
+    info!("Attempting to set custom whitelists.");
+    // Clear the custom whitelists if the JSON is empty
+    if whitelist_json.is_empty() {
+        info!("Received empty JSON, resetting whitelists to default.");
+        LISTS.reset_to_default().await;
+        ENDPOINT_CACHE.clear(); // Clear cache after reset
+        NEED_FULL_RECOMPUTE_WHITELIST.store(true, Ordering::SeqCst);
+        return Ok(());
+    }
+
+    let whitelist_result = serde_json::from_str::<WhitelistsJSON>(whitelist_json);
+
+    match whitelist_result {
+        Ok(whitelist_data) => {
+            info!("Successfully parsed custom whitelist JSON.");
+            let whitelist = Whitelists::new_from_json(whitelist_data);
+            LISTS.set_custom_data(whitelist).await;
+            ENDPOINT_CACHE.clear(); // Clear cache after successful set
+            NEED_FULL_RECOMPUTE_WHITELIST.store(true, Ordering::SeqCst);
+            return Ok(());
+        }
+        Err(e) => {
+            error!(
+                "Error parsing custom whitelist JSON: {}. Resetting to default.",
+                e
+            );
+            LISTS.reset_to_default().await;
+            ENDPOINT_CACHE.clear(); // Clear cache after reset due to error
+            NEED_FULL_RECOMPUTE_WHITELIST.store(true, Ordering::SeqCst);
+            return Err(anyhow!("Error parsing custom whitelist JSON: {}", e));
+        }
+    }
+}
+
+/// Incrementally recomputes whitelist conformance for the provided session map.
+///
+/// The function will:
+/// 1. Determine if the underlying whitelist database has changed via the
+///    NEED_FULL_RECOMPUTE_WHITELIST flag – this triggers a full recompute.
+/// 2. Otherwise evaluate only sessions with `last_modified` newer than the last
+///    execution **or** still in `Unknown` state.
+/// 3. Refresh `whitelist_exceptions` vector & `whitelist_conformance` flag.
+pub async fn recompute_whitelist_for_sessions(
+    whitelist_name_arc: &Arc<CustomRwLock<String>>, // currently configured name
+    sessions: &Arc<CustomDashMap<Session, SessionInfo>>,
+    whitelist_exceptions: &Arc<CustomRwLock<Vec<Session>>>,
+    whitelist_conformance: &Arc<AtomicBool>,
+    last_exception_time: &Arc<CustomRwLock<DateTime<Utc>>>,
+) {
+    use tracing::{info, trace};
+    trace!("Starting incremental whitelist recomputation");
+
+    // Snapshot of current configuration
+    let wl_name_now = whitelist_name_arc.read().await.clone();
+
+    // Determine if a full recompute has been requested via the global flag.
+    let flag_full_recompute = NEED_FULL_RECOMPUTE_WHITELIST.swap(false, Ordering::SeqCst);
+
+    // Snapshot last run timestamp (used to decide incremental vs. full recompute)
+    let last_run_ts = {
+        let guard = LAST_WHITELIST_RUN.lock().unwrap();
+        *guard
+    };
+
+    // Decide whether to run a full recompute or an incremental pass.  The
+    // decision now depends solely on the module-wide flag that is set whenever
+    // the underlying whitelist database changes (e.g., update / custom load).
+    let full_recompute = flag_full_recompute;
+
+    // Collect sessions needing evaluation and gather snapshots first
+    // ----------------------------------------------------------------------------------
+    // Skip the whole process if no whitelist is active (empty name) and model not custom
+    let should_skip = wl_name_now.is_empty() && !LISTS.is_custom().await;
+
+    if should_skip {
+        trace!("Skipping whitelist evaluation because no whitelist is active");
+        return;
+    }
+
+    // Build working sets for faster processing: Keep exceptions that still exist + find all sessions to evaluate
+    let (current_exceptions, sessions_to_evaluate, session_snapshots) = {
+        // 1. Get current exceptions (we'll filter only those still in sessions map)
+        let exceptions = whitelist_exceptions.read().await.clone();
+
+        // 2. Collect all sessions needing evaluation
+        let mut to_evaluate: Vec<Session> = if full_recompute {
+            // If full recompute, gather all sessions
+            sessions.iter().map(|entry| entry.key().clone()).collect()
+        } else {
+            // Otherwise just sessions modified since last run or in Unknown state
+            sessions
+                .iter()
+                .filter(|entry| {
+                    entry.value().last_modified > last_run_ts
+                        || entry.value().is_whitelisted == WhitelistState::Unknown
+                })
+                .map(|entry| entry.key().clone())
+                .collect()
+        };
+
+        // Always re-evaluate current exceptions
+        for exception in &exceptions {
+            if !to_evaluate.contains(exception) && sessions.contains_key(exception) {
+                to_evaluate.push(exception.clone());
+            }
+        }
+
+        // 3. Take a snapshot of all session info we're about to evaluate
+        // This avoids holding locks during evaluation
+        let mut snapshots = HashMap::with_capacity(to_evaluate.len());
+        for session_key in &to_evaluate {
+            if let Some(entry) = sessions.get(session_key) {
+                snapshots.insert(session_key.clone(), entry.clone());
+            }
+        }
+
+        // Return all three working sets
+        (exceptions, to_evaluate, snapshots)
+    };
+
+    // Perform all whitelist checks for all sessions WITHOUT locks
+    // ----------------------------------------------------------------------------------
+
+    trace!(
+        "Pre-computing whitelist results for {} sessions",
+        sessions_to_evaluate.len()
+    );
+
+    // Pre-calculate whitelist status for all sessions (this is the expensive part)
+    let mut evaluation_results = Vec::with_capacity(sessions_to_evaluate.len());
+    let mut new_exceptions = Vec::<Session>::new(); // We'll accumulate non-conforming sessions here
+
+    // Important: First add exceptions that still exist in the sessions map.
+    // Use the sessions map directly, not snapshots, to keep current exceptions
+    // even if not selected for re-evaluation
+    for exception in &current_exceptions {
+        if sessions.contains_key(exception) {
+            new_exceptions.push(exception.clone());
+        }
+    }
+
+    info!("Processing {} sessions", sessions_to_evaluate.len());
+
+    for session_key in &sessions_to_evaluate {
+        // Skip if we don't have a snapshot (might have been removed)
+        if let Some(snapshot) = session_snapshots.get(session_key) {
+            // Perform the whitelist check - this is done WITHOUT any locks held
+            let (is_ok, reason) = is_session_in_whitelist(
+                snapshot.dst_domain.as_deref(),
+                Some(&snapshot.session.dst_ip.to_string()),
+                snapshot.session.dst_port,
+                snapshot.session.protocol.to_string().as_str(),
+                &wl_name_now,
+                snapshot.dst_asn.as_ref().map(|asn| asn.as_number),
+                snapshot.dst_asn.as_ref().map(|asn| asn.country.as_str()),
+                snapshot.dst_asn.as_ref().map(|asn| asn.owner.as_str()),
+                snapshot.l7.as_ref().map(|l7| l7.process_name.as_str()),
+            )
+            .await;
+
+            // Store the result directly in the main results collection
+            evaluation_results.push((session_key.clone(), is_ok, reason));
+
+            // Track non-conforming sessions for the exceptions list
+            if !is_ok && !new_exceptions.contains(session_key) {
+                trace!("Adding to new_exceptions: {:?}", session_key);
+                new_exceptions.push(session_key.clone());
+            } else if is_ok {
+                // If it's now conforming, remove from exceptions if present
+                new_exceptions.retain(|s| s != session_key);
+            }
+        }
+    }
+
+    // Apply all results with minimal lock time
+    // ----------------------------------------------------------------------------------
+
+    trace!(
+        "Applying {} whitelist evaluations with minimal lock time",
+        evaluation_results.len()
+    );
+
+    // Prepare exception list
+    new_exceptions.sort();
+    new_exceptions.dedup();
+
+    // Fast bulk update of session status - very brief locks per session
+    for (session_key, is_conforming, reason) in evaluation_results {
+        // Re-acquire a write lock briefly to update just this session
+        // This minimizes lock contention by holding the lock for the absolute minimum time
+        if let Some(mut entry) = sessions.get_mut(&session_key) {
+            let info_mut = entry.value_mut();
+
+            // Get the current values
+            let current_state = info_mut.is_whitelisted;
+            let current_reason = info_mut.whitelist_reason.clone();
+
+            // Determine new values
+            let new_state = if is_conforming {
+                WhitelistState::Conforming
+            } else {
+                WhitelistState::NonConforming
+            };
+
+            let new_reason = if is_conforming { None } else { reason };
+
+            // Only update if values changed
+            let state_changed = current_state != new_state;
+            let reason_changed = current_reason != new_reason;
+
+            if state_changed || reason_changed {
+                info_mut.is_whitelisted = new_state;
+                info_mut.whitelist_reason = new_reason;
+                info_mut.last_modified = Utc::now();
+            }
+        }
+    }
+
+    // Update the whitelist exceptions list atomically
+    let exception_list_changed = {
+        let guard = whitelist_exceptions.read().await;
+        trace!("Current exceptions: {:?}", *guard);
+        trace!("New exceptions: {:?}", new_exceptions);
+        *guard != new_exceptions
+    };
+
+    if exception_list_changed {
+        trace!(
+            "Updating whitelist exceptions list: {} items",
+            new_exceptions.len()
+        );
+        *whitelist_exceptions.write().await = new_exceptions.clone();
+    }
+
+    // Update conformance flag & timestamp
+    let nonconforming_exists = !new_exceptions.is_empty();
+
+    if nonconforming_exists {
+        whitelist_conformance.store(false, Ordering::Relaxed);
+        *last_exception_time.write().await = Utc::now();
+    } else {
+        whitelist_conformance.store(true, Ordering::Relaxed);
+    }
+
+    // Update last run timestamp
+    {
+        let mut guard = LAST_WHITELIST_RUN.lock().unwrap();
+        *guard = Utc::now();
+    }
+
+    info!(
+        "Whitelist recomputation completed with {} exceptions for {} sessions",
+        new_exceptions.len(),
+        sessions_to_evaluate.len()
+    );
+}
+
+// ---- Public wrapper helpers for access while keeping LISTS private ----
+
+/// Reset whitelist model to default bundled lists and clear caches.
+pub async fn reset_to_default() {
+    LISTS.reset_to_default().await;
+    ENDPOINT_CACHE.clear();
+    NEED_FULL_RECOMPUTE_WHITELIST.store(true, Ordering::SeqCst);
+}
+
+/// `true` when custom whitelist data is loaded.
+pub async fn is_custom() -> bool {
+    LISTS.is_custom().await
+}
+
+/// Snapshot as JSON struct.
+pub async fn current_json() -> WhitelistsJSON {
+    let data = LISTS.data.read().await.clone();
+    WhitelistsJSON::from(data)
+}
+
+#[cfg(test)]
+pub async fn overwrite_with_test_data(data: Whitelists) {
+    LISTS.overwrite_with_test_data(data).await;
+    ENDPOINT_CACHE.clear();
+    NEED_FULL_RECOMPUTE_WHITELIST.store(true, Ordering::SeqCst);
+}
+
+pub async fn get_whitelists() -> String {
+    let list_model = &LISTS;
+    let data = list_model.data.read().await;
+    let json_data = WhitelistsJSON::from(data.clone()); // Clone the data inside the lock
+    serde_json::to_string(&json_data).unwrap_or_default()
 }
 
 #[cfg(test)]

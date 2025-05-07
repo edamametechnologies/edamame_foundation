@@ -1,7 +1,7 @@
 use crate::asn_db::{Db, Record};
-use crate::lanscan_asn_v4_db::*;
-use crate::lanscan_asn_v6_db::*;
-use dashmap::DashMap;
+use crate::customlock::*;
+use crate::lanscan::asn_v4_db::*;
+use crate::lanscan::asn_v6_db::*;
 use lazy_static::lazy_static;
 use std::io::BufReader;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -24,7 +24,7 @@ lazy_static! {
 
     // Global cache for IP ASN lookups.
     // The key is the IpAddr and the value is the (possibly missing) Record.
-    static ref ASN_CACHE: DashMap<IpAddr, Option<Record>> = DashMap::new();
+    static ref ASN_CACHE: CustomDashMap<IpAddr, Option<Record>> = CustomDashMap::new("ASN Cache");
 }
 
 // Private helper that performs the direct database lookup (without caching).

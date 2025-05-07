@@ -1,8 +1,8 @@
 use crate::cloud_model::*;
-use crate::lanscan_port_info::*;
-use crate::lanscan_profiles_db::*;
+use crate::customlock::*;
+use crate::lanscan::port_info::*;
+use crate::lanscan::profiles_db::*;
 use anyhow::{Context, Result};
-use dashmap::DashMap;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -11,6 +11,12 @@ use tracing::{info, trace, warn};
 
 // Constants for repository and file names
 const PROFILES_NAME: &str = "lanscan-profiles-db.json";
+
+// Cache for device_type computation: key -> device type
+lazy_static! {
+    static ref DEVICE_TYPE_CACHE: CustomDashMap<String, String> =
+        CustomDashMap::new("Profiles Device Type Cache");
+}
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Attributes {
@@ -58,14 +64,14 @@ impl CloudSignature for DeviceTypeList {
 pub struct DeviceTypeList {
     pub date: String,
     pub signature: String,
-    pub profiles: Arc<DashMap<String, DeviceTypeRule>>,
+    pub profiles: Arc<CustomDashMap<String, DeviceTypeRule>>,
 }
 
 impl DeviceTypeList {
     pub fn new_from_json(device_info: DeviceTypeListJSON) -> Self {
         info!("Loading device profiles from JSON");
 
-        let profiles = Arc::new(DashMap::new());
+        let profiles = Arc::new(CustomDashMap::new("Profiles"));
         for profile in device_info.profiles {
             profiles.insert(profile.device_type.clone(), profile);
         }
@@ -96,6 +102,40 @@ pub async fn device_type(
     oui_vendor: &str,
     hostname: &str,
 ) -> String {
+    // Build a deterministic cache key
+    let mut ports_vec: Vec<u16> = open_ports.iter().map(|p| p.port).collect();
+    ports_vec.sort_unstable();
+    let ports_key = ports_vec
+        .iter()
+        .map(|p| p.to_string())
+        .collect::<Vec<String>>()
+        .join(",");
+
+    let mut mdns_vec: Vec<String> = mdns_services.iter().map(|s| s.to_lowercase()).collect();
+    mdns_vec.sort();
+    let mdns_key = mdns_vec.join(",");
+
+    let banners_vec: Vec<String> = open_ports
+        .iter()
+        .map(|info| info.banner.to_lowercase())
+        .collect();
+    let mut banners_sorted = banners_vec.clone();
+    banners_sorted.sort();
+    let banners_key = banners_sorted.join(",");
+
+    let key = format!(
+        "{}|{}|{}|{}|{}",
+        ports_key,
+        mdns_key,
+        oui_vendor.to_lowercase(),
+        hostname.to_lowercase(),
+        banners_key
+    );
+
+    if let Some(entry) = DEVICE_TYPE_CACHE.get(&key) {
+        return entry.clone();
+    }
+
     trace!(
         "Computing device type for ports {:?}, mdns {:?}, vendor {}, hostname {}",
         open_ports,
@@ -131,7 +171,12 @@ pub async fn device_type(
                 &banners_lower,
             ) {
                 trace!("Match for device type {:?}", profile.value().device_type);
-                return profile.value().device_type.clone();
+                let result = profile.value().device_type.clone();
+
+                // Store in cache before returning
+                DEVICE_TYPE_CACHE.insert(key, result.clone());
+
+                return result;
             }
         }
     }
@@ -144,7 +189,12 @@ pub async fn device_type(
         );
     }
 
-    "Unknown".to_string()
+    let result = "Unknown".to_string();
+
+    // Store in cache before returning
+    DEVICE_TYPE_CACHE.insert(key, result.clone());
+
+    result
 }
 
 fn match_condition(
@@ -266,6 +316,9 @@ pub async fn update(branch: &str, force: bool) -> Result<UpdateStatus> {
         })
         .await?;
 
+    // Clear computed device_type cache whenever we attempt an update (conservative)
+    DEVICE_TYPE_CACHE.clear();
+
     match status {
         UpdateStatus::Updated => info!("Profiles were successfully updated."),
         UpdateStatus::NotUpdated => info!("Profiles are already up to date."),
@@ -291,6 +344,9 @@ mod tests {
         INIT.call_once(|| {
             // Initialize logging or any other setup here
         });
+
+        // Clear device type cache to ensure test isolation
+        DEVICE_TYPE_CACHE.clear();
     }
 
     #[tokio::test]

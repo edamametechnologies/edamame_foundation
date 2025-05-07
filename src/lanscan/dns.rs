@@ -1,8 +1,6 @@
+use crate::customlock::*;
 use crate::runtime::*;
-use crate::rwlock::CustomRwLock;
-use dashmap::DashMap;
 use dns_parser::Packet as DnsPacket;
-use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -16,21 +14,21 @@ struct PendingQuery {
 }
 
 pub struct DnsPacketProcessor {
-    pending_dns_queries: Arc<CustomRwLock<HashMap<u16, PendingQuery>>>,
-    dns_resolutions: Arc<DashMap<IpAddr, String>>,
+    pending_dns_queries: Arc<CustomDashMap<u16, PendingQuery>>,
+    dns_resolutions: Arc<CustomDashMap<IpAddr, String>>,
     dns_query_cleanup_handle: Option<TaskHandle>,
 }
 
 impl DnsPacketProcessor {
     pub fn new() -> Self {
         Self {
-            pending_dns_queries: Arc::new(CustomRwLock::new(HashMap::new())),
-            dns_resolutions: Arc::new(DashMap::new()),
+            pending_dns_queries: Arc::new(CustomDashMap::new("Pending DNS Queries")),
+            dns_resolutions: Arc::new(CustomDashMap::new("DNS Resolutions")),
             dns_query_cleanup_handle: None,
         }
     }
 
-    pub fn get_dns_resolutions(&self) -> Arc<DashMap<IpAddr, String>> {
+    pub fn get_dns_resolutions(&self) -> Arc<CustomDashMap<IpAddr, String>> {
         self.dns_resolutions.clone()
     }
 
@@ -51,7 +49,7 @@ impl DnsPacketProcessor {
                             return;
                         }
                         // Store the transaction ID and domain name
-                        let mut queries = self.pending_dns_queries.write().await;
+                        let queries = self.pending_dns_queries.write().await;
                         debug!("DNS Query to {} ({})", domain_name, tx_id);
                         queries.insert(
                             tx_id,
@@ -65,10 +63,10 @@ impl DnsPacketProcessor {
                     // DNS Response
                     // Retrieve the domain name using the transaction ID
                     let pending_query = {
-                        let mut queries = self.pending_dns_queries.write().await;
+                        let queries = self.pending_dns_queries.write().await;
                         queries.remove(&tx_id)
                     };
-                    if let Some(pending_query) = pending_query {
+                    if let Some((_, pending_query)) = pending_query {
                         debug!(
                             "DNS Response from {} ({})",
                             pending_query.domain_name, tx_id
@@ -113,7 +111,7 @@ impl DnsPacketProcessor {
                 }
                 let now = Instant::now();
                 // Clean up expired DNS queries
-                let mut queries = pending_dns_queries.write().await;
+                let queries = pending_dns_queries.write().await;
                 queries.retain(|_, pending_query| {
                     now.duration_since(pending_query.timestamp) < Duration::from_secs(30)
                 });

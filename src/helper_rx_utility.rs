@@ -1,20 +1,21 @@
+use crate::customlock::CustomRwLock;
 use crate::helper_rx::{order_error, CARGO_PKG_VERSION};
-use crate::lanscan_arp::*;
-use crate::lanscan_broadcast::scan_hosts_broadcast;
+use crate::lanscan::arp::*;
+use crate::lanscan::broadcast::scan_hosts_broadcast;
 #[cfg(all(
     any(target_os = "macos", target_os = "linux", target_os = "windows"),
     feature = "packetcapture"
 ))]
-use crate::lanscan_capture::LANScanCapture;
-use crate::lanscan_interface::*;
-use crate::lanscan_ip::*;
-use crate::lanscan_mdns::*;
-use crate::lanscan_neighbors::scan_neighbors;
+use crate::lanscan::capture::LANScanCapture;
+use crate::lanscan::interface::*;
+use crate::lanscan::ip::*;
+use crate::lanscan::mdns::*;
+use crate::lanscan::neighbors::scan_neighbors;
 #[cfg(all(
     any(target_os = "macos", target_os = "linux", target_os = "windows"),
     feature = "packetcapture"
 ))]
-use crate::lanscan_sessions::SessionFilter;
+use crate::lanscan::sessions::SessionFilter;
 use crate::logger::get_all_logs;
 use crate::runner_cli::run_cli;
 use crate::runtime::async_spawn;
@@ -30,34 +31,33 @@ use std::fs::File;
 use std::io::ErrorKind;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use tokio::time::{sleep, Duration};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 #[cfg(all(
     any(target_os = "macos", target_os = "linux", target_os = "windows"),
     feature = "packetcapture"
 ))]
 lazy_static! {
-    pub static ref CAPTURE: Arc<Mutex<LANScanCapture>> =
-        Arc::new(Mutex::new(LANScanCapture::new()));
+    pub static ref CAPTURE: Arc<CustomRwLock<LANScanCapture>> =
+        Arc::new(CustomRwLock::new(LANScanCapture::new()));
 }
 
 lazy_static! {
     // Current default interface
-    pub static ref INTERFACES: Arc<Mutex<LANScanInterfaces>> =
-        Arc::new(Mutex::new(LANScanInterfaces::new()));
-    pub static ref INTERFACES_SIGNATURE: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+    pub static ref INTERFACES: Arc<CustomRwLock<LANScanInterfaces>> =
+        Arc::new(CustomRwLock::new(LANScanInterfaces::new()));
+    pub static ref INTERFACES_SIGNATURE: Arc<CustomRwLock<String>> = Arc::new(CustomRwLock::new(String::new()));
 }
 
 // Detect and check interface changes
 pub async fn check_interfaces_changes() -> bool {
     let interfaces = get_valid_network_interfaces();
     let mut interfaces_changed = false;
-    *INTERFACES.lock().await = interfaces.clone();
+    *INTERFACES.write().await = interfaces.clone();
     let interfaces_signature = interfaces.signature();
-    if *INTERFACES_SIGNATURE.lock().await != interfaces_signature {
-        *INTERFACES_SIGNATURE.lock().await = interfaces_signature;
+    if *INTERFACES_SIGNATURE.read().await != interfaces_signature {
+        *INTERFACES_SIGNATURE.write().await = interfaces_signature;
         interfaces_changed = true;
     }
     return interfaces_changed;
@@ -149,7 +149,7 @@ pub async fn utility_mdns_resolve(addresses: &str) -> Result<String> {
                 mdns_services_instances,
             ));
         } else {
-            warn!("No mDNS info found for IP {}", address);
+            debug!("No mDNS info found for IP {}", address);
         }
     }
     // Convert MacAddr6 to String to make it serializable consistently
@@ -206,11 +206,11 @@ pub async fn utility_get_logs() -> Result<String> {
     feature = "packetcapture"
 ))]
 pub async fn utility_start_capture() -> Result<String> {
-    if CAPTURE.lock().await.is_capturing().await {
+    if CAPTURE.read().await.is_capturing().await {
         return order_error("capture already started", false);
     }
-    let interfaces = INTERFACES.lock().await.clone();
-    CAPTURE.lock().await.start(&interfaces).await;
+    let interfaces = INTERFACES.read().await.clone();
+    CAPTURE.write().await.start(&interfaces).await;
     Ok("".to_string())
 }
 
@@ -219,7 +219,7 @@ pub async fn utility_start_capture() -> Result<String> {
     feature = "packetcapture"
 ))]
 pub async fn utility_stop_capture() -> Result<String> {
-    CAPTURE.lock().await.stop().await;
+    CAPTURE.write().await.stop().await;
     Ok("".to_string())
 }
 
@@ -228,11 +228,11 @@ pub async fn utility_stop_capture() -> Result<String> {
     feature = "packetcapture"
 ))]
 pub async fn utility_restart_capture() -> Result<String> {
-    if !CAPTURE.lock().await.is_capturing().await {
+    if !CAPTURE.read().await.is_capturing().await {
         return order_error("restart capture: capture not running", false);
     }
-    let interfaces = INTERFACES.lock().await.clone();
-    CAPTURE.lock().await.restart(&interfaces).await;
+    let interfaces = INTERFACES.read().await.clone();
+    CAPTURE.write().await.restart(&interfaces).await;
     Ok("".to_string())
 }
 
@@ -241,7 +241,7 @@ pub async fn utility_restart_capture() -> Result<String> {
     feature = "packetcapture"
 ))]
 pub async fn utility_is_capturing() -> Result<String> {
-    let is_capturing = CAPTURE.lock().await.is_capturing().await;
+    let is_capturing = CAPTURE.read().await.is_capturing().await;
     let result = is_capturing.to_string();
     info!("Returning is_capturing: {}", result);
     Ok(result)
@@ -252,7 +252,7 @@ pub async fn utility_is_capturing() -> Result<String> {
     feature = "packetcapture"
 ))]
 pub async fn utility_set_whitelist(whitelist_name: &str) -> Result<String> {
-    CAPTURE.lock().await.set_whitelist(whitelist_name).await;
+    CAPTURE.write().await.set_whitelist(whitelist_name).await;
     Ok("".to_string())
 }
 
@@ -262,7 +262,7 @@ pub async fn utility_set_whitelist(whitelist_name: &str) -> Result<String> {
 ))]
 pub async fn utility_set_custom_whitelists(whitelist_json: &str) -> Result<String> {
     CAPTURE
-        .lock()
+        .write()
         .await
         .set_custom_whitelists(whitelist_json)
         .await;
@@ -274,7 +274,7 @@ pub async fn utility_set_custom_whitelists(whitelist_json: &str) -> Result<Strin
     feature = "packetcapture"
 ))]
 pub async fn utility_create_custom_whitelists() -> Result<String> {
-    let whitelist = match CAPTURE.lock().await.create_custom_whitelists().await {
+    let whitelist = match CAPTURE.write().await.create_custom_whitelists().await {
         Ok(whitelist) => whitelist,
         Err(e) => {
             error!("Error creating custom whitelists: {}", e);
@@ -290,8 +290,8 @@ pub async fn utility_create_custom_whitelists() -> Result<String> {
     feature = "packetcapture"
 ))]
 pub async fn utility_set_custom_blacklists(blacklist_json: &str) -> Result<String> {
-    CAPTURE
-        .lock()
+    let _ = CAPTURE
+        .write()
         .await
         .set_custom_blacklists(blacklist_json)
         .await;
@@ -304,7 +304,7 @@ pub async fn utility_set_custom_blacklists(blacklist_json: &str) -> Result<Strin
 ))]
 pub async fn utility_set_filter(filter: &str) -> Result<String> {
     match serde_json::from_str::<SessionFilter>(filter) {
-        Ok(filter) => CAPTURE.lock().await.set_filter(filter).await,
+        Ok(filter) => CAPTURE.write().await.set_filter(filter).await,
         Err(e) => {
             error!("Invalid argument for set_filter {} : {}", filter, e);
             return order_error(
@@ -321,7 +321,7 @@ pub async fn utility_set_filter(filter: &str) -> Result<String> {
     feature = "packetcapture"
 ))]
 pub async fn utility_get_filter() -> Result<String> {
-    let filter = CAPTURE.lock().await.get_filter().await;
+    let filter = CAPTURE.read().await.get_filter().await;
     let json_filter = match serde_json::to_string(&filter) {
         Ok(json) => json,
         Err(e) => {
@@ -337,8 +337,8 @@ pub async fn utility_get_filter() -> Result<String> {
     any(target_os = "macos", target_os = "linux", target_os = "windows"),
     feature = "packetcapture"
 ))]
-pub async fn utility_get_sessions() -> Result<String> {
-    let sessions = CAPTURE.lock().await.get_sessions().await;
+pub async fn utility_get_sessions(incremental: bool) -> Result<String> {
+    let sessions = CAPTURE.read().await.get_sessions(incremental).await;
     let json_sessions = match serde_json::to_string(&sessions) {
         Ok(json) => json,
         Err(e) => {
@@ -346,7 +346,11 @@ pub async fn utility_get_sessions() -> Result<String> {
             return order_error(&format!("error serializing sessions to JSON: {}", e), false);
         }
     };
-    info!("Returning {} sessions", sessions.len());
+    info!(
+        "Returning {} sessions, incremental: {}",
+        sessions.len(),
+        incremental
+    );
     Ok(json_sessions)
 }
 
@@ -354,8 +358,8 @@ pub async fn utility_get_sessions() -> Result<String> {
     any(target_os = "macos", target_os = "linux", target_os = "windows"),
     feature = "packetcapture"
 ))]
-pub async fn utility_get_current_sessions() -> Result<String> {
-    let active_sessions = CAPTURE.lock().await.get_current_sessions().await;
+pub async fn utility_get_current_sessions(incremental: bool) -> Result<String> {
+    let active_sessions = CAPTURE.read().await.get_current_sessions(incremental).await;
     let json_active_sessions = match serde_json::to_string(&active_sessions) {
         Ok(json) => json,
         Err(e) => {
@@ -366,7 +370,11 @@ pub async fn utility_get_current_sessions() -> Result<String> {
             );
         }
     };
-    info!("Returning {} current sessions", active_sessions.len());
+    info!(
+        "Returning {} current sessions, incremental: {}",
+        active_sessions.len(),
+        incremental
+    );
     Ok(json_active_sessions)
 }
 
@@ -376,7 +384,7 @@ pub async fn utility_get_current_sessions() -> Result<String> {
 ))]
 pub async fn utility_get_whitelist_conformance() -> Result<String> {
     let conformance = CAPTURE
-        .lock()
+        .read()
         .await
         .get_whitelist_conformance()
         .await
@@ -389,8 +397,12 @@ pub async fn utility_get_whitelist_conformance() -> Result<String> {
     any(target_os = "macos", target_os = "linux", target_os = "windows"),
     feature = "packetcapture"
 ))]
-pub async fn utility_get_whitelist_exceptions() -> Result<String> {
-    let exceptions = CAPTURE.lock().await.get_whitelist_exceptions().await;
+pub async fn utility_get_whitelist_exceptions(incremental: bool) -> Result<String> {
+    let exceptions = CAPTURE
+        .read()
+        .await
+        .get_whitelist_exceptions(incremental)
+        .await;
     let json_exceptions = match serde_json::to_string(&exceptions) {
         Ok(json) => json,
         Err(e) => {
@@ -401,7 +413,11 @@ pub async fn utility_get_whitelist_exceptions() -> Result<String> {
             );
         }
     };
-    info!("Returning {} whitelist exceptions", exceptions.len());
+    info!(
+        "Returning {} whitelist exceptions, incremental: {}",
+        exceptions.len(),
+        incremental
+    );
     Ok(json_exceptions)
 }
 
@@ -411,7 +427,7 @@ pub async fn utility_get_whitelist_exceptions() -> Result<String> {
 ))]
 pub async fn utility_get_blacklisted_status() -> Result<String> {
     let status = CAPTURE
-        .lock()
+        .read()
         .await
         .get_blacklisted_status()
         .await
@@ -424,8 +440,12 @@ pub async fn utility_get_blacklisted_status() -> Result<String> {
     any(target_os = "macos", target_os = "linux", target_os = "windows"),
     feature = "packetcapture"
 ))]
-pub async fn utility_get_blacklisted_sessions() -> Result<String> {
-    let sessions = CAPTURE.lock().await.get_blacklisted_sessions().await;
+pub async fn utility_get_blacklisted_sessions(incremental: bool) -> Result<String> {
+    let sessions = CAPTURE
+        .read()
+        .await
+        .get_blacklisted_sessions(incremental)
+        .await;
     let json_sessions = match serde_json::to_string(&sessions) {
         Ok(json) => json,
         Err(e) => {
@@ -436,7 +456,11 @@ pub async fn utility_get_blacklisted_sessions() -> Result<String> {
             );
         }
     };
-    info!("Returning {} blacklisted sessions", sessions.len());
+    info!(
+        "Returning {} blacklisted sessions, incremental: {}",
+        sessions.len(),
+        incremental
+    );
     Ok(json_sessions)
 }
 
@@ -445,7 +469,7 @@ pub async fn utility_get_blacklisted_sessions() -> Result<String> {
     feature = "packetcapture"
 ))]
 pub async fn utility_get_whitelists() -> Result<String> {
-    let json = CAPTURE.lock().await.get_whitelists().await;
+    let json = CAPTURE.read().await.get_whitelists().await;
     info!("Returning whitelists JSON");
     Ok(json)
 }
@@ -455,7 +479,7 @@ pub async fn utility_get_whitelists() -> Result<String> {
     feature = "packetcapture"
 ))]
 pub async fn utility_get_blacklists() -> Result<String> {
-    let json = CAPTURE.lock().await.get_blacklists().await;
+    let json = CAPTURE.read().await.get_blacklists().await;
     info!("Returning blacklists JSON");
     Ok(json)
 }
@@ -465,7 +489,7 @@ pub async fn utility_get_blacklists() -> Result<String> {
     feature = "packetcapture"
 ))]
 pub async fn utility_get_whitelist_name() -> Result<String> {
-    let name = CAPTURE.lock().await.get_whitelist_name().await;
+    let name = CAPTURE.read().await.get_whitelist_name().await;
     info!("Returning whitelist name: {}", name);
     Ok(name)
 }
@@ -480,19 +504,19 @@ pub fn start_interface_monitor() {
     async_spawn(async move {
         loop {
             if check_interfaces_changes().await {
-                let interfaces = INTERFACES.lock().await.clone();
+                let interfaces = INTERFACES.read().await.clone();
                 // Handle capture restart
                 #[cfg(all(
                     any(target_os = "macos", target_os = "linux", target_os = "windows"),
                     feature = "packetcapture"
                 ))]
                 {
-                    let is_capturing = capture.lock().await.is_capturing().await;
+                    let is_capturing = capture.read().await.is_capturing().await;
                     if is_capturing {
-                        capture.lock().await.stop().await;
+                        capture.write().await.stop().await;
 
                         info!("Interfaces changed, restarting capture on {:?}", interfaces);
-                        capture.lock().await.start(&interfaces).await;
+                        capture.write().await.start(&interfaces).await;
                     }
                 }
                 // Local cache
@@ -510,7 +534,7 @@ pub fn start_interface_monitor() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lanscan_sessions::{
+    use crate::lanscan::sessions::{
         Protocol, Session, SessionFilter, SessionInfo, SessionStats, SessionStatus, WhitelistState,
     };
     use chrono::{TimeZone, Utc};
@@ -635,7 +659,7 @@ mod tests {
             dst_service: Some("dns".to_string()),
             l7: None,
             src_asn: None,
-            dst_asn: None, // Assuming ASN Record serialization is handled or tested elsewhere
+            dst_asn: None,
             is_whitelisted: WhitelistState::Unknown,
             criticality: "low".to_string(),
             whitelist_reason: None,

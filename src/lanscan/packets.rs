@@ -1,13 +1,13 @@
-use crate::blacklists::*;
-use crate::lanscan_asn::*;
-use crate::lanscan_ip::is_lan_ip;
-use crate::lanscan_l7::LANScanL7;
-use crate::lanscan_port_vulns::get_name_from_port;
-use crate::lanscan_sessions::session_macros::*;
-use crate::lanscan_sessions::*;
-use crate::rwlock::CustomRwLock;
+use crate::customlock::*;
+use crate::lanscan::asn::*;
+use crate::lanscan::ip::is_lan_ip;
+use crate::lanscan::l7::LANScanL7;
+use crate::lanscan::port_vulns::get_name_from_port;
+use crate::lanscan::sessions::session_macros::*;
+use crate::lanscan::sessions::*;
 use chrono::Utc;
-use dashmap::DashMap;
+use dashmap::mapref::entry::Entry;
+use lazy_static::lazy_static;
 use pnet_packet::ethernet::{EtherTypes, EthernetPacket};
 use pnet_packet::ip::IpNextHeaderProtocols;
 use pnet_packet::ipv4::Ipv4Packet;
@@ -17,13 +17,70 @@ use pnet_packet::udp::UdpPacket;
 use pnet_packet::Packet as PnetPacket;
 use std::collections::HashSet;
 use std::net::IpAddr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio;
-use tracing::{trace, warn};
+use tracing::{info, trace, warn};
 use uuid::Uuid;
 
-// Add a constant for the TCP PSH flag if it's not already defined
 const TCP_PSH: u8 = 0x08; // PSH (push) flag in TCP
+
+lazy_static! {
+    static ref PACKET_STATS: PacketStats = PacketStats::new();
+}
+
+struct PacketStats {
+    total_processed: AtomicU64,
+    tcp_processed: AtomicU64,
+    udp_processed: AtomicU64,
+    ipv4_processed: AtomicU64,
+    ipv6_processed: AtomicU64,
+    new_sessions: AtomicU64,
+    updated_sessions: AtomicU64,
+    last_log_time: AtomicU64,
+}
+
+impl PacketStats {
+    fn new() -> Self {
+        Self {
+            total_processed: AtomicU64::new(0),
+            tcp_processed: AtomicU64::new(0),
+            udp_processed: AtomicU64::new(0),
+            ipv4_processed: AtomicU64::new(0),
+            ipv6_processed: AtomicU64::new(0),
+            new_sessions: AtomicU64::new(0),
+            updated_sessions: AtomicU64::new(0),
+            last_log_time: AtomicU64::new(0),
+        }
+    }
+    fn log_and_reset(&self) {
+        if self.last_log_time.load(Ordering::Relaxed) == 0
+            || Utc::now().timestamp_millis() as u64 - self.last_log_time.load(Ordering::Relaxed)
+                > 30000
+        {
+            self.last_log_time
+                .store(Utc::now().timestamp_millis() as u64, Ordering::Relaxed);
+        } else {
+            return;
+        }
+
+        let total = self.total_processed.swap(0, Ordering::Relaxed);
+        let tcp = self.tcp_processed.swap(0, Ordering::Relaxed);
+        let udp = self.udp_processed.swap(0, Ordering::Relaxed);
+        let ipv4 = self.ipv4_processed.swap(0, Ordering::Relaxed);
+        let ipv6 = self.ipv6_processed.swap(0, Ordering::Relaxed);
+        let new = self.new_sessions.swap(0, Ordering::Relaxed);
+        let updated = self.updated_sessions.swap(0, Ordering::Relaxed);
+
+        // Only log if there was activity in the interval
+        if total > 0 {
+            info!(
+                "Packet Stats (last 30s): Total={}, TCP={}, UDP={}, IPv4={}, IPv6={}, NewSessions={}, UpdatedSessions={}",
+                total, tcp, udp, ipv4, ipv6, new, updated
+            );
+        }
+    }
+}
 
 #[derive(Debug, PartialEq)]
 pub enum ParsedPacket {
@@ -44,14 +101,132 @@ pub struct DnsPacketData {
     pub dns_payload: Vec<u8>,
 }
 
+// Helper: fast, in-place stats update for existing sessions
+fn update_session_stats(
+    stats: &mut SessionStats,
+    parsed_packet: &SessionPacketData,
+    now: chrono::DateTime<chrono::Utc>,
+    is_originator: bool,
+) {
+    // Direction-aware byte/packet counters --------------------------------
+    if is_originator {
+        stats.outbound_bytes += parsed_packet.packet_length as u64;
+        stats.orig_pkts += 1;
+        stats.orig_ip_bytes += parsed_packet.ip_packet_length as u64;
+    } else {
+        stats.inbound_bytes += parsed_packet.packet_length as u64;
+        stats.resp_pkts += 1;
+        stats.resp_ip_bytes += parsed_packet.ip_packet_length as u64;
+    }
+
+    // Average pkt size + inbound/outbound ratio ---------------------------
+    let total_packets = stats.orig_pkts + stats.resp_pkts;
+    let total_bytes = stats.inbound_bytes + stats.outbound_bytes;
+    stats.average_packet_size = if total_packets > 0 {
+        total_bytes as f64 / total_packets as f64
+    } else {
+        0.0
+    };
+
+    stats.inbound_outbound_ratio = if stats.outbound_bytes > 0 {
+        stats.inbound_bytes as f64 / stats.outbound_bytes as f64
+    } else {
+        0.0
+    };
+
+    // Segment detection ---------------------------------------------------
+    let time_since_last_activity = (now - stats.last_activity).num_milliseconds() as f64 / 1000.0; // seconds
+
+    let is_segment_end = if parsed_packet.session.protocol == Protocol::TCP {
+        if let Some(flags) = parsed_packet.flags {
+            (flags & TCP_PSH) != 0
+        } else {
+            false
+        }
+    } else {
+        false
+    } || (stats.in_segment
+        && time_since_last_activity >= stats.segment_timeout);
+
+    if !stats.in_segment {
+        stats.in_segment = true;
+        stats.current_segment_start = now;
+    }
+
+    if is_segment_end && stats.in_segment {
+        let previous_end = stats.last_segment_end;
+        stats.segment_count += 1;
+        stats.in_segment = false;
+        stats.last_segment_end = Some(now);
+
+        if let Some(prev_end) = previous_end {
+            let seg_ia =
+                (stats.current_segment_start - prev_end).num_milliseconds() as f64 / 1000.0;
+            if seg_ia >= 0.0 {
+                stats.total_segment_interarrival += seg_ia;
+                stats.segment_interarrival = if stats.segment_count > 1 {
+                    stats.total_segment_interarrival / (stats.segment_count - 1) as f64
+                } else {
+                    0.0
+                };
+            } else {
+                warn!(
+                    "Negative segment interarrival calculated ({}ms). Current start: {:?}, Previous end: {:?}. Skipping.",
+                    (stats.current_segment_start - prev_end).num_milliseconds(),
+                    stats.current_segment_start,
+                    prev_end
+                );
+            }
+        }
+
+        if time_since_last_activity >= stats.segment_timeout {
+            stats.in_segment = true;
+            stats.current_segment_start = now;
+        }
+    }
+
+    // Update last activity -----------------------------------------------
+    stats.last_activity = now;
+
+    // History & connection state -----------------------------------------
+    if let Some(flags) = parsed_packet.flags {
+        let c = map_tcp_flags(flags, parsed_packet.packet_length, is_originator);
+        stats.history.push(c);
+        if (flags & (TcpFlags::FIN | TcpFlags::RST)) != 0 && stats.end_time.is_none() {
+            stats.end_time = Some(now);
+            stats.conn_state = Some(determine_conn_state(&stats.history));
+        }
+    }
+}
+
 pub async fn process_parsed_packet(
     parsed_packet: SessionPacketData,
-    sessions: &Arc<DashMap<Session, SessionInfo>>,
+    sessions: &Arc<CustomDashMap<Session, SessionInfo>>,
     current_sessions: &Arc<CustomRwLock<Vec<Session>>>,
-    self_ips: &HashSet<IpAddr>,
+    own_ips: &HashSet<IpAddr>,
     filter: &Arc<CustomRwLock<SessionFilter>>,
     l7: Option<&Arc<LANScanL7>>,
 ) {
+    // --- Increment Counters ---
+    PACKET_STATS.total_processed.fetch_add(1, Ordering::Relaxed);
+    match parsed_packet.session.protocol {
+        Protocol::TCP => {
+            PACKET_STATS.tcp_processed.fetch_add(1, Ordering::Relaxed);
+        }
+        Protocol::UDP => {
+            PACKET_STATS.udp_processed.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    match parsed_packet.session.src_ip {
+        IpAddr::V4(_) => {
+            PACKET_STATS.ipv4_processed.fetch_add(1, Ordering::Relaxed);
+        }
+        IpAddr::V6(_) => {
+            PACKET_STATS.ipv6_processed.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    // --- End Increment Counters ---
+
     let now = Utc::now();
 
     // Check if the ports are known service ports
@@ -151,344 +326,213 @@ pub async fn process_parsed_packet(
         return;
     }
 
-    if let Some(mut info) = sessions.get_mut(&key) {
-        let stats = &mut info.stats;
+    // Use entry().or_insert_with() to atomically check and insert if not exists
+    let entry = sessions.entry(key.clone());
+    match entry {
+        Entry::Occupied(mut occ) => {
+            // --- Increment Update Counter ---
+            PACKET_STATS
+                .updated_sessions
+                .fetch_add(1, Ordering::Relaxed);
+            // --- End Increment Update Counter ---
 
-        if is_originator {
-            // Packet from originator to responder
-            stats.outbound_bytes += parsed_packet.packet_length as u64;
-            stats.orig_pkts += 1;
-            stats.orig_ip_bytes += parsed_packet.ip_packet_length as u64;
-        } else {
-            // Packet from responder to originator
-            stats.inbound_bytes += parsed_packet.packet_length as u64;
-            stats.resp_pkts += 1;
-            stats.resp_ip_bytes += parsed_packet.ip_packet_length as u64;
+            let info = occ.get_mut();
+            update_session_stats(&mut info.stats, &parsed_packet, now, is_originator);
+            // Update last_modified timestamp since stats changed
+            info.last_modified = now;
         }
+        Entry::Vacant(vacant) => {
+            // --- Increment New Session Counter ---
+            PACKET_STATS.new_sessions.fetch_add(1, Ordering::Relaxed);
+            // --- End Increment New Session Counter ---
 
-        // Calculate average packet size after adding bytes
-        let total_packets = stats.orig_pkts + stats.resp_pkts;
-        let total_bytes = stats.inbound_bytes + stats.outbound_bytes;
-        stats.average_packet_size = if total_packets > 0 {
-            total_bytes as f64 / total_packets as f64
-        } else {
-            0.0
-        };
+            // New session
+            let uid = Uuid::new_v4().to_string();
 
-        // Update inbound/outbound ratio
-        stats.inbound_outbound_ratio = if stats.outbound_bytes > 0 {
-            stats.inbound_bytes as f64 / stats.outbound_bytes as f64
-        } else {
-            0.0
-        };
+            let mut stats = SessionStats {
+                start_time: now,
+                end_time: None,
+                last_activity: now,
+                inbound_bytes: 0,
+                outbound_bytes: 0,
+                orig_pkts: 0,
+                resp_pkts: 0,
+                orig_ip_bytes: 0,
+                resp_ip_bytes: 0,
+                history: String::new(),
+                conn_state: None,
+                missed_bytes: 0,
 
-        // Segment detection logic
-        let time_since_last_activity =
-            (now - stats.last_activity).num_milliseconds() as f64 / 1000.0; // in seconds
+                // Initialize new traffic statistics
+                average_packet_size: 0.0, // Initialize to 0, will be updated after we add bytes
+                inbound_outbound_ratio: 0.0, // Will update after we add bytes
 
-        // Check if this packet ends a segment (PUSH flag or timeout)
-        let is_segment_end = if parsed_packet.session.protocol == Protocol::TCP {
+                // Initialize segment tracking
+                segment_count: 0,
+                current_segment_start: now,
+                last_segment_end: None,
+                segment_interarrival: 0.0,
+                total_segment_interarrival: 0.0,
+                in_segment: true, // First packet starts a segment
+
+                // Default timeout for segment detection
+                segment_timeout: 5.0, // 5 seconds by default
+            };
+
+            // Update session stats based on the first packet
+            if is_originator {
+                stats.outbound_bytes += parsed_packet.packet_length as u64;
+                stats.orig_pkts += 1;
+                stats.orig_ip_bytes += parsed_packet.ip_packet_length as u64;
+            } else {
+                stats.inbound_bytes += parsed_packet.packet_length as u64;
+                stats.resp_pkts += 1;
+                stats.resp_ip_bytes += parsed_packet.ip_packet_length as u64;
+            }
+
+            // Calculate average packet size after adding bytes
+            let total_packets = stats.orig_pkts + stats.resp_pkts;
+            let total_bytes = stats.inbound_bytes + stats.outbound_bytes;
+            stats.average_packet_size = if total_packets > 0 {
+                total_bytes as f64 / total_packets as f64
+            } else {
+                0.0
+            };
+
+            // Calculate inbound/outbound ratio (might be 0.0 or infinity initially)
+            stats.inbound_outbound_ratio = if stats.outbound_bytes > 0 {
+                stats.inbound_bytes as f64 / stats.outbound_bytes as f64
+            } else {
+                0.0
+            };
+
+            // Update history with correct direction
             if let Some(flags) = parsed_packet.flags {
-                // Check for PUSH flag in TCP packets
-                (flags & TCP_PSH) != 0
-            } else {
-                false
+                let c = map_tcp_flags(flags, parsed_packet.packet_length, is_originator);
+                stats.history.push(c);
+
+                // Check for TCP PUSH flag for segment tracking
+                if parsed_packet.session.protocol == Protocol::TCP && (flags & TCP_PSH) != 0 {
+                    // This packet ends a segment
+                    stats.segment_count = 1;
+                    stats.in_segment = false;
+                    stats.last_segment_end = Some(now);
+                }
+
+                // Check for FIN or RST flags to properly set end_time for new sessions
+                if (flags & (TcpFlags::FIN | TcpFlags::RST)) != 0 {
+                    stats.end_time = Some(now);
+                    stats.conn_state = Some(determine_conn_state(&stats.history));
+                }
             }
-        } else {
-            false
-        } || (stats.in_segment
-            && time_since_last_activity >= stats.segment_timeout);
 
-        // If we're starting a new segment (because we weren't in one before this packet)
-        if !stats.in_segment {
-            stats.in_segment = true;
-            stats.current_segment_start = now; // Start of the *new* segment
-        }
+            // Determine locality flags based on the session key (which might be swapped)
+            let is_local_src = is_lan_ip(&key.src_ip);
+            let is_local_dst = is_lan_ip(&key.dst_ip);
 
-        // If this packet ends a segment
-        if is_segment_end && stats.in_segment {
-            // Check in_segment *again* ensures we only process the end of the *current* segment
-            let previous_segment_end_time = stats.last_segment_end; // Store the *previous* end time
+            // Update self flags based on the session key (which might be swapped)
+            let is_self_src = own_ips.contains(&key.src_ip);
+            let is_self_dst = own_ips.contains(&key.dst_ip);
 
-            stats.segment_count += 1;
-            stats.in_segment = false; // End current segment
-            stats.last_segment_end = Some(now); // Update with the end time of the *current* segment
+            trace!("New session: {:?}. Performing lookups concurrently.", key);
 
-            // Calculate interarrival time using the *previous* end time
-            if let Some(prev_end) = previous_segment_end_time {
-                // Interarrival is time between previous end and current start
-                let segment_interarrival =
-                    (stats.current_segment_start - prev_end).num_milliseconds() as f64 / 1000.0;
+            let src_ip_lookup = key.src_ip;
+            let dst_ip_lookup = key.dst_ip;
 
-                if segment_interarrival >= 0.0 {
-                    // Only add non-negative interarrivals
-                    stats.total_segment_interarrival += segment_interarrival;
-                    // Calculate average interarrival time over (segment_count - 1) intervals
-                    stats.segment_interarrival = if stats.segment_count > 1 {
-                        stats.total_segment_interarrival / (stats.segment_count - 1) as f64
+            // Get the service name for destination port
+            let dst_service = if key.dst_port == parsed_packet.session.dst_port {
+                // If we didn't swap, use the dst_service_name we already looked up
+                if !dst_service_name.is_empty() {
+                    Some(dst_service_name)
+                } else {
+                    None
+                }
+            } else if key.dst_port == parsed_packet.session.src_port {
+                // If we swapped, use the src_service_name we already looked up
+                if !src_service_name.is_empty() {
+                    Some(src_service_name)
+                } else {
+                    None
+                }
+            } else {
+                // This shouldn't happen, but just in case
+                warn!("Unexpected port mismatch in session key. Will look up service name.");
+                let name = get_name_from_port(key.dst_port).await;
+                if !name.is_empty() {
+                    Some(name)
+                } else {
+                    None
+                }
+            };
+
+            let (src_asn_opt, dst_asn_opt) = tokio::join!(
+                // Source ASN lookup (only if not local)
+                async {
+                    if !is_local_src {
+                        get_asn(src_ip_lookup).await
                     } else {
-                        0.0 // First interarrival time IS the average
-                    };
-                } else {
-                    warn!(
-                         "Negative segment interarrival calculated ({}ms). Current start: {:?}, Previous end: {:?}. Skipping.",
-                         (stats.current_segment_start - prev_end).num_milliseconds(),
-                         stats.current_segment_start,
-                         prev_end
-                     );
-                    // Keep the previous average if the new calculation is invalid
-                }
-            }
-            // No 'else' needed here - if previous_segment_end_time is None, it's the first segment ending, no interarrival yet.
-
-            // Start a new segment immediately if this is a timeout-based end
-            // (for TCP with PUSH flag, a new segment typically starts with next packet)
-            if time_since_last_activity >= stats.segment_timeout {
-                stats.in_segment = true;
-                stats.current_segment_start = now;
-            }
-        }
-
-        // Update last activity AFTER segment processing uses the previous value
-        stats.last_activity = now;
-
-        // Update history with correct direction
-        if let Some(flags) = parsed_packet.flags {
-            let c = map_tcp_flags(flags, parsed_packet.packet_length, is_originator);
-            stats.history.push(c);
-            if (flags & (TcpFlags::FIN | TcpFlags::RST)) != 0 && stats.end_time.is_none() {
-                stats.end_time = Some(now);
-                stats.conn_state = Some(determine_conn_state(&stats.history));
-            }
-        }
-    } else {
-        // New session
-        let uid = Uuid::new_v4().to_string();
-
-        let mut stats = SessionStats {
-            start_time: now,
-            end_time: None,
-            last_activity: now,
-            inbound_bytes: 0,
-            outbound_bytes: 0,
-            orig_pkts: 0,
-            resp_pkts: 0,
-            orig_ip_bytes: 0,
-            resp_ip_bytes: 0,
-            history: String::new(),
-            conn_state: None,
-            missed_bytes: 0,
-
-            // Initialize new traffic statistics
-            average_packet_size: 0.0, // Initialize to 0, will be updated after we add bytes
-            inbound_outbound_ratio: 0.0, // Will update after we add bytes
-
-            // Initialize segment tracking
-            segment_count: 0,
-            current_segment_start: now,
-            last_segment_end: None,
-            segment_interarrival: 0.0,
-            total_segment_interarrival: 0.0,
-            in_segment: true, // First packet starts a segment
-
-            // Default timeout for segment detection
-            segment_timeout: 5.0, // 5 seconds by default
-        };
-
-        // Update session stats based on the first packet
-        if is_originator {
-            stats.outbound_bytes += parsed_packet.packet_length as u64;
-            stats.orig_pkts += 1;
-            stats.orig_ip_bytes += parsed_packet.ip_packet_length as u64;
-        } else {
-            stats.inbound_bytes += parsed_packet.packet_length as u64;
-            stats.resp_pkts += 1;
-            stats.resp_ip_bytes += parsed_packet.ip_packet_length as u64;
-        }
-
-        // Calculate average packet size after adding bytes
-        let total_packets = stats.orig_pkts + stats.resp_pkts;
-        let total_bytes = stats.inbound_bytes + stats.outbound_bytes;
-        stats.average_packet_size = if total_packets > 0 {
-            total_bytes as f64 / total_packets as f64
-        } else {
-            0.0
-        };
-
-        // Calculate inbound/outbound ratio (might be 0.0 or infinity initially)
-        stats.inbound_outbound_ratio = if stats.outbound_bytes > 0 {
-            stats.inbound_bytes as f64 / stats.outbound_bytes as f64
-        } else {
-            0.0
-        };
-
-        // Update history with correct direction
-        if let Some(flags) = parsed_packet.flags {
-            let c = map_tcp_flags(flags, parsed_packet.packet_length, is_originator);
-            stats.history.push(c);
-
-            // Check for TCP PUSH flag for segment tracking
-            if parsed_packet.session.protocol == Protocol::TCP && (flags & TCP_PSH) != 0 {
-                // This packet ends a segment
-                stats.segment_count = 1;
-                stats.in_segment = false;
-                stats.last_segment_end = Some(now);
-            }
-
-            // Check for FIN or RST flags to properly set end_time for new sessions
-            if (flags & (TcpFlags::FIN | TcpFlags::RST)) != 0 {
-                stats.end_time = Some(now);
-                stats.conn_state = Some(determine_conn_state(&stats.history));
-            }
-        }
-
-        // Determine locality flags based on the session key (which might be swapped)
-        let is_local_src = is_lan_ip(&key.src_ip);
-        let is_local_dst = is_lan_ip(&key.dst_ip);
-
-        // Update self flags based on the session key (which might be swapped)
-        let is_self_src = self_ips.contains(&key.src_ip);
-        let is_self_dst = self_ips.contains(&key.dst_ip);
-
-        trace!("New session: {:?}. Performing lookups concurrently.", key);
-
-        // --- Perform lookups concurrently ---
-        let src_ip_lookup = key.src_ip;
-        let dst_ip_lookup = key.dst_ip;
-        // Perform string conversion once if needed for blacklist lookups
-        let src_ip_str = src_ip_lookup.to_string();
-        let dst_ip_str = dst_ip_lookup.to_string();
-
-        // Get the service name for destination port
-        let dst_service = if key.dst_port == parsed_packet.session.dst_port {
-            // If we didn't swap, use the dst_service_name we already looked up
-            if !dst_service_name.is_empty() {
-                Some(dst_service_name)
-            } else {
-                None
-            }
-        } else if key.dst_port == parsed_packet.session.src_port {
-            // If we swapped, use the src_service_name we already looked up
-            if !src_service_name.is_empty() {
-                Some(src_service_name)
-            } else {
-                None
-            }
-        } else {
-            // This shouldn't happen, but just in case
-            trace!("Unexpected port mismatch in session key. Will look up service name.");
-            let name = get_name_from_port(key.dst_port).await;
-            if !name.is_empty() {
-                Some(name)
-            } else {
-                None
-            }
-        };
-
-        let (src_asn_opt, dst_asn_opt, src_blacklist_result, dst_blacklist_result) = tokio::join!(
-            // Source ASN lookup (only if not local)
-            async {
-                if !is_local_src {
-                    get_asn(src_ip_lookup).await
-                } else {
-                    None
-                }
-            },
-            // Destination ASN lookup (only if not local)
-            async {
-                if !is_local_dst {
-                    get_asn(dst_ip_lookup).await
-                } else {
-                    None
-                }
-            },
-            // Source IP blacklist check
-            is_ip_blacklisted(&src_ip_str), // Returns (bool, Vec<String>)
-            // Destination IP blacklist check
-            is_ip_blacklisted(&dst_ip_str) // Returns (bool, Vec<String>)
-        );
-        // --- Lookups finished ---
-
-        trace!("Lookups completed for session: {:?}", key);
-
-        // Queue the new session for L7 resolution (can happen after lookups)
-        if let Some(l7) = l7 {
-            l7.add_connection_to_resolver(&key).await;
-            trace!("Added session {:?} to L7 resolver queue", key);
-        }
-
-        // Set initial status
-        let status = SessionStatus {
-            active: true, // A new session is active by definition
-            added: true,
-            activated: true, // It's newly activated
-            deactivated: false,
-        };
-
-        // Create the SessionInfo struct using the results from join!
-        let mut session_info = SessionInfo {
-            session: key.clone(),
-            stats,
-            status,
-            is_local_src,
-            is_local_dst,
-            is_self_src,
-            is_self_dst,
-            src_domain: None, // Domain resolution happens later
-            dst_domain: None, // Domain resolution happens later
-            dst_service: dst_service,
-            l7: None, // L7 resolution happens later
-            src_asn: src_asn_opt,
-            dst_asn: dst_asn_opt,
-            is_whitelisted: WhitelistState::Unknown, // Whitelist check happens later
-            criticality: "".to_string(),
-            whitelist_reason: None,
-            uid: uid,
-            last_modified: Utc::now(),
-        };
-
-        // --- Process blacklist results ---
-        let (src_blacklisted, src_lists) = src_blacklist_result;
-        let (dst_blacklisted, dst_lists) = dst_blacklist_result;
-
-        let mut criticality_parts = Vec::new();
-        // Only add tags if the IP is actually blacklisted AND is not a local/LAN IP
-        if src_blacklisted && !is_local_src {
-            criticality_parts.extend(src_lists);
-        }
-        if dst_blacklisted && !is_local_dst {
-            criticality_parts.extend(dst_lists);
-        }
-
-        // Remove duplicates and set criticality
-        if !criticality_parts.is_empty() {
-            criticality_parts.sort();
-            criticality_parts.dedup();
-            session_info.criticality = format!(
-                "{}",
-                criticality_parts
-                    .iter()
-                    .map(|name| format!("blacklist:{}", name))
-                    .collect::<Vec<_>>()
-                    .join(",")
+                        None
+                    }
+                },
+                // Destination ASN lookup (only if not local)
+                async {
+                    if !is_local_dst {
+                        get_asn(dst_ip_lookup).await
+                    } else {
+                        None
+                    }
+                },
             );
-            trace!(
-                "Set criticality for session {:?}: {}",
-                key,
-                session_info.criticality
-            );
+            // --- Lookups finished ---
+
+            trace!("Lookups completed for session: {:?}", key);
+
+            // Queue the new session for L7 resolution
+            if let Some(l7) = l7 {
+                l7.add_connection_to_resolver(&key).await;
+                trace!("Added session {:?} to L7 resolver queue", key);
+            }
+
+            // Set initial status
+            let status = SessionStatus {
+                active: true, // A new session is active by definition
+                added: true,
+                activated: true, // It's newly activated
+                deactivated: false,
+            };
+
+            // Create the SessionInfo struct using the results from join!
+            let session_info = SessionInfo {
+                session: key.clone(),
+                stats,
+                status,
+                is_local_src,
+                is_local_dst,
+                is_self_src,
+                is_self_dst,
+                src_domain: None, // Domain resolution happens later
+                dst_domain: None, // Domain resolution happens later
+                dst_service: dst_service,
+                l7: None, // L7 resolution happens later
+                src_asn: src_asn_opt,
+                dst_asn: dst_asn_opt,
+                is_whitelisted: WhitelistState::Unknown, // Whitelist check happens later
+                criticality: "".to_string(),             // Blacklist check happens later
+                whitelist_reason: None,
+                uid: uid,
+                last_modified: Utc::now(),
+            };
+
+            // Insert the session info and maintain lock until insertion is complete
+            vacant.insert(session_info);
+            trace!("Inserted session info for {:?} into main map", key);
+
+            // Add the key to the current sessions vector
+            current_sessions.write().await.push(key.clone());
+            trace!("Added session key {:?} to current sessions vector", key);
         }
-        // --- End blacklist processing ---
-
-        // Insert the newly created session info into the main map
-        sessions.insert(key.clone(), session_info);
-        trace!("Inserted session info for {:?} into main map", key);
-
-        // Add the key to the current sessions vector
-        // This still requires a write lock, but happens after concurrent lookups
-        current_sessions.write().await.push(key.clone());
-        trace!("Added session key {:?} to current sessions vector", key);
     }
+    PACKET_STATS.log_and_reset();
 }
 
 fn determine_conn_state(history: &str) -> String {
@@ -759,194 +803,12 @@ pub fn parse_packet_pcap(packet_data: &[u8]) -> Option<ParsedPacket> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::blacklists::{BlacklistInfo, Blacklists, BlacklistsJSON};
+    use crate::customlock::CustomRwLock;
+    use chrono::Utc;
+    use pnet_packet::tcp::TcpFlags;
     use serial_test::serial;
-    use std::collections::HashSet;
     use std::net::{IpAddr, Ipv4Addr};
-
-    // Add this helper function for the test
-    async fn ensure_port_is_service_port(port: u16, name: &str) {
-        use crate::lanscan_port_vulns::*;
-
-        // Check if the port is already recognized
-        let service_name = get_name_from_port(port).await;
-
-        if service_name.is_empty() {
-            println!("DEBUG: Port {} is not recognized as a service port", port);
-            println!("DEBUG: Temporarily fixing by adding port to VULNS for test");
-
-            // Create a temporary port info
-            let port_info = VulnerabilityPortInfo {
-                port,
-                name: name.to_string(),
-                description: format!("Test port {}", port),
-                vulnerabilities: Vec::new(),
-                count: 1,
-                protocol: "tcp".to_string(),
-            };
-
-            // Add it to the VULNS data model
-            let data = VULNS.data.read().await;
-            data.port_vulns.insert(port, port_info);
-
-            // Verify it worked
-            let updated_name = get_name_from_port(port).await;
-            println!(
-                "DEBUG: After fix: Port {} service name: '{}'",
-                port, updated_name
-            );
-        } else {
-            println!(
-                "DEBUG: Port {} is recognized as service: '{}'",
-                port, service_name
-            );
-        }
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn test_blacklisted_ip_criticality() {
-        // Create a test blacklist
-        let blacklist_info = BlacklistInfo {
-            name: "test_blacklist".to_string(),
-            description: Some("Test blacklist".to_string()),
-            last_updated: Some("2025-03-29".to_string()),
-            source_url: None,
-            ip_ranges: vec![
-                "192.168.1.100/32".to_string(), // Specific IP
-                "10.0.0.0/8".to_string(),       // Private IP range
-                "8.8.8.0/24".to_string(),       // Google DNS range
-            ],
-        };
-
-        let blacklists_json = BlacklistsJSON {
-            date: "2025-03-29".to_string(),
-            signature: "test-signature".to_string(),
-            blacklists: vec![blacklist_info],
-        };
-
-        let blacklists = Blacklists::new_from_json(blacklists_json);
-
-        // Override global blacklists with our test data to ensure we only have our test blacklist
-        LISTS.overwrite_with_test_data(blacklists.clone()).await;
-
-        // Create session data with a blacklisted IP (8.8.8.8)
-        let session_data = SessionPacketData {
-            session: Session {
-                protocol: Protocol::TCP,
-                src_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
-                src_port: 12345,
-                dst_ip: IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)),
-                dst_port: 80,
-            },
-            packet_length: 100,
-            ip_packet_length: 120,
-            flags: Some(TcpFlags::SYN),
-        };
-
-        // Create necessary objects for the test
-        let sessions = Arc::new(DashMap::new());
-        let current_sessions = Arc::new(CustomRwLock::new(Vec::new()));
-        let self_ips = vec![IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))];
-        let self_ips_set: HashSet<IpAddr> = self_ips.into_iter().collect();
-        let filter = Arc::new(CustomRwLock::new(SessionFilter::All));
-
-        // Process the packet
-        process_parsed_packet(
-            session_data,
-            &sessions,
-            &current_sessions,
-            &self_ips_set,
-            &filter,
-            None,
-        )
-        .await;
-
-        // Verify that the session was added with the correct criticality
-        assert_eq!(sessions.len(), 1);
-        let session_key = Session {
-            protocol: Protocol::TCP,
-            src_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
-            src_port: 12345,
-            dst_ip: IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)),
-            dst_port: 80,
-        };
-
-        let session_info = sessions.get(&session_key).unwrap();
-        assert_eq!(session_info.criticality, "blacklist:test_blacklist");
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn test_non_blacklisted_ip_criticality() {
-        // Create a test blacklist that doesn't include our test IPs
-        let blacklist_info = BlacklistInfo {
-            name: "test_blacklist".to_string(),
-            description: Some("Test blacklist".to_string()),
-            last_updated: Some("2025-03-29".to_string()),
-            source_url: None,
-            ip_ranges: vec![
-                "172.16.0.0/12".to_string(),  // Different private range
-                "203.0.113.0/24".to_string(), // TEST-NET-3 range
-            ],
-        };
-
-        let blacklists_json = BlacklistsJSON {
-            date: "2025-03-29".to_string(),
-            signature: "test-signature".to_string(),
-            blacklists: vec![blacklist_info],
-        };
-
-        let blacklists = Blacklists::new_from_json(blacklists_json);
-
-        // Override global blacklists with our test data to ensure we only have our test blacklist
-        LISTS.overwrite_with_test_data(blacklists.clone()).await;
-
-        // Create session data with a non-blacklisted IP
-        let session_data = SessionPacketData {
-            session: Session {
-                protocol: Protocol::TCP,
-                src_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
-                src_port: 12345,
-                dst_ip: IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)), // Cloudflare DNS
-                dst_port: 80,
-            },
-            packet_length: 100,
-            ip_packet_length: 120,
-            flags: Some(TcpFlags::SYN),
-        };
-
-        // Create necessary objects for the test
-        let sessions = Arc::new(DashMap::new());
-        let current_sessions = Arc::new(CustomRwLock::new(Vec::new()));
-        let self_ips = vec![IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))];
-        let self_ips_set: HashSet<IpAddr> = self_ips.into_iter().collect();
-        let filter = Arc::new(CustomRwLock::new(SessionFilter::All));
-
-        // Process the packet
-        process_parsed_packet(
-            session_data,
-            &sessions,
-            &current_sessions,
-            &self_ips_set,
-            &filter,
-            None,
-        )
-        .await;
-
-        // Verify that the session was added without a criticality
-        assert_eq!(sessions.len(), 1);
-        let session_key = Session {
-            protocol: Protocol::TCP,
-            src_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
-            src_port: 12345,
-            dst_ip: IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)),
-            dst_port: 80,
-        };
-
-        let session_info = sessions.get(&session_key).unwrap();
-        assert_eq!(session_info.criticality, "");
-    }
+    use std::{collections::HashSet, sync::Arc};
 
     #[tokio::test]
     #[serial]
@@ -967,10 +829,10 @@ mod tests {
         };
 
         // Create necessary objects for the test
-        let sessions = Arc::new(DashMap::new());
+        let sessions = Arc::new(CustomDashMap::new("Sessions"));
         let current_sessions = Arc::new(CustomRwLock::new(Vec::new()));
-        let self_ips = vec![IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))];
-        let self_ips_set: HashSet<IpAddr> = self_ips.into_iter().collect();
+        let own_ips = vec![IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))];
+        let own_ips_set: HashSet<IpAddr> = own_ips.into_iter().collect();
         let filter = Arc::new(CustomRwLock::new(SessionFilter::All));
 
         // Process the packet
@@ -978,7 +840,7 @@ mod tests {
             session_data,
             &sessions,
             &current_sessions,
-            &self_ips_set,
+            &own_ips_set,
             &filter,
             None,
         )
@@ -1025,10 +887,10 @@ mod tests {
         };
 
         // Create necessary objects for the test
-        let sessions = Arc::new(DashMap::new());
+        let sessions = Arc::new(CustomDashMap::new("Sessions"));
         let current_sessions = Arc::new(CustomRwLock::new(Vec::new()));
-        let self_ips = vec![IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))];
-        let self_ips_set: HashSet<IpAddr> = self_ips.into_iter().collect();
+        let own_ips = vec![IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))];
+        let own_ips_set: HashSet<IpAddr> = own_ips.into_iter().collect();
         let filter = Arc::new(CustomRwLock::new(SessionFilter::All));
 
         // Process the packet
@@ -1036,7 +898,7 @@ mod tests {
             session_data,
             &sessions,
             &current_sessions,
-            &self_ips_set,
+            &own_ips_set,
             &filter,
             None,
         )
@@ -1085,10 +947,10 @@ mod tests {
         };
 
         // Create necessary objects for the test
-        let sessions = Arc::new(DashMap::new());
+        let sessions = Arc::new(CustomDashMap::new("Sessions"));
         let current_sessions = Arc::new(CustomRwLock::new(Vec::new()));
-        let self_ips = vec![IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))]; // Neither IP is ours
-        let self_ips_set: HashSet<IpAddr> = self_ips.into_iter().collect();
+        let own_ips = vec![IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))]; // Neither IP is ours
+        let own_ips_set: HashSet<IpAddr> = own_ips.into_iter().collect();
         let filter = Arc::new(CustomRwLock::new(SessionFilter::All));
 
         // Process the packet
@@ -1096,7 +958,7 @@ mod tests {
             session_data.clone(),
             &sessions,
             &current_sessions,
-            &self_ips_set,
+            &own_ips_set,
             &filter,
             None,
         )
@@ -1125,7 +987,7 @@ mod tests {
         );
 
         // Now test with a SYN+ACK packet - should swap direction
-        let sessions2 = Arc::new(DashMap::new());
+        let sessions2 = Arc::new(CustomDashMap::new("Sessions"));
         let current_sessions2 = Arc::new(CustomRwLock::new(Vec::new()));
 
         let session_data2 = SessionPacketData {
@@ -1146,7 +1008,7 @@ mod tests {
             session_data2,
             &sessions2,
             &current_sessions2,
-            &self_ips_set,
+            &own_ips_set,
             &filter,
             None,
         )
@@ -1175,14 +1037,11 @@ mod tests {
         // Create test data
         let src_ip = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1));
         let dst_ip = IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8));
-        let self_ips = vec![src_ip];
-        let self_ips_set: HashSet<IpAddr> = self_ips.into_iter().collect();
-
-        // *** IMPORTANT: Ensure port 80 is recognized as HTTP service ***
-        ensure_port_is_service_port(80, "HTTP").await;
+        let own_ips = vec![src_ip];
+        let own_ips_set: HashSet<IpAddr> = own_ips.into_iter().collect();
 
         // Set up session storage
-        let sessions = Arc::new(DashMap::new());
+        let sessions = Arc::new(CustomDashMap::new("Sessions"));
         let current_sessions = Arc::new(CustomRwLock::new(Vec::new()));
         let filter = Arc::new(CustomRwLock::new(SessionFilter::All));
 
@@ -1206,7 +1065,7 @@ mod tests {
             packet1,
             &sessions,
             &current_sessions,
-            &self_ips_set,
+            &own_ips_set,
             &filter,
             None,
         )
@@ -1256,7 +1115,7 @@ mod tests {
             packet2.clone(),
             &sessions,
             &current_sessions,
-            &self_ips_set,
+            &own_ips_set,
             &filter,
             None,
         )
@@ -1340,7 +1199,7 @@ mod tests {
             packet3,
             &sessions,
             &current_sessions,
-            &self_ips_set,
+            &own_ips_set,
             &filter,
             None,
         )
@@ -1381,7 +1240,7 @@ mod tests {
             packet4,
             &sessions,
             &current_sessions,
-            &self_ips_set,
+            &own_ips_set,
             &filter,
             None,
         )
@@ -1414,7 +1273,7 @@ mod tests {
             packet5,
             &sessions,
             &current_sessions,
-            &self_ips_set,
+            &own_ips_set,
             &filter,
             None,
         )
@@ -1453,7 +1312,7 @@ mod tests {
             udp_packet1,
             &sessions,
             &current_sessions,
-            &self_ips_set,
+            &own_ips_set,
             &filter,
             None,
         )
@@ -1514,10 +1373,10 @@ mod tests {
         };
 
         // Create necessary objects for the test
-        let sessions = Arc::new(DashMap::new());
+        let sessions = Arc::new(CustomDashMap::new("Sessions"));
         let current_sessions = Arc::new(CustomRwLock::new(Vec::new()));
-        let self_ips = vec![IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))];
-        let self_ips_set: HashSet<IpAddr> = self_ips.into_iter().collect();
+        let own_ips = vec![IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))];
+        let own_ips_set: HashSet<IpAddr> = own_ips.into_iter().collect();
         let filter = Arc::new(CustomRwLock::new(SessionFilter::All));
 
         // Process the packet
@@ -1525,7 +1384,7 @@ mod tests {
             session_packet.clone(),
             &sessions,
             &current_sessions,
-            &self_ips_set,
+            &own_ips_set,
             &filter,
             None,
         )
@@ -1570,10 +1429,10 @@ mod tests {
         };
 
         // Create necessary objects for the test
-        let sessions = Arc::new(DashMap::new());
+        let sessions = Arc::new(CustomDashMap::new("Sessions"));
         let current_sessions = Arc::new(CustomRwLock::new(Vec::new()));
-        let self_ips = vec![IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))];
-        let self_ips_set: HashSet<IpAddr> = self_ips.into_iter().collect();
+        let own_ips = vec![IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))];
+        let own_ips_set: HashSet<IpAddr> = own_ips.into_iter().collect();
         let filter = Arc::new(CustomRwLock::new(SessionFilter::All));
 
         // Process the packet
@@ -1581,7 +1440,7 @@ mod tests {
             session_packet.clone(),
             &sessions,
             &current_sessions,
-            &self_ips_set,
+            &own_ips_set,
             &filter,
             None,
         )
@@ -1627,10 +1486,10 @@ mod tests {
         };
 
         // Create necessary objects for the test
-        let sessions = Arc::new(DashMap::new());
+        let sessions = Arc::new(CustomDashMap::new("Sessions"));
         let current_sessions = Arc::new(CustomRwLock::new(Vec::new()));
-        let self_ips = vec![IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))];
-        let self_ips_set: HashSet<IpAddr> = self_ips.into_iter().collect();
+        let own_ips = vec![IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))];
+        let own_ips_set: HashSet<IpAddr> = own_ips.into_iter().collect();
         let filter = Arc::new(CustomRwLock::new(SessionFilter::All));
 
         // Process the packet
@@ -1638,7 +1497,7 @@ mod tests {
             session_packet_syn.clone(),
             &sessions,
             &current_sessions,
-            &self_ips_set,
+            &own_ips_set,
             &filter,
             None,
         )
@@ -1670,10 +1529,10 @@ mod tests {
         // Expected: direction flipped to make the originator the source
 
         // Create the first session
-        let sessions = Arc::new(DashMap::new());
+        let sessions = Arc::new(CustomDashMap::new("Sessions"));
         let current_sessions = Arc::new(CustomRwLock::new(Vec::new()));
-        let self_ips = vec![IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))];
-        let self_ips_set: HashSet<IpAddr> = self_ips.into_iter().collect();
+        let own_ips = vec![IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))];
+        let own_ips_set: HashSet<IpAddr> = own_ips.into_iter().collect();
         let filter = Arc::new(CustomRwLock::new(SessionFilter::All));
 
         // Server responding with SYN+ACK
@@ -1695,7 +1554,7 @@ mod tests {
             session_packet_synack.clone(),
             &sessions,
             &current_sessions,
-            &self_ips_set,
+            &own_ips_set,
             &filter,
             None,
         )
@@ -1726,11 +1585,11 @@ mod tests {
         // Create test data
         let src_ip = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1));
         let dst_ip = IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8));
-        let self_ips = vec![src_ip];
-        let self_ips_set: HashSet<IpAddr> = self_ips.into_iter().collect();
+        let own_ips = vec![src_ip];
+        let own_ips_set: HashSet<IpAddr> = own_ips.into_iter().collect();
 
         // Set up session storage
-        let sessions = Arc::new(DashMap::new());
+        let sessions = Arc::new(CustomDashMap::new("Sessions"));
         let current_sessions = Arc::new(CustomRwLock::new(Vec::new()));
         let filter = Arc::new(CustomRwLock::new(SessionFilter::All));
 
@@ -1743,9 +1602,6 @@ mod tests {
             dst_port: 80,
         };
 
-        // Ensure port 80 is recognized as a service port
-        ensure_port_is_service_port(80, "HTTP").await;
-
         // 1. Create and process the first packet
         let packet1 = SessionPacketData {
             session: session_key.clone(),
@@ -1757,7 +1613,7 @@ mod tests {
             packet1,
             &sessions,
             &current_sessions,
-            &self_ips_set,
+            &own_ips_set,
             &filter,
             None,
         )
@@ -1777,7 +1633,7 @@ mod tests {
             packet2,
             &sessions,
             &current_sessions,
-            &self_ips_set,
+            &own_ips_set,
             &filter,
             None,
         )
@@ -1808,7 +1664,7 @@ mod tests {
             packet3,
             &sessions,
             &current_sessions,
-            &self_ips_set,
+            &own_ips_set,
             &filter,
             None,
         )
@@ -1825,7 +1681,7 @@ mod tests {
             packet4,
             &sessions,
             &current_sessions,
-            &self_ips_set,
+            &own_ips_set,
             &filter,
             None,
         )
@@ -1860,7 +1716,7 @@ mod tests {
             packet5,
             &sessions,
             &current_sessions,
-            &self_ips_set,
+            &own_ips_set,
             &filter,
             None,
         )
@@ -1885,7 +1741,7 @@ mod tests {
             packet6,
             &sessions,
             &current_sessions,
-            &self_ips_set,
+            &own_ips_set,
             &filter,
             None,
         )
@@ -1914,11 +1770,11 @@ mod tests {
         // Create test data for UDP
         let src_ip = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1));
         let dst_ip = IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8));
-        let self_ips = vec![src_ip];
-        let self_ips_set: HashSet<IpAddr> = self_ips.into_iter().collect();
+        let own_ips = vec![src_ip];
+        let own_ips_set: HashSet<IpAddr> = own_ips.into_iter().collect();
 
         // Set up session storage
-        let sessions = Arc::new(DashMap::new());
+        let sessions = Arc::new(CustomDashMap::new("Sessions"));
         let current_sessions = Arc::new(CustomRwLock::new(Vec::new()));
         let filter = Arc::new(CustomRwLock::new(SessionFilter::All));
 
@@ -1942,7 +1798,7 @@ mod tests {
             udp_packet1,
             &sessions,
             &current_sessions,
-            &self_ips_set,
+            &own_ips_set,
             &filter,
             None,
         )
@@ -1981,7 +1837,7 @@ mod tests {
             udp_packet2,
             &sessions,
             &current_sessions,
-            &self_ips_set,
+            &own_ips_set,
             &filter,
             None,
         )
@@ -2016,7 +1872,7 @@ mod tests {
                 udp_packet_n,
                 &sessions,
                 &current_sessions,
-                &self_ips_set,
+                &own_ips_set,
                 &filter,
                 None,
             )
@@ -2044,11 +1900,11 @@ mod tests {
         // Create test data
         let src_ip = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1));
         let dst_ip = IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8));
-        let self_ips = vec![src_ip];
-        let self_ips_set: HashSet<IpAddr> = self_ips.into_iter().collect();
+        let own_ips = vec![src_ip];
+        let own_ips_set: HashSet<IpAddr> = own_ips.into_iter().collect();
 
         // Set up session storage
-        let sessions = Arc::new(DashMap::new());
+        let sessions = Arc::new(CustomDashMap::new("Sessions"));
         let current_sessions = Arc::new(CustomRwLock::new(Vec::new()));
         let filter = Arc::new(CustomRwLock::new(SessionFilter::All));
 
@@ -2060,9 +1916,6 @@ mod tests {
             dst_ip,
             dst_port: 80,
         };
-
-        // Ensure HTTP port is recognized
-        ensure_port_is_service_port(80, "HTTP").await;
 
         // 1. Process packets out of order - FIN before SYN
         // First process a FIN packet (which would normally come later in the session)
@@ -2076,7 +1929,7 @@ mod tests {
             packet_fin,
             &sessions,
             &current_sessions,
-            &self_ips_set,
+            &own_ips_set,
             &filter,
             None,
         )
@@ -2093,7 +1946,7 @@ mod tests {
             packet_syn,
             &sessions,
             &current_sessions,
-            &self_ips_set,
+            &own_ips_set,
             &filter,
             None,
         )
@@ -2171,7 +2024,7 @@ mod tests {
             packet_psh,
             &sessions,
             &current_sessions,
-            &self_ips_set,
+            &own_ips_set,
             &filter,
             None,
         )
@@ -2188,7 +2041,7 @@ mod tests {
             packet_ack,
             &sessions,
             &current_sessions,
-            &self_ips_set,
+            &own_ips_set,
             &filter,
             None,
         )
@@ -2217,376 +2070,5 @@ mod tests {
                 "Total outbound bytes should be 500 (200+300)"
             );
         }
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn test_multiple_blacklists_criticality() {
-        // Create test blacklists with overlapping entries
-        let blacklist_info1 = BlacklistInfo {
-            name: "test_blacklist_1".to_string(),
-            description: Some("Test blacklist 1".to_string()),
-            last_updated: Some("2025-03-29".to_string()),
-            source_url: None,
-            ip_ranges: vec![
-                "192.168.1.100/32".to_string(),
-                "10.0.0.0/8".to_string(),
-                "198.51.100.0/24".to_string(), // Overlapping IP range
-            ],
-        };
-
-        let blacklist_info2 = BlacklistInfo {
-            name: "test_blacklist_2".to_string(),
-            description: Some("Test blacklist 2".to_string()),
-            last_updated: Some("2025-03-29".to_string()),
-            source_url: None,
-            ip_ranges: vec![
-                "198.51.100.0/24".to_string(), // Overlapping IP range
-                "203.0.113.0/24".to_string(),
-            ],
-        };
-
-        let blacklists_json = BlacklistsJSON {
-            date: "2025-03-29".to_string(),
-            signature: "test-signature".to_string(),
-            blacklists: vec![blacklist_info1, blacklist_info2],
-        };
-
-        let blacklists = Blacklists::new_from_json(blacklists_json);
-        LISTS.overwrite_with_test_data(blacklists.clone()).await;
-
-        // Create session with an IP that appears in both blacklists
-        let session_data = SessionPacketData {
-            session: Session {
-                protocol: Protocol::TCP,
-                src_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
-                src_port: 12345,
-                dst_ip: IpAddr::V4(Ipv4Addr::new(198, 51, 100, 5)), // IP in the overlapping range
-                dst_port: 80,
-            },
-            packet_length: 100,
-            ip_packet_length: 120,
-            flags: Some(TcpFlags::SYN),
-        };
-
-        // Create necessary test objects
-        let sessions = Arc::new(DashMap::new());
-        let current_sessions = Arc::new(CustomRwLock::new(Vec::new()));
-        let self_ips = vec![IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))];
-        let self_ips_set: HashSet<IpAddr> = self_ips.into_iter().collect();
-        let filter = Arc::new(CustomRwLock::new(SessionFilter::All));
-
-        // Process the packet
-        process_parsed_packet(
-            session_data,
-            &sessions,
-            &current_sessions,
-            &self_ips_set,
-            &filter,
-            None,
-        )
-        .await;
-
-        // Verify the session was added with criticality from both blacklists
-        assert_eq!(sessions.len(), 1);
-        let session_key = Session {
-            protocol: Protocol::TCP,
-            src_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
-            src_port: 12345,
-            dst_ip: IpAddr::V4(Ipv4Addr::new(198, 51, 100, 5)),
-            dst_port: 80,
-        };
-
-        let session_info = sessions.get(&session_key).unwrap();
-        // Both blacklist names should be in the criticality, separated by comma
-        assert!(session_info
-            .criticality
-            .contains("blacklist:test_blacklist_1"));
-        assert!(session_info
-            .criticality
-            .contains("blacklist:test_blacklist_2"));
-        // Blacklist names should be sorted
-        assert_eq!(
-            session_info.criticality,
-            "blacklist:test_blacklist_1,blacklist:test_blacklist_2"
-        );
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn test_ipv6_blacklisted_ip() {
-        // Create a test blacklist with IPv6 addresses
-        let blacklist_info = BlacklistInfo {
-            name: "ipv6_blacklist".to_string(),
-            description: Some("IPv6 Test blacklist".to_string()),
-            last_updated: Some("2025-03-29".to_string()),
-            source_url: None,
-            ip_ranges: vec![
-                "2001:db8::/32".to_string(),           // Documentation IPv6 range
-                "2001:db8:1234:5678::/64".to_string(), // More specific prefix
-            ],
-        };
-
-        let blacklists_json = BlacklistsJSON {
-            date: "2025-03-29".to_string(),
-            signature: "test-signature".to_string(),
-            blacklists: vec![blacklist_info],
-        };
-
-        let blacklists = Blacklists::new_from_json(blacklists_json);
-        LISTS.overwrite_with_test_data(blacklists.clone()).await;
-
-        // Create session with a blacklisted IPv6 address
-        let session_data = SessionPacketData {
-            session: Session {
-                protocol: Protocol::TCP,
-                src_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
-                src_port: 12345,
-                dst_ip: IpAddr::V6("2001:db8:1234:5678:abcd:ef01:2345:6789".parse().unwrap()),
-                dst_port: 80,
-            },
-            packet_length: 100,
-            ip_packet_length: 120,
-            flags: Some(TcpFlags::SYN),
-        };
-
-        // Create necessary objects for the test
-        let sessions = Arc::new(DashMap::new());
-        let current_sessions = Arc::new(CustomRwLock::new(Vec::new()));
-        let self_ips = vec![IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))];
-        let self_ips_set: HashSet<IpAddr> = self_ips.into_iter().collect();
-        let filter = Arc::new(CustomRwLock::new(SessionFilter::All));
-
-        // Process the packet
-        process_parsed_packet(
-            session_data,
-            &sessions,
-            &current_sessions,
-            &self_ips_set,
-            &filter,
-            None,
-        )
-        .await;
-
-        // Verify that the session was added with the correct criticality
-        assert_eq!(sessions.len(), 1);
-        let session_key = Session {
-            protocol: Protocol::TCP,
-            src_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
-            src_port: 12345,
-            dst_ip: IpAddr::V6("2001:db8:1234:5678:abcd:ef01:2345:6789".parse().unwrap()),
-            dst_port: 80,
-        };
-
-        let session_info = sessions.get(&session_key).unwrap();
-        assert_eq!(session_info.criticality, "blacklist:ipv6_blacklist");
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn test_subnet_blacklisting() {
-        // Create a test blacklist with public IP ranges (not private ranges)
-        let blacklist_info = BlacklistInfo {
-            name: "subnet_blacklist".to_string(),
-            description: Some("Subnet Test blacklist".to_string()),
-            last_updated: Some("2025-03-29".to_string()),
-            source_url: None,
-            ip_ranges: vec![
-                "198.51.100.0/24".to_string(), // TEST-NET-2 range (small subnet)
-                "203.0.113.0/24".to_string(),  // TEST-NET-3 range (small subnet)
-                "198.18.0.0/15".to_string(),   // Benchmarking range (large subnet)
-            ],
-        };
-
-        let blacklists_json = BlacklistsJSON {
-            date: "2025-03-29".to_string(),
-            signature: "test-signature".to_string(),
-            blacklists: vec![blacklist_info],
-        };
-
-        let blacklists = Blacklists::new_from_json(blacklists_json);
-        LISTS.overwrite_with_test_data(blacklists.clone()).await;
-
-        // Test multiple IPs from different parts of the subnets using public test ranges
-        let test_ips = vec![
-            (IpAddr::V4(Ipv4Addr::new(198, 51, 100, 5)), true), // In TEST-NET-2 range
-            (IpAddr::V4(Ipv4Addr::new(198, 51, 100, 255)), true), // Edge of TEST-NET-2 range
-            (IpAddr::V4(Ipv4Addr::new(198, 51, 101, 1)), false), // Just outside TEST-NET-2 range
-            (IpAddr::V4(Ipv4Addr::new(203, 0, 113, 128)), true), // Middle of TEST-NET-3 range
-            (IpAddr::V4(Ipv4Addr::new(198, 18, 255, 255)), true), // Part of benchmarking range
-            (IpAddr::V4(Ipv4Addr::new(198, 20, 0, 0)), false),  // Just outside benchmarking range
-        ];
-
-        for (test_ip, should_be_blacklisted) in test_ips {
-            // Create session with the test IP
-            let session_data = SessionPacketData {
-                session: Session {
-                    protocol: Protocol::TCP,
-                    src_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
-                    src_port: 12345,
-                    dst_ip: test_ip,
-                    dst_port: 80,
-                },
-                packet_length: 100,
-                ip_packet_length: 120,
-                flags: Some(TcpFlags::SYN),
-            };
-
-            // Create new test objects for each iteration
-            let sessions = Arc::new(DashMap::new());
-            let current_sessions = Arc::new(CustomRwLock::new(Vec::new()));
-            let self_ips = vec![IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))];
-            let self_ips_set: HashSet<IpAddr> = self_ips.into_iter().collect();
-            let filter = Arc::new(CustomRwLock::new(SessionFilter::All));
-
-            // Process the packet
-            process_parsed_packet(
-                session_data,
-                &sessions,
-                &current_sessions,
-                &self_ips_set,
-                &filter,
-                None,
-            )
-            .await;
-
-            // Verify correct blacklist detection
-            assert_eq!(sessions.len(), 1);
-            let session_key = Session {
-                protocol: Protocol::TCP,
-                src_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
-                src_port: 12345,
-                dst_ip: test_ip,
-                dst_port: 80,
-            };
-
-            let session_info = sessions.get(&session_key).unwrap();
-            if should_be_blacklisted {
-                assert_eq!(
-                    session_info.criticality, "blacklist:subnet_blacklist",
-                    "IP {:?} should be blacklisted but isn't",
-                    test_ip
-                );
-            } else {
-                assert_eq!(
-                    session_info.criticality, "",
-                    "IP {:?} shouldn't be blacklisted but is",
-                    test_ip
-                );
-            }
-        }
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn test_local_blacklisted_ip_handling() {
-        // Create a test blacklist that includes local LAN IP ranges
-        let blacklist_info = BlacklistInfo {
-            name: "local_blacklist".to_string(),
-            description: Some("Local Network Blacklist".to_string()),
-            last_updated: Some("2025-03-29".to_string()),
-            source_url: None,
-            ip_ranges: vec![
-                "192.168.0.0/16".to_string(), // Common home network range
-                "10.0.0.0/8".to_string(),     // Common corporate network range
-                "172.16.0.0/12".to_string(),  // Other private range
-            ],
-        };
-
-        let blacklists_json = BlacklistsJSON {
-            date: "2025-03-29".to_string(),
-            signature: "test-signature".to_string(),
-            blacklists: vec![blacklist_info],
-        };
-
-        let blacklists = Blacklists::new_from_json(blacklists_json);
-        LISTS.overwrite_with_test_data(blacklists.clone()).await;
-
-        // Create a session between two local IPs that are also on the blacklist
-        let session_data = SessionPacketData {
-            session: Session {
-                protocol: Protocol::TCP,
-                src_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 10)), // Local IP in blacklist
-                src_port: 12345,
-                dst_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 20)), // Local IP in blacklist
-                dst_port: 80,
-            },
-            packet_length: 100,
-            ip_packet_length: 120,
-            flags: Some(TcpFlags::SYN),
-        };
-
-        // Create objects for test
-        let sessions = Arc::new(DashMap::new());
-        let current_sessions = Arc::new(CustomRwLock::new(Vec::new()));
-        let self_ips = vec![IpAddr::V4(Ipv4Addr::new(192, 168, 1, 10))]; // One of the IPs is self
-        let self_ips_set: HashSet<IpAddr> = self_ips.into_iter().collect();
-        let filter = Arc::new(CustomRwLock::new(SessionFilter::All));
-
-        // Process the packet
-        process_parsed_packet(
-            session_data,
-            &sessions,
-            &current_sessions,
-            &self_ips_set,
-            &filter,
-            None,
-        )
-        .await;
-
-        // Verify that local IPs don't get marked with criticality even if on blacklist
-        assert_eq!(sessions.len(), 1);
-        let session_key = Session {
-            protocol: Protocol::TCP,
-            src_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 10)),
-            src_port: 12345,
-            dst_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 20)),
-            dst_port: 80,
-        };
-
-        let session_info = sessions.get(&session_key).unwrap();
-        // Criticality should be empty because we don't apply blacklists to local IPs
-        assert_eq!(session_info.criticality, "");
-
-        // Now test a mixed case: local source to blacklisted external destination
-        let session_data2 = SessionPacketData {
-            session: Session {
-                protocol: Protocol::TCP,
-                src_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 10)), // Local IP
-                src_port: 54321,
-                dst_ip: IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)), // External IP not in blacklist
-                dst_port: 443,
-            },
-            packet_length: 100,
-            ip_packet_length: 120,
-            flags: Some(TcpFlags::SYN),
-        };
-
-        // Create new session map for this test
-        let sessions2 = Arc::new(DashMap::new());
-        let current_sessions2 = Arc::new(CustomRwLock::new(Vec::new()));
-
-        // Process the second packet
-        process_parsed_packet(
-            session_data2,
-            &sessions2,
-            &current_sessions2,
-            &self_ips_set,
-            &filter,
-            None,
-        )
-        .await;
-
-        let session_key2 = Session {
-            protocol: Protocol::TCP,
-            src_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 10)),
-            src_port: 54321,
-            dst_ip: IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)),
-            dst_port: 443,
-        };
-
-        // This IP is not blacklisted, so criticality should be empty
-        let session_info2 = sessions2.get(&session_key2).unwrap();
-        assert_eq!(session_info2.criticality, "");
     }
 }

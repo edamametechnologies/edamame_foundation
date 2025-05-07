@@ -1,4 +1,4 @@
-use crate::rwlock::CustomRwLock;
+use crate::customlock::CustomRwLock;
 use anyhow::{anyhow, Context, Result};
 use reqwest::Client;
 use std::sync::Arc;
@@ -51,6 +51,22 @@ where
             is_custom: Arc::new(CustomRwLock::new(false)),
             builtin_data,
         })
+    }
+
+    /// Initializes an empty CloudModel for testing purposes.
+    pub fn initialize_empty() -> Self
+    where
+        T: Default,
+    {
+        let initial_data = T::default();
+        let builtin_data = Arc::new(initial_data.clone());
+
+        Self {
+            data: Arc::new(CustomRwLock::new(initial_data)),
+            file_name: "test_empty.json".to_string(),
+            is_custom: Arc::new(CustomRwLock::new(false)),
+            builtin_data,
+        }
     }
 
     /// Sets custom data, replacing the current data.
