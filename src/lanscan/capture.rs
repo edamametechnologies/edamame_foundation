@@ -1598,7 +1598,7 @@ impl LANScanCapture {
         }
 
         let integration_start = Instant::now();
-        let added_count = resolver.add_dns_resolutions_custom(&dns_resolutions); // Changed to use the custom version
+        let added_count = resolver.add_dns_resolutions_custom(&dns_resolutions);
         let integration_time = Instant::now().duration_since(integration_start);
 
         if integration_time.as_millis() > 100 {
@@ -2290,9 +2290,11 @@ mod tests {
             incremental_sessions1[0].session, session1,
             "The modified session should be session1"
         );
-        
+
         // Use a more flexible timestamp comparison that allows for slight timing differences
-        let time_diff = (incremental_sessions1[0].last_modified - modification_time).num_milliseconds().abs();
+        let time_diff = (incremental_sessions1[0].last_modified - modification_time)
+            .num_milliseconds()
+            .abs();
         assert!(
             time_diff < 100, // Allow up to 100ms difference
             "Timestamp difference too large: {}ms, left: {}, right: {}",
@@ -2438,9 +2440,11 @@ mod tests {
             incremental_current1[0].session, session1,
             "The modified session should be session1"
         );
-        
+
         // Use a more flexible timestamp comparison that allows for slight timing differences
-        let time_diff = (incremental_current1[0].last_modified - modification_time).num_milliseconds().abs();
+        let time_diff = (incremental_current1[0].last_modified - modification_time)
+            .num_milliseconds()
+            .abs();
         assert!(
             time_diff < 100, // Allow up to 100ms difference
             "Timestamp difference too large: {}ms, left: {}, right: {}",
@@ -2582,9 +2586,11 @@ mod tests {
             "First incremental blacklist fetch should return 1 session"
         );
         assert_eq!(incremental_blacklisted1[0].session, blacklisted_session);
-        
+
         // Use a more flexible timestamp comparison that allows for slight timing differences
-        let time_diff = (incremental_blacklisted1[0].last_modified - modification_time).num_milliseconds().abs();
+        let time_diff = (incremental_blacklisted1[0].last_modified - modification_time)
+            .num_milliseconds()
+            .abs();
         assert!(
             time_diff < 100, // Allow up to 100ms difference
             "Timestamp difference too large: {}ms, left: {}, right: {}",
@@ -3172,7 +3178,7 @@ mod tests {
             blacklists: vec![blacklist_info],
         };
 
-        let blacklists_data = Blacklists::new_from_json(blacklists_json);
+        let blacklists_data = Blacklists::new_from_json(blacklists_json, true);
 
         // Override global blacklists with our test data
         // Use the helper function which is now accessible

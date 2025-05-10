@@ -66,54 +66,120 @@ impl CloudSignature for Blacklists {
     }
 }
 
+lazy_static! {
+    static ref LOCAL_IPV4_RANGES_TO_FILTER: Vec<IpNet> = vec![
+        "0.0.0.0/8".parse().expect("Failed to parse 0.0.0.0/8"),       // Unspecified range
+        "10.0.0.0/8".parse().expect("Failed to parse 10.0.0.0/8"),      // Private Class A
+        "127.0.0.0/8".parse().expect("Failed to parse 127.0.0.0/8"),     // Loopback
+        "169.254.0.0/16".parse().expect("Failed to parse 169.254.0.0/16"),  // Link-Local
+        "172.16.0.0/12".parse().expect("Failed to parse 172.16.0.0/12"),   // Private Class B
+        "192.168.0.0/16".parse().expect("Failed to parse 192.168.0.0/16"),  // Private Class C
+    ];
+    static ref LOCAL_IPV6_RANGES_TO_FILTER: Vec<IpNet> = vec![
+        "::/128".parse().expect("Failed to parse ::/128"),          // Unspecified
+        "::1/128".parse().expect("Failed to parse ::1/128"),         // Loopback
+        "fc00::/7".parse().expect("Failed to parse fc00::/7"),        // Unique Local Address (ULA)
+        "fe80::/10".parse().expect("Failed to parse fe80::/10"),       // Link-Local
+    ];
+}
+
+/// Checks if a given IpNet is entirely contained within known local/private ranges.
+fn is_range_local_to_filter(net_to_check: &IpNet) -> bool {
+    match net_to_check {
+        IpNet::V4(v4_net_to_check) => {
+            for local_v4_range in LOCAL_IPV4_RANGES_TO_FILTER.iter() {
+                if local_v4_range.contains(&IpNet::V4(*v4_net_to_check)) {
+                    return true;
+                }
+            }
+        }
+        IpNet::V6(v6_net_to_check) => {
+            for local_v6_range in LOCAL_IPV6_RANGES_TO_FILTER.iter() {
+                if local_v6_range.contains(&IpNet::V6(*v6_net_to_check)) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 impl Blacklists {
     /// Creates a new Blacklists instance from the provided JSON data.
-    pub fn new_from_json(blacklist_info: BlacklistsJSON) -> Self {
-        info!("Loading blacklists from JSON");
+    /// If `filter_local_ranges` is true, known local/private IP ranges will be omitted.
+    pub fn new_from_json(blacklist_info_json: BlacklistsJSON, filter_local_ranges: bool) -> Self {
+        if filter_local_ranges {
+            info!("Loading blacklists from JSON and filtering known local/private ranges.");
+        } else {
+            info!("Loading blacklists from JSON without filtering local/private ranges (custom blacklist).");
+        }
 
-        let blacklists = Arc::new(CustomDashMap::new("blacklists"));
-        let parsed_ranges = Arc::new(CustomDashMap::new("parsed_ranges"));
+        let blacklists_map = Arc::new(CustomDashMap::new("blacklists"));
+        let parsed_ranges_map = Arc::new(CustomDashMap::new("parsed_ranges"));
 
-        for info in blacklist_info.blacklists {
-            let list_name = info.name.clone();
+        for info_orig in blacklist_info_json.blacklists {
+            let list_name = info_orig.name.clone();
 
-            // Parse and cache IP ranges
-            let mut ranges = Vec::new();
-            for ip_range_str in &info.ip_ranges {
+            let mut filtered_ip_range_strings = Vec::new();
+            let mut current_list_parsed_nets = Vec::new();
+
+            for ip_range_str in &info_orig.ip_ranges {
                 let ip_str_to_parse = if let Ok(ip) = ip_range_str.parse::<IpAddr>() {
-                    // If this is a plain IP address without CIDR notation, add the appropriate mask
                     match ip {
-                        IpAddr::V4(_) => format!("{}/32", ip_range_str), // Single IPv4 address
-                        IpAddr::V6(_) => format!("{}/128", ip_range_str), // Single IPv6 address
+                        IpAddr::V4(_) => format!("{}/32", ip_range_str),
+                        IpAddr::V6(_) => format!("{}/128", ip_range_str),
                     }
                 } else {
-                    // Already in CIDR or another format, try parsing as is
                     ip_range_str.clone()
                 };
 
                 match ip_str_to_parse.parse::<IpNet>() {
-                    Ok(net) => ranges.push(net),
+                    Ok(net) => {
+                        if filter_local_ranges && is_range_local_to_filter(&net) {
+                            info!(
+                                "Filtering local range {} from blacklist {} during load.",
+                                net, list_name
+                            );
+                        } else {
+                            current_list_parsed_nets.push(net);
+                            filtered_ip_range_strings.push(ip_range_str.clone());
+                            // Keep original string if not filtered
+                        }
+                    }
                     Err(e) => {
-                        warn!("Failed to parse IP range {}: {}", ip_range_str, e);
+                        warn!(
+                            "Failed to parse IP range '{}' from blacklist '{}': {}",
+                            ip_range_str, list_name, e
+                        );
                     }
                 }
             }
 
-            // Store the parsed ranges
-            if !ranges.is_empty() {
-                parsed_ranges.insert(list_name.clone(), ranges);
+            if !current_list_parsed_nets.is_empty() {
+                parsed_ranges_map.insert(list_name.clone(), current_list_parsed_nets);
             }
 
-            blacklists.insert(list_name, info);
+            // Store BlacklistInfo with potentially filtered ip_ranges (string list)
+            let new_info = BlacklistInfo {
+                name: info_orig.name,
+                description: info_orig.description,
+                last_updated: info_orig.last_updated,
+                source_url: info_orig.source_url,
+                ip_ranges: filtered_ip_range_strings, // Use the filtered list of strings
+            };
+            blacklists_map.insert(list_name.clone(), new_info);
         }
 
-        info!("Loaded {} blacklists", blacklists.len());
+        info!(
+            "Loaded {} blacklists (after any filtering).",
+            blacklists_map.len()
+        );
 
         Blacklists {
-            date: blacklist_info.date,
-            signature: blacklist_info.signature,
-            blacklists,
-            parsed_ranges,
+            date: blacklist_info_json.date,
+            signature: blacklist_info_json.signature,
+            blacklists: blacklists_map,
+            parsed_ranges: parsed_ranges_map,
         }
     }
 
@@ -204,7 +270,8 @@ lazy_static! {
         let model = CloudModel::initialize(BLACKLISTS_FILE_NAME.to_string(), BLACKLISTS, |data| {
             let blacklist_info_json: BlacklistsJSON =
                 serde_json::from_str(data).with_context(|| "Failed to parse JSON data")?;
-            Ok(Blacklists::new_from_json(blacklist_info_json))
+            // Filter local ranges for default/embedded blacklists
+            Ok(Blacklists::new_from_json(blacklist_info_json, true))
         })
         .expect("Failed to initialize CloudModel");
         model
@@ -305,12 +372,12 @@ pub async fn is_ip_blacklisted(ip: &str) -> (bool, Vec<String>) {
 pub async fn update(branch: &str, force: bool) -> Result<UpdateStatus> {
     info!("Starting blacklists update from backend");
 
-    // Perform the update directly on the model
     let status = LISTS
         .update(branch, force, |data| {
             let blacklist_info_json: BlacklistsJSON =
                 serde_json::from_str(data).with_context(|| "Failed to parse JSON data")?;
-            Ok(Blacklists::new_from_json(blacklist_info_json))
+            // Filter local ranges for updated default blacklists
+            Ok(Blacklists::new_from_json(blacklist_info_json, true))
         })
         .await?;
 
@@ -335,11 +402,10 @@ pub async fn update(branch: &str, force: bool) -> Result<UpdateStatus> {
 /// Clears the IP cache upon successful update or reset.
 pub async fn set_custom_blacklists(blacklist_json: &str) -> Result<(), anyhow::Error> {
     info!("Attempting to set custom blacklists.");
-    // Clear the custom blacklists if the JSON is empty
     if blacklist_json.is_empty() {
         info!("Received empty JSON, resetting blacklists to default.");
-        LISTS.reset_to_default().await;
-        clear_ip_cache(); // Clear cache after reset
+        LISTS.reset_to_default().await; // This will re-initialize with filtering
+        clear_ip_cache();
         NEED_FULL_RECOMPUTE_BLACKLIST.store(true, Ordering::SeqCst);
         return Ok(());
     }
@@ -349,9 +415,10 @@ pub async fn set_custom_blacklists(blacklist_json: &str) -> Result<(), anyhow::E
     match blacklist_result {
         Ok(blacklist_data) => {
             info!("Successfully parsed custom blacklist JSON.");
-            let blacklist = Blacklists::new_from_json(blacklist_data);
+            // Do NOT filter local ranges for custom blacklists
+            let blacklist = Blacklists::new_from_json(blacklist_data, false);
             LISTS.set_custom_data(blacklist).await;
-            clear_ip_cache(); // Clear cache after successful set
+            clear_ip_cache();
             NEED_FULL_RECOMPUTE_BLACKLIST.store(true, Ordering::SeqCst);
             return Ok(());
         }
@@ -645,9 +712,254 @@ mod tests {
     use serial_test::serial;
 
     /// Helper function to initialize LISTS with controlled test data
-    async fn initialize_test_blacklists() {
+    async fn initialize_test_blacklists_for_filtering_tests() -> BlacklistsJSON {
         // Clear the IP cache to ensure test isolation
         IP_CACHE.clear();
+        NEED_FULL_RECOMPUTE_BLACKLIST.store(false, Ordering::SeqCst);
+
+        let test_blacklist_json = BlacklistsJSON {
+            date: "2025-03-30".to_string(),
+            signature: "filtering_test_signature".to_string(),
+            blacklists: vec![
+                BlacklistInfo {
+                    name: "mixed_list".to_string(),
+                    description: Some("List with mixed local and public ranges".to_string()),
+                    last_updated: Some("2025-03-30".to_string()),
+                    source_url: None,
+                    ip_ranges: vec![
+                        "192.168.1.0/24".to_string(),           // Local IPv4 range
+                        "10.0.0.0/8".to_string(),               // Local IPv4 range
+                        "127.0.0.1/32".to_string(),             // Local IPv4 single
+                        "fe80::/10".to_string(),                // Link-local IPv6 range
+                        "fc00::1/128".to_string(),              // Unique Local IPv6 single
+                        "::1/128".to_string(),                  // IPv6 Loopback
+                        "8.8.8.8/32".to_string(),               // Public IPv4 single
+                        "2001:4860:4860::8888/128".to_string(), // Public IPv6 single
+                        "9.9.9.0/24".to_string(),               // Public IPv4 range
+                    ],
+                },
+                BlacklistInfo {
+                    name: "all_local_list".to_string(),
+                    description: Some("List with only local ranges".to_string()),
+                    last_updated: Some("2025-03-30".to_string()),
+                    source_url: None,
+                    ip_ranges: vec!["172.16.0.0/12".to_string(), "169.254.10.20/32".to_string()],
+                },
+                BlacklistInfo {
+                    name: "all_public_list".to_string(),
+                    description: Some("List with only public ranges".to_string()),
+                    last_updated: Some("2025-03-30".to_string()),
+                    source_url: None,
+                    ip_ranges: vec![
+                        "1.1.1.1/32".to_string(),
+                        "2606:4700:4700::1111/128".to_string(),
+                    ],
+                },
+            ],
+        };
+        test_blacklist_json
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_blacklist_loading_with_local_filtering() {
+        let json_data = initialize_test_blacklists_for_filtering_tests().await;
+        let blacklists = Blacklists::new_from_json(json_data, true); // filter_local_ranges = true
+
+        // Check "mixed_list"
+        let mixed_list_info = blacklists
+            .blacklists
+            .get("mixed_list")
+            .expect("mixed_list should exist");
+        let mixed_list_ranges = &mixed_list_info.ip_ranges;
+
+        assert!(
+            mixed_list_ranges.contains(&"8.8.8.8/32".to_string()),
+            "Public IPv4 single should be present"
+        );
+        assert!(
+            mixed_list_ranges.contains(&"2001:4860:4860::8888/128".to_string()),
+            "Public IPv6 single should be present"
+        );
+        assert!(
+            mixed_list_ranges.contains(&"9.9.9.0/24".to_string()),
+            "Public IPv4 range should be present"
+        );
+
+        assert!(
+            !mixed_list_ranges.contains(&"192.168.1.0/24".to_string()),
+            "Local 192.168.1.0/24 should be filtered"
+        );
+        assert!(
+            !mixed_list_ranges.contains(&"10.0.0.0/8".to_string()),
+            "Local 10.0.0.0/8 should be filtered"
+        );
+        assert!(
+            !mixed_list_ranges.contains(&"127.0.0.1/32".to_string()),
+            "Local 127.0.0.1/32 should be filtered"
+        );
+        assert!(
+            !mixed_list_ranges.contains(&"fe80::/10".to_string()),
+            "Local fe80::/10 should be filtered"
+        );
+        assert!(
+            !mixed_list_ranges.contains(&"fc00::1/128".to_string()),
+            "Local fc00::1/128 should be filtered"
+        );
+        assert!(
+            !mixed_list_ranges.contains(&"::1/128".to_string()),
+            "Local ::1/128 should be filtered"
+        );
+
+        let mixed_list_parsed_ranges = blacklists
+            .parsed_ranges
+            .get("mixed_list")
+            .expect("parsed_ranges for mixed_list");
+        assert_eq!(
+            mixed_list_parsed_ranges.len(),
+            3,
+            "mixed_list should have 3 parsed public ranges"
+        );
+
+        // Check "all_local_list"
+        let all_local_info = blacklists
+            .blacklists
+            .get("all_local_list")
+            .expect("all_local_list should exist");
+        assert!(
+            all_local_info.ip_ranges.is_empty(),
+            "all_local_list strings should be empty after filtering"
+        );
+        assert!(
+            !blacklists.parsed_ranges.contains_key("all_local_list"),
+            "all_local_list should have no parsed ranges after filtering"
+        );
+
+        // Check "all_public_list"
+        let all_public_info = blacklists
+            .blacklists
+            .get("all_public_list")
+            .expect("all_public_list should exist");
+        assert_eq!(
+            all_public_info.ip_ranges.len(),
+            2,
+            "all_public_list strings should have 2 entries"
+        );
+        let all_public_parsed = blacklists
+            .parsed_ranges
+            .get("all_public_list")
+            .expect("parsed_ranges for all_public_list");
+        assert_eq!(
+            all_public_parsed.len(),
+            2,
+            "all_public_list should have 2 parsed public ranges"
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_blacklist_loading_without_local_filtering_custom() {
+        let json_data = initialize_test_blacklists_for_filtering_tests().await;
+        // Simulate custom blacklist loading by calling new_from_json directly with filter_local_ranges = false
+        let blacklists = Blacklists::new_from_json(json_data.clone(), false);
+
+        // Check "mixed_list" - all original ranges should be present
+        let mixed_list_info = blacklists
+            .blacklists
+            .get("mixed_list")
+            .expect("mixed_list should exist");
+        let original_mixed_list_count = json_data
+            .blacklists
+            .iter()
+            .find(|b| b.name == "mixed_list")
+            .unwrap()
+            .ip_ranges
+            .len();
+        assert_eq!(
+            mixed_list_info.ip_ranges.len(),
+            original_mixed_list_count,
+            "All ranges should be present in mixed_list strings for custom load"
+        );
+
+        let mixed_list_parsed_ranges = blacklists
+            .parsed_ranges
+            .get("mixed_list")
+            .expect("parsed_ranges for mixed_list for custom load");
+        assert_eq!(
+            mixed_list_parsed_ranges.len(),
+            original_mixed_list_count,
+            "All ranges should be parsed in mixed_list for custom load"
+        );
+
+        // Check "all_local_list" - all original ranges should be present
+        let all_local_info = blacklists
+            .blacklists
+            .get("all_local_list")
+            .expect("all_local_list should exist");
+        let original_all_local_count = json_data
+            .blacklists
+            .iter()
+            .find(|b| b.name == "all_local_list")
+            .unwrap()
+            .ip_ranges
+            .len();
+        assert_eq!(
+            all_local_info.ip_ranges.len(),
+            original_all_local_count,
+            "All ranges should be present in all_local_list strings for custom load"
+        );
+        let all_local_parsed_ranges = blacklists
+            .parsed_ranges
+            .get("all_local_list")
+            .expect("parsed_ranges for all_local_list for custom load");
+        assert_eq!(
+            all_local_parsed_ranges.len(),
+            original_all_local_count,
+            "All ranges should be parsed in all_local_list for custom load"
+        );
+
+        // Test actual `set_custom_blacklists` flow
+        let json_string = serde_json::to_string(&json_data).unwrap();
+        set_custom_blacklists(&json_string)
+            .await
+            .expect("Failed to set custom blacklists");
+
+        let custom_loaded_data = LISTS.data.read().await;
+        let custom_mixed_list_info = custom_loaded_data
+            .blacklists
+            .get("mixed_list")
+            .expect("mixed_list via LISTS");
+        assert_eq!(
+            custom_mixed_list_info.ip_ranges.len(),
+            original_mixed_list_count,
+            "Custom set via LISTS: mixed_list strings incorrect"
+        );
+        let custom_mixed_parsed = custom_loaded_data
+            .parsed_ranges
+            .get("mixed_list")
+            .expect("parsed_ranges for mixed_list via LISTS");
+        assert_eq!(
+            custom_mixed_parsed.len(),
+            original_mixed_list_count,
+            "Custom set via LISTS: mixed_list parsed incorrect"
+        );
+
+        // Reset to default to ensure it re-filters
+        LISTS.reset_to_default().await;
+        let default_data_after_reset = LISTS.data.read().await;
+        // This check assumes the default embedded blacklist (BLACKLISTS string) also has some filterable content
+        // or at least exercises the filtering path. A more specific check would require knowing its content.
+        // For now, just ensure it doesn't crash and some lists are loaded.
+        assert!(
+            !default_data_after_reset.blacklists.is_empty(),
+            "Default blacklists (after reset) should not be empty"
+        );
+    }
+
+    /// Original helper, may need adjustment or new tests if it relied on local IPs in default data
+    async fn initialize_test_blacklists() {
+        IP_CACHE.clear();
+        NEED_FULL_RECOMPUTE_BLACKLIST.store(false, Ordering::SeqCst);
 
         let test_blacklist_json = BlacklistsJSON {
             date: "2025-03-29".to_string(),
@@ -658,19 +970,32 @@ mod tests {
                     description: Some("Base test blacklist".to_string()),
                     last_updated: Some("2025-03-29".to_string()),
                     source_url: None,
-                    ip_ranges: vec!["192.168.0.0/16".to_string(), "10.0.0.0/8".to_string()],
+                    // These will be filtered if loaded as "default"
+                    ip_ranges: vec![
+                        "192.168.0.0/16".to_string(),
+                        "10.0.0.0/8".to_string(),
+                        "8.8.8.8/32".to_string(),
+                    ],
                 },
                 BlacklistInfo {
                     name: "another_blacklist".to_string(),
                     description: Some("Another test blacklist".to_string()),
                     last_updated: Some("2025-03-29".to_string()),
                     source_url: None,
-                    ip_ranges: vec!["172.16.0.0/12".to_string(), "169.254.0.0/16".to_string()],
+                    // These will be filtered if loaded as "default"
+                    ip_ranges: vec![
+                        "172.16.0.0/12".to_string(),
+                        "169.254.0.0/16".to_string(),
+                        "9.9.9.9/32".to_string(),
+                    ],
                 },
             ],
         };
 
-        let blacklists = Blacklists::new_from_json(test_blacklist_json);
+        // When using overwrite_with_test_data, it bypasses the CloudModel's own loading logic.
+        // So, to test filtering, we must pass a pre-filtered Blacklists instance if desired.
+        // For these older tests, let's assume they want unfiltered data as if it were custom.
+        let blacklists = Blacklists::new_from_json(test_blacklist_json, false); // false = treat as custom
         LISTS.overwrite_with_test_data(blacklists).await;
     }
 
@@ -683,9 +1008,12 @@ mod tests {
         let (is_blacklisted, _) = is_ip_blacklisted("192.168.1.1").await;
         assert!(is_blacklisted, "IP in range should be blacklisted");
 
-        // Test IP not in range
-        let (is_blacklisted, _) = is_ip_blacklisted("8.8.8.8").await;
-        assert!(!is_blacklisted, "IP not in range should not be blacklisted");
+        // Test IP not in range - corrected IP to one actually not in test lists
+        let (is_blacklisted, _) = is_ip_blacklisted("1.2.3.4").await;
+        assert!(
+            !is_blacklisted,
+            "IP 1.2.3.4 not in range should not be blacklisted"
+        );
     }
 
     #[tokio::test]
@@ -693,11 +1021,11 @@ mod tests {
     async fn test_invalid_blacklist() {
         initialize_test_blacklists().await;
 
-        // Test with IP that is not in any blacklist
-        let (is_blacklisted, _) = is_ip_blacklisted("8.8.8.8").await;
+        // Test with IP that is not in any blacklist - corrected IP
+        let (is_blacklisted, _) = is_ip_blacklisted("1.2.3.4").await;
         assert!(
             !is_blacklisted,
-            "Should return false for non-blacklisted IP"
+            "Should return false for non-blacklisted IP 1.2.3.4"
         );
     }
 
@@ -741,7 +1069,7 @@ mod tests {
             }],
         };
 
-        let blacklists = Blacklists::new_from_json(test_blacklist_json);
+        let blacklists = Blacklists::new_from_json(test_blacklist_json, false);
         LISTS.overwrite_with_test_data(blacklists).await;
 
         // Test IPv6 in range
@@ -761,18 +1089,28 @@ mod tests {
     async fn test_blacklist_ip_check() {
         initialize_test_blacklists().await;
 
-        // Test with IP in blacklist range
+        // Test with IP in blacklist range (192.168.1.10 is local, but loaded with filter_locals:false)
         let (is_blacklisted, _) = is_ip_blacklisted("192.168.1.10").await;
         assert!(is_blacklisted, "IP in range should be blacklisted");
 
-        // Test with IP not in blacklist range
-        let (is_blacklisted, _) = is_ip_blacklisted("8.8.8.8").await;
-        assert!(!is_blacklisted, "IP not in range should not be blacklisted");
-
-        // Test IP in second blacklist
-        let (is_blacklisted, _) = is_ip_blacklisted("172.16.1.1").await;
+        // Test with IP that is genuinely not in any of the test blacklists
+        let (is_blacklisted_not_present, _) = is_ip_blacklisted("1.2.3.4").await;
         assert!(
-            is_blacklisted,
+            !is_blacklisted_not_present,
+            "IP 1.2.3.4, not in any list, should not be blacklisted"
+        );
+
+        // Test with an IP that *is* in a list (8.8.8.8/32 in base_blacklist)
+        let (is_blacklisted_present, _) = is_ip_blacklisted("8.8.8.8").await;
+        assert!(
+            is_blacklisted_present,
+            "IP 8.8.8.8, present in base_blacklist, should be blacklisted"
+        );
+
+        // Test IP in second blacklist (172.16.1.1 is local, but loaded with filter_locals:false)
+        let (is_blacklisted_another, _) = is_ip_blacklisted("172.16.1.1").await;
+        assert!(
+            is_blacklisted_another,
             "IP in second blacklist should be blacklisted"
         );
     }
@@ -792,7 +1130,7 @@ mod tests {
             }],
         };
 
-        let blacklists = Blacklists::new_from_json(test_blacklist_json);
+        let blacklists = Blacklists::new_from_json(test_blacklist_json, false);
         // Overwrite the global model directly for this test
         LISTS.overwrite_with_test_data(blacklists).await;
 
@@ -821,8 +1159,8 @@ mod tests {
         initialize_test_blacklists().await;
 
         // Empty blacklist name should never match (though the function currently loops through all)
-        let (is_blacklisted, _) = is_ip_blacklisted("8.8.8.8").await;
-        // The behavior depends on the test data; if 8.8.8.8 isn't in any list, it should be false.
+        let (is_blacklisted, _) = is_ip_blacklisted("1.2.3.4").await;
+        // The behavior depends on the test data; if 1.2.3.4 isn't in any list, it should be false.
         assert!(
             !is_blacklisted,
             "Empty blacklist name check (behavior test)"
@@ -854,7 +1192,7 @@ mod tests {
         };
 
         // Create a fresh blacklist with only the test data to avoid cross-test interference
-        let blacklists = Blacklists::new_from_json(test_blacklist_json);
+        let blacklists = Blacklists::new_from_json(test_blacklist_json, false);
         LISTS.overwrite_with_test_data(blacklists).await;
 
         // Test direct IPv4 without CIDR
