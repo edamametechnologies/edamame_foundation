@@ -1449,7 +1449,7 @@ mod tests {
         device1.last_seen = Utc.with_ymd_and_hms(2023, 1, 1, 12, 0, 0).unwrap();
 
         let mut device2 = DeviceInfo::new(Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 10))));
-        device2.is_local = true; // Changed to local for timestamp to be updated
+        device2.is_local = true; // Local for timestamp to be updated
         device2.os_name = "Some OS".to_string();
         device2.last_seen = Utc.with_ymd_and_hms(2023, 1, 1, 13, 0, 0).unwrap();
 
