@@ -2,16 +2,16 @@
 use reqwest;
 #[cfg(all(target_os = "windows", feature = "packetcapture"))]
 use std::env;
-#[cfg(all(target_os = "windows", feature = "packetcapture"))]
-use std::fs;
-#[cfg(all(target_os = "windows", feature = "packetcapture"))]
-use zip;
 #[cfg(all(feature = "ebpf", target_os = "linux"))]
 use std::env;
+#[cfg(all(target_os = "windows", feature = "packetcapture"))]
+use std::fs;
 #[cfg(all(feature = "ebpf", target_os = "linux"))]
 use std::path::{Path, PathBuf};
 #[cfg(all(feature = "ebpf", target_os = "linux"))]
 use std::process::Command;
+#[cfg(all(target_os = "windows", feature = "packetcapture"))]
+use zip;
 
 fn main() {
     // Tonic/proto
