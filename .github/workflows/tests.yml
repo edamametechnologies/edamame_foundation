@@ -161,7 +161,7 @@ jobs:
           platforms: arm64
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@nightly
         with:
           targets: ${{ matrix.target }}
 
@@ -298,6 +298,10 @@ jobs:
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           # Add rust to path for subsequent steps
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+          rustup target add nightly-${{ matrix.target }}
+          # For ebpf
+          rustup toolchain install nightly --component rust-src
+          rustup component add --toolchain nightly llvm-tools-preview
 
       - name: Run tests
         id: tests
@@ -436,7 +440,10 @@ jobs:
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           source $HOME/.cargo/env
-          rustup target add ${{ matrix.target }}
+          rustup target add nightly-${{ matrix.target }}
+          # For ebpf
+          rustup toolchain install nightly --component rust-src
+          rustup component add --toolchain nightly llvm-tools-preview
         shell: alpine.sh {0}
 
       # Must be in the Alpine VM
