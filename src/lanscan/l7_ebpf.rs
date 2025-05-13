@@ -103,6 +103,32 @@ mod linux {
             }
             println!("kernel version check passed");
 
+            // Check for LinuxKit kernel (Docker Desktop, etc.)
+            if release_str.contains("linuxkit") {
+                println!("[l7_ebpf] WARNING: Running on LinuxKit kernel ({}). eBPF functionality may be limited in Docker Desktop", release_str);
+            }
+
+            // Check if perf_event_paranoid is set correctly
+            if let Ok(paranoid) = std::fs::read_to_string("/proc/sys/kernel/perf_event_paranoid") {
+                if let Ok(value) = paranoid.trim().parse::<i32>() {
+                    if value > -1 {
+                        println!("[l7_ebpf] WARNING: perf_event_paranoid = {} (should be -1 or lower)", value);
+                        println!("[l7_ebpf] Try: sudo sysctl -w kernel.perf_event_paranoid=-1");
+                    }
+                }
+            }
+
+            // Check debug fs mount
+            let debug_mounted = Command::new("mount")
+                .output()
+                .map(|out| String::from_utf8_lossy(&out.stdout).contains("debugfs"))
+                .unwrap_or(false);
+            
+            if !debug_mounted {
+                println!("[l7_ebpf] WARNING: debugfs not mounted. This may cause issues with kprobes.");
+                println!("[l7_ebpf] Try: sudo mount -t debugfs none /sys/kernel/debug");
+            }
+
             // Decide which object file to load.  Priority:
             //   1. Runtime env-var `L7_EBPF_OBJECT` (allows overrides).
             //   2. Compile-time value injected by build.rs via `cargo:rustc-env`.
@@ -194,6 +220,30 @@ mod linux {
                 if let Err(e) = kp.attach("inet_sock_set_state", 0) {
                     error!("Failed to attach kprobe: {}", e);
                     println!("[l7_ebpf] Disabled – failed to attach kprobe: {}", e);
+                    
+                    // Extra diagnostics for perf_event_open failure
+                    if e.to_string().contains("perf_event_open") {
+                        println!("[l7_ebpf] perf_event_open failure - common fixes:");
+                        println!("[l7_ebpf]   1. Set kernel.perf_event_paranoid=-1");
+                        println!("[l7_ebpf]      sudo sysctl -w kernel.perf_event_paranoid=-1");
+                        println!("[l7_ebpf]   2. Ensure debugfs is mounted:");
+                        println!("[l7_ebpf]      sudo mount -t debugfs none /sys/kernel/debug");
+                        println!("[l7_ebpf]   3. When in Docker, use --privileged and:");
+                        println!("[l7_ebpf]      -v /sys/kernel/debug:/sys/kernel/debug");
+                        
+                        // Check if we're in Docker
+                        let in_docker = std::path::Path::new("/.dockerenv").exists() || 
+                                       std::fs::read_to_string("/proc/1/cgroup")
+                                           .map(|s| s.contains("/docker/"))
+                                           .unwrap_or(false);
+                        
+                        if in_docker {
+                            println!("[l7_ebpf] **DETECTED DOCKER ENVIRONMENT**");
+                            println!("[l7_ebpf] Docker Desktop on macOS has limited eBPF support.");
+                            println!("[l7_ebpf] Consider testing on a native Linux system instead.");
+                        }
+                    }
+                    
                     return None;
                 }
             } else {
