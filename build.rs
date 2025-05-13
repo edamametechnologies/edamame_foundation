@@ -122,8 +122,6 @@ fn main() {
     // a missing object file is not an error.
     #[cfg(all(feature = "ebpf", target_os = "linux"))]
     {
-        let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
-
         // Location of the eBPF program crate (sibling directory `ebpf/l7_ebpf_program`)
         let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
         let manifest_dir = Path::new(&manifest_dir);

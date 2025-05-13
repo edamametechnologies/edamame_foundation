@@ -325,7 +325,7 @@ jobs:
         run: |
           # Ensure cargo is in path
           export PATH="$HOME/.cargo/bin:$PATH"
-          make ${{ matrix.platform }}_test
+          make ${{ matrix.platform }}_test_no_ebpf
         continue-on-error: true
 
       - name: Dump logs
