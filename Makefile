@@ -41,8 +41,7 @@ unix_test:
 	$(shell which sudo) -E $(shell which cargo) test --features packetcapture -- --nocapture --test-threads=1
 
 linux_test_ebpf:
-	$(shell which sudo) -E $(shell which cargo) test lanscan::l7::ebpf_tests --features packetcapture,asyncpacketcapture,ebpf -- --nocapture --test-threads=1
-	# $(shell which sudo) -E $(shell which cargo) test --features packetcapture,asyncpacketcapture,ebpf -- --nocapture --test-threads=1
+	$(shell which sudo) -E $(shell which cargo) test --features packetcapture,asyncpacketcapture,ebpf -- --nocapture --test-threads=1
 
 linux_test: unix_test linux_test_ebpf
 
@@ -73,5 +72,5 @@ linux_test_macos: docker_build_linux_test
 		--privileged \
 		-v $(CURDIR):/workspace \
 		-w /workspace \
-		$(LINUX_TEST_IMAGE) make linux_test_ebpf
+		$(LINUX_TEST_IMAGE) make linux_test
 
