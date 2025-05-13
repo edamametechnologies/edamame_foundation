@@ -11,7 +11,10 @@ RUN apt-get update -y && DEBIAN_FRONTEND=noninteractive \
     apt-get install -y --no-install-recommends \
         sudo libpcap-dev clang llvm make pkg-config build-essential \
         libelf-dev zlib1g-dev ca-certificates protobuf-compiler iproute2 netcat-traditional \
-    && rm -rf /var/lib/apt/lists/*
+        kmod
+# Try to install bpftool - may not be available in all repositories
+RUN apt-get update -y && DEBIAN_FRONTEND=noninteractive \
+    apt-get install -y --no-install-recommends bpftool || true
 
 # Install nightly toolchain plus rust-src (needed for building `core` for
 # custom/embedded targets like `bpfel-unknown-none`).  We intentionally do
@@ -24,7 +27,30 @@ RUN rustup component add --toolchain nightly llvm-tools-preview
 # Use nightly by default so that build.rs picks it up automatically
 ENV RUSTUP_TOOLCHAIN=nightly
 
+# Create necessary files and directories for eBPF
+RUN mkdir -p /sys/fs/bpf
+RUN echo '#!/bin/bash' > /entrypoint.sh && \
+    echo 'echo "Kernel version: $(uname -r)"' >> /entrypoint.sh && \
+    echo 'if [[ $(uname -r) == *linuxkit* ]]; then' >> /entrypoint.sh && \
+    echo '  echo "WARNING: Running with LinuxKit kernel (Docker Desktop) - eBPF functionality will be limited"' >> /entrypoint.sh && \
+    echo 'fi' >> /entrypoint.sh && \
+    echo '' >> /entrypoint.sh && \
+    echo '# Try to mount debug filesystem but do not fail if it does not work' >> /entrypoint.sh && \
+    echo 'echo "Attempting to mount debug filesystem..."' >> /entrypoint.sh && \
+    echo 'mount -t debugfs debugfs /sys/kernel/debug 2>/dev/null || echo "Could not mount debugfs (expected in Docker Desktop)"' >> /entrypoint.sh && \
+    echo '' >> /entrypoint.sh && \
+    echo '# Try to set kernel parameters but do not fail if they are not settable' >> /entrypoint.sh && \
+    echo 'echo "Attempting to set kernel parameters..."' >> /entrypoint.sh && \
+    echo 'sysctl -w kernel.perf_event_paranoid=-1 2>/dev/null || echo "Could not set perf_event_paranoid (expected in Docker Desktop)"' >> /entrypoint.sh && \
+    echo 'sysctl -w kernel.unprivileged_bpf_disabled=0 2>/dev/null || echo "Could not set unprivileged_bpf_disabled (expected in Docker Desktop)"' >> /entrypoint.sh && \
+    echo 'sysctl -w net.core.bpf_jit_enable=1 2>/dev/null || echo "Could not set bpf_jit_enable (expected in Docker Desktop)"' >> /entrypoint.sh && \
+    echo '' >> /entrypoint.sh && \
+    echo '# Execute the provided command' >> /entrypoint.sh && \
+    echo 'exec "$@"' >> /entrypoint.sh && \
+    chmod +x /entrypoint.sh
+
 # Default working directory will be set by the Makefile `docker run`
 WORKDIR /workspace
 
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["bash"] 
