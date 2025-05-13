@@ -169,8 +169,8 @@ jobs:
         shell: bash
         run: |
           # For ebpf
-          rustup toolchain install nightly --component rust-src
-          rustup component add --toolchain nightly llvm-tools-preview
+          rustup component add rust-src --toolchain nightly-${{ matrix.target }}
+          rustup component add llvm-tools-preview --toolchain nightly-${{ matrix.target }} 
           # Use nightly by default so that build.rs picks it up automatically
           echo "RUSTUP_TOOLCHAIN=nightly" >> $HOME/.cargo/env
 
@@ -313,8 +313,8 @@ jobs:
           # Then add the target to the nightly toolchain
           rustup target add --toolchain nightly ${{ matrix.target }}
           # For ebpf - add rust-src specifically for the target toolchain
-          rustup toolchain install nightly-${{ matrix.target }} --component rust-src
-          rustup component add --toolchain nightly llvm-tools-preview
+          rustup component add rust-src --toolchain nightly-${{ matrix.target }}
+          rustup component add llvm-tools-preview --toolchain nightly-${{ matrix.target }} 
           # Use nightly by default so that build.rs picks it up automatically
           echo "RUSTUP_TOOLCHAIN=nightly" >> $HOME/.cargo/env
           
@@ -462,8 +462,8 @@ jobs:
           # Then add the target to the nightly toolchain
           rustup target add --toolchain nightly ${{ matrix.target }}
           # For ebpf - add rust-src specifically for the target toolchain
-          rustup toolchain install nightly-${{ matrix.target }} --component rust-src
-          rustup component add --toolchain nightly llvm-tools-preview
+          rustup component add rust-src --toolchain nightly-${{ matrix.target }}
+          rustup component add llvm-tools-preview --toolchain nightly-${{ matrix.target }} 
           # Use nightly by default so that build.rs picks it up automatically
           echo "RUSTUP_TOOLCHAIN=nightly" >> $HOME/.cargo/env
         shell: alpine.sh {0}
