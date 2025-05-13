@@ -40,7 +40,11 @@ unix_test:
 	$(shell which sudo) -E $(shell which cargo) test --features packetcapture,asyncpacketcapture -- --nocapture --test-threads=1
 	$(shell which sudo) -E $(shell which cargo) test --features packetcapture -- --nocapture --test-threads=1
 
-linux_test: unix_test
+linux_test_ebpf:
+	$(shell which sudo) -E $(shell which cargo) test lanscan::l7::ebpf_tests --features packetcapture,asyncpacketcapture,ebpf -- --nocapture --test-threads=1
+	# $(shell which sudo) -E $(shell which cargo) test --features packetcapture,asyncpacketcapture,ebpf -- --nocapture --test-threads=1
+
+linux_test: unix_test linux_test_ebpf
 
 macos_test: unix_test
 
@@ -48,4 +52,26 @@ ios_test: ios
 
 android_test: android
 
+# -----------------------------------------------------------------------------
+# macOS → Linux test helper (runs full Linux test-suite inside Docker)
+# -----------------------------------------------------------------------------
+
+# Image name to use/build
+LINUX_TEST_IMAGE ?= edamame_linux_test
+
+.PHONY: docker_build_linux_test linux_test_macos
+
+# Build the test image (only needs to run when the Dockerfile changes)
+docker_build_linux_test:
+	docker build -t $(LINUX_TEST_IMAGE) -f Dockerfile.linux-test .
+
+# Run the full Linux test-suite inside the container, mounting the current
+# workspace so that the code being edited on macOS is tested.
+#   $ make linux_test_macos
+linux_test_macos: docker_build_linux_test
+	docker run --rm -i \
+		--privileged \
+		-v $(CURDIR):/workspace \
+		-w /workspace \
+		$(LINUX_TEST_IMAGE) make linux_test_ebpf
 

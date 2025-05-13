@@ -1,6 +1,6 @@
 [package]
 name = "edamame_foundation"
-version = "0.9.34"
+version = "0.9.35"
 edition = "2021"
 
 [lints.rust]
@@ -11,6 +11,7 @@ default = []
 asyncpacketcapture = []
 packetcapture = [ "pcap", "pnet_packet", "hickory-resolver", "dns-parser", "sysinfo", "netstat2" ]
 tokio-console = []
+ebpf = [ "aya", "bytemuck", "nix" ]
 
 [lib]
 # Dynamic lib version is not used on apple platforms as it's painful, but we must use it on Windows, Linux and Android
@@ -150,7 +151,6 @@ tracing-oslog = { git = "https://github.com/madsmtm/tracing-oslog.git", branch =
 serial_test = "3.1.1"
 
 [build-dependencies]
-
 # Conditional compilation for build dependencies
 # protobuf->Rust compiler
 tonic-build = "0.13.0"
@@ -159,3 +159,8 @@ tonic-build = "0.13.0"
 # Prevent reqwest from using native-tls
 reqwest = { version = "0.12.5", default-features = false, features = ["blocking", "rustls-tls"] }
 zip = "2.2.0"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+aya = { version = "0.13.1", features = ["async_tokio"], optional = true }
+bytemuck = { version = "1.15", features = ["derive"], optional = true }
+nix = { version = "0.30.1", optional = true, features = [ "user" ] }

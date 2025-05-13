@@ -755,7 +755,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "LANG=C ufw status | grep -qi 'Status: active' || echo firewall_disabled"
+        "target": "if command -v ufw >/dev/null 2>&1; then output=$(LANG=C ufw status 2>&1); ufw_exit_code=$?; if [ $ufw_exit_code -eq 0 ]; then echo \"$output\" | grep -qi 'Status: active' || echo firewall_disabled; fi; fi"
       },
       "metrictype": "bool",
       "name": "local firewall disabled",
