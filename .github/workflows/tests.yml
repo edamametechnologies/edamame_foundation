@@ -165,6 +165,15 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Set RUSTUP_TOOLCHAIN
+        shell: bash
+        run: |
+          # For ebpf
+          rustup toolchain install nightly --component rust-src
+          rustup component add --toolchain nightly llvm-tools-preview
+          # Use nightly by default so that build.rs picks it up automatically
+          echo "RUSTUP_TOOLCHAIN=nightly" >> $HOME/.cargo/env
+
       - name: iOS add-ons
         if: matrix.platform == 'ios'
         shell: bash
@@ -298,11 +307,14 @@ jobs:
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           # Add rust to path for subsequent steps
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+          . "$HOME/.cargo/env
           rustup target add nightly-${{ matrix.target }}
           # For ebpf
           rustup toolchain install nightly --component rust-src
           rustup component add --toolchain nightly llvm-tools-preview
-
+          # Use nightly by default so that build.rs picks it up automatically
+          echo "RUSTUP_TOOLCHAIN=nightly" >> $HOME/.cargo/env
+          
       - name: Run tests
         id: tests
         shell: bash
@@ -444,6 +456,8 @@ jobs:
           # For ebpf
           rustup toolchain install nightly --component rust-src
           rustup component add --toolchain nightly llvm-tools-preview
+          # Use nightly by default so that build.rs picks it up automatically
+          echo "RUSTUP_TOOLCHAIN=nightly" >> $HOME/.cargo/env
         shell: alpine.sh {0}
 
       # Must be in the Alpine VM
