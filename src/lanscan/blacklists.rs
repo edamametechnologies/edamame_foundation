@@ -710,7 +710,7 @@ pub async fn overwrite_with_test_data(data: Blacklists) {
 mod tests {
     use super::*;
     use serial_test::serial;
-    
+
     async fn initialize_test_blacklists() {
         IP_CACHE.clear();
         NEED_FULL_RECOMPUTE_BLACKLIST.store(false, Ordering::SeqCst);
@@ -1005,6 +1005,199 @@ mod tests {
         );
 
         // Reset LISTS back to default after the test to avoid affecting other tests
+        LISTS.reset_to_default().await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_local_range_filtering() {
+        // Ensure a clean state for IP_CACHE and the recompute flag
+        IP_CACHE.clear();
+        NEED_FULL_RECOMPUTE_BLACKLIST.store(false, Ordering::SeqCst);
+
+        let test_blacklist_json_with_locals = BlacklistsJSON {
+            date: "2025-04-01".to_string(),
+            signature: "test_local_filter_signature".to_string(),
+            blacklists: vec![BlacklistInfo {
+                name: "filter_test_list".to_string(),
+                description: Some("Test list for local range filtering".to_string()),
+                last_updated: Some("2025-04-01".to_string()),
+                source_url: None,
+                ip_ranges: vec![
+                    "192.168.0.0/16".to_string(),     // Local CIDR, should be filtered
+                    "10.0.0.1".to_string(), // Local single IP (becomes /32), should be filtered
+                    "8.8.8.8/32".to_string(), // Non-local CIDR (effectively single IP), should remain
+                    "172.16.0.0/12".to_string(), // Local CIDR, should be filtered
+                    "203.0.113.45".to_string(), // Non-local single IP (becomes /32), should remain
+                    "fc00::/7".to_string(),   // Local IPv6 CIDR, should be filtered
+                    "2001:db8::cafe/128".to_string(), // Non-local IPv6 CIDR (effectively single IP), should remain
+                ],
+            }],
+        };
+
+        // Load the blacklists with filtering enabled
+        let filtered_blacklists =
+            Blacklists::new_from_json(test_blacklist_json_with_locals.clone(), true);
+
+        let filtered_blacklists_clone = filtered_blacklists.clone();
+
+        // 1. Check parsed_ranges directly
+        let ranges_for_list = filtered_blacklists
+            .parsed_ranges
+            .get("filter_test_list")
+            .expect("List should exist in parsed_ranges");
+
+        let remaining_ip_cidrs: Vec<String> = ranges_for_list
+            .iter()
+            .map(|ipnet| ipnet.to_string())
+            .collect();
+
+        // Non-local ranges that should remain
+        assert!(
+            remaining_ip_cidrs.contains(&"8.8.8.8/32".to_string()),
+            "Non-local IP 8.8.8.8/32 should remain."
+        );
+        assert!(
+            remaining_ip_cidrs.contains(&"203.0.113.45/32".to_string()), // Single IP "203.0.113.45" becomes "203.0.113.45/32"
+            "Non-local IP 203.0.113.45/32 should remain."
+        );
+        assert!(
+            remaining_ip_cidrs.contains(&"2001:db8::cafe/128".to_string()),
+            "Non-local IPv6 2001:db8::cafe/128 should remain."
+        );
+
+        // Local ranges that should be filtered out
+        assert!(
+            !remaining_ip_cidrs.contains(&"192.168.0.0/16".to_string()),
+            "Local range 192.168.0.0/16 should be filtered."
+        );
+        assert!(
+            !remaining_ip_cidrs.contains(&"10.0.0.1/32".to_string()), // Single IP "10.0.0.1" becomes "10.0.0.1/32"
+            "Local IP 10.0.0.1/32 should be filtered."
+        );
+        assert!(
+            !remaining_ip_cidrs.contains(&"172.16.0.0/12".to_string()),
+            "Local range 172.16.0.0/12 should be filtered."
+        );
+        assert!(
+            !remaining_ip_cidrs.contains(&"fc00::/7".to_string()),
+            "Local IPv6 range fc00::/7 should be filtered."
+        );
+        assert_eq!(
+            ranges_for_list.len(),
+            3,
+            "Only non-local IPs should remain in parsed_ranges"
+        );
+
+        // To use is_ip_blacklisted, we need to set this data into the global LISTS
+        // We use overwrite_with_test_data which uses the Blacklists instance directly
+        LISTS
+            .overwrite_with_test_data(filtered_blacklists_clone)
+            .await;
+
+        // 2. Test with is_ip_blacklisted (which uses the global LISTS)
+
+        // IPs that should have been filtered out
+        let (is_blacklisted, _) = is_ip_blacklisted("192.168.1.1").await;
+        assert!(
+            !is_blacklisted,
+            "Local IP 192.168.1.1 should not be blacklisted after filtering"
+        );
+
+        let (is_blacklisted, _) = is_ip_blacklisted("10.0.0.1").await;
+        assert!(
+            !is_blacklisted,
+            "Local IP 10.0.0.1 should not be blacklisted after filtering"
+        );
+
+        let (is_blacklisted, _) = is_ip_blacklisted("172.16.0.5").await;
+        assert!(
+            !is_blacklisted,
+            "Local IP 172.16.0.5 should not be blacklisted after filtering"
+        );
+
+        let (is_blacklisted, _) = is_ip_blacklisted("fc00::1").await;
+        assert!(
+            !is_blacklisted,
+            "Local IPv6 fc00::1 should not be blacklisted after filtering"
+        );
+
+        // IPs that should remain
+        let (is_blacklisted, lists) = is_ip_blacklisted("8.8.8.8").await;
+        assert!(is_blacklisted, "Non-local IP 8.8.8.8 should be blacklisted");
+        assert!(lists.contains(&"filter_test_list".to_string()));
+
+        let (is_blacklisted, lists) = is_ip_blacklisted("203.0.113.45").await;
+        assert!(
+            is_blacklisted,
+            "Non-local IP 203.0.113.45 should be blacklisted"
+        );
+        assert!(lists.contains(&"filter_test_list".to_string()));
+
+        let (is_blacklisted, lists) = is_ip_blacklisted("2001:db8::cafe").await;
+        assert!(
+            is_blacklisted,
+            "Non-local IPv6 2001:db8::cafe should be blacklisted"
+        );
+        assert!(lists.contains(&"filter_test_list".to_string()));
+
+        // Test a different IP from a filtered range
+        let (is_blacklisted, _) = is_ip_blacklisted("172.16.10.20").await;
+        assert!(
+            !is_blacklisted,
+            "Another IP 172.16.10.20 from a filtered local range should not be blacklisted"
+        );
+
+        // Also test the case where filtering is OFF (custom blacklist behavior)
+        // Here, local IPs should remain.
+        let unfiltered_blacklists =
+            Blacklists::new_from_json(test_blacklist_json_with_locals, false); // filter_local_ranges = false
+
+        LISTS.overwrite_with_test_data(unfiltered_blacklists).await;
+        // Clear the IP cache to ensure that results are recomputed with the
+        // newly-overwritten blacklist data. Otherwise, earlier cached lookups
+        // from the filtered phase (which returned no matches) would cause the
+        // subsequent assertions to fail even though the underlying blacklist
+        // contents have changed.
+        IP_CACHE.clear();
+
+        let (is_blacklisted, lists) = is_ip_blacklisted("192.168.1.1").await;
+        assert!(
+            is_blacklisted,
+            "Local IP 192.168.1.1 should be blacklisted when filtering is OFF"
+        );
+        assert!(lists.contains(&"filter_test_list".to_string()));
+
+        let (is_blacklisted, lists) = is_ip_blacklisted("10.0.0.1").await;
+        assert!(
+            is_blacklisted,
+            "Local IP 10.0.0.1 should be blacklisted when filtering is OFF"
+        );
+        assert!(lists.contains(&"filter_test_list".to_string()));
+
+        let (is_blacklisted, lists) = is_ip_blacklisted("172.16.0.5").await;
+        assert!(
+            is_blacklisted,
+            "Local IP 172.16.0.5 should be blacklisted when filtering is OFF"
+        );
+        assert!(lists.contains(&"filter_test_list".to_string()));
+
+        let (is_blacklisted, lists) = is_ip_blacklisted("fc00::1").await;
+        assert!(
+            is_blacklisted,
+            "Local IPv6 fc00::1 should be blacklisted when filtering is OFF"
+        );
+        assert!(lists.contains(&"filter_test_list".to_string()));
+
+        // Non-local IPs should still be there
+        let (is_blacklisted, lists) = is_ip_blacklisted("8.8.8.8").await;
+        assert!(
+            is_blacklisted,
+            "Non-local IP 8.8.8.8 should still be blacklisted when filtering is OFF"
+        );
+        assert!(lists.contains(&"filter_test_list".to_string()));
+
+        // Reset LISTS back to default after the test
         LISTS.reset_to_default().await;
     }
 }

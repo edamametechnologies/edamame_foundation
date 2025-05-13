@@ -50,6 +50,7 @@
 // by combining direct matching with caching, PID reuse protection, and retry mechanisms.
 
 use crate::customlock::*;
+use crate::lanscan::l7_ebpf;
 use crate::lanscan::sessions::*;
 use crate::runtime::async_spawn_blocking;
 use crate::runtime::*;
@@ -116,6 +117,7 @@ pub enum L7ResolutionSource {
     HostCacheHitRunning,
     HostCacheHitTerminated, // Within grace period
     FailedMaxRetries,       // Explicitly mark failures after retries
+    Ebpf,                   // Obtained from eBPF helper on Linux
 }
 
 #[derive(Debug, Clone)]
@@ -941,12 +943,28 @@ impl LANScanL7 {
     }
 
     pub async fn get_resolved_l7(&self, connection: &Session) -> Option<L7Resolution> {
+        // Check cached result first
         if let Some(l7) = self.l7_map.get(connection).map(|s| s.value().clone()) {
-            Some(l7)
-        } else {
-            self.add_connection_to_resolver(connection).await;
-            None
+            return Some(l7);
         }
+
+        // Try eBPF helper (will be a fast lookup when running on Linux)
+        if let Some(l7_data) = l7_ebpf::get_l7_for_session(connection) {
+            let resolution = L7Resolution {
+                l7: Some(l7_data),
+                date: Utc::now(),
+                retry_count: 0,
+                last_retry: None,
+                source: L7ResolutionSource::Ebpf,
+            };
+            // Insert into cache for future queries
+            self.l7_map.insert(connection.clone(), resolution.clone());
+            return Some(resolution);
+        }
+
+        // Fall back to resolver queue mechanism
+        self.add_connection_to_resolver(connection).await;
+        None
     }
 
     async fn resolve_l7_data(
@@ -1541,5 +1559,390 @@ mod tests {
             dst_port: 45678,
         };
         assert!(!LANScanL7::is_likely_ephemeral(&server_connection));
+    }
+}
+
+// Feature-specific tests that will only run on Linux with eBPF enabled
+#[cfg(all(target_os = "linux", feature = "ebpf"))]
+#[cfg(test)]
+mod ebpf_tests {
+    use super::*;
+    use crate::admin::get_admin_status;
+    use crate::lanscan::sessions::{Protocol, Session};
+    use rand::Rng;
+    use std::io::ErrorKind;
+    use std::net::TcpStream;
+    use std::process::Command;
+    use std::process::Stdio;
+
+    #[derive(Debug)]
+    enum NcError {
+        NotFound,     // no nc binary available
+        ListenFailed, // command started but server never became ready
+        SpawnFailed,  // some other spawn error (permissions etc.)
+    }
+
+    fn start_nc_server(port: u16) -> Result<std::process::Child, NcError> {
+        let port_str = port.to_string();
+
+        // Common netcat binaries we accept in order of preference.
+        // `nc` is usually provided via the alternatives system (OpenBSD or
+        // traditional implementation).  The other names cover systems where
+        // the wrapper has not been configured.
+        const CANDIDATES: &[&str] = &["nc", "netcat", "ncat", "nc.traditional"];
+
+        // Two common syntax variants (traditional vs. OpenBSD).  We try the
+        // traditional "-l -p <port>" first because that is required by the
+        // `netcat-traditional` package shipped in the test container.  The
+        // OpenBSD syntax "-l <port>" is attempted second.
+        let try_args = vec![vec!["-l", "-p", &port_str], vec!["-l", &port_str]];
+
+        let mut spawn_success = false; // at least one binary executed
+
+        for cmd_name in CANDIDATES {
+            println!("Trying to start netcat server with {}", cmd_name);
+            for args in &try_args {
+                let mut cmd = Command::new(cmd_name);
+                cmd.args(args)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped());
+
+                match cmd.spawn() {
+                    Ok(mut child) => {
+                        spawn_success = true;
+                        println!("Started netcat server with {} {:?}", cmd_name, args);
+                        // wait up to 5 s for the listener
+                        let start = std::time::Instant::now();
+                        let timeout = std::time::Duration::from_secs(20);
+                        let mut server_ready = false;
+                        while start.elapsed() < timeout {
+                            println!("Checking if netcat server is ready");
+                            if TcpStream::connect(("127.0.0.1", port)).is_ok() {
+                                server_ready = true;
+                                break;
+                            }
+                            println!("Waiting for netcat server to listen on port {}", port);
+                            std::thread::sleep(std::time::Duration::from_secs(5));
+                        }
+                        if server_ready {
+                            println!("Netcat server is ready");
+                            return Ok(child);
+                        } else {
+                            println!("Netcat server {:?} is not ready after timeout", args);
+                            println!("Killing netcat server");
+                            // Ensure the child terminates before we attempt to
+                            // drain its stderr so we don't block indefinitely.
+                            let _ = child.kill();
+
+                            match child.wait_with_output() {
+                                Ok(output) => {
+                                    let status = output.status;
+                                    let out_str = String::from_utf8_lossy(&output.stdout);
+                                    let err_str = String::from_utf8_lossy(&output.stderr);
+                                    eprintln!("[test] {} {:?} exited with status {}\nstdout:\n{}\nstderr:\n{}", cmd_name, args, status, out_str.trim(), err_str.trim());
+                                }
+                                Err(e) => {
+                                    eprintln!(
+                                        "[test] Failed to collect output from {} {:?}: {}",
+                                        cmd_name, args, e
+                                    );
+                                }
+                            }
+                            // Try next argument variant / candidate instead
+                            continue;
+                        }
+                    }
+                    Err(e) => {
+                        if e.kind() == ErrorKind::NotFound {
+                            println!(
+                                "Binary '{}' not found (args {:?}): {} - continuing",
+                                cmd_name, args, e
+                            );
+                            continue; // try next candidate name
+                        } else {
+                            eprintln!("[test] Unable to spawn {} {:?}: {}", cmd_name, args, e);
+                            return Err(NcError::SpawnFailed);
+                        }
+                    }
+                }
+            }
+        }
+        if spawn_success {
+            Err(NcError::ListenFailed)
+        } else {
+            Err(NcError::NotFound)
+        }
+    }
+
+    fn start_nc_client(port: u16) -> Result<std::process::Child, NcError> {
+        let port_str = port.to_string();
+
+        const CANDIDATES: &[&str] = &["nc", "netcat", "ncat", "nc.traditional"];
+
+        for cmd_name in CANDIDATES {
+            let mut cmd = Command::new(cmd_name);
+            cmd.args(["127.0.0.1", &port_str])
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+
+            match cmd.spawn() {
+                Ok(child) => return Ok(child),
+                Err(e) => {
+                    if e.kind() == ErrorKind::NotFound {
+                        continue; // next candidate
+                    } else {
+                        eprintln!("[test] Unable to spawn {}: {}", cmd_name, e);
+                        return Err(NcError::SpawnFailed);
+                    }
+                }
+            }
+        }
+        Err(NcError::NotFound)
+    }
+
+    #[tokio::test]
+    async fn test_ebpf_l7_resolution() {
+        if !get_admin_status() {
+            println!("Skipping test_ebpf_l7_resolution: insufficient privileges");
+            return;
+        }
+        if !l7_ebpf::is_available() {
+            println!("Skipping test_ebpf_l7_resolution: eBPF helper not available");
+            return;
+        }
+        let port: u16 = rand::thread_rng().gen_range(20000..40000);
+        let mut server_process = match start_nc_server(port) {
+            Ok(child) => child,
+            Err(NcError::NotFound) => {
+                println!("Skipping test_ebpf_l7_resolution: netcat not installed");
+                return;
+            }
+            Err(err) => {
+                panic!("Could not start netcat server: {:?}", err);
+            }
+        };
+        let mut client_process = match start_nc_client(port) {
+            Ok(child) => child,
+            Err(NcError::NotFound) => {
+                let _ = server_process.kill();
+                println!("Skipping test_ebpf_l7_resolution: netcat not installed");
+                return;
+            }
+            Err(err) => {
+                let _ = server_process.kill();
+                panic!("Could not start netcat client: {:?}", err);
+            }
+        };
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let lanscan_l7 = LANScanL7::new();
+        let session = Session {
+            protocol: Protocol::TCP,
+            src_ip: "127.0.0.1".parse().unwrap(),
+            src_port: port,
+            dst_ip: "127.0.0.1".parse().unwrap(),
+            dst_port: port,
+        };
+        let server_l7 = lanscan_l7.get_resolved_l7(&session).await;
+        let _ = client_process.kill();
+        let _ = server_process.kill();
+        if let Some(resolution) = server_l7 {
+            println!("eBPF resolution source: {:?}", resolution.source);
+            println!("eBPF resolution data: {:?}", resolution.l7);
+            assert_eq!(
+                resolution.source,
+                L7ResolutionSource::Ebpf,
+                "Expected eBPF resolution source"
+            );
+            if let Some(l7_data) = resolution.l7 {
+                assert!(
+                    l7_data.process_name.contains("nc") || l7_data.process_name.contains("netcat"),
+                    "Expected process name to contain 'nc' or 'netcat', got: {}",
+                    l7_data.process_name
+                );
+                assert!(l7_data.pid > 0, "Expected non-zero PID");
+            } else {
+                panic!("eBPF resolution source but no L7 data");
+            }
+        } else {
+            panic!("Expected eBPF resolution for known socket");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_ebpf_l7_priority_over_standard_resolver() {
+        if !get_admin_status() {
+            println!(
+                "Skipping test_ebpf_l7_priority_over_standard_resolver: insufficient privileges"
+            );
+            return;
+        }
+        if !l7_ebpf::is_available() {
+            println!(
+                "Skipping test_ebpf_l7_priority_over_standard_resolver: eBPF helper not available"
+            );
+            return;
+        }
+        let port: u16 = rand::thread_rng().gen_range(20000..40000);
+        let mut server_process = match start_nc_server(port) {
+            Ok(child) => child,
+            Err(NcError::NotFound) => {
+                println!(
+                    "Skipping test_ebpf_l7_priority_over_standard_resolver: netcat not installed"
+                );
+                return;
+            }
+            Err(err) => {
+                panic!("Could not start netcat server: {:?}", err);
+            }
+        };
+        let mut client_process = match start_nc_client(port) {
+            Ok(child) => child,
+            Err(NcError::NotFound) => {
+                let _ = server_process.kill();
+                println!(
+                    "Skipping test_ebpf_l7_priority_over_standard_resolver: netcat not installed"
+                );
+                return;
+            }
+            Err(err) => {
+                let _ = server_process.kill();
+                panic!("Could not start netcat client: {:?}", err);
+            }
+        };
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let mut lanscan_l7 = LANScanL7::new();
+        lanscan_l7.start().await;
+        use tokio::time::sleep;
+        let session = Session {
+            protocol: Protocol::TCP,
+            src_ip: "127.0.0.1".parse().unwrap(),
+            src_port: port,
+            dst_ip: "127.0.0.1".parse().unwrap(),
+            dst_port: port,
+        };
+        let initial_result = lanscan_l7.get_resolved_l7(&session).await;
+        let mut from_ebpf = false;
+        if let Some(resolution) = initial_result {
+            println!("Initial resolution source: {:?}", resolution.source);
+            if resolution.source == L7ResolutionSource::Ebpf {
+                from_ebpf = true;
+                if let Some(l7) = resolution.l7 {
+                    println!(
+                        "Initial eBPF resolution: pid={}, name={}",
+                        l7.pid, l7.process_name
+                    );
+                }
+            }
+        }
+        if !from_ebpf {
+            lanscan_l7.add_connection_to_resolver(&session).await;
+            sleep(std::time::Duration::from_secs(2)).await;
+            if let Some(resolution) = lanscan_l7.get_resolved_l7(&session).await {
+                println!("Queue-based resolution source: {:?}", resolution.source);
+                if resolution.source == L7ResolutionSource::Ebpf {
+                    from_ebpf = true;
+                    if let Some(l7) = resolution.l7 {
+                        println!(
+                            "Queue-based eBPF resolution: pid={}, name={}",
+                            l7.pid, l7.process_name
+                        );
+                    }
+                }
+            }
+        }
+        let _ = client_process.kill();
+        let _ = server_process.kill();
+        lanscan_l7.stop().await;
+        assert!(
+            from_ebpf,
+            "With eBPF feature enabled, resolution should come from eBPF"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_ebpf_l7_integration_with_capture() {
+        use crate::lanscan::capture::LANScanCapture;
+        use crate::lanscan::interface::LANScanInterfaces;
+        if !get_admin_status() {
+            println!("Skipping test_ebpf_l7_integration_with_capture: insufficient privileges");
+            return;
+        }
+        if !l7_ebpf::is_available() {
+            println!("Skipping test_ebpf_l7_integration_with_capture: eBPF helper not available");
+            return;
+        }
+        let port: u16 = rand::thread_rng().gen_range(20000..40000);
+        println!("Starting netcat server on port {}", port);
+        let mut server_process = match start_nc_server(port) {
+            Ok(child) => child,
+            Err(NcError::NotFound) => {
+                println!("Skipping test_ebpf_l7_integration_with_capture: netcat not installed");
+                return;
+            }
+            Err(err) => {
+                println!("Could not start netcat server: {:?}", err);
+                panic!("Could not start netcat server: {:?}", err);
+            }
+        };
+        println!("Starting netcat client on port {}", port);
+        let mut client_process = match start_nc_client(port) {
+            Ok(child) => child,
+            Err(NcError::NotFound) => {
+                let _ = server_process.kill();
+                println!("Skipping test_ebpf_l7_integration_with_capture: netcat not installed");
+                return;
+            }
+            Err(err) => {
+                let _ = server_process.kill();
+                panic!("Could not start netcat client: {:?}", err);
+            }
+        };
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        println!("Starting capture");
+        let mut capture = LANScanCapture::new();
+        let interfaces = LANScanInterfaces::new();
+        println!("Starting capture on interfaces: {}", interfaces);
+        capture.start(&interfaces).await;
+        sleep(std::time::Duration::from_secs(3)).await;
+        let mut found_connection = false;
+        let mut sessions = vec![];
+        let check_start = std::time::Instant::now();
+        while check_start.elapsed().as_secs() < 5 {
+            sessions = capture.get_current_sessions(false).await;
+            for session in &sessions {
+                if (session.session.src_port == port || session.session.dst_port == port)
+                    && session.session.protocol == Protocol::TCP
+                {
+                    found_connection = true;
+                    println!("Found test connection: {:?}", session.session);
+                    if let Some(l7_info) = &session.l7 {
+                        println!(
+                            "L7 resolution: pid={}, process={}",
+                            l7_info.pid, l7_info.process_name
+                        );
+                        assert!(
+                            l7_info.process_name.contains("nc")
+                                || l7_info.process_name.contains("netcat"),
+                            "Expected process name to contain 'nc' or 'netcat', got: {}",
+                            l7_info.process_name
+                        );
+                    }
+                    break;
+                }
+            }
+            if found_connection {
+                break;
+            }
+            sleep(std::time::Duration::from_millis(200)).await;
+        }
+        if !found_connection {
+            eprintln!("Sessions seen: {:?}", sessions);
+        }
+        let _ = client_process.kill();
+        let _ = server_process.kill();
+        capture.stop().await;
+        assert!(found_connection, "Should have found the test connection");
     }
 }

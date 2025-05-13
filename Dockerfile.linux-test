@@ -1,0 +1,30 @@
+# syntax=docker/dockerfile:1.4
+# -------------------------------------------------------------
+# Minimal image for running the edamame_* test-suite on Linux.
+# Intended to be used from macOS via `make linux_test_macos`,
+# which mounts the workspace and invokes `make linux_test` inside.
+# -------------------------------------------------------------
+FROM rust:1.78-bullseye AS base
+
+# Install extra tooling required to compile eBPF objects and run tests
+RUN apt-get update -y && DEBIAN_FRONTEND=noninteractive \
+    apt-get install -y --no-install-recommends \
+        sudo libpcap-dev clang llvm make pkg-config build-essential \
+        libelf-dev zlib1g-dev ca-certificates protobuf-compiler iproute2 netcat-traditional \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install nightly toolchain plus rust-src (needed for building `core` for
+# custom/embedded targets like `bpfel-unknown-none`).  We intentionally do
+# NOT attempt to download a pre-compiled std for the BPF target because it
+# is often unavailable; instead the compiler will build `core` from the
+# vendored sources when needed.
+RUN rustup toolchain install nightly --component rust-src
+RUN rustup component add --toolchain nightly llvm-tools-preview
+
+# Use nightly by default so that build.rs picks it up automatically
+ENV RUSTUP_TOOLCHAIN=nightly
+
+# Default working directory will be set by the Makefile `docker run`
+WORKDIR /workspace
+
+CMD ["bash"] 
