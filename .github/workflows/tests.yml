@@ -165,7 +165,7 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Set RUSTUP_TOOLCHAIN
+      - name: Set Rust toolchain
         shell: bash
         run: |
           # For ebpf
@@ -307,7 +307,7 @@ jobs:
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           # Add rust to path for subsequent steps
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-          . "$HOME/.cargo/env
+          . "$HOME/.cargo/env"
           rustup target add nightly-${{ matrix.target }}
           # For ebpf
           rustup toolchain install nightly --component rust-src
@@ -452,12 +452,8 @@ jobs:
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           source $HOME/.cargo/env
-          rustup target add nightly-${{ matrix.target }}
-          # For ebpf
-          rustup toolchain install nightly --component rust-src
-          rustup component add --toolchain nightly llvm-tools-preview
-          # Use nightly by default so that build.rs picks it up automatically
-          echo "RUSTUP_TOOLCHAIN=nightly" >> $HOME/.cargo/env
+          rustup target add ${{ matrix.target }}
+          # No nightly therefore no Ebpf support
         shell: alpine.sh {0}
 
       # Must be in the Alpine VM
@@ -466,7 +462,7 @@ jobs:
         run: |
           cd temp
           source $HOME/.cargo/env
-          make ${{ matrix.platform }}_test
+          make ${{ matrix.platform }}_test_no_ebpf
         shell: alpine.sh --root {0}
         continue-on-error: true
         env:

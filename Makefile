@@ -45,6 +45,8 @@ linux_test_ebpf:
 
 linux_test: unix_test linux_test_ebpf
 
+linux_test_no_ebpf: unix_test
+
 macos_test: unix_test
 
 ios_test: ios
