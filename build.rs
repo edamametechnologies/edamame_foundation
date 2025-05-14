@@ -6,10 +6,10 @@ use std::env;
 use std::env;
 #[cfg(all(target_os = "windows", feature = "packetcapture"))]
 use std::fs;
-#[cfg(all(feature = "ebpf", target_os = "linux"))]
-use std::path::{Path, PathBuf};
 #[cfg(all(target_os = "windows", feature = "packetcapture"))]
 use std::path::PathBuf;
+#[cfg(all(feature = "ebpf", target_os = "linux"))]
+use std::path::{Path, PathBuf};
 #[cfg(all(feature = "ebpf", target_os = "linux"))]
 use std::process::Command;
 #[cfg(all(target_os = "windows", feature = "packetcapture"))]
