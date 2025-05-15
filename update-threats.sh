@@ -43,7 +43,7 @@ update_threat_metrics() {
 
 update_lanscan_port_vulns () {
     local is_local=${1:-false}
-    local target=./src/lanscan_port_vulns_db.rs
+    local target=./src/lanscan/port_vulns_db.rs
     # We need to use 4 # in order to deal with the mess of escape chars found in the CVE descriptions
     local header="// Built in default port vulns db\npub static PORT_VULNS: &str = r####\""
     local trailer="\"####;"
@@ -57,7 +57,7 @@ update_lanscan_port_vulns () {
 
     if [ "$is_local" = true ]; then
         echo "Using local port vulns db file"
-        local body="$(cat ../threatmodels/lanscan-port-vulns-db.json)"
+        local body="$(cat ../threatmodels/lanscan/port-vulns-db.json)"
     else
         echo "Fetching port vulns db from GitHub"
         local branch=$(git rev-parse --abbrev-ref HEAD)
@@ -79,7 +79,7 @@ update_lanscan_port_vulns () {
 
 update_lanscan_vendor_vulns () {
     local is_local=${1:-false}
-    local target=./src/lanscan_vendor_vulns_db.rs
+    local target=./src/lanscan/vendor_vulns_db.rs
     # We need to use 4 # in order to deal with the mess of escape chars found in the CVE descriptions
     local header="// Built in default vendor vulns db\npub static VENDOR_VULNS: &str = r####\""
     local trailer="\"####;"
@@ -93,7 +93,7 @@ update_lanscan_vendor_vulns () {
 
     if [ "$is_local" = true ]; then
         echo "Using local vendor vulns db file"
-        local body="$(cat ../threatmodels/lanscan-vendor-vulns-db.json)"
+        local body="$(cat ../threatmodels/lanscan/vendor-vulns-db.json)"
     else
         echo "Fetching vendor vulns db from GitHub"
         local branch=$(git rev-parse --abbrev-ref HEAD)
@@ -115,7 +115,7 @@ update_lanscan_vendor_vulns () {
 
 update_lanscan_profiles () {
     local is_local=${1:-false}
-    local target=./src/lanscan_profiles_db.rs
+    local target=./src/lanscan/profiles_db.rs
     local header="// Built in default profile db\npub static DEVICE_PROFILES: &str = r#\""
     local trailer="\"#;"
 
@@ -128,7 +128,7 @@ update_lanscan_profiles () {
 
     if [ "$is_local" = true ]; then
         echo "Using local profiles db file"
-        local body="$(cat ../threatmodels/lanscan-profiles-db.json)"
+        local body="$(cat ../threatmodels/lanscan/profiles-db.json)"
     else
         echo "Fetching profiles db from GitHub"
         local branch=$(git rev-parse --abbrev-ref HEAD)

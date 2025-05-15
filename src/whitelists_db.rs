@@ -1,7 +1,7 @@
 // Built in default whitelists db
 pub static WHITELISTS: &str = r#"{
-  "date": "April 11th 2025",
-  "signature": "5198c7bb3e4a4b9886a63823a2a96b2448f4e1ea16842d55672f3825e5ff75ab",
+  "date": "May 15th 2025",
+  "signature": "fad360694f7933c544424fee637f7115877d2a9be71139b962f4e7c3deb3f3c7",
   "whitelists": [
     {
       "endpoints": [
@@ -102,6 +102,11 @@ pub static WHITELISTS: &str = r#"{
           "domain": "pub.dev",
           "port": 443,
           "process": "dart"
+        },
+        {
+          "description": "Connection to Googleusercontent (WARNING too permissive but required for Dart/Flutter and others)",
+          "domain": "*.googleusercontent.com",
+          "port": 443
         },
         {
           "description": "Connection to Chromium source code repository",
@@ -412,6 +417,12 @@ pub static WHITELISTS: &str = r#"{
           "description": "Connection to Canonical mirrors",
           "domain": "*.canonical.com",
           "port": 80,
+          "process": "edamame_posture"
+        },
+        {
+          "description": "Connection to Canonical mirrors",
+          "domain": "*.canonical.com",
+          "port": 443,
           "process": "edamame_posture"
         },
         {
