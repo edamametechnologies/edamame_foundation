@@ -94,7 +94,6 @@ pub trait Backend {
         &self,
         signature: &str,
         domain: &str,
-        policy_name: &str,
     ) -> Result<Vec<PoliciesStatusBackend>>;
 
     async fn get_remediation_lanscan(
