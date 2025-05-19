@@ -2,6 +2,7 @@ use anyhow::{Error, Result};
 use edamame_backend::feedback_info_backend::FeedbackInfoBackend;
 use edamame_backend::lanscan_device_info_backend::*;
 use edamame_backend::lanscan_dislike_device_info_backend::DislikeDeviceInfoBackend;
+use edamame_backend::policy_backend::*;
 use edamame_backend::pwned_breach_backend::BreachDetailBackend;
 use edamame_backend::score_backend::*;
 use edamame_backend::session_info_backend::SessionInfoBackend;
@@ -88,6 +89,19 @@ pub trait Backend {
         domain: &str,
         policy_name: &str,
     ) -> Result<bool>;
+
+    async fn check_policies_for_domain(
+        &self,
+        signature: &str,
+        domain: &str,
+        policy_name: &str,
+    ) -> Result<bool>;
+
+    async fn get_policies_status_for_domain(
+        &self,
+        signature: &str,
+        domain: &str,
+    ) -> Result<Vec<PoliciesStatusBackend>>;
 
     async fn get_remediation_lanscan(
         &self,

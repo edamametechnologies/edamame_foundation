@@ -1,6 +1,6 @@
 [package]
 name = "edamame_foundation"
-version = "0.9.36"
+version = "0.9.37"
 edition = "2021"
 
 [lints.rust]
@@ -143,9 +143,7 @@ windows = { version = "0.61.0", features = [ "Data_Xml_Dom", "Win32_Foundation",
 
 # iOS or macOS
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
-# Broken for now - PR: https://github.com/Absolucy/tracing-oslog/pull/12
-# tracing-oslog = "0.2.0"
-tracing-oslog = { git = "https://github.com/madsmtm/tracing-oslog.git", branch = "pregenerate-bindings" }
+tracing-oslog = "0.2.0"
 
 [dev-dependencies]
 serial_test = "3.1.1"
