@@ -1030,7 +1030,7 @@ checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
 [[package]]
 name = "edamame_backend"
 version = "0.3.4"
-source = "git+https://github.com/edamametechnologies/edamame_backend#8749ebe637d33f86d5c83e9c2a81060a0eb1a745"
+source = "git+https://github.com/edamametechnologies/edamame_backend#712e01ded1e951282491a2b5118cec5a4ca40a2d"
 dependencies = [
  "anyhow",
  "blake3",
@@ -1750,9 +1750,9 @@ dependencies = [
 
 [[package]]
 name = "hyper-util"
-version = "0.1.11"
+version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "497bbc33a26fdd4af9ed9c70d63f61cf56a938375fbb32df34db9b1cd6d643f2"
+checksum = "cf9f1e950e0d9d1d3c47184416723cf29c0d1f93bd8cccf37e4beb6b44f31710"
 dependencies = [
  "bytes",
  "futures-channel",
