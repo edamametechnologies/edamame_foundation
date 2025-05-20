@@ -86,14 +86,14 @@ pub trait Backend {
     async fn check_policy_for_domain(
         &self,
         signature: &str,
-        domain: &str,
+        domain_name: &str,
         policy_name: &str,
     ) -> Result<bool>;
 
     async fn check_policies_for_domain(
         &self,
         signature: &str,
-        domain: &str,
+        domain_name: &str,
     ) -> Result<Vec<PoliciesStatusBackend>>;
 
     async fn get_remediation_lanscan(
