@@ -21,9 +21,6 @@ use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::fmt;
 use tracing_subscriber::prelude::*;
 
-#[cfg(any(target_os = "ios", target_os = "macos"))]
-use tracing_oslog::OsLogger;
-
 const MAX_LOG_LINES: usize = 20000;
 
 lazy_static! {
@@ -333,8 +330,6 @@ pub fn init_logger(
             #[cfg(any(target_os = "ios", target_os = "macos"))]
             {
                 if !matches!(executable_type, "helper") && !matches!(executable_type, "cli") {
-                    // OsLogger if not an helper or a posture
-                    let os_logger = OsLogger::new("com.edamametech.edamame", "");
                     #[cfg(feature = "tokio-console")]
                     match tracing_subscriber::registry()
                         .with(filter_layer)
@@ -343,7 +338,6 @@ pub fn init_logger(
                         .with(sentry_layer)
                         // Must be here when using sentry
                         .with(fmt::layer().with_writer(stdout_writer.0))
-                        .with(os_logger)
                         .with(console_subscriber::spawn())
                         .try_init()
                     {
@@ -358,7 +352,6 @@ pub fn init_logger(
                         .with(sentry_layer)
                         // Must be here when using sentry
                         .with(fmt::layer().with_writer(stdout_writer.0))
-                        .with(os_logger)
                         .try_init()
                     {
                         Ok(_) => {}
@@ -450,15 +443,11 @@ pub fn init_logger(
             #[cfg(any(target_os = "ios", target_os = "macos"))]
             {
                 if !matches!(executable_type, "helper") && !matches!(executable_type, "cli") {
-                    // OsLogger if not an helper or a posture
-                    let os_logger = OsLogger::new("com.edamametech.edamame", "default");
-
                     match tracing_subscriber::registry()
                         .with(filter_layer)
                         .with(fmt::layer().with_writer(stdout_writer.0))
                         .with(fmt::layer().with_writer(file_writer.0))
                         .with(fmt::layer().with_writer(logger.memory_writer.clone()))
-                        .with(os_logger)
                         .try_init()
                     {
                         Ok(_) => {}
