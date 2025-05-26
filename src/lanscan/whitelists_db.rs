@@ -1,10 +1,22 @@
 // Built in default whitelists db
 pub static WHITELISTS: &str = r#"{
-  "date": "April 11th 2025",
-  "signature": "5198c7bb3e4a4b9886a63823a2a96b2448f4e1ea16842d55672f3825e5ff75ab",
+  "date": "May 15th 2025",
+  "signature": "fad360694f7933c544424fee637f7115877d2a9be71139b962f4e7c3deb3f3c7",
   "whitelists": [
     {
       "endpoints": [
+        {
+          "description": "10.0.0.0/8",
+          "ip": "10.0.0.0/8"
+        },
+        {
+          "description": "172.16.0.0/12",
+          "ip": "172.16.0.0/12"
+        },
+        {
+          "description": "192.168.0.0/16",
+          "ip": "192.168.0.0/16"
+        },
         {
           "description": "IP-API",
           "domain": "ip-api.com",
@@ -74,12 +86,6 @@ pub static WHITELISTS: &str = r#"{
           "description": "Cloudflare (http)",
           "port": 80,
           "process": "edamame_posture"
-        },
-        {
-          "description": "GlobalSign",
-          "domain": "*.globalsign.com",
-          "port": 80,
-          "process": "edamame_posture"
         }
       ],
       "extends": null,
@@ -96,6 +102,11 @@ pub static WHITELISTS: &str = r#"{
           "domain": "pub.dev",
           "port": 443,
           "process": "dart"
+        },
+        {
+          "description": "Connection to Googleusercontent (WARNING too permissive but required for Dart/Flutter and others)",
+          "domain": "*.googleusercontent.com",
+          "port": 443
         },
         {
           "description": "Connection to Chromium source code repository",
@@ -173,9 +184,14 @@ pub static WHITELISTS: &str = r#"{
           "port": 443
         },
         {
-          "description": "Connection to GlobalSign",
+          "description": "Connection to GlobalSign (https)",
           "domain": "*.globalsign.com",
           "port": 443
+        },
+        {
+          "description": "Connection to GlobalSign (http)",
+          "domain": "*.globalsign.com",
+          "port": 80
         },
         {
           "description": "Connection to DigiCert",
@@ -299,6 +315,11 @@ pub static WHITELISTS: &str = r#"{
           "port": 80
         },
         {
+          "description": "Connection to Apple News",
+          "domain": "c.apple.news",
+          "port": 443
+        },
+        {
           "as_number": 714,
           "description": "Connection to Apple Engineering services (https) (ASN: 714, Country: US, Owner: APPLE-ENGINEERING)",
           "port": 443
@@ -342,6 +363,11 @@ pub static WHITELISTS: &str = r#"{
           "port": 80
         },
         {
+          "description": "Connection to Alpine Linux",
+          "domain": "*.alpinelinux.org",
+          "port": 443
+        },
+        {
           "description": "Connection to Snapcraft",
           "domain": "api.snapcraft.io",
           "port": 443
@@ -372,6 +398,16 @@ pub static WHITELISTS: &str = r#"{
           "port": 443
         },
         {
+          "description": "Connection to Ubuntu ports",
+          "domain": "ports.ubuntu.com",
+          "port": 443
+        },
+        {
+          "description": "Connection to Ubuntu mirrors",
+          "domain": "archive.archive.ubuntu.com",
+          "port": 443
+        },
+        {
           "as_number": 41231,
           "description": "Connection to Canonical services (http) (ASN: 41231, Country: GB, Owner: CANONICAL-AS)",
           "port": 80,
@@ -381,6 +417,12 @@ pub static WHITELISTS: &str = r#"{
           "description": "Connection to Canonical mirrors",
           "domain": "*.canonical.com",
           "port": 80,
+          "process": "edamame_posture"
+        },
+        {
+          "description": "Connection to Canonical mirrors",
+          "domain": "*.canonical.com",
+          "port": 443,
           "process": "edamame_posture"
         },
         {
