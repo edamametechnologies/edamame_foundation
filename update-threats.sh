@@ -57,7 +57,7 @@ update_lanscan_port_vulns () {
 
     if [ "$is_local" = true ]; then
         echo "Using local port vulns db file"
-        local body="$(cat ../threatmodels/lanscan/port-vulns-db.json)"
+        local body="$(cat ../threatmodels/port-vulns-db.json)"
     else
         echo "Fetching port vulns db from GitHub"
         local branch=$(git rev-parse --abbrev-ref HEAD)
@@ -93,7 +93,7 @@ update_lanscan_vendor_vulns () {
 
     if [ "$is_local" = true ]; then
         echo "Using local vendor vulns db file"
-        local body="$(cat ../threatmodels/lanscan/vendor-vulns-db.json)"
+        local body="$(cat ../threatmodels/vendor-vulns-db.json)"
     else
         echo "Fetching vendor vulns db from GitHub"
         local branch=$(git rev-parse --abbrev-ref HEAD)
@@ -128,7 +128,7 @@ update_lanscan_profiles () {
 
     if [ "$is_local" = true ]; then
         echo "Using local profiles db file"
-        local body="$(cat ../threatmodels/lanscan/profiles-db.json)"
+        local body="$(cat ../threatmodels/profiles-db.json)"
     else
         echo "Fetching profiles db from GitHub"
         local branch=$(git rev-parse --abbrev-ref HEAD)
@@ -150,7 +150,7 @@ update_lanscan_profiles () {
 
 update_whitelists_db() {
     local is_local=${1:-false}
-    local target=./src/whitelists_db.rs
+    local target=./src/lanscan/whitelists_db.rs
     local header="// Built in default whitelists db\npub static WHITELISTS: &str = r#\""
     local trailer="\"#;"
 
@@ -185,7 +185,7 @@ update_whitelists_db() {
 
 update_blacklists_db() {
     local is_local=${1:-false}
-    local target=./src/blacklists_db.rs
+    local target=./src/lanscan/blacklists_db.rs
     local header="// Built in default blacklist db\npub static BLACKLISTS: &str = r#\""
     local trailer="\"#;"
 
