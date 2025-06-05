@@ -195,7 +195,6 @@ jobs:
         id: tests
         shell: bash
         run: |
-          cargo test -- --nocapture
           cargo test --features packetcapture -- --nocapture
         continue-on-error: true
 
@@ -326,7 +325,6 @@ jobs:
         run: |
           # Ensure cargo is in path
           export PATH="$HOME/.cargo/bin:$PATH"
-          cargo test -- --nocapture
           cargo test --features packetcapture -- --nocapture
         continue-on-error: true
 
@@ -478,7 +476,6 @@ jobs:
         run: |
           cd temp
           source $HOME/.cargo/env
-          cargo test -- --nocapture
           cargo test --features packetcapture -- --nocapture
         shell: alpine.sh --root {0}
         continue-on-error: true
