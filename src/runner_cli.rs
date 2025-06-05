@@ -1,4 +1,3 @@
-use crate::runtime::async_spawn_blocking;
 use anyhow::{anyhow, Error, Result};
 use powershell_script::PsScriptBuilder;
 use run_script::ScriptOptions;
@@ -14,7 +13,7 @@ pub async fn run_cli(cmd: &str, username: &str, personate: bool) -> Result<Strin
     let username_clone = username.to_string();
 
     // Spawn a thread to execute the command as neither ps nor run_script are async
-    let handle = async_spawn_blocking(move || -> (i32, String, String) {
+    let handle = tokio::task::spawn_blocking(move || -> (i32, String, String) {
         let (mut code, mut stdout, mut stderr) = (0, String::new(), String::new());
 
         if cfg!(target_os = "windows") {

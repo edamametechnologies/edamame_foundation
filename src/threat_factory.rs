@@ -1,4 +1,3 @@
-use crate::cloud_model::*;
 use crate::threat::*;
 use crate::threat_metrics_android::*;
 use crate::threat_metrics_ios::*;
@@ -6,6 +5,7 @@ use crate::threat_metrics_linux::*;
 use crate::threat_metrics_macos::*;
 use crate::threat_metrics_windows::*;
 use anyhow::{anyhow, Context, Result};
+use edamame_models::*;
 use lazy_static::lazy_static;
 use tracing::{info, warn};
 

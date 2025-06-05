@@ -25,37 +25,37 @@ This library follows a modular design, organized into several functional categor
 - **helper_rx_utility.rs** - Helper utility functions (network interfaces, capture)
 - **helper_state.rs** - Helper activation state management
 
-### Network Analysis (LANScan)
+### Network Analysis (Flodbadd)
 
 #### Core Network Components
-- **lanscan_interface.rs** - Network interface discovery and management
-- **lanscan_ip.rs** - IP address utilities and LAN detection
-- **lanscan_arp.rs** - Address Resolution Protocol operations
-- **lanscan_broadcast.rs** - Network broadcast scanning
-- **lanscan_neighbors.rs** - Neighbor discovery across platforms
-- **lanscan_sessions.rs** - Network connection session tracking
-- **lanscan_resolver.rs** - DNS resolution services
+- **flodbadd_interface.rs** - Network interface discovery and management
+- **flodbadd_ip.rs** - IP address utilities and LAN detection
+- **flodbadd_arp.rs** - Address Resolution Protocol operations
+- **flodbadd_broadcast.rs** - Network broadcast scanning
+- **flodbadd_neighbors.rs** - Neighbor discovery across platforms
+- **flodbadd_sessions.rs** - Network connection session tracking
+- **flodbadd_resolver.rs** - DNS resolution services
 
 #### Packet Capture and Analysis
-- **lanscan_capture.rs** - Network traffic capture engine
-- **lanscan_packets.rs** - Packet parsing and classification
-- **lanscan_dns.rs** - DNS packet analysis
-- **lanscan_l7.rs** - Layer 7 (application) protocol analysis
-- **lanscan_mdns.rs** - Multicast DNS service discovery
+- **flodbadd_capture.rs** - Network traffic capture engine
+- **flodbadd_packets.rs** - Packet parsing and classification
+- **flodbadd_dns.rs** - DNS packet analysis
+- **flodbadd_l7.rs** - Layer 7 (application) protocol analysis
+- **flodbadd_mdns.rs** - Multicast DNS service discovery
 
 #### Device Intelligence
-- **lanscan_device_info.rs** - Device profile data structure
-- **lanscan_oui.rs** - MAC address vendor identification
-- **lanscan_profiles.rs** - Device type identification engine
-- **lanscan_profiles_db.rs** - Device profile database
+- **flodbadd_device_info.rs** - Device profile data structure
+- **flodbadd_oui.rs** - MAC address vendor identification
+- **flodbadd_profiles.rs** - Device type identification engine
+- **flodbadd_profiles_db.rs** - Device profile database
 
 #### Vulnerability Management
-- **lanscan_port_info.rs** - Port information structures
-- **lanscan_port_vulns.rs** - Port vulnerability assessment
-- **lanscan_port_vulns_db.rs** - Port vulnerability database
-- **lanscan_vendor_vulns.rs** - Vendor vulnerability tracking
-- **lanscan_vulnerability_info.rs** - Vulnerability data structures
-- **lanscan_asn.rs** - Autonomous System Number lookups
+- **flodbadd_port_info.rs** - Port information structures
+- **flodbadd_port_vulns.rs** - Port vulnerability assessment
+- **flodbadd_port_vulns_db.rs** - Port vulnerability database
+- **flodbadd_vendor_vulns.rs** - Vendor vulnerability tracking
+- **flodbadd_vulnerability_info.rs** - Vulnerability data structures
+- **flodbadd_asn.rs** - Autonomous System Number lookups
 - **asn_db.rs** - ASN database operations
 
 ### Security Assessment Engine
@@ -82,7 +82,7 @@ This library follows a modular design, organized into several functional categor
 
 ### Cloud Integration
 
-- **cloud_model.rs** - Base trait for cloud-synchronized models
+- **edamame_model.rs** - Base trait for cloud-synchronized models
 - **backend.rs** - Backend service interface
 - **health.rs** - Health metrics tracking
 - **runner_cli.rs** - CLI command execution engine

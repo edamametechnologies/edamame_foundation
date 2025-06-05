@@ -195,7 +195,8 @@ jobs:
         id: tests
         shell: bash
         run: |
-          make ${{ matrix.platform }}_test
+          cargo test -- --nocapture
+          cargo test --features packetcapture -- --nocapture
         continue-on-error: true
 
       - name: Dump logs
@@ -325,7 +326,8 @@ jobs:
         run: |
           # Ensure cargo is in path
           export PATH="$HOME/.cargo/bin:$PATH"
-          make ${{ matrix.platform }}_test_no_ebpf
+          cargo test -- --nocapture
+          cargo test --features packetcapture -- --nocapture
         continue-on-error: true
 
       - name: Dump logs
@@ -476,7 +478,8 @@ jobs:
         run: |
           cd temp
           source $HOME/.cargo/env
-          make ${{ matrix.platform }}_test_no_ebpf
+          cargo test -- --nocapture
+          cargo test --features packetcapture -- --nocapture
         shell: alpine.sh --root {0}
         continue-on-error: true
         env:

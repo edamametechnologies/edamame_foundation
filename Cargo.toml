@@ -1,6 +1,6 @@
 [package]
 name = "edamame_foundation"
-version = "0.9.38"
+version = "0.9.40"
 edition = "2021"
 
 [lints.rust]
@@ -8,9 +8,8 @@ async_fn_in_trait = "allow"
 
 [features]
 default = []
-asyncpacketcapture = []
-packetcapture = [ "pcap", "pnet_packet", "hickory-resolver", "dns-parser", "sysinfo", "netstat2" ]
 tokio-console = []
+packetcapture = []
 ebpf = [ "aya", "bytemuck", "nix" ]
 
 [lib]
@@ -19,8 +18,18 @@ ebpf = [ "aya", "bytemuck", "nix" ]
 crate-type = [ "staticlib", "cdylib", "lib" ]
 
 [dependencies]
+# Local copy in order to allow rapid development/debug
 #edamame_backend = { path = "../edamame_backend" }
 edamame_backend = { git = "https://github.com/edamametechnologies/edamame_backend", branch = "main" }
+# Local copy in order to allow rapid development/debug
+#undeadlock = { path = "../undeadlock" }
+undeadlock = { git = "https://github.com/edamametechnologies/undeadlock", branch = "main" }
+# Local copy in order to allow rapid development/debug
+#flodbadd = { path = "../flodbadd" }
+flodbadd = { git = "https://github.com/edamametechnologies/flodbadd", branch = "main" }
+# Local copy in order to allow rapid development/debug
+#edamame_models = { path = "../edamame_models" }
+edamame_models = { git = "https://github.com/edamametechnologies/threatmodels-rs", branch = "main" }
 
 # Sentry
 # Beware it will use reqwest with native-tls by default, not rustls
@@ -112,6 +121,10 @@ csv = "1.0.10"
 # Prevent reqwest from using native-tls
 reqwest = { version = "0.12.5", default-features = false, features = ["gzip", "rustls-tls"] }
 
+# macOS
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2.168"
+
 # Android
 [target.'cfg(target_os = "android")'.dependencies]
 # Native Android tracing
@@ -120,17 +133,6 @@ tracing-android = "0.2.0"
 [target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
 # Not supported on iOS an Android (only implemented in Flutter for those platforms)
 network-interface = "2.0.0"
-
-# Capture on macOS, Linux, Windows
-# pcap requires libpcap-devel on Linux, and Npcap on Windows
-pcap = { version = "2.2.0" , optional = true, features = ["capture-stream"] }
-hickory-resolver = { version = "0.25.1", optional = true }
-dns-parser = { git = "https://github.com/edamametechnologies/dns-parser", branch = "pr47", optional = true }
-pnet_packet = { version = "0.35.0", optional = true }
-# System information
-sysinfo = { version = "0.34.2", optional = true }
-libc = "0.2.168"
-netstat2 = { version = "0.11.0", optional = true }
 
 [target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
 users = "0.11.0"
@@ -148,11 +150,6 @@ serial_test = "3.1.1"
 # Conditional compilation for build dependencies
 # protobuf->Rust compiler
 tonic-build = "0.13.0"
-
-# Npcap
-# Prevent reqwest from using native-tls
-reqwest = { version = "0.12.5", default-features = false, features = ["blocking", "rustls-tls"] }
-zip = "2.2.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 aya = { version = "0.13.1", features = ["async_tokio"], optional = true }
