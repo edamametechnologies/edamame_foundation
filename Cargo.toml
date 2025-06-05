@@ -9,7 +9,7 @@ async_fn_in_trait = "allow"
 [features]
 default = []
 tokio-console = []
-packetcapture = []
+packetcapture = [ "flodbadd/packetcapture" ]
 ebpf = [ "aya", "bytemuck", "nix" ]
 
 [lib]
