@@ -1,10 +1,10 @@
-use crate::cloud_model::*;
 use crate::history::*;
 use crate::order::MetricOrderResult;
 use crate::threat::*;
 use crate::threat_factory::*;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use edamame_models::*;
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use std::collections::{HashMap, HashSet};

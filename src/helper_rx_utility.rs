@@ -1,25 +1,23 @@
-use crate::customlock::CustomRwLock;
 use crate::helper_rx::{order_error, CARGO_PKG_VERSION};
-use crate::lanscan::arp::*;
-use crate::lanscan::broadcast::scan_hosts_broadcast;
-#[cfg(all(
-    any(target_os = "macos", target_os = "linux", target_os = "windows"),
-    feature = "packetcapture"
-))]
-use crate::lanscan::capture::LANScanCapture;
-use crate::lanscan::interface::*;
-use crate::lanscan::ip::*;
-use crate::lanscan::mdns::*;
-use crate::lanscan::neighbors::scan_neighbors;
-#[cfg(all(
-    any(target_os = "macos", target_os = "linux", target_os = "windows"),
-    feature = "packetcapture"
-))]
-use crate::lanscan::sessions::SessionFilter;
 use crate::logger::get_all_logs;
 use crate::runner_cli::run_cli;
-use crate::runtime::async_spawn;
 use anyhow::Result;
+use flodbadd::arp::*;
+use flodbadd::broadcast::scan_hosts_broadcast;
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux", target_os = "windows"),
+    feature = "packetcapture"
+))]
+use flodbadd::capture::FlodbaddCapture;
+use flodbadd::interface::*;
+use flodbadd::ip::*;
+use flodbadd::mdns::*;
+use flodbadd::neighbors::scan_neighbors;
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux", target_os = "windows"),
+    feature = "packetcapture"
+))]
+use flodbadd::sessions::SessionFilter;
 use lazy_static::lazy_static;
 #[cfg(target_os = "macos")]
 use libc::EACCES;
@@ -33,20 +31,21 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info, warn};
+use undeadlock::CustomRwLock;
 
 #[cfg(all(
     any(target_os = "macos", target_os = "linux", target_os = "windows"),
     feature = "packetcapture"
 ))]
 lazy_static! {
-    pub static ref CAPTURE: Arc<CustomRwLock<LANScanCapture>> =
-        Arc::new(CustomRwLock::new(LANScanCapture::new()));
+    pub static ref CAPTURE: Arc<CustomRwLock<FlodbaddCapture>> =
+        Arc::new(CustomRwLock::new(FlodbaddCapture::new()));
 }
 
 lazy_static! {
     // Current default interface
-    pub static ref INTERFACES: Arc<CustomRwLock<LANScanInterfaces>> =
-        Arc::new(CustomRwLock::new(LANScanInterfaces::new()));
+    pub static ref INTERFACES: Arc<CustomRwLock<FlodbaddInterfaces>> =
+        Arc::new(CustomRwLock::new(FlodbaddInterfaces::new()));
     pub static ref INTERFACES_SIGNATURE: Arc<CustomRwLock<String>> = Arc::new(CustomRwLock::new(String::new()));
 }
 
@@ -289,6 +288,42 @@ pub async fn utility_create_custom_whitelists() -> Result<String> {
     any(target_os = "macos", target_os = "linux", target_os = "windows"),
     feature = "packetcapture"
 ))]
+pub async fn utility_augment_custom_whitelists() -> Result<String> {
+    let whitelist = match CAPTURE.write().await.augment_custom_whitelists().await {
+        Ok(whitelist) => whitelist,
+        Err(e) => {
+            error!("Error augmenting custom whitelists: {}", e);
+            return order_error(&format!("error augmenting custom whitelists: {}", e), false);
+        }
+    };
+    tracing::debug!("Returning whitelist: {}", whitelist);
+    Ok(whitelist)
+}
+
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux", target_os = "windows"),
+    feature = "packetcapture"
+))]
+pub async fn utility_merge_custom_whitelists(
+    whitelist1_json: &str,
+    whitelist2_json: &str,
+) -> Result<String> {
+    let whitelist =
+        match FlodbaddCapture::merge_custom_whitelists(whitelist1_json, whitelist2_json).await {
+            Ok(whitelist) => whitelist,
+            Err(e) => {
+                error!("Error merging custom whitelists: {}", e);
+                return order_error(&format!("error merging custom whitelists: {}", e), false);
+            }
+        };
+    tracing::debug!("Returning whitelist: {}", whitelist);
+    Ok(whitelist)
+}
+
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux", target_os = "windows"),
+    feature = "packetcapture"
+))]
 pub async fn utility_set_custom_blacklists(blacklist_json: &str) -> Result<String> {
     let _ = CAPTURE
         .write()
@@ -496,12 +531,15 @@ pub async fn utility_get_whitelist_name() -> Result<String> {
 
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub fn start_interface_monitor() {
+    let rt = crate::runtime::handle();
+
     #[cfg(all(
         any(target_os = "macos", target_os = "linux", target_os = "windows"),
         feature = "packetcapture"
     ))]
     let capture = CAPTURE.clone();
-    async_spawn(async move {
+
+    rt.spawn(async move {
         loop {
             if check_interfaces_changes().await {
                 let interfaces = INTERFACES.read().await.clone();
@@ -534,10 +572,10 @@ pub fn start_interface_monitor() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lanscan::sessions::{
+    use chrono::{TimeZone, Utc};
+    use flodbadd::sessions::{
         Protocol, Session, SessionFilter, SessionInfo, SessionStats, SessionStatus, WhitelistState,
     };
-    use chrono::{TimeZone, Utc};
     use macaddr::MacAddr6;
     use serde_json;
     use std::net::{IpAddr, Ipv4Addr};
@@ -662,6 +700,7 @@ mod tests {
             dst_asn: None,
             is_whitelisted: WhitelistState::Unknown,
             criticality: "low".to_string(),
+            dismissed: false,
             whitelist_reason: None,
             uid: "test-uid-123".to_string(),
             last_modified: Utc.with_ymd_and_hms(2023, 1, 1, 12, 5, 1).unwrap(),

@@ -1,89 +1,49 @@
+use once_cell::sync::OnceCell;
 use std::future::Future;
-use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Mutex};
-use tokio::runtime::{Handle, Runtime};
-use tokio::task::JoinHandle;
-use tracing::{trace, warn};
+use tokio::runtime::Runtime;
 
-#[derive(Debug)]
-pub struct TaskHandle {
-    pub handle: JoinHandle<()>,
-    pub stop_flag: Arc<AtomicBool>,
-}
+// Global runtime instance
+static RUNTIME: OnceCell<Runtime> = OnceCell::new();
 
-// Use Arc to wrap the Runtime for safe sharing across threads
-static RUNTIME: Mutex<Option<Arc<Runtime>>> = Mutex::new(None);
+/// Initialize the Tokio runtime with edamame-specific settings.
+///
+/// Call this once at application startup before any async operations.
+pub fn init() {
+    let _ = RUNTIME.get_or_init(|| {
+        let mut builder = tokio::runtime::Builder::new_multi_thread();
+        builder.enable_all().thread_name("edamame");
 
-// Initializes the Tokio runtime and stores it in the global static variable.
-// If the runtime is already initialized, it does nothing.
-pub fn async_init() {
-    // Check if the runtime has already been initialized
-    if RUNTIME.lock().expect("Failed to lock runtime").is_some() {
-        warn!("Runtime already initialized");
-        return;
-    }
-
-    // Build a new multi-threaded Tokio runtime
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .thread_name("edamame")
-        .build()
-        .expect("Failed to build runtime");
-
-    // Store the new runtime in the global static variable
-    let rt = Arc::new(rt);
-    *RUNTIME.lock().expect("Failed to lock runtime") = Some(rt);
-}
-
-// Gets the handle of the initialized runtime.
-// If the runtime is not initialized, it returns the current default Tokio runtime handle.
-fn get_runtime_handle() -> Handle {
-    match RUNTIME.lock() {
-        Ok(rt_lock) => {
-            if let Some(rt) = &*rt_lock {
-                trace!("Using custom runtime handle");
-                // Show backtrace
-                use std::backtrace::Backtrace;
-                let backtrace = Backtrace::capture();
-                trace!("Backtrace: {:?}", backtrace);
-                rt.handle().clone()
-            } else {
-                warn!("Runtime not initialized, using default Tokio runtime handle");
-                Handle::current()
-            }
+        // Set worker threads based on available parallelism
+        if let Ok(parallelism) = std::thread::available_parallelism() {
+            builder.worker_threads(parallelism.get());
         }
-        Err(_) => Handle::current(),
-    }
+
+        builder.build().expect("Failed to build runtime")
+    });
 }
 
-// Executes an asynchronous function and blocks until it completes.
-// If the custom runtime is not available, it uses the default Tokio runtime.
-pub fn async_exec<R, F>(async_fn: F) -> R
+/// Block on a future using the initialized runtime.
+///
+/// This is mainly for use in synchronous API functions that need to call async code.
+/// In async contexts, use tokio directly.
+///
+/// # Panics
+/// Panics if the runtime hasn't been initialized.
+pub fn block_on<F>(future: F) -> F::Output
 where
-    R: 'static,
-    F: Future<Output = R> + 'static,
+    F: Future,
 {
-    let handle = get_runtime_handle();
-    handle.block_on(async_fn)
+    RUNTIME
+        .get()
+        .expect("Runtime not initialized. Call runtime::init() first.")
+        .block_on(future)
 }
 
-// Spawns an asynchronous task on the runtime.
-// If the custom runtime is not available, it uses the default Tokio runtime.
-pub fn async_spawn<F>(async_fn: F) -> JoinHandle<()>
-where
-    F: Future<Output = ()> + 'static + Send,
-{
-    let handle = get_runtime_handle();
-    handle.spawn(async_fn)
-}
-
-// Spawns a blocking task on the runtime.
-// If the custom runtime is not available, it uses the default Tokio runtime.
-pub fn async_spawn_blocking<F, R>(blocking_fn: F) -> JoinHandle<R>
-where
-    F: FnOnce() -> R + Send + 'static,
-    R: Send + 'static,
-{
-    let handle = get_runtime_handle();
-    handle.spawn_blocking(blocking_fn)
+/// Get a reference to the runtime.
+///
+/// Useful when you need to pass the runtime handle explicitly.
+pub fn handle() -> &'static Runtime {
+    RUNTIME
+        .get()
+        .expect("Runtime not initialized. Call runtime::init() first.")
 }

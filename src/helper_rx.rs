@@ -395,7 +395,6 @@ pub async fn rpc_run(
                 feature = "packetcapture"
             ))]
             "set_whitelist" => utility_set_whitelist(arg1).await,
-
             #[cfg(all(
                 any(target_os = "macos", target_os = "linux", target_os = "windows"),
                 feature = "packetcapture"
@@ -406,6 +405,16 @@ pub async fn rpc_run(
                 feature = "packetcapture"
             ))]
             "set_custom_whitelists" => utility_set_custom_whitelists(arg1).await,
+            #[cfg(all(
+                any(target_os = "macos", target_os = "linux", target_os = "windows"),
+                feature = "packetcapture"
+            ))]
+            "augment_custom_whitelists" => utility_augment_custom_whitelists().await,
+            #[cfg(all(
+                any(target_os = "macos", target_os = "linux", target_os = "windows"),
+                feature = "packetcapture"
+            ))]
+            "merge_custom_whitelists" => utility_merge_custom_whitelists(arg1, arg2).await,
             #[cfg(all(
                 any(target_os = "macos", target_os = "linux", target_os = "windows"),
                 feature = "packetcapture"
@@ -493,7 +502,6 @@ pub async fn rpc_run(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::async_spawn;
     use edamame_proto::edamame_helper_client::EdamameHelperClient;
     use edamame_proto::edamame_helper_server::{EdamameHelper, EdamameHelperServer};
     use std::str;
@@ -639,7 +647,7 @@ mod tests {
             });
 
         // Start server in a separate task
-        async_spawn(async move {
+        tokio::spawn(async move {
             info!("Starting server on {:?}", addr);
             if let Err(e) = server_future.await {
                 error!("Server error: {:?}", e);

@@ -1,6 +1,6 @@
 // Built in default threat model
 pub static THREAT_METRICS_LINUX: &str = r#"{
-  "date": "April 11th 2025",
+  "date": "June 01th 2025",
   "extends": "none",
   "metrics": [
     {
@@ -93,7 +93,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "LANG=C sentinelctl version 2>/dev/null | grep -q 'Agent version' || pgrep -f FortiEDRAvScanner >/dev/null 2>&1 || echo epp_disabled"
+        "target": "sentinel_found=0; forti_found=0; if command -v sentinelctl >/dev/null 2>&1 && LANG=C sentinelctl version 2>/dev/null | grep -q \"Agent version\"; then sentinel_found=1; fi; if pgrep -f FortiEDRAvScanner >/dev/null 2>&1; then forti_found=1; fi; if [ $sentinel_found -eq 0 ] && [ $forti_found -eq 0 ]; then echo \"epp_disabled\"; fi"
       },
       "metrictype": "bool",
       "name": "no EPP",
@@ -500,7 +500,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         },
         {
           "locale": "FR",
-          "summary": "Le fichier `/etc/fstab` dans les systèmes Unix et Linux fournit une table des systèmes de fichiers qui doivent être montés automatiquement au démarrage du système. Ce fichier contient des informations importantes telles que les systèmes de fichiers à monter, où les monter et quelles options utiliser.\nCompte tenu de son importance, les permissions recommandées pour le fichier `/etc/fstab` sont `644` :\n- `6` (lecture et écriture) pour le propriétaire, qui devrait être l'utilisateur root ou superutilisateur. Cela permet au système de modifier le fichier lorsque des systèmes de fichiers sont ajoutés ou supprimés.\n- `4` (lecture seule) pour le groupe et les autres. Cela permet aux utilisateurs et aux processus de lire le fichier et de comprendre les systèmes de fichiers du système, mais les empêche d'apporter des modifications potentiellement nuisibles.\nCette configuration garantit que seul l'utilisateur root peut modifier le fichier, protégeant ainsi la configuration du système de fichiers du système. En même temps, elle permet aux autres utilisateurs et processus de lire le fichier, fournissant l'accès nécessaire aux informations sur le système de fichiers.",
+          "summary": "Le fichier `/etc/fstab` dans les systèmes Unix et Linux fournit une table des systèmes de fichiers qui doivent être montés automatiquement au démarrage du système. Ce fichier contient des informations importantes telles que les systèmes de fichiers à monter, où les monter et quelles options utiliser.\nCompte tenu de son importance, les permissions recommandées pour le fichier `/etc/fstab` sont `644` :\n- `6` (lecture et écriture) pour le propriétaire, qui devrait être l'utilisateur root ou superutilisateur. Cela permet au système de modifier le fichier lorsque des systèmes de fichiers sont ajoutés ou supprimés.\n- `4` (lecture seule) pour le groupe et les autres. Cela permet aux utilisateurs et aux processus de lire le fichier et de comprendre les systèmes de fichiers du système, mais les empêche d'apporter des modifications potentiellement nuisibles.\nCette configuration garantit que seul l'utilisateur root peut modifier le fichier, protégeant ainsi la configuration du système de fichiers.",
           "title": "Permissions du fichier /etc/fstab"
         }
       ],
@@ -608,7 +608,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "ls -l /etc/group | grep -q 'root root' || echo bad_group"
+        "target": "ls -l /etc/group | grep -q \"root root\" || echo bad_group"
       },
       "metrictype": "bool",
       "name": "group group",
@@ -657,7 +657,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "ls -l /etc/shadow | grep -q 'root shadow' || echo bad_group"
+        "target": "ls -l /etc/shadow | grep -q \"root shadow\" || echo bad_group"
       },
       "metrictype": "bool",
       "name": "shadow group",
@@ -706,7 +706,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "LANG=C apt update -qq > /dev/null 2>&1 || true && apt list --upgradeable 2>/dev/null | grep -q 'upgradable' && echo os_outdated"
+        "target": "LANG=C apt update -qq > /dev/null 2>&1 || true && apt list --upgradeable 2>/dev/null | grep -q \"upgradable\" && echo os_outdated"
       },
       "metrictype": "bool",
       "name": "latest os",
@@ -755,7 +755,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "if command -v ufw >/dev/null 2>&1; then output=$(LANG=C ufw status 2>&1); ufw_exit_code=$?; if [ $ufw_exit_code -eq 0 ]; then echo \"$output\" | grep -qi 'Status: active' || echo firewall_disabled; fi; fi"
+        "target": "if command -v ufw >/dev/null 2>&1; then output=$(LANG=C ufw status 2>&1); ufw_exit_code=$?; if [ $ufw_exit_code -eq 0 ]; then echo \"$output\" | grep -qi \"Status: active\" || echo firewall_disabled; fi; fi"
       },
       "metrictype": "bool",
       "name": "local firewall disabled",
@@ -810,7 +810,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "LANG=C systemctl is-active ssh | grep -q 'inactive' || echo remote_login_enabled"
+        "target": "LANG=C systemctl is-active ssh | grep -q \"inactive\" || echo remote_login_enabled"
       },
       "metrictype": "bool",
       "name": "remote login enabled",
@@ -881,7 +881,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "LANG=C systemctl is-active xrdp 2>/dev/null | grep -q 'inactive' || echo rdp_enabled"
+        "target": "LANG=C systemctl is-active xrdp 2>/dev/null | grep -q \"inactive\" || echo rdp_enabled"
       },
       "metrictype": "bool",
       "name": "remote desktop enabled",
@@ -952,7 +952,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "LANG=C systemctl is-active nfs-kernel-server 2>/dev/null | grep -q 'inactive' || echo nfs_enabled; LANG=C systemctl is-active smbd 2>/dev/null | grep -q 'inactive' || echo smb_enabled"
+        "target": "LANG=C systemctl is-active nfs-kernel-server 2>/dev/null | grep -q \"inactive\" || echo nfs_enabled; LANG=C systemctl is-active smbd 2>/dev/null | grep -q \"inactive\" || echo smb_enabled"
       },
       "metrictype": "bool",
       "name": "file sharing enabled",
@@ -1023,7 +1023,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "LANG=C gsettings get org.gnome.desktop.screensaver lock-enabled | grep -q 'true' || echo screensaver_lock_disabled"
+        "target": "LANG=C gsettings get org.gnome.desktop.screensaver lock-enabled | grep -q \"true\" || echo screensaver_lock_disabled"
       },
       "metrictype": "bool",
       "name": "too slow or disabled screensaver lock",
@@ -1096,7 +1096,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "LANG=C mokutil --sb-state | grep -q 'SecureBoot enabled' || echo secure_boot_disabled"
+        "target": "LANG=C mokutil --sb-state | grep -q \"SecureBoot enabled\" || echo secure_boot_disabled"
       },
       "metrictype": "bool",
       "name": "secure boot disabled",
@@ -1157,7 +1157,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "[ ! -f /etc/security/pwquality.conf ] && echo 'weak password_policy: pwquality is not in use' || ! grep -qvE '^\\s*#|^\\s*$' /etc/security/pwquality.conf && echo 'weak password policy: conf file uses defaults'"
+        "target": "[ ! -f /etc/security/pwquality.conf ] && echo \"weak password_policy: pwquality is not in use\" || ! grep -qvE '^\\s*#|^\\s*$' /etc/security/pwquality.conf && echo \"weak password policy: conf file uses defaults\""
       },
       "metrictype": "bool",
       "name": "password is too weak",
@@ -1268,5 +1268,5 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
     }
   ],
   "name": "threat model Linux",
-  "signature": "925192be89d649dc58f9fff7c9f812c116761acaaf10d85fc80f72deb05eaa36"
+  "signature": "060f74f017d0b6caef1ae4f72b9c2773e6f82a9171c0abdb1898ccb5ac4e6fa9"
 }"#;
