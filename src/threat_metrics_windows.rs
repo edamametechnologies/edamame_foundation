@@ -1,6 +1,6 @@
 // Built in default threat model
 pub static THREAT_METRICS_WINDOWS: &str = r#"{
-  "date": "April 11th 2025",
+  "date": "June 08th 2025",
   "extends": "none",
   "metrics": [
     {
@@ -1840,5 +1840,5 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
     }
   ],
   "name": "threat model Windows",
-  "signature": "7a67457fd74d69ecaf5abb7268e47185861a343f5d9f95ad52b15a8df49c679a"
+  "signature": "98d240a7cfb012da5c1700ba3e816a76bd4851d40007635ba2eff9ab32a8534d"
 }"#;

@@ -1,6 +1,6 @@
 // Built in default threat model
 pub static THREAT_METRICS_MACOS: &str = r#"{
-  "date": "April 11th 2025",
+  "date": "June 08th 2025",
   "extends": "none",
   "metrics": [
     {
@@ -2040,5 +2040,5 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
     }
   ],
   "name": "threat model macOS",
-  "signature": "5a28b7267d02b4c6c158d425706d9b2b1413b6c79664ad3ffd31b72351d892b1"
+  "signature": "8c6c44079eacdae296f0c5f7d43060c8d8a30f19ded5c0163789f7d5df7d5965"
 }"#;
