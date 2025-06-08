@@ -1762,6 +1762,77 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
       "description": [
         {
           "locale": "EN",
+          "summary": "The egress network traffic is not verified or contains anomalous traffic.",
+          "title": "Unverified or egress traffic"
+        },
+        {
+          "locale": "FR",
+          "summary": "Le trafic réseau sortant n'est pas vérifié ou contient du trafic anormal.",
+          "title": "Trafic sortant non vérifié ou non sécurisé"
+        }
+      ],
+      "dimension": "network",
+      "implementation": {
+        "class": "internal",
+        "education": [],
+        "elevation": "user",
+        "maxversion": 0,
+        "minversion": 12,
+        "system": "macOS",
+        "target": "egresscan"
+      },
+      "metrictype": "bool",
+      "name": "egresscan",
+      "remediation": {
+        "class": "internal",
+        "education": [
+          {
+            "class": "html",
+            "locale": "EN",
+            "target": "<p>Inspect the egress network traffic to identify potential threats by following these steps:</p><ul><li>Navigate to the 'Sessions' tab.</li><li>Press the 'Capture' button.</li><li>If an anomalous session is identified, take appropriate action.</li></ul>"
+          },
+          {
+            "class": "html",
+            "locale": "FR",
+            "target": "<p>Inspectez le trafic réseau sortant pour identifier les menaces potentielles en suivant ces étapes:</p><ul><li>Allez dans l'onglet 'Sessions'.</li><li>Appuyez sur le bouton 'Capture'.</li><li>Si une session anormale est identifiée, prenez les mesures appropriées.</li></ul>"
+          }
+        ],
+        "elevation": "",
+        "maxversion": 0,
+        "minversion": 12,
+        "system": "macOS",
+        "target": "session_manager"
+      },
+      "rollback": {
+        "class": "internal",
+        "education": [
+          {
+            "class": "html",
+            "locale": "EN",
+            "target": "<p>Scan your network to identify all connected devices and assess potential threats by following these steps:</p><ul><li>Navigate to the 'Network' tab.</li><li>Devices of critical importance are marked with yellow for medium criticality and red for high criticality.</li><li>Select a critical device.</li><li>Assess each port's criticality by reading the associated CVEs and analyzing potential issues with AI.</li><li>If a port is determined to be safe, mark it as verified.</li></ul><p>Once all devices are deemed safe, this threat will be marked as inactive.</p>"
+          },
+          {
+            "class": "html",
+            "locale": "FR",
+            "target": "<p>Scannez votre réseau pour identifier tous les appareils connectés et évaluer les menaces potentielles en suivant ces étapes:</p><ul><li>Allez dans l'onglet 'Réseau'.</li><li>Les appareils de grande importance sont marqués en jaune pour une criticité moyenne et en rouge pour une criticité élevée.</li><li>Sélectionnez un appareil critique.</li><li>Évaluez la criticité de chaque port en lisant les CVE associés et en analysant les problèmes potentiels avec l'IA.</li><li>Si un port est déterminé comme sûr, marquez-le comme vérifié.</li></ul><p>Une fois que tous les appareils sont considérés comme sûrs, cette menace sera marquée comme inactive.</p>"
+          }
+        ],
+        "elevation": "",
+        "maxversion": 0,
+        "minversion": 12,
+        "system": "macOS",
+        "target": "session_manager"
+      },
+      "scope": "generic",
+      "severity": 1,
+      "tags": [
+        "Personal Posture"
+      ]
+    },
+    {
+      "description": [
+        {
+          "locale": "EN",
           "summary": "Your operating system is not up to date, please proceed to upgrade to get the latest security patches.",
           "title": "Your OS is not up to date"
         },
