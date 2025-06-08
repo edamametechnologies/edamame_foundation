@@ -10,7 +10,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 use tokio::time::timeout;
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Identity};
-use tracing::trace;
+use tracing::{debug, trace};
 
 // Implement a flag to detect if the helper is in fatal state
 lazy_static! {
@@ -149,6 +149,7 @@ async fn helper_run(
         .ca_certificate(server_root_ca_cert)
         .identity(client_identity);
 
+    debug!("Connecting to helper server: {}", target);
     let channel = Channel::from_static(target).tls_config(tls)?;
 
     // Timeout the connection after 120 seconds, this needs to be high enough as we are querying the helper in //
