@@ -1763,7 +1763,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         {
           "locale": "EN",
           "summary": "The egress network traffic is not verified or contains anomalous traffic.",
-          "title": "Unverified or egress traffic"
+          "title": "Unverified or anomalous traffic"
         },
         {
           "locale": "FR",
