@@ -1294,7 +1294,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "([ -d \"/Applications/1Password 7.app\" ] || [ -d \"/Applications/LastPass.app\" ] || [ -d \"/Applications/KeePassXC.app\" ] || [ -d \"/Applications/Bitwarden.app\" ] || command -v pass || command -v op || command -v lpass || command -v keepassxc || command -v bw) >/dev/null 2>&1 || echo \"No password manager installed\""
+        "target": "([ -d \"/Applications/1Password.app\" ] || [ -d \"/Applications/LastPass.app\" ] || [ -d \"/Applications/KeePassXC.app\" ] || [ -d \"/Applications/Bitwarden.app\" ]) >/dev/null 2>&1 || echo \"No password manager installed\""
       },
       "metrictype": "bool",
       "name": "no password manager",
