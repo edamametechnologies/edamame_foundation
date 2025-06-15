@@ -1306,7 +1306,7 @@ dependencies = [
 [[package]]
 name = "flodbadd"
 version = "0.9.41"
-source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#b01893520ff5b7e1552fe43cd0501fa4dd7a7b00"
+source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#07e09b55fcfbaf2d5f58ff970b24e5f9b0ab3b42"
 dependencies = [
  "anyhow",
  "arp-toolkit",
@@ -3654,12 +3654,9 @@ checksum = "d66dc143e6b11c1eddc06d5c423cfc97062865baf299914ab64caa38182078fe"
 
 [[package]]
 name = "slab"
-version = "0.4.9"
+version = "0.4.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8f92a496fb766b417c996b9c5e57daf2f7ad3b0bebe1ccfca4856390e3d3bb67"
-dependencies = [
- "autocfg",
-]
+checksum = "04dc19736151f35336d325007ac991178d504a119863a2fcb3758cdb5e52c50d"
 
 [[package]]
 name = "smallvec"
