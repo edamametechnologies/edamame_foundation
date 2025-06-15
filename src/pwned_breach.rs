@@ -45,7 +45,7 @@ pub struct BreachDetail {
     pub data_classes: Vec<String>,
     pub is_verified: bool,
     pub is_sensitive: bool,
-    pub dismiss: bool,
+    pub dismissed: bool,
     pub timestamp_dismiss: DateTime<Utc>,
     pub criticality: PwnedCriticality,
 }
