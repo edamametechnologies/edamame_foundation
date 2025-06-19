@@ -64,8 +64,10 @@ jobs:
             arch: aarch64
             target: aarch64-unknown-linux-gnu
             protobuf_install: sudo apt-get update && sudo apt-get install -y protobuf-compiler libpcap-dev
+    
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 90
+    # We need to wait a long time for aarch64 due to the use of qemu
+    timeout-minutes: 240
     
     steps:
       - name: Setup EDAMAME Posture
@@ -377,6 +379,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     # We need to wait a long time for musl aarch64 due to the use of qemu
     timeout-minutes: 240
+
     env:
       CARGO_TERM_COLOR: always
       EDAMAME_TARGET: ${{ secrets.EDAMAME_TARGET }}
