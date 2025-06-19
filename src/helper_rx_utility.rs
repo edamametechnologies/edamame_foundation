@@ -205,9 +205,6 @@ pub async fn utility_get_logs() -> Result<String> {
     feature = "packetcapture"
 ))]
 pub async fn utility_start_capture() -> Result<String> {
-    if CAPTURE.read().await.is_capturing().await {
-        return order_error("capture already started", false);
-    }
     let interfaces = INTERFACES.read().await.clone();
     CAPTURE.write().await.start(&interfaces).await;
     Ok("".to_string())
@@ -227,9 +224,6 @@ pub async fn utility_stop_capture() -> Result<String> {
     feature = "packetcapture"
 ))]
 pub async fn utility_restart_capture() -> Result<String> {
-    if !CAPTURE.read().await.is_capturing().await {
-        return order_error("restart capture: capture not running", false);
-    }
     let interfaces = INTERFACES.read().await.clone();
     CAPTURE.write().await.restart(&interfaces).await;
     Ok("".to_string())
