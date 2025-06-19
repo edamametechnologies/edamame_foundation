@@ -2,15 +2,14 @@ use fmt::MakeWriter;
 use lazy_static::lazy_static;
 use regex::Regex;
 use sentry_tracing::EventFilter;
-use std::env::set_var;
 use std::{
     collections::VecDeque,
     env::{current_exe, var},
-    fs::create_dir_all,
+    fs::{create_dir_all, File},
     io::{self, Write},
     mem::forget,
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, Once},
 };
 use tracing::Level;
 #[cfg(target_os = "android")]
@@ -54,6 +53,9 @@ lazy_static! {
         Regex::new(&pattern).expect("Failed to compile sanitization regex")
     };
 }
+
+static PANIC_HOOK_INIT: Once = Once::new();
+static EXECUTABLE_TYPE: Mutex<Option<String>> = Mutex::new(None);
 
 pub struct MemoryWriterData {
     logs: VecDeque<String>,
@@ -174,30 +176,128 @@ impl Logger {
     }
 
     pub fn get_new_logs(&self) -> String {
-        let mut locked_data = self.memory_writer.data.lock().unwrap();
-        let new_logs: String = locked_data
-            .logs
-            .iter()
-            .take(locked_data.to_take)
-            .fold(String::new(), |acc, x| format!("{}\n{}", acc, x));
-        locked_data.to_take = 0;
-        new_logs
+        match self.memory_writer.data.lock() {
+            Ok(mut locked_data) => {
+                let new_logs: String = locked_data
+                    .logs
+                    .iter()
+                    .take(locked_data.to_take)
+                    .fold(String::new(), |acc, x| format!("{}\n{}", acc, x));
+                locked_data.to_take = 0;
+                new_logs
+            }
+            Err(e) => {
+                eprintln!("Error locking memory writer for new logs: {}", e);
+                String::new()
+            }
+        }
     }
 
     pub fn get_all_logs(&self) -> String {
-        let locked_data = self.memory_writer.data.lock().unwrap();
-        locked_data
-            .logs
-            .iter()
-            .fold(String::new(), |acc, x| format!("{}\n{}", acc, x))
+        match self.memory_writer.data.lock() {
+            Ok(locked_data) => locked_data
+                .logs
+                .iter()
+                .fold(String::new(), |acc, x| format!("{}\n{}", acc, x)),
+            Err(e) => {
+                eprintln!("Error locking memory writer for all logs: {}", e);
+                String::new()
+            }
+        }
     }
 
     pub fn flush_logs(&self) {
-        let mut locked_data = self.memory_writer.data.lock().unwrap();
-        locked_data.logs.clear();
-        locked_data.lines = 0;
-        locked_data.to_take = 0;
+        match self.memory_writer.data.lock() {
+            Ok(mut locked_data) => {
+                locked_data.logs.clear();
+                locked_data.lines = 0;
+                locked_data.to_take = 0;
+            }
+            Err(e) => {
+                eprintln!("Error locking memory writer for flush: {}", e);
+            }
+        }
     }
+}
+
+fn create_panic_artifact(
+    executable_type: &str,
+    msg: &str,
+    location: &str,
+    backtrace: &std::backtrace::Backtrace,
+) {
+    let _ = std::panic::catch_unwind(|| {
+        // Get current executable path and directory
+        let exe_path = current_exe().unwrap_or_else(|_| PathBuf::from(""));
+        let exe_dir = exe_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."));
+
+        // Create timestamp for filename
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_else(|_| std::time::Duration::from_secs(0))
+            .as_secs();
+
+        // Format: {executable_type}_panic_{timestamp}
+        let panic_filename = format!("{}_panic_{}.txt", executable_type, now);
+        let panic_file_path = exe_dir.join(panic_filename);
+
+        // Create panic content
+        let panic_content = format!(
+            "PANIC REPORT\n\
+            =============\n\
+            Timestamp: {}\n\
+            Executable: {:?}\n\
+            Type: {}\n\
+            PID: {}\n\
+            \n\
+            PANIC DETAILS\n\
+            =============\n\
+            Message: {}\n\
+            Location: {}\n\
+            \n\
+            BACKTRACE\n\
+            =========\n\
+            {}\n\
+            \n\
+            ENVIRONMENT\n\
+            ===========\n\
+            RUST_BACKTRACE: {}\n\
+            OS: {}\n\
+            ARCH: {}\n",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+            exe_path,
+            executable_type,
+            std::process::id(),
+            msg,
+            location,
+            backtrace,
+            std::env::var("RUST_BACKTRACE").unwrap_or_else(|_| "unset".to_string()),
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        );
+
+        // Write to file
+        match File::create(&panic_file_path) {
+            Ok(mut file) => {
+                if let Err(e) = file.write_all(panic_content.as_bytes()) {
+                    eprintln!("Failed to write panic artifact: {}", e);
+                } else {
+                    eprintln!("Panic artifact written to: {:?}", panic_file_path);
+                }
+            }
+            Err(e) => {
+                eprintln!(
+                    "Failed to create panic artifact file {:?}: {}",
+                    panic_file_path, e
+                );
+            }
+        }
+    });
 }
 
 fn init_sentry(url: &str, release: &str) {
@@ -229,9 +329,6 @@ pub fn init_logger(
     provided_env_log_spec: &str,
     sentry_error_filter: &[&str],
 ) {
-    // Force backtrace
-    set_var("RUST_BACKTRACE", "1");
-
     let mut logger_guard = match LOGGER.lock() {
         Ok(guard) => guard,
         Err(e) => {
@@ -247,6 +344,53 @@ pub fn init_logger(
 
     *logger_guard = Some(Arc::new(Logger::new()));
     let logger = logger_guard.as_ref().unwrap();
+
+    // Store executable type for panic handler
+    if let Ok(mut exec_type) = EXECUTABLE_TYPE.lock() {
+        *exec_type = Some(executable_type.to_string());
+    }
+
+    // Force backtrace
+    std::env::set_var("RUST_BACKTRACE", "1");
+
+    // Set a panic hook that logs to tracing and stderr (only once to avoid replacement)
+    PANIC_HOOK_INIT.call_once(|| {
+        std::panic::set_hook(Box::new(|panic_info| {
+            let payload = panic_info.payload();
+            let msg = if let Some(s) = payload.downcast_ref::<&str>() {
+                *s
+            } else if let Some(s) = payload.downcast_ref::<String>() {
+                s.as_str()
+            } else {
+                "Box<Any>"
+            };
+            let location = panic_info
+                .location()
+                .map(|l| l.to_string())
+                .unwrap_or_else(|| "unknown location".to_string());
+            let backtrace = std::backtrace::Backtrace::force_capture();
+
+            // Create panic artifact file
+            let executable_type = EXECUTABLE_TYPE
+                .lock()
+                .ok()
+                .and_then(|exec_type| exec_type.as_ref().cloned())
+                .unwrap_or_else(|| "unknown".to_string());
+            create_panic_artifact(&executable_type, msg, &location, &backtrace);
+
+            // Log to stderr first (safer, less likely to panic)
+            eprintln!("PANIC: {} at {}\nBacktrace:\n{}", msg, location, backtrace);
+
+            // Then try to log through tracing (could potentially panic)
+            use tracing::error;
+            let _ = std::panic::catch_unwind(|| {
+                error!(
+                    "panic occurred: {} at {}\nBacktrace:\n{}",
+                    msg, location, backtrace
+                );
+            });
+        }));
+    });
 
     if !url.is_empty() {
         init_sentry(url, release);
@@ -514,20 +658,34 @@ pub fn init_logger(
 }
 
 pub fn get_new_logs() -> String {
-    let logger_guard = LOGGER.lock().unwrap();
-    if let Some(logger) = logger_guard.as_ref() {
-        logger.get_new_logs()
-    } else {
-        String::new()
+    match LOGGER.lock() {
+        Ok(logger_guard) => {
+            if let Some(logger) = logger_guard.as_ref() {
+                logger.get_new_logs()
+            } else {
+                String::new()
+            }
+        }
+        Err(e) => {
+            eprintln!("Error accessing logger for new logs: {}", e);
+            String::new()
+        }
     }
 }
 
 pub fn get_all_logs() -> String {
-    let logger_guard = LOGGER.lock().unwrap();
-    if let Some(logger) = logger_guard.as_ref() {
-        logger.get_all_logs()
-    } else {
-        String::new()
+    match LOGGER.lock() {
+        Ok(logger_guard) => {
+            if let Some(logger) = logger_guard.as_ref() {
+                logger.get_all_logs()
+            } else {
+                String::new()
+            }
+        }
+        Err(e) => {
+            eprintln!("Error accessing logger for all logs: {}", e);
+            String::new()
+        }
     }
 }
 
@@ -591,5 +749,51 @@ mod tests {
         let test_log = r#"{"id": "12345", "password": "secret"}"#;
         let sanitized_log = sanitize_keywords(test_log, &["id", "password"]);
         assert_eq!(sanitized_log, r#"{"id": "*****", "password": "******"}"#);
+    }
+
+    #[test]
+    fn test_panic_artifact_creation() {
+        use std::fs;
+
+        let test_msg = "Test panic message";
+        let test_location = "test_file.rs:123:45";
+        let test_backtrace = std::backtrace::Backtrace::force_capture();
+
+        // Test the panic artifact creation function directly
+        create_panic_artifact("test", test_msg, test_location, &test_backtrace);
+
+        // The panic artifact will be created in the test executable's directory
+        let exe_path = current_exe().unwrap();
+        let exe_dir = exe_path.parent().unwrap();
+        let entries = fs::read_dir(exe_dir).unwrap();
+
+        let mut found_panic_file = false;
+        for entry in entries {
+            if let Ok(entry) = entry {
+                let filename = entry.file_name();
+                let filename_str = filename.to_string_lossy();
+                if filename_str.starts_with("test_panic_") && filename_str.ends_with(".txt") {
+                    found_panic_file = true;
+
+                    // Verify file contents
+                    let content = fs::read_to_string(entry.path()).unwrap();
+                    assert!(content.contains("PANIC REPORT"));
+                    assert!(content.contains("Test panic message"));
+                    assert!(content.contains("test_file.rs:123:45"));
+                    assert!(content.contains("BACKTRACE"));
+                    assert!(content.contains("Type: test"));
+
+                    // Clean up the test file
+                    let _ = fs::remove_file(entry.path());
+                    break;
+                }
+            }
+        }
+
+        assert!(
+            found_panic_file,
+            "Panic artifact file was not created in {:?}",
+            exe_dir
+        );
     }
 }
