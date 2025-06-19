@@ -1306,7 +1306,7 @@ dependencies = [
 [[package]]
 name = "flodbadd"
 version = "0.9.41"
-source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#0b9b11d5c28b872d4ae4a7970fb0200f77f64d9f"
+source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#a0aefdb0984a86a8be50f42c0fd2dad6987b370f"
 dependencies = [
  "anyhow",
  "arp-toolkit",
@@ -3039,9 +3039,9 @@ dependencies = [
 
 [[package]]
 name = "quinn-udp"
-version = "0.5.12"
+version = "0.5.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ee4e529991f949c5e25755532370b8af5d114acae52326361d68d47af64aa842"
+checksum = "fcebb1209ee276352ef14ff8732e24cc2b02bbac986cd74a4c81bcb2f9881970"
 dependencies = [
  "cfg_aliases",
  "libc",
