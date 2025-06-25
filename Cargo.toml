@@ -67,7 +67,8 @@ humantime = "2.1.0"
 # gRPC server/client
 # This uses rustls
 tonic = { version = "0.13.0", features = ["_tls-any"] }
-prost = "0.13.1"
+# 0.14 has breaking changes
+prost = "0.13.5"
 
 base64 = "0.22.1"
 
