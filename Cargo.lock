@@ -1317,7 +1317,7 @@ dependencies = [
 [[package]]
 name = "flodbadd"
 version = "0.9.44"
-source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#85ba929019816512225c427951b4137357ca03aa"
+source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#aac6593c11fb3591623c854a78b130b61855e2c4"
 dependencies = [
  "anyhow",
  "arp-toolkit",
@@ -1330,6 +1330,7 @@ dependencies = [
  "encoding_rs",
  "eui48",
  "extended-isolation-forest",
+ "futures",
  "futures-util",
  "hex",
  "hickory-resolver",
