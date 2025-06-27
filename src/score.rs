@@ -295,7 +295,7 @@ pub trait ScoreTrait {
     async fn get_history(&self) -> Result<OrderHistory>;
     async fn remediate(&self, name: &str) -> Result<MetricOrderResult>;
     async fn rollback(&self, name: &str) -> Result<MetricOrderResult>;
-    async fn update_threats(&mut self, branch: &str) -> Result<UpdateStatus>;
+    async fn update_threats(&self, branch: &str) -> Result<UpdateStatus>;
     async fn threat_active(&self, name: &str) -> Result<MetricOrderResult>;
     async fn get_threats_url(&self, platform: &str, branch: &str) -> String;
 }
