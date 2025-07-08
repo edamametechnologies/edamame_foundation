@@ -1317,7 +1317,7 @@ dependencies = [
 [[package]]
 name = "flodbadd"
 version = "0.9.46"
-source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#cc20c7e0baa71f6a9cacbe59b9f18d800f1e1f54"
+source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#ad1b59a12490b992ccb2ce36e9ab576e0e6f9b59"
 dependencies = [
  "anyhow",
  "arp-toolkit",
@@ -4303,7 +4303,7 @@ checksum = "1dccffe3ce07af9386bfd29e80c0ab1a8205a2fc34e4bcd40364df902cfa8f3f"
 [[package]]
 name = "undeadlock"
 version = "0.9.46"
-source = "git+https://github.com/edamametechnologies/undeadlock?branch=main#cff2a012d4defee80b20e92653341da2b989a43c"
+source = "git+https://github.com/edamametechnologies/undeadlock?branch=main#e159732d3f273f9c5af89519b107d0b0b7fb1451"
 dependencies = [
  "dashmap",
  "futures",
