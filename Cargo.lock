@@ -1317,7 +1317,7 @@ dependencies = [
 [[package]]
 name = "flodbadd"
 version = "0.9.46"
-source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#ad1b59a12490b992ccb2ce36e9ab576e0e6f9b59"
+source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#c758ffc3bd530fc8f16d4c527d93b44ffb2587fd"
 dependencies = [
  "anyhow",
  "arp-toolkit",
