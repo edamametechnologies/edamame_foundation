@@ -245,8 +245,13 @@ pub async fn utility_is_capturing() -> Result<String> {
     feature = "packetcapture"
 ))]
 pub async fn utility_set_whitelist(whitelist_name: &str) -> Result<String> {
-    CAPTURE.write().await.set_whitelist(whitelist_name).await;
-    Ok("".to_string())
+    match CAPTURE.write().await.set_whitelist(whitelist_name).await {
+        Ok(_) => Ok("".to_string()),
+        Err(e) => {
+            error!("Error setting whitelist: {}", e);
+            order_error(&format!("error setting whitelist: {}", e), false)
+        }
+    }
 }
 
 #[cfg(all(
