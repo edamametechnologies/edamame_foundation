@@ -1105,7 +1105,7 @@ dependencies = [
 [[package]]
 name = "edamame_models"
 version = "0.1.0"
-source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#4848ae0d5be5cc2870ab632236d4a49668161c68"
+source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#20aa2153a4ce17e003b72e4d8678855900d756fc"
 dependencies = [
  "anyhow",
  "reqwest",
@@ -1317,7 +1317,7 @@ dependencies = [
 [[package]]
 name = "flodbadd"
 version = "0.9.46"
-source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#3ce8ca899ea6adc07602094168fa51d912b9322a"
+source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#ddb36ab6dcef62206d5bfc98621d96ca592c4a77"
 dependencies = [
  "anyhow",
  "arp-toolkit",
