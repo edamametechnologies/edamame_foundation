@@ -1,0 +1,46 @@
+on:
+  push:
+    branches: [ dev, main ]
+  pull_request:
+
+# Auto cancel previous runs if they were not completed.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+name: Rust format
+
+jobs:
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    
+    steps:
+
+      - name: Setup EDAMAME Posture
+        uses: edamametechnologies/edamame_posture_action@v0
+        with:
+          edamame_user: ${{ vars.EDAMAME_POSTURE_USER }}
+          edamame_domain: ${{ vars.EDAMAME_POSTURE_DOMAIN }}
+          edamame_pin: ${{ secrets.EDAMAME_POSTURE_PIN }}
+          edamame_id: ${{ github.run_id }}
+          checkout: true
+
+      - run: rustup component add rustfmt
+
+      - name: Install protobuf
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+
+      - name: Check code format
+        run: |
+          cargo fmt --all -- --check
+
+      - name: Install cargo-hack
+        run: |
+          cargo install -f cargo-hack
+
+      - name: Check all features
+        run: |
+          cargo hack check --all-features --all-targets
