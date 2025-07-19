@@ -1,5 +1,10 @@
 use crate::helper_rx::{order_error, CARGO_PKG_VERSION};
 use crate::logger::get_all_logs;
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux", target_os = "windows"),
+    feature = "packetcapture"
+))]
+use crate::peer_ids::get_peer_ids;
 use crate::runner_cli::run_cli;
 use anyhow::Result;
 use flodbadd::arp::*;
@@ -60,6 +65,15 @@ pub async fn check_interfaces_changes() -> bool {
         interfaces_changed = true;
     }
     return interfaces_changed;
+}
+
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux", target_os = "windows"),
+    feature = "packetcapture"
+))]
+pub async fn utility_get_peer_ids() -> Result<String> {
+    let peer_ids = get_peer_ids();
+    Ok(serde_json::to_string(&peer_ids)?)
 }
 
 pub async fn utility_broadcast_ping(broadcast_addr: &str) -> Result<String> {
@@ -198,6 +212,15 @@ pub async fn utility_helper_flags() -> Result<String> {
 pub async fn utility_get_logs() -> Result<String> {
     let logs = get_all_logs();
     Ok(logs)
+}
+
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux", target_os = "windows"),
+    feature = "packetcapture"
+))]
+pub async fn utility_get_peer_ids() -> Result<String> {
+    let peer_ids = get_peer_ids();
+    Ok(serde_json::to_string(&peer_ids)?)
 }
 
 #[cfg(all(
