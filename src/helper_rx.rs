@@ -362,6 +362,11 @@ pub async fn rpc_run(
         }
         "utilityorder" => match subordertype {
             "getappleid_email" => utility_getappleid_email(arg1).await,
+            #[cfg(all(
+                any(target_os = "macos", target_os = "linux", target_os = "windows"),
+                feature = "packetcapture"
+            ))]
+            "get_peer_ids" => utility_get_peer_ids().await,
             "mdns_resolve" => utility_mdns_resolve(arg1).await,
             "arp_resolve" => utility_arp_resolve(arg1).await,
             "broadcast_ping" => utility_broadcast_ping(arg1).await,

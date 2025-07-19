@@ -15,6 +15,7 @@ pub mod history;
 pub mod logger;
 pub mod order;
 pub mod order_type;
+pub mod peer_ids;
 pub mod pwned_breach;
 pub mod runner_cli;
 pub mod runtime;
