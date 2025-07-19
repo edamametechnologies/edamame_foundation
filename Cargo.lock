@@ -559,9 +559,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.2.29"
+version = "1.2.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5c1599538de2394445747c8cf7935946e3cc27e9625f889d979bfb2aaf569362"
+checksum = "deec109607ca693028562ed836a5f1c4b8bd77755c4e132fc5ce11b0b6211ae7"
 dependencies = [
  "jobserver",
  "libc",
@@ -953,7 +953,7 @@ checksum = "1c7a8fb8a9fbf66c1f703fe16184d10ca0ee9d23be5b4436400408ba54a95005"
 [[package]]
 name = "edamame_backend"
 version = "0.3.4"
-source = "git+https://github.com/edamametechnologies/edamame_backend?branch=main#a2bb74b521c942ee883cf8d9a6570038569c4860"
+source = "git+https://github.com/edamametechnologies/edamame_backend?branch=main#ccdd37784465189ce07b47539245b6c32caca633"
 dependencies = [
  "anyhow",
  "blake3",
@@ -1240,8 +1240,8 @@ dependencies = [
 
 [[package]]
 name = "flodbadd"
-version = "0.9.49"
-source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#b469c1424d1dffe878f6c5a7d042664b6c563281"
+version = "0.9.50"
+source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#2dccbf9224b254434535a04930aa80e9468c1406"
 dependencies = [
  "anyhow",
  "arp-toolkit",
@@ -1713,7 +1713,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tower-service",
- "webpki-roots 1.0.1",
+ "webpki-roots 1.0.2",
 ]
 
 [[package]]
@@ -2529,9 +2529,9 @@ dependencies = [
 
 [[package]]
 name = "pcap"
-version = "2.2.0"
+version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "499125886165f62fbc0c095ead9189b253f48eb1c5fcab49f81a270f2f220652"
+checksum = "83cdabc34a80d9ec3563694cc31423fba6bb9bab4f31a9a5d5b85f29bd6d660a"
 dependencies = [
  "bitflags 1.3.2",
  "errno 0.2.8",
@@ -3191,7 +3191,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
- "webpki-roots 1.0.1",
+ "webpki-roots 1.0.2",
 ]
 
 [[package]]
@@ -3472,9 +3472,9 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.140"
+version = "1.0.141"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "20068b6e96dc6c9bd23e01df8827e6c7e1f2fddd43c21810382803c136b99373"
+checksum = "30b9eff21ebe718216c6ec64e1d9ac57087aad11efc64e32002bce4a0d4c03d3"
 dependencies = [
  "itoa",
  "memchr",
@@ -4200,8 +4200,8 @@ checksum = "1dccffe3ce07af9386bfd29e80c0ab1a8205a2fc34e4bcd40364df902cfa8f3f"
 
 [[package]]
 name = "undeadlock"
-version = "0.9.49"
-source = "git+https://github.com/edamametechnologies/undeadlock?branch=main#1c13f05ae03f63a9d93473a12e770f609a32d11a"
+version = "0.9.50"
+source = "git+https://github.com/edamametechnologies/undeadlock?branch=main#a38b7dab5d71517b8ebec51ce828b06f5429c1eb"
 dependencies = [
  "dashmap",
  "futures",
@@ -4446,14 +4446,14 @@ version = "0.26.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "521bc38abb08001b01866da9f51eb7c5d647a19260e00054a8c7fd5f9e57f7a9"
 dependencies = [
- "webpki-roots 1.0.1",
+ "webpki-roots 1.0.2",
 ]
 
 [[package]]
 name = "webpki-roots"
-version = "1.0.1"
+version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8782dd5a41a24eed3a4f40b606249b3e236ca61adf1f25ea4d45c73de122b502"
+checksum = "7e8983c3ab33d6fb807cfcdad2491c4ea8cbc8ed839181c7dfd9c67c83e261b2"
 dependencies = [
  "rustls-pki-types",
 ]
