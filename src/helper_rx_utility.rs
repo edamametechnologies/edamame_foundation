@@ -218,15 +218,6 @@ pub async fn utility_get_logs() -> Result<String> {
     any(target_os = "macos", target_os = "linux", target_os = "windows"),
     feature = "packetcapture"
 ))]
-pub async fn utility_get_peer_ids() -> Result<String> {
-    let peer_ids = get_peer_ids();
-    Ok(serde_json::to_string(&peer_ids)?)
-}
-
-#[cfg(all(
-    any(target_os = "macos", target_os = "linux", target_os = "windows"),
-    feature = "packetcapture"
-))]
 pub async fn utility_start_capture() -> Result<String> {
     let interfaces = INTERFACES.read().await.clone();
     CAPTURE.write().await.start(&interfaces).await;
