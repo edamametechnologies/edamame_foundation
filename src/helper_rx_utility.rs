@@ -220,7 +220,11 @@ pub async fn utility_get_logs() -> Result<String> {
 ))]
 pub async fn utility_start_capture() -> Result<String> {
     let interfaces = INTERFACES.read().await.clone();
-    CAPTURE.write().await.start(&interfaces).await;
+    let capture_start_result = CAPTURE.write().await.start(&interfaces).await;
+    if let Err(e) = capture_start_result {
+        error!("Capture start failed: {}", e);
+        return order_error(&format!("capture start failed: {}", e), false);
+    }
     Ok("".to_string())
 }
 
@@ -239,7 +243,11 @@ pub async fn utility_stop_capture() -> Result<String> {
 ))]
 pub async fn utility_restart_capture() -> Result<String> {
     let interfaces = INTERFACES.read().await.clone();
-    CAPTURE.write().await.restart(&interfaces).await;
+    let capture_restart_result = CAPTURE.write().await.restart(&interfaces).await;
+    if let Err(e) = capture_restart_result {
+        error!("Capture restart failed: {}", e);
+        return order_error(&format!("capture restart failed: {}", e), false);
+    }
     Ok("".to_string())
 }
 
@@ -430,6 +438,23 @@ pub async fn utility_get_current_sessions(incremental: bool) -> Result<String> {
     any(target_os = "macos", target_os = "linux", target_os = "windows"),
     feature = "packetcapture"
 ))]
+pub async fn utility_get_packet_stats() -> Result<String> {
+    let stats = CAPTURE.read().await.get_packet_stats().await;
+    let json_stats = match serde_json::to_string(&stats) {
+        Ok(json) => json,
+        Err(e) => {
+            error!("Error serializing packet stats to JSON: {}", e);
+            return order_error(&format!("error serializing packet stats to JSON: {}", e), false);
+        }
+    };
+    info!("Returning packet stats: {}", json_stats);
+    Ok(json_stats)
+}
+
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux", target_os = "windows"),
+    feature = "packetcapture"
+))]
 pub async fn utility_get_whitelist_conformance() -> Result<String> {
     let conformance = CAPTURE
         .read()
@@ -567,7 +592,14 @@ pub fn start_interface_monitor() {
                         capture.write().await.stop().await;
 
                         info!("Interfaces changed, restarting capture on {:?}", interfaces);
-                        capture.write().await.start(&interfaces).await;
+                        match capture.write().await.start(&interfaces).await {
+                            Ok(_) => {
+                                info!("Capture started successfully");
+                            }
+                            Err(e) => {
+                                error!("Failed to start capture: {}", e);
+                            }
+                        }
                     }
                 }
                 // Local cache

@@ -455,6 +455,11 @@ pub async fn rpc_run(
                 any(target_os = "macos", target_os = "linux", target_os = "windows"),
                 feature = "packetcapture"
             ))]
+            "get_packet_stats" => utility_get_packet_stats().await,
+            #[cfg(all(
+                any(target_os = "macos", target_os = "linux", target_os = "windows"),
+                feature = "packetcapture"
+            ))]
             "get_whitelist_conformance" => utility_get_whitelist_conformance().await,
             #[cfg(all(
                 any(target_os = "macos", target_os = "linux", target_os = "windows"),
