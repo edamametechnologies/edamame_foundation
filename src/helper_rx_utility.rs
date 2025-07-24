@@ -444,7 +444,10 @@ pub async fn utility_get_packet_stats() -> Result<String> {
         Ok(json) => json,
         Err(e) => {
             error!("Error serializing packet stats to JSON: {}", e);
-            return order_error(&format!("error serializing packet stats to JSON: {}", e), false);
+            return order_error(
+                &format!("error serializing packet stats to JSON: {}", e),
+                false,
+            );
         }
     };
     info!("Returning packet stats: {}", json_stats);

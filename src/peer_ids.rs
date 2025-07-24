@@ -127,8 +127,12 @@ pub fn get_peer_ids() -> Vec<(String, String)> {
                         if let Some(self_node) = v.get("Self").and_then(|p| p.as_object()) {
                             // Extract node ID
                             if let Some(id) = self_node.get("ID").and_then(|id| id.as_str()) {
-                                out.push(("tailscale/ID".into(), id.into()));
-                                debug!("Found Tailscale node ID: {}", id);
+                                if !id.is_empty() {
+                                    out.push(("tailscale/ID".into(), id.into()));
+                                    debug!("Found Tailscale node ID: {}", id);
+                                } else {
+                                    debug!("Tailscale node ID is empty");
+                                }
                             } else {
                                 debug!("No Tailscale node ID found in Self node");
                             }
@@ -137,8 +141,12 @@ pub fn get_peer_ids() -> Vec<(String, String)> {
                             if let Some(public_key) =
                                 self_node.get("PublicKey").and_then(|k| k.as_str())
                             {
-                                out.push(("tailscale/PublicKey".into(), public_key.into()));
-                                debug!("Found Tailscale public key: {}", public_key);
+                                if !public_key.is_empty() {
+                                    out.push(("tailscale/PublicKey".into(), public_key.into()));
+                                    debug!("Found Tailscale public key: {}", public_key);
+                                } else {
+                                    debug!("Tailscale public key is empty");
+                                }
                             } else {
                                 debug!("No Tailscale public key found in Self node");
                             }
@@ -150,6 +158,7 @@ pub fn get_peer_ids() -> Vec<(String, String)> {
                                 let ip_strings: Vec<String> = ips
                                     .iter()
                                     .filter_map(|ip| ip.as_str())
+                                    .filter(|s| !s.is_empty())
                                     .map(|s| s.to_string())
                                     .collect();
                                 if !ip_strings.is_empty() {
@@ -167,8 +176,12 @@ pub fn get_peer_ids() -> Vec<(String, String)> {
                             if let Some(hostname) =
                                 self_node.get("HostName").and_then(|h| h.as_str())
                             {
-                                out.push(("tailscale/HostName".into(), hostname.into()));
-                                debug!("Found Tailscale hostname: {}", hostname);
+                                if !hostname.is_empty() {
+                                    out.push(("tailscale/HostName".into(), hostname.into()));
+                                    debug!("Found Tailscale hostname: {}", hostname);
+                                } else {
+                                    debug!("Tailscale hostname is empty");
+                                }
                             } else {
                                 debug!("No Tailscale hostname found in Self node");
                             }
@@ -237,8 +250,12 @@ pub fn get_peer_ids() -> Vec<(String, String)> {
                 let parts: Vec<&str> = output.trim().split_whitespace().collect();
                 if parts.len() >= 3 && parts[0] == "200" && parts[1] == "info" {
                     let node_id = parts[2];
-                    out.push(("zerotier/nodeID".into(), node_id.into()));
-                    debug!("Found ZeroTier node ID: {}", node_id);
+                    if !node_id.is_empty() {
+                        out.push(("zerotier/nodeID".into(), node_id.into()));
+                        debug!("Found ZeroTier node ID: {}", node_id);
+                    } else {
+                        debug!("ZeroTier node ID is empty");
+                    }
                 } else {
                     warn!("Unexpected ZeroTier info output format");
                     debug!("ZeroTier stdout: {}", output);
@@ -297,30 +314,32 @@ pub fn get_peer_ids() -> Vec<(String, String)> {
                 netbird_cmd
             );
             if nb.status.success() {
+                // First, let's debug the raw JSON
+                let json_str = String::from_utf8_lossy(&nb.stdout);
+                debug!("NetBird JSON response: {}", json_str);
+
                 match serde_json::from_slice::<Value>(&nb.stdout) {
                     Ok(v) => {
-                        // Extract publicKey from root level
+                        // Extract local node information from root level
                         if let Some(public_key) = v.get("publicKey").and_then(|k| k.as_str()) {
-                            out.push(("netbird/publicKey".into(), public_key.into()));
-                            debug!("Found NetBird public key: {}", public_key);
-                        } else {
-                            debug!("No NetBird public key found in status output");
+                            if !public_key.is_empty() {
+                                out.push(("netbird/publicKey".into(), public_key.into()));
+                                debug!("Found NetBird local public key: {}", public_key);
+                            }
                         }
 
-                        // Extract netbirdIp from root level
                         if let Some(netbird_ip) = v.get("netbirdIp").and_then(|ip| ip.as_str()) {
-                            out.push(("netbird/netbirdIp".into(), netbird_ip.into()));
-                            debug!("Found NetBird IP: {}", netbird_ip);
-                        } else {
-                            debug!("No NetBird IP found in status output");
+                            if !netbird_ip.is_empty() {
+                                out.push(("netbird/netbirdIp".into(), netbird_ip.into()));
+                                debug!("Found NetBird local IP: {}", netbird_ip);
+                            }
                         }
 
-                        // Extract hostname (using fqdn field)
                         if let Some(hostname) = v.get("fqdn").and_then(|h| h.as_str()) {
-                            out.push(("netbird/fqdn".into(), hostname.into()));
-                            debug!("Found NetBird hostname: {}", hostname);
-                        } else {
-                            debug!("No NetBird hostname found in status output");
+                            if !hostname.is_empty() {
+                                out.push(("netbird/fqdn".into(), hostname.into()));
+                                debug!("Found NetBird local hostname: {}", hostname);
+                            }
                         }
                     }
                     Err(e) => {
@@ -387,8 +406,12 @@ pub fn get_peer_ids() -> Vec<(String, String)> {
                         .and_then(|cc| cc.get("userkey"))
                         .and_then(|k| k.as_str())
                     {
-                        out.push(("netskope/userkey".into(), user_key.into()));
-                        debug!("Found Netskope user key");
+                        if !user_key.is_empty() {
+                            out.push(("netskope/userkey".into(), user_key.into()));
+                            debug!("Found Netskope user key");
+                        } else {
+                            debug!("Netskope user key is empty");
+                        }
                     } else {
                         debug!("No Netskope user key found in config (clientConfig.userkey)");
                     }
@@ -400,8 +423,12 @@ pub fn get_peer_ids() -> Vec<(String, String)> {
                         .and_then(|device| device.get("hostname"))
                         .and_then(|h| h.as_str())
                     {
-                        out.push(("netskope/hostname".into(), hostname.into()));
-                        debug!("Found Netskope hostname: {}", hostname);
+                        if !hostname.is_empty() {
+                            out.push(("netskope/hostname".into(), hostname.into()));
+                            debug!("Found Netskope hostname: {}", hostname);
+                        } else {
+                            debug!("Netskope hostname is empty");
+                        }
                     } else {
                         debug!("No Netskope hostname found in config (cache.device.hostname)");
                     }
@@ -413,8 +440,12 @@ pub fn get_peer_ids() -> Vec<(String, String)> {
                         .and_then(|device| device.get("serial_num"))
                         .and_then(|s| s.as_str())
                     {
-                        out.push(("netskope/serial".into(), serial.into()));
-                        debug!("Found Netskope serial: {}", serial);
+                        if !serial.is_empty() {
+                            out.push(("netskope/serial".into(), serial.into()));
+                            debug!("Found Netskope serial: {}", serial);
+                        } else {
+                            debug!("Netskope serial is empty");
+                        }
                     } else {
                         debug!("No Netskope serial found in config (cache.device.serial_num)");
                     }
