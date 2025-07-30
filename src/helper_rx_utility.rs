@@ -57,6 +57,7 @@ lazy_static! {
 // Detect and check interface changes
 pub async fn check_interfaces_changes() -> bool {
     let interfaces = get_valid_network_interfaces();
+
     let mut interfaces_changed = false;
     *INTERFACES.write().await = interfaces.clone();
     let interfaces_signature = interfaces.signature();
@@ -72,7 +73,7 @@ pub async fn check_interfaces_changes() -> bool {
     feature = "packetcapture"
 ))]
 pub async fn utility_get_peer_ids() -> Result<String> {
-    let peer_ids = get_peer_ids();
+    let peer_ids = get_peer_ids().await;
     Ok(serde_json::to_string(&peer_ids)?)
 }
 
@@ -592,20 +593,18 @@ pub fn start_interface_monitor() {
                 {
                     let is_capturing = capture.read().await.is_capturing().await;
                     if is_capturing {
-                        capture.write().await.stop().await;
-
                         info!("Interfaces changed, restarting capture on {:?}", interfaces);
-                        match capture.write().await.start(&interfaces).await {
+                        match capture.write().await.restart(&interfaces).await {
                             Ok(_) => {
-                                info!("Capture started successfully");
+                                info!("Capture restarted successfully");
                             }
                             Err(e) => {
-                                error!("Failed to start capture: {}", e);
+                                error!("Failed to restart capture: {}", e);
                             }
                         }
                     }
                 }
-                // Local cache
+                // Initialize the local IP cache
                 info!("Interfaces changed, initializing local IP cache");
                 init_local_cache(&interfaces);
                 // mDNS flush

@@ -1,36 +1,17 @@
 use serde_json::Value;
 use std::path::Path;
-use std::process::Command;
 use std::time::Duration;
+use tokio::process::Command;
+use tokio::time::timeout;
 use tracing::{debug, error, warn};
 
-/// Execute a command with a 20-second timeout
-fn execute_command_with_timeout(mut cmd: Command) -> std::io::Result<std::process::Output> {
-    use std::sync::mpsc;
-    use std::thread;
-
-    let (tx, rx) = mpsc::channel();
-
-    // Spawn command execution in a separate thread
-    let handle = thread::spawn(move || {
-        let result = cmd.output();
-        let _ = tx.send(result);
-    });
-
-    // Wait for result with timeout
-    match rx.recv_timeout(Duration::from_secs(20)) {
-        Ok(output) => output,
-        Err(mpsc::RecvTimeoutError::Timeout) => {
-            // Kill the thread if possible and return timeout error
-            drop(handle); // Drop the handle, can't easily kill it
-            Err(std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                "Command execution timed out after 10 seconds",
-            ))
-        }
-        Err(mpsc::RecvTimeoutError::Disconnected) => Err(std::io::Error::new(
-            std::io::ErrorKind::BrokenPipe,
-            "Command execution thread disconnected",
+/// Execute a command with a 20-second timeout (async version)
+async fn execute_command_with_timeout(mut cmd: Command) -> std::io::Result<std::process::Output> {
+    match timeout(Duration::from_secs(20), cmd.output()).await {
+        Ok(output_res) => output_res,
+        Err(_) => Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "Command execution timed out after 20 seconds",
         )),
     }
 }
@@ -62,30 +43,15 @@ fn binary_exists(binary_name: &str) -> bool {
     }
 }
 
-/// Read a file with a 10-second timeout
-fn read_file_with_timeout(path: &str) -> std::io::Result<String> {
-    use std::fs::File;
-    use std::io::Read;
-    use std::time::Instant;
-
-    let start = Instant::now();
-    let timeout = Duration::from_secs(10);
-
-    // Simple file read with timeout check
-    let mut file = File::open(path)?;
-    let mut contents = String::new();
-
-    // For simplicity, we'll do a blocking read but check the elapsed time
-    // In a real implementation, you might want to use async I/O
-    if start.elapsed() > timeout {
-        return Err(std::io::Error::new(
+/// Read a file with a 10-second timeout (async version)
+async fn read_file_with_timeout(path: &str) -> std::io::Result<String> {
+    match timeout(Duration::from_secs(10), tokio::fs::read_to_string(path)).await {
+        Ok(res) => res,
+        Err(_) => Err(std::io::Error::new(
             std::io::ErrorKind::TimedOut,
             "File read timed out after 10 seconds",
-        ));
+        )),
     }
-
-    file.read_to_string(&mut contents)?;
-    Ok(contents)
 }
 
 /// Try to discover peer- or gateway-IDs for the VPN / ZTNA agents that may be
@@ -93,7 +59,7 @@ fn read_file_with_timeout(path: &str) -> std::io::Result<String> {
 /// elevation; any missing binary, socket or registry key is simply skipped.
 ///
 /// The tuple returned is always (vendor_tag, peer_or_gateway_id).
-pub fn get_peer_ids() -> Vec<(String, String)> {
+pub async fn get_peer_ids() -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
 
     /* ----------  TAILSCALE  ---------- */
@@ -115,7 +81,7 @@ pub fn get_peer_ids() -> Vec<(String, String)> {
 
     let mut cmd = Command::new(tailscale_cmd);
     cmd.args(&["status", "--json"]);
-    match execute_command_with_timeout(cmd) {
+    match execute_command_with_timeout(cmd).await {
         Ok(ts) => {
             debug!(
                 "Tailscale command found and executed: {} status --json",
@@ -135,55 +101,6 @@ pub fn get_peer_ids() -> Vec<(String, String)> {
                                 }
                             } else {
                                 debug!("No Tailscale node ID found in Self node");
-                            }
-
-                            // Extract public key
-                            if let Some(public_key) =
-                                self_node.get("PublicKey").and_then(|k| k.as_str())
-                            {
-                                if !public_key.is_empty() {
-                                    out.push(("tailscale/PublicKey".into(), public_key.into()));
-                                    debug!("Found Tailscale public key: {}", public_key);
-                                } else {
-                                    debug!("Tailscale public key is empty");
-                                }
-                            } else {
-                                debug!("No Tailscale public key found in Self node");
-                            }
-
-                            // Extract IP address (join all IPs from TailscaleIPs array)
-                            if let Some(ips) =
-                                self_node.get("TailscaleIPs").and_then(|ips| ips.as_array())
-                            {
-                                let ip_strings: Vec<String> = ips
-                                    .iter()
-                                    .filter_map(|ip| ip.as_str())
-                                    .filter(|s| !s.is_empty())
-                                    .map(|s| s.to_string())
-                                    .collect();
-                                if !ip_strings.is_empty() {
-                                    let joined_ips = ip_strings.join(",");
-                                    out.push(("tailscale/TailscaleIPs".into(), joined_ips.clone()));
-                                    debug!("Found Tailscale IPs: {}", joined_ips);
-                                } else {
-                                    debug!("No valid Tailscale IPs found in TailscaleIPs array");
-                                }
-                            } else {
-                                debug!("No TailscaleIPs array found in Self node");
-                            }
-
-                            // Extract hostname
-                            if let Some(hostname) =
-                                self_node.get("HostName").and_then(|h| h.as_str())
-                            {
-                                if !hostname.is_empty() {
-                                    out.push(("tailscale/HostName".into(), hostname.into()));
-                                    debug!("Found Tailscale hostname: {}", hostname);
-                                } else {
-                                    debug!("Tailscale hostname is empty");
-                                }
-                            } else {
-                                debug!("No Tailscale hostname found in Self node");
                             }
                         } else {
                             debug!("No Tailscale Self node found in status output");
@@ -240,7 +157,7 @@ pub fn get_peer_ids() -> Vec<(String, String)> {
 
     let mut cmd = Command::new(zerotier_cmd);
     cmd.args(&["info"]);
-    match execute_command_with_timeout(cmd) {
+    match execute_command_with_timeout(cmd).await {
         Ok(zt) => {
             debug!("ZeroTier command found and executed: {} info", zerotier_cmd);
             if zt.status.success() {
@@ -307,7 +224,7 @@ pub fn get_peer_ids() -> Vec<(String, String)> {
 
     let mut cmd = Command::new(netbird_cmd);
     cmd.args(&["status", "--json"]);
-    match execute_command_with_timeout(cmd) {
+    match execute_command_with_timeout(cmd).await {
         Ok(nb) => {
             debug!(
                 "NetBird command found and executed: {} status --json",
@@ -320,25 +237,11 @@ pub fn get_peer_ids() -> Vec<(String, String)> {
 
                 match serde_json::from_slice::<Value>(&nb.stdout) {
                     Ok(v) => {
-                        // Extract local node information from root level
-                        if let Some(public_key) = v.get("publicKey").and_then(|k| k.as_str()) {
-                            if !public_key.is_empty() {
-                                out.push(("netbird/publicKey".into(), public_key.into()));
-                                debug!("Found NetBird local public key: {}", public_key);
-                            }
-                        }
-
+                        // We use the netbirdIp field to identify the local node
                         if let Some(netbird_ip) = v.get("netbirdIp").and_then(|ip| ip.as_str()) {
                             if !netbird_ip.is_empty() {
                                 out.push(("netbird/netbirdIp".into(), netbird_ip.into()));
                                 debug!("Found NetBird local IP: {}", netbird_ip);
-                            }
-                        }
-
-                        if let Some(hostname) = v.get("fqdn").and_then(|h| h.as_str()) {
-                            if !hostname.is_empty() {
-                                out.push(("netbird/fqdn".into(), hostname.into()));
-                                debug!("Found NetBird local hostname: {}", hostname);
                             }
                         }
                     }
@@ -395,7 +298,7 @@ pub fn get_peer_ids() -> Vec<(String, String)> {
         debug!("Netskope config file not found: {}", nsconfig_path);
     }
 
-    match read_file_with_timeout(nsconfig_path) {
+    match read_file_with_timeout(nsconfig_path).await {
         Ok(config_content) => {
             debug!("Netskope config file found and read: {}", nsconfig_path);
             match serde_json::from_str::<Value>(&config_content) {
