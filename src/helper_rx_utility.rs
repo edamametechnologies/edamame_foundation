@@ -4,7 +4,7 @@ use crate::logger::get_all_logs;
     any(target_os = "macos", target_os = "linux", target_os = "windows"),
     feature = "packetcapture"
 ))]
-use crate::peer_ids::get_peer_ids_with_username;
+use crate::peer_ids::get_peer_ids;
 use crate::runner_cli::run_cli;
 use anyhow::Result;
 use flodbadd::arp::*;
@@ -73,7 +73,7 @@ pub async fn check_interfaces_changes() -> bool {
     feature = "packetcapture"
 ))]
 pub async fn utility_get_peer_ids(username: &str) -> Result<String> {
-    let peer_ids = get_peer_ids_with_username(username).await;
+    let peer_ids = get_peer_ids(username).await;
     Ok(serde_json::to_string(&peer_ids)?)
 }
 
