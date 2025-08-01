@@ -69,7 +69,7 @@ async fn discover_tailscale(username: &str) -> Vec<(String, String)> {
         let cmd_string = if cfg!(target_os = "windows") {
             format!("& '{}' status --json", tailscale_cmd)
         } else {
-            format!("{} status --json", tailscale_cmd)
+            format!("'{}' status --json", tailscale_cmd)
         };
         match run_cli(&cmd_string, username, true, Some(20)).await {
             Ok(ts) => {
@@ -136,7 +136,7 @@ async fn discover_zerotier() -> Vec<(String, String)> {
         let cmd_string = if cfg!(target_os = "windows") {
             format!("& '{}' -q info", zerotier_cmd)
         } else {
-            format!("{} info", zerotier_cmd)
+            format!("'{}' info", zerotier_cmd)
         };
 
         match run_cli(&cmd_string, "", false, Some(20)).await {
@@ -186,7 +186,7 @@ async fn discover_netbird() -> Vec<(String, String)> {
         let cmd_string = if cfg!(target_os = "windows") {
             format!("& '{}' status --json", netbird_cmd)
         } else {
-            format!("{} status --json", netbird_cmd)
+            format!("'{}' status --json", netbird_cmd)
         };
         match run_cli(&cmd_string, "", false, Some(20)).await {
             Ok(stdout) => {
