@@ -66,7 +66,11 @@ async fn discover_tailscale(username: &str) -> Vec<(String, String)> {
     if binary_exists(tailscale_cmd) {
         debug!("Tailscale binary found: {}", tailscale_cmd);
         // Build the command string and execute it via the generic `run_cli` helper.
-        let cmd_string = format!("'{}' status --json", tailscale_cmd);
+        let cmd_string = if cfg!(target_os = "windows") {
+            format!("& '{}' status --json", tailscale_cmd)
+        } else {
+            format!("{} status --json", tailscale_cmd)
+        };
         match run_cli(&cmd_string, username, true, Some(20)).await {
             Ok(ts) => {
                 debug!(
@@ -130,9 +134,9 @@ async fn discover_zerotier() -> Vec<(String, String)> {
         debug!("ZeroTier binary found: {}", zerotier_cmd);
         // Build the command string: on Windows we need the quiet flag to avoid decorative output.
         let cmd_string = if cfg!(target_os = "windows") {
-            format!("'{}' -q info", zerotier_cmd)
+            format!("& '{}' -q info", zerotier_cmd)
         } else {
-            format!("'{}' info", zerotier_cmd)
+            format!("{} info", zerotier_cmd)
         };
 
         match run_cli(&cmd_string, "", false, Some(20)).await {
@@ -179,7 +183,11 @@ async fn discover_netbird() -> Vec<(String, String)> {
 
     if binary_exists(netbird_cmd) {
         debug!("NetBird binary found: {}", netbird_cmd);
-        let cmd_string = format!("'{}' status --json", netbird_cmd);
+        let cmd_string = if cfg!(target_os = "windows") {
+            format!("& '{}' status --json", netbird_cmd)
+        } else {
+            format!("{} status --json", netbird_cmd)
+        };
         match run_cli(&cmd_string, "", false, Some(20)).await {
             Ok(stdout) => {
                 debug!("NetBird JSON response: {}", stdout);
