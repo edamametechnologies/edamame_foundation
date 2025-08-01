@@ -2,20 +2,8 @@ use crate::admin::get_admin_status;
 use serde_json::Value;
 use std::path::Path;
 use std::time::Duration;
-use tokio::process::Command;
 use tokio::time::timeout;
 use tracing::{debug, error, warn};
-
-/// Execute a command with a 20-second timeout
-async fn execute_command_with_timeout(mut cmd: Command) -> std::io::Result<std::process::Output> {
-    match timeout(Duration::from_secs(20), cmd.output()).await {
-        Ok(output_res) => output_res,
-        Err(_) => Err(std::io::Error::new(
-            std::io::ErrorKind::TimedOut,
-            "Command execution timed out after 20 seconds",
-        )),
-    }
-}
 
 /// Check if a binary exists in PATH or as absolute path
 fn binary_exists(binary_name: &str) -> bool {
@@ -30,7 +18,7 @@ fn binary_exists(binary_name: &str) -> bool {
             // Also check with .exe extension on Windows
             #[cfg(target_os = "windows")]
             {
-                let exe_path = p.join(format!("{}.exe", binary_name.trim_end_matches(".exe")));
+                let exe_path = p.join(format!("'{}.exe'", binary_name.trim_end_matches(".exe")));
                 if exe_path.exists() {
                     return true;
                 }
@@ -58,7 +46,12 @@ async fn read_file_with_timeout(path: &str) -> std::io::Result<String> {
 /* -------------------------------------------------------------------------- */
 
 /// Discover peer IDs from the local Tailscale agent
-async fn discover_tailscale() -> Vec<(String, String)> {
+use crate::runner_cli::run_cli;
+
+/// Discover peer IDs from the local Tailscale agent. Executes the Tailscale
+/// CLI via the generic `run_cli` helper so that we can transparently
+/// personate `username` when needed (e.g. when running as root on Unix).
+async fn discover_tailscale(username: &str) -> Vec<(String, String)> {
     debug!("Checking for Tailscale...");
     let tailscale_cmd = if cfg!(target_os = "windows") {
         "C:\\Program Files\\Tailscale\\tailscale.exe"
@@ -72,41 +65,36 @@ async fn discover_tailscale() -> Vec<(String, String)> {
 
     if binary_exists(tailscale_cmd) {
         debug!("Tailscale binary found: {}", tailscale_cmd);
-        let mut cmd = Command::new(tailscale_cmd);
-        cmd.args(["status", "--json"]);
-        match execute_command_with_timeout(cmd).await {
+        // Build the command string and execute it via the generic `run_cli` helper.
+        let cmd_string = format!("'{}' status --json", tailscale_cmd);
+        match run_cli(&cmd_string, username, true, Some(20)).await {
             Ok(ts) => {
                 debug!(
                     "Tailscale command found and executed: {} status --json",
                     tailscale_cmd
                 );
-                if ts.status.success() {
-                    match serde_json::from_slice::<Value>(&ts.stdout) {
-                        Ok(v) => {
-                            if let Some(self_node) = v.get("Self").and_then(|p| p.as_object()) {
-                                if let Some(id) = self_node.get("ID").and_then(|id| id.as_str()) {
-                                    if !id.is_empty() {
-                                        out.push(("tailscale/ID".into(), id.into()));
-                                        debug!("Found Tailscale node ID: {}", id);
-                                    } else {
-                                        debug!("Tailscale node ID is empty");
-                                    }
+                // `run_cli` already returns an `Err` on non-zero exit code, so we can
+                // directly parse the returned stdout string.
+                match serde_json::from_str::<Value>(&ts) {
+                    Ok(v) => {
+                        if let Some(self_node) = v.get("Self").and_then(|p| p.as_object()) {
+                            if let Some(id) = self_node.get("ID").and_then(|id| id.as_str()) {
+                                if !id.is_empty() {
+                                    out.push(("tailscale/ID".into(), id.into()));
+                                    debug!("Found Tailscale node ID: {}", id);
                                 } else {
-                                    debug!("No Tailscale node ID found in Self node");
+                                    debug!("Tailscale node ID is empty");
                                 }
                             } else {
-                                debug!("No Tailscale Self node found in status output");
+                                debug!("No Tailscale node ID found in Self node");
                             }
-                        }
-                        Err(e) => {
-                            error!("Failed to parse Tailscale status JSON: {}", e);
-                            debug!("Tailscale stdout: {}", String::from_utf8_lossy(&ts.stdout));
+                        } else {
+                            debug!("No Tailscale Self node found in status output");
                         }
                     }
-                } else {
-                    error!("Tailscale command failed with exit code: {}", ts.status);
-                    if !ts.stderr.is_empty() {
-                        error!("Tailscale stderr: {}", String::from_utf8_lossy(&ts.stderr));
+                    Err(e) => {
+                        error!("Failed to parse Tailscale status JSON: {}", e);
+                        debug!("Tailscale stdout: {}", ts);
                     }
                 }
             }
@@ -126,6 +114,7 @@ async fn discover_tailscale() -> Vec<(String, String)> {
 
 /// Discover peer IDs from the local ZeroTier agent
 async fn discover_zerotier() -> Vec<(String, String)> {
+    use crate::runner_cli::run_cli;
     debug!("Checking for ZeroTier...");
     let zerotier_cmd = if cfg!(target_os = "windows") {
         "C:\\ProgramData\\ZeroTier\\One\\zerotier-one_x64.exe"
@@ -139,43 +128,32 @@ async fn discover_zerotier() -> Vec<(String, String)> {
 
     if binary_exists(zerotier_cmd) {
         debug!("ZeroTier binary found: {}", zerotier_cmd);
-        let mut cmd = Command::new(zerotier_cmd);
-        if cfg!(target_os = "windows") {
-            cmd.args(["-q", "info"]);
+        // Build the command string: on Windows we need the quiet flag to avoid decorative output.
+        let cmd_string = if cfg!(target_os = "windows") {
+            format!("'{}' -q info", zerotier_cmd)
         } else {
-            cmd.arg("info");
-        }
-        match execute_command_with_timeout(cmd).await {
-            Ok(zt) => {
-                debug!("ZeroTier command found and executed: {} info", zerotier_cmd);
-                if zt.status.success() {
-                    let stdout = String::from_utf8_lossy(&zt.stdout);
-                    let parts: Vec<&str> = stdout.trim().split_whitespace().collect();
-                    if parts.len() >= 3 && parts[0] == "200" && parts[1] == "info" {
-                        let node_id = parts[2];
-                        if !node_id.is_empty() {
-                            out.push(("zerotier/nodeID".into(), node_id.into()));
-                            debug!("Found ZeroTier node ID: {}", node_id);
-                        } else {
-                            debug!("ZeroTier node ID is empty");
-                        }
+            format!("'{}' info", zerotier_cmd)
+        };
+
+        match run_cli(&cmd_string, "", false, Some(20)).await {
+            Ok(stdout) => {
+                debug!("ZeroTier stdout: {}", stdout);
+                let parts: Vec<&str> = stdout.trim().split_whitespace().collect();
+                if parts.len() >= 3 && parts[0] == "200" && parts[1] == "info" {
+                    let node_id = parts[2];
+                    if !node_id.is_empty() {
+                        out.push(("zerotier/nodeID".into(), node_id.into()));
+                        debug!("Found ZeroTier node ID: {}", node_id);
                     } else {
-                        warn!("Unexpected ZeroTier info output format");
-                        debug!("ZeroTier stdout: {}", stdout);
+                        debug!("ZeroTier node ID is empty");
                     }
                 } else {
-                    error!(
-                        "ZeroTier command failed with exit code: {} - {}",
-                        zt.status,
-                        String::from_utf8_lossy(&zt.stderr)
-                    );
+                    warn!("Unexpected ZeroTier info output format");
                 }
             }
             Err(e) => {
-                error!(
-                    "ZeroTier binary exists but failed to execute: {} - {}",
-                    zerotier_cmd, e
-                );
+                error!("ZeroTier command execution failed: {} - {}", cmd_string, e);
+                println!("ZeroTier command execution failed: {} - {}", cmd_string, e);
             }
         }
     } else {
@@ -187,6 +165,7 @@ async fn discover_zerotier() -> Vec<(String, String)> {
 
 /// Discover peer IDs from the local NetBird agent
 async fn discover_netbird() -> Vec<(String, String)> {
+    use crate::runner_cli::run_cli;
     debug!("Checking for NetBird...");
     let netbird_cmd = if cfg!(target_os = "windows") {
         "C:\\Program Files\\NetBird\\netbird.exe"
@@ -200,51 +179,33 @@ async fn discover_netbird() -> Vec<(String, String)> {
 
     if binary_exists(netbird_cmd) {
         debug!("NetBird binary found: {}", netbird_cmd);
-        let mut cmd = Command::new(netbird_cmd);
-        cmd.args(["status", "--json"]);
-        match execute_command_with_timeout(cmd).await {
-            Ok(nb) => {
-                debug!(
-                    "NetBird command found and executed: {} status --json",
-                    netbird_cmd
-                );
-                if nb.status.success() {
-                    let json_str = String::from_utf8_lossy(&nb.stdout);
-                    debug!("NetBird JSON response: {}", json_str);
-                    match serde_json::from_slice::<Value>(&nb.stdout) {
-                        Ok(v) => {
-                            // Helper closure to push non-empty string values with a given tag
-                            let mut insert_if_present = |tag: &str, val_opt: Option<&str>| {
-                                if let Some(val) = val_opt {
-                                    if !val.is_empty() {
-                                        out.push((tag.to_owned(), val.to_owned()));
-                                        debug!("Found NetBird {}: {}", tag, val);
-                                    }
+        let cmd_string = format!("'{}' status --json", netbird_cmd);
+        match run_cli(&cmd_string, "", false, Some(20)).await {
+            Ok(stdout) => {
+                debug!("NetBird JSON response: {}", stdout);
+                match serde_json::from_str::<Value>(&stdout) {
+                    Ok(v) => {
+                        // Helper closure to push non-empty string values with a given tag
+                        let mut insert_if_present = |tag: &str, val_opt: Option<&str>| {
+                            if let Some(val) = val_opt {
+                                if !val.is_empty() {
+                                    out.push((tag.to_owned(), val.to_owned()));
+                                    debug!("Found NetBird {}: {}", tag, val);
                                 }
-                            };
-
-                            insert_if_present(
-                                "netbird/netbirdIp",
-                                v.get("netbirdIp").and_then(|ip| ip.as_str()),
-                            );
-                        }
-                        Err(e) => {
-                            error!("Failed to parse NetBird status JSON: {}", e);
-                            debug!("NetBird stdout: {}", json_str);
-                        }
+                            }
+                        };
+                        insert_if_present(
+                            "netbird/netbirdIp",
+                            v.get("netbirdIp").and_then(|ip| ip.as_str()),
+                        );
                     }
-                } else {
-                    error!("NetBird command failed with exit code: {}", nb.status);
-                    if !nb.stderr.is_empty() {
-                        error!("NetBird stderr: {}", String::from_utf8_lossy(&nb.stderr));
+                    Err(e) => {
+                        error!("Failed to parse NetBird status JSON: {}", e);
                     }
                 }
             }
             Err(e) => {
-                error!(
-                    "NetBird binary exists but failed to execute: {} - {}",
-                    netbird_cmd, e
-                );
+                error!("NetBird command execution failed: {} - {}", cmd_string, e);
             }
         }
     } else {
@@ -336,7 +297,7 @@ async fn discover_netskope() -> Vec<(String, String)> {
 /// elevation; any missing binary, socket or registry key is simply skipped.
 ///
 /// The tuple returned is always (vendor_tag, peer_or_gateway_id).
-pub async fn get_peer_ids() -> Vec<(String, String)> {
+pub async fn get_peer_ids(username: &str) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
 
     // Abort early if we don't have admin privileges.
@@ -348,7 +309,7 @@ pub async fn get_peer_ids() -> Vec<(String, String)> {
 
     // Run the discovery routines concurrently.
     let (mut tailscale_ids, mut zerotier_ids, mut netbird_ids, mut netskope_ids) = tokio::join!(
-        discover_tailscale(),
+        discover_tailscale(username),
         discover_zerotier(),
         discover_netbird(),
         discover_netskope()
@@ -381,7 +342,8 @@ mod tests {
     async fn test_get_peer_ids() {
         use crate::peer_ids::get_peer_ids;
 
-        let peer_ids = get_peer_ids().await;
+        let user = std::env::var("USER").unwrap_or_else(|_| "".to_string());
+        let peer_ids = get_peer_ids(&user).await;
         println!("Peer IDs: {:?}", peer_ids);
     }
 }

@@ -4,7 +4,7 @@ use crate::logger::get_all_logs;
     any(target_os = "macos", target_os = "linux", target_os = "windows"),
     feature = "packetcapture"
 ))]
-use crate::peer_ids::get_peer_ids;
+use crate::peer_ids::get_peer_ids_with_username;
 use crate::runner_cli::run_cli;
 use anyhow::Result;
 use flodbadd::arp::*;
@@ -72,8 +72,8 @@ pub async fn check_interfaces_changes() -> bool {
     any(target_os = "macos", target_os = "linux", target_os = "windows"),
     feature = "packetcapture"
 ))]
-pub async fn utility_get_peer_ids() -> Result<String> {
-    let peer_ids = get_peer_ids().await;
+pub async fn utility_get_peer_ids(username: &str) -> Result<String> {
+    let peer_ids = get_peer_ids_with_username(username).await;
     Ok(serde_json::to_string(&peer_ids)?)
 }
 
@@ -179,6 +179,7 @@ pub async fn utility_getappleid_email(username: &str) -> Result<String> {
         r#"defaults read MobileMeAccounts Accounts | grep AccountID | grep -o "\".*\"" | sed "s/\"//g" | tr -d "\n""#,
         username,
         true,
+        None,
     ).await
 }
 

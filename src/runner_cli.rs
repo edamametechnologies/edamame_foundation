@@ -1,11 +1,17 @@
 use anyhow::{anyhow, Error, Result};
 use powershell_script::PsScriptBuilder;
 use run_script::ScriptOptions;
+use tokio::time::{timeout, Duration};
 use tracing::{debug, error};
 
 // The personate parameter forces the execution into the context of username
 // We could use an empty username to indicate there is no need to personate but we keep it as is for now in case we find other use cases for the username
-pub async fn run_cli(cmd: &str, username: &str, personate: bool) -> Result<String> {
+pub async fn run_cli(
+    cmd: &str,
+    username: &str,
+    personate: bool,
+    timeout_opt: Option<u64>,
+) -> Result<String> {
     // Verify platform support
     check_platform_support()?;
 
@@ -38,7 +44,26 @@ pub async fn run_cli(cmd: &str, username: &str, personate: bool) -> Result<Strin
         (code, stdout, stderr)
     });
 
-    let (code, stdout, stderr) = handle.await.map_err(|e| Error::new(e))?;
+    // Wait for the blocking task to finish but enforce a timeout
+    let (code, stdout, stderr) = if let Some(timeout_secs) = timeout_opt {
+        let (code, stdout, stderr) = match timeout(Duration::from_secs(timeout_secs), handle).await
+        {
+            Ok(join_res) => join_res.map_err(|e| Error::new(e))?,
+            Err(_) => {
+                error!(
+                    "Execution of command {:?} timed out after {} seconds",
+                    cmd, timeout_secs
+                );
+                return Err(anyhow!(
+                    "Execution of command timed out after {} seconds",
+                    timeout_secs
+                ));
+            }
+        };
+        (code, stdout, stderr)
+    } else {
+        handle.await?
+    };
 
     // Remove newlines from stdout
     let stdout = stdout.replace('\n', "").replace('\r', "");

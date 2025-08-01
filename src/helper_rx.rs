@@ -324,7 +324,7 @@ pub async fn rpc_run(
                             order_error(&format!("personate required but no username provided for metricorder {}", threat), false)
                         } else {
                             match class {
-                                "cli" => run_cli(target, username, personate).await,
+                                "cli" => run_cli(target, username, personate, None).await,
                                 "internal" => {
                                     // We don't have any internal implementation within the helper for now
                                     order_error(&format!("internal implementation type not implemented for metricorder {}", threat), false)
@@ -366,7 +366,7 @@ pub async fn rpc_run(
                 any(target_os = "macos", target_os = "linux", target_os = "windows"),
                 feature = "packetcapture"
             ))]
-            "get_peer_ids" => utility_get_peer_ids().await,
+            "get_peer_ids" => utility_get_peer_ids(arg1).await,
             "mdns_resolve" => utility_mdns_resolve(arg1).await,
             "arp_resolve" => utility_arp_resolve(arg1).await,
             "broadcast_ping" => utility_broadcast_ping(arg1).await,
