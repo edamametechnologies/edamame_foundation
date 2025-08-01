@@ -1,3 +1,4 @@
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 use crate::admin::get_admin_status;
 use serde_json::Value;
 use std::path::Path;
@@ -309,6 +310,7 @@ pub async fn get_peer_ids(username: &str) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
 
     // Abort early if we don't have admin privileges.
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     if !get_admin_status() {
         warn!("Running as non-admin, skipping VPN/ZTNA agent discovery");
         return out;
