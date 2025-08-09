@@ -1,6 +1,6 @@
 [package]
 name = "edamame_foundation"
-version = "0.9.57"
+version = "0.9.59"
 edition = "2021"
 
 [lints.rust]
