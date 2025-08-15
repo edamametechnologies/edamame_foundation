@@ -965,7 +965,7 @@ dependencies = [
 
 [[package]]
 name = "edamame_foundation"
-version = "0.9.59"
+version = "0.9.60"
 dependencies = [
  "anyhow",
  "arp-toolkit",
@@ -1240,7 +1240,7 @@ dependencies = [
 [[package]]
 name = "flodbadd"
 version = "0.9.60"
-source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#b904bef4881d005bf3e0c79035f14de551506c54"
+source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#e0294be418953cc861785696a8d3aafbcb075d3c"
 dependencies = [
  "anyhow",
  "arp-toolkit",
@@ -3668,9 +3668,9 @@ dependencies = [
 
 [[package]]
 name = "sorted-vec"
-version = "0.8.7"
+version = "0.8.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f40f1aa8c0f688ae6d6ffd5e9e351d635acc176dfad05816494b321be7e01007"
+checksum = "ee66d25213bcbd4feb55704c0c8eee3f95d022c693dab42d796e1b8f23666d9a"
 
 [[package]]
 name = "stable_deref_trait"
