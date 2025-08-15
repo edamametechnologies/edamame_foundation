@@ -311,16 +311,18 @@ pub async fn utility_create_custom_whitelists() -> Result<String> {
     any(target_os = "macos", target_os = "linux", target_os = "windows"),
     feature = "packetcapture"
 ))]
-pub async fn utility_augment_custom_whitelists() -> Result<String> {
-    let whitelist = match CAPTURE.write().await.augment_custom_whitelists().await {
-        Ok(whitelist) => whitelist,
-        Err(e) => {
+pub async fn utility_augment_custom_whitelists() -> Result<(String, f64)> {
+    let result = CAPTURE
+        .write()
+        .await
+        .augment_custom_whitelists()
+        .await
+        .map_err(|e| {
             error!("Error augmenting custom whitelists: {}", e);
-            return order_error(&format!("error augmenting custom whitelists: {}", e), false);
-        }
-    };
-    tracing::debug!("Returning whitelist: {}", whitelist);
-    Ok(whitelist)
+            anyhow::anyhow!("error augmenting custom whitelists: {}", e)
+        })?;
+    tracing::debug!("Returning whitelist: {}, % similarity: {}", result.0, result.1);
+    Ok(result)
 }
 
 #[cfg(all(
