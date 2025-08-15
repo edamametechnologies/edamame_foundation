@@ -286,15 +286,13 @@ jobs:
           checkout: false
           wait_for_api: true
           wait_for_https: true
-        # Will fail on 18.04 because of glibc version
-        continue-on-error: true
 
       # Manual checkout for containers (actions/checkout@v4 requires node20 which is not supported on older Ubuntu containers)
       - name: Manual checkout for containers
         shell: bash
         run: |
           git clone https://github.com/${{ github.repository }}.git .
-          git checkout ${{ github.ref_name }}
+          git checkout "${{ github.head_ref || github.ref_name }}"
 
       - name: Install additional packages
         shell: bash
@@ -451,7 +449,7 @@ jobs:
           mkdir temp
           cd temp
           git clone https://github.com/${{ github.repository }}.git .
-          git checkout ${{ github.ref_name }}
+          git checkout "${{ github.head_ref || github.ref_name }}"
         shell: alpine.sh {0}
 
       # Install Rust in Alpine VM
