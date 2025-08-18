@@ -321,7 +321,11 @@ pub async fn utility_augment_custom_whitelists() -> Result<(String, f64)> {
             error!("Error augmenting custom whitelists: {}", e);
             anyhow::anyhow!("error augmenting custom whitelists: {}", e)
         })?;
-    tracing::debug!("Returning whitelist: {}, % similarity: {}", result.0, result.1);
+    tracing::debug!(
+        "Returning whitelist: {}, % similarity: {}",
+        result.0,
+        result.1
+    );
     Ok(result)
 }
 

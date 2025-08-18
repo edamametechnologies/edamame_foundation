@@ -417,15 +417,18 @@ pub async fn rpc_run(
             "augment_custom_whitelists" => {
                 // Convert tuple (String, f64) -> JSON string for transport
                 match utility_augment_custom_whitelists().await {
-                    Ok(result) => {
-                        match serde_json::to_string(&result) {
-                            Ok(json) => Ok(json),
-                            Err(e) => order_error(&format!("failed to serialize augment result: {}", e), false),
-                        }
+                    Ok(result) => match serde_json::to_string(&result) {
+                        Ok(json) => Ok(json),
+                        Err(e) => order_error(
+                            &format!("failed to serialize augment result: {}", e),
+                            false,
+                        ),
+                    },
+                    Err(e) => {
+                        order_error(&format!("error augmenting custom whitelists: {}", e), false)
                     }
-                    Err(e) => order_error(&format!("error augmenting custom whitelists: {}", e), false),
                 }
-            },
+            }
             #[cfg(all(
                 any(target_os = "macos", target_os = "linux", target_os = "windows"),
                 feature = "packetcapture"
