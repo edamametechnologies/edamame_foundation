@@ -29,47 +29,52 @@ env:
 
 jobs:
   test-native:
+    # We need to wait a long time for aarch64 due to the use of qemu
+    timeout-minutes: 240
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu
+            runs-on: ubuntu-latest
             platform: linux
             arch: x86_64
             target: x86_64-unknown-linux-gnu
             protobuf_install: sudo apt-get update && sudo apt-get install -y protobuf-compiler libpcap-dev
-          - os: macos-latest
+          - os: macos
+            runs-on: macos-latest
             platform: macos
             arch: x86_64
             target: x86_64-apple-darwin
             protobuf_install: brew install protobuf
-          - os: windows-latest
+          - os: windows
+            runs-on: vm-runner-windows
             platform: windows
             arch: x86_64
             target: x86_64-pc-windows-msvc
             protobuf_install: choco install protoc
-          - os: macos-latest
+          - os: macos
+            runs-on: macos-latest
             platform: ios
             arch: aarch64
             target: aarch64-apple-ios
             protobuf_install: brew install protobuf
-          - os: ubuntu-latest
+          - os: ubuntu
+            runs-on: ubuntu-latest
             platform: android
             arch: x86_64
             target: x86_64-linux-android
             protobuf_install: sudo apt-get update && sudo apt-get install -y protobuf-compiler libpcap-dev
-          # Linux aarch64 test using QEMU
-          - os: ubuntu-latest
+          - os: ubuntu
+            runs-on: ubuntu-24.04-arm
             platform: linux
             arch: aarch64
             target: aarch64-unknown-linux-gnu
             protobuf_install: sudo apt-get update && sudo apt-get install -y protobuf-compiler libpcap-dev
-    
-    runs-on: ${{ matrix.os }}
-    # We need to wait a long time for aarch64 due to the use of qemu
-    timeout-minutes: 240
+    runs-on: ${{ matrix.runs-on }}
     
     steps:
+
       - name: Setup EDAMAME Posture
         uses: edamametechnologies/edamame_posture_action@v0
         with:
@@ -83,7 +88,7 @@ jobs:
         id: set-ignored-paths
         shell: bash
         run: |
-          if [ "${{ matrix.os }}" = "ubuntu-latest" ] && [ "${{ matrix.platform }}" != "android" ]; then
+          if [ "${{ matrix.os }}" = "ubuntu" ] && [ "${{ matrix.platform }}" != "android" ]; then
             echo "IGNORED_PATHS<<EOF" >> $GITHUB_OUTPUT
             echo "windows/**" >> $GITHUB_OUTPUT
             echo "macos/**" >> $GITHUB_OUTPUT
@@ -98,7 +103,7 @@ jobs:
             echo ".github/workflows/*ios*.yml" >> $GITHUB_OUTPUT
             echo ".github/workflows/*android*.yml" >> $GITHUB_OUTPUT
             echo "EOF" >> $GITHUB_OUTPUT
-          elif [ "${{ matrix.os }}" = "macos-latest" ] && [ "${{ matrix.platform }}" != "ios" ]; then
+          elif [ "${{ matrix.os }}" = "macos" ] && [ "${{ matrix.platform }}" != "ios" ]; then
             echo "IGNORED_PATHS<<EOF" >> $GITHUB_OUTPUT
             echo "windows/**" >> $GITHUB_OUTPUT
             echo "linux/**" >> $GITHUB_OUTPUT
@@ -113,7 +118,7 @@ jobs:
             echo ".github/workflows/*linux*.yml" >> $GITHUB_OUTPUT
             echo ".github/workflows/*android*.yml" >> $GITHUB_OUTPUT
             echo "EOF" >> $GITHUB_OUTPUT
-          elif [ "${{ matrix.os }}" = "windows-latest" ]; then
+          elif [ "${{ matrix.os }}" = "windows" ]; then
             echo "IGNORED_PATHS<<EOF" >> $GITHUB_OUTPUT
             echo "linux/**" >> $GITHUB_OUTPUT
             echo "snap/**" >> $GITHUB_OUTPUT
@@ -155,12 +160,6 @@ jobs:
             echo ".github/workflows/*ios*.yml" >> $GITHUB_OUTPUT
             echo "EOF" >> $GITHUB_OUTPUT
           fi
-
-      - name: Set up QEMU
-        if: matrix.arch == 'aarch64' && matrix.platform == 'linux'
-        uses: docker/setup-qemu-action@v2
-        with:
-          platforms: arm64
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@nightly
@@ -228,29 +227,31 @@ jobs:
           exit 1
 
   test-container:
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
         include:
           # Container-based tests for older Ubuntu versions
-          - os: ubuntu-latest
+          - os: ubuntu
+            runs-on: ubuntu-latest
             container_image: ubuntu:20.04
             container_name: ubuntu-20.04
             platform: linux
             arch: x86_64
             target: x86_64-unknown-linux-gnu
-          - os: ubuntu-latest
+          - os: ubuntu
+            runs-on: ubuntu-latest
             container_image: ubuntu:18.04
             container_name: ubuntu-18.04
             platform: linux
             arch: x86_64
             target: x86_64-unknown-linux-gnu
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.runs-on }}
     container:
       image: ${{ matrix.container_image }}
       # Needed for integration tests (pcap)
       options: --cap-add=NET_ADMIN --cap-add=NET_RAW
-    timeout-minutes: 90
     env:
       CARGO_TERM_COLOR: always
       EDAMAME_TARGET: ${{ secrets.EDAMAME_TARGET }}
@@ -361,22 +362,23 @@ jobs:
           exit 1
 
   test-alpine:
+    # We need to wait a long time for musl aarch64 due to the use of qemu
+    timeout-minutes: 240
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu
+            runs-on: ubuntu-latest
             arch: x86_64
             target: x86_64-unknown-linux-musl
             platform: linux
-          - os: ubuntu-latest
+          - os: ubuntu
+            runs-on: ubuntu-24.04-arm
             arch: aarch64
             target: aarch64-unknown-linux-musl
             platform: linux
-
-    runs-on: ${{ matrix.os }}
-    # We need to wait a long time for musl aarch64 due to the use of qemu
-    timeout-minutes: 240
+    runs-on: ${{ matrix.runs-on }}
 
     env:
       CARGO_TERM_COLOR: always
@@ -393,12 +395,6 @@ jobs:
       EDAMAME_LOG_LEVEL: debug
 
     steps:
-      # Set up QEMU for aarch64 emulation
-      - name: Set up QEMU
-        if: matrix.arch == 'aarch64'
-        uses: docker/setup-qemu-action@v2
-        with:
-          platforms: arm64
 
       # Setup Alpine Linux
       - name: Setup Alpine Linux
