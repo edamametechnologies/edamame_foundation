@@ -161,7 +161,7 @@ jobs:
             echo "EOF" >> $GITHUB_OUTPUT
           fi
 
-      - name: Install Rust toolchain
+      - name: Install Rust toolchain (nightly for ebpf)
         uses: dtolnay/rust-toolchain@nightly
         with:
           targets: ${{ matrix.target }}
