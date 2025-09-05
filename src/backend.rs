@@ -1,4 +1,5 @@
 use anyhow::{Error, Result};
+use edamame_backend::advisor_todos_backend::AdvisorTodosBackend;
 use edamame_backend::feedback_info_backend::FeedbackInfoBackend;
 use edamame_backend::lanscan_device_info_backend::*;
 use edamame_backend::lanscan_dislike_device_info_backend::DislikeDeviceInfoBackend;
@@ -124,5 +125,11 @@ pub trait Backend {
         &self,
         language: &str,
         session_info: &SessionInfoBackend,
+    ) -> Result<String>;
+
+    async fn get_remediation_advisor(
+        &self,
+        language: &str,
+        advisor_info: &AdvisorTodosBackend,
     ) -> Result<String>;
 }
