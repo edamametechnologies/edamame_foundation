@@ -1,5 +1,6 @@
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub mod admin;
+pub mod advisor;
 pub mod backend;
 pub mod health;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
