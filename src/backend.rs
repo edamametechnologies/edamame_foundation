@@ -133,9 +133,9 @@ pub trait Backend {
         advisor_info: &AdvisorTodosBackend,
     ) -> Result<String>;
 
-    async fn get_remediation_advisor_report(
+    async fn request_advisor_report(
         &self,
         language: &str,
         advisor_info: &AdvisorTodosBackend,
-    ) -> Result<String>;
+    ) -> Result<()>;
 }
