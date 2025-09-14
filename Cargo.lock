@@ -1253,7 +1253,7 @@ dependencies = [
 [[package]]
 name = "flodbadd"
 version = "0.9.63"
-source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#e1618606b21dc498c13b5be6ef3a403d3394da5d"
+source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#33cae75a11cbcc65fa45a045b27f574492ff1f22"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -3447,9 +3447,9 @@ checksum = "490dcfcbfef26be6800d11870ff2df8774fa6e86d047e3e8c8a76b25655e41ca"
 
 [[package]]
 name = "semver"
-version = "1.0.26"
+version = "1.0.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "56e6fa9c48d24d85fb3de5ad847117517440f6beceb7798af16b4a87d616b8d0"
+checksum = "d767eb0aabc880b29956c35734170f26ed551a859dbd361d140cdbeca61ab1e2"
 
 [[package]]
 name = "sentry"
