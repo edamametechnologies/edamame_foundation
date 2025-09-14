@@ -84,9 +84,18 @@ impl AdvisorTodo {
         sorted_todos
     }
 
-    /// Get todos sorted in a deterministic way (without using timestamps) by type with a limit of 25 most recent todos per category
+    /// Get todos sorted in a deterministic way by type with a limit of 15 most recent todos per category
     pub fn get_sorted_todos_for_rag(todos: &Vec<AdvisorTodo>) -> Vec<AdvisorTodo> {
-        // Group todos by advice type, sort each group, and keep only the most recent 25
+        let mut todos = todos.clone();
+
+        // Remove todos that are done
+        todos.retain(|t| !t.done);
+
+        // Only keep the critical and medium priority todos
+        todos
+            .retain(|t| t.priority == AdvicePriority::High || t.priority == AdvicePriority::Medium);
+
+        // Group todos by advice type, sort each group, and keep only the most recent 15
         let mut todos_by_type: HashMap<Advice, Vec<AdvisorTodo>> = HashMap::new();
 
         // Group todos by type
@@ -97,8 +106,7 @@ impl AdvisorTodo {
                 .push(todo);
         }
 
-        // Sort each group by priority (high > medium > low), then by advice
-        // and keep only the most recent 25 todos for each category
+        // Sort each group by priority (higher to lower), then by advice
         let mut sorted_todos = Vec::new();
         for (_advice, mut group_todos) in todos_by_type.into_iter() {
             group_todos.sort_by(|a, b| {
@@ -109,8 +117,8 @@ impl AdvisorTodo {
                     priority_cmp
                 }
             });
-            // Keep only the most recent 25 todos for each category
-            group_todos.truncate(25);
+            // Keep only the most recent 15 todos for each category
+            group_todos.truncate(15);
             sorted_todos.extend(group_todos);
         }
 
