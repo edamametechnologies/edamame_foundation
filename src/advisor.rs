@@ -84,63 +84,82 @@ impl AdvisorTodo {
         sorted_todos
     }
 
-    /// Get todos sorted in a deterministic way by type with a limit of 15 most recent todos per category
+    /// Get todos sorted in a deterministic way by category (variant) with a limit of 20 most recent todos per category
     pub fn get_sorted_todos_for_rag(todos: &Vec<AdvisorTodo>) -> Vec<AdvisorTodo> {
         let mut todos = todos.clone();
 
         // Remove todos that are done
         todos.retain(|t| !t.done);
 
-        // Only keep the critical and medium priority todos
+        // Only keep the high and medium priority todos
         todos
             .retain(|t| t.priority == AdvicePriority::High || t.priority == AdvicePriority::Medium);
 
-        // Group todos by advice type, sort each group, and keep only the most recent 15
-        let mut todos_by_type: HashMap<Advice, Vec<AdvisorTodo>> = HashMap::new();
-
-        // Group todos by type
-        for todo in todos.iter().cloned() {
-            todos_by_type
-                .entry(todo.advice.clone())
-                .or_insert_with(Vec::new)
-                .push(todo);
+        // Helper to map an Advice to a coarse category (variant-level)
+        fn advice_category(advice: &Advice) -> &'static str {
+            match advice {
+                Advice::RemediatePolicy { .. } => "Policy",
+                Advice::RemediateThreat { .. } => "Threat",
+                Advice::RemediateNetworkPort { .. } => "NetworkPort",
+                Advice::RemediateNetworkSession { .. } => "NetworkSession",
+                Advice::RemediatePwnedBreach { .. } => "PwnedBreach",
+                Advice::ConfigureLanScanMonitoring
+                | Advice::ConfigurePwnedMonitoring
+                | Advice::ConfigureSessionMonitoring => "Configure",
+            }
         }
 
-        // Sort each group by priority (higher to lower), then by advice
-        let mut sorted_todos = Vec::new();
-        for (_advice, mut group_todos) in todos_by_type.into_iter() {
-            group_todos.sort_by(|a, b| {
-                let priority_cmp = b.priority.cmp(&a.priority);
-                if priority_cmp == std::cmp::Ordering::Equal {
-                    b.advice.cmp(&a.advice)
+        // Group todos by category, sort each group by timestamp desc, and keep only the most recent 20
+        let mut todos_by_category: HashMap<String, Vec<AdvisorTodo>> = HashMap::new();
+
+        for todo in todos.into_iter() {
+            let key = advice_category(&todo.advice).to_string();
+            todos_by_category.entry(key).or_default().push(todo);
+        }
+
+        let mut limited: Vec<AdvisorTodo> = Vec::new();
+        for (_category, mut group) in todos_by_category.into_iter() {
+            // Sort newest first; use priority then advice as deterministic tie-breakers
+            group.sort_by(|a, b| {
+                let ts_cmp = b.timestamp.cmp(&a.timestamp);
+                if ts_cmp == std::cmp::Ordering::Equal {
+                    let pr_cmp = b.priority.cmp(&a.priority);
+                    if pr_cmp == std::cmp::Ordering::Equal {
+                        // Fall back to advice debug string for stable ordering
+                        let a_s = format!("{:?}", a.advice);
+                        let b_s = format!("{:?}", b.advice);
+                        b_s.cmp(&a_s)
+                    } else {
+                        pr_cmp
+                    }
                 } else {
-                    priority_cmp
+                    ts_cmp
                 }
             });
-            // Keep only the most recent 15 todos for each category
-            group_todos.truncate(15);
-            sorted_todos.extend(group_todos);
+            group.truncate(20);
+            limited.extend(group);
         }
 
-        // Sort the final result by advice type, then by priority, then by timestamp
-        sorted_todos.sort_by(|a, b| {
-            // Compare advice types by their string representation for consistent ordering
-            let a_type_str = format!("{:?}", a.advice);
-            let b_type_str = format!("{:?}", b.advice);
-            let type_cmp = a_type_str.cmp(&b_type_str);
-            if type_cmp == std::cmp::Ordering::Equal {
-                let priority_cmp = b.priority.cmp(&a.priority);
-                if priority_cmp == std::cmp::Ordering::Equal {
-                    b.timestamp.cmp(&a.timestamp)
+        // Deterministic final ordering: by category name, then priority desc, then stable advice key (no timestamp)
+        limited.sort_by(|a, b| {
+            let a_cat = advice_category(&a.advice);
+            let b_cat = advice_category(&b.advice);
+            let cat_cmp = a_cat.cmp(&b_cat);
+            if cat_cmp == std::cmp::Ordering::Equal {
+                let pr_cmp = b.priority.cmp(&a.priority);
+                if pr_cmp == std::cmp::Ordering::Equal {
+                    let a_key = format!("{:?}", a.advice);
+                    let b_key = format!("{:?}", b.advice);
+                    a_key.cmp(&b_key)
                 } else {
-                    priority_cmp
+                    pr_cmp
                 }
             } else {
-                type_cmp
+                cat_cmp
             }
         });
 
-        sorted_todos
+        limited
     }
 }
 
@@ -428,5 +447,175 @@ impl AdvisorStateDiff {
             || !self.new_critical_devices.is_empty()
             || !self.new_pwned_breaches.is_empty()
             || !self.new_suspicious_sessions.is_empty()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Duration;
+
+    fn mk_threat(i: i64, minutes_ago: i64) -> AdvisorTodo {
+        AdvisorTodo {
+            advice: Advice::RemediateThreat {
+                name: format!("threat-{i}"),
+            },
+            priority: AdvicePriority::High,
+            timestamp: Utc::now() - Duration::minutes(minutes_ago),
+            done: false,
+        }
+    }
+
+    fn mk_session(i: i64, minutes_ago: i64) -> AdvisorTodo {
+        AdvisorTodo {
+            advice: Advice::RemediateNetworkSession {
+                uid: format!("sess-{i}"),
+            },
+            priority: AdvicePriority::High,
+            timestamp: Utc::now() - Duration::minutes(minutes_ago),
+            done: false,
+        }
+    }
+
+    fn mk_port(i: i64, minutes_ago: i64) -> AdvisorTodo {
+        use std::net::Ipv4Addr;
+        AdvisorTodo {
+            advice: Advice::RemediateNetworkPort {
+                ip_addr: IpAddr::V4(Ipv4Addr::new(10, 0, 0, (i % 250 + 1) as u8)),
+            },
+            priority: AdvicePriority::High,
+            timestamp: Utc::now() - Duration::minutes(minutes_ago),
+            done: false,
+        }
+    }
+
+    #[test]
+    fn get_sorted_todos_for_rag_keeps_20_per_category_by_recency() {
+        let mut todos: Vec<AdvisorTodo> = Vec::new();
+
+        // Create 20 threats (should truncate to 20 newest)
+        for i in 0..25i64 {
+            todos.push(mk_threat(i, i));
+        }
+
+        // Create 18 sessions (should truncate to 20 newest)
+        for i in 0..22i64 {
+            todos.push(mk_session(i, i));
+        }
+
+        // Create 5 network ports (should keep all 5)
+        for i in 0..5i64 {
+            todos.push(mk_port(i, i));
+        }
+
+        // Add some that should be filtered out: done + low priority
+        todos.push(AdvisorTodo {
+            advice: Advice::RemediateThreat {
+                name: "ignored-done".into(),
+            },
+            priority: AdvicePriority::High,
+            timestamp: Utc::now(),
+            done: true,
+        });
+        todos.push(AdvisorTodo {
+            advice: Advice::RemediateThreat {
+                name: "ignored-low".into(),
+            },
+            priority: AdvicePriority::Low,
+            timestamp: Utc::now(),
+            done: false,
+        });
+
+        let result = AdvisorTodo::get_sorted_todos_for_rag(&todos);
+
+        // Count per category
+        let mut threat_count = 0usize;
+        let mut session_count = 0usize;
+        let mut port_count = 0usize;
+        let mut has_low = false;
+        let mut has_done = false;
+
+        for t in &result {
+            match &t.advice {
+                Advice::RemediateThreat { .. } => threat_count += 1,
+                Advice::RemediateNetworkSession { .. } => session_count += 1,
+                Advice::RemediateNetworkPort { .. } => port_count += 1,
+                _ => {}
+            }
+            if t.priority == AdvicePriority::Low {
+                has_low = true;
+            }
+            if t.done {
+                has_done = true;
+            }
+        }
+
+        assert_eq!(threat_count, 20, "expected 20 newest threats");
+        assert_eq!(session_count, 20, "expected 20 newest sessions");
+        assert_eq!(port_count, 5, "expected all 5 ports kept");
+        assert!(!has_low, "low-priority items should be filtered out");
+        assert!(!has_done, "done items should be filtered out");
+
+        // Verify deterministic ordering: category asc, then priority desc, then stable advice key asc
+        let category = |a: &Advice| -> &'static str {
+            match a {
+                Advice::RemediatePolicy { .. } => "Policy",
+                Advice::RemediateThreat { .. } => "Threat",
+                Advice::RemediateNetworkPort { .. } => "NetworkPort",
+                Advice::RemediateNetworkSession { .. } => "NetworkSession",
+                Advice::RemediatePwnedBreach { .. } => "PwnedBreach",
+                Advice::ConfigureLanScanMonitoring
+                | Advice::ConfigurePwnedMonitoring
+                | Advice::ConfigureSessionMonitoring => "Configure",
+            }
+        };
+
+        let mut last_cat = "".to_string();
+        let mut last_prio: Option<AdvicePriority> = None;
+        let mut last_key: Option<String> = None;
+
+        for (idx, t) in result.iter().enumerate() {
+            let cat = category(&t.advice).to_string();
+            if idx == 0 {
+                last_cat = cat.clone();
+                last_prio = Some(t.priority);
+                last_key = Some(format!("{:?}", t.advice));
+                continue;
+            }
+
+            // Category should be non-decreasing
+            assert!(cat >= last_cat, "categories not sorted deterministically");
+
+            if cat == last_cat {
+                // Within same category, priority should be non-increasing (High > Medium)
+                if let Some(prev_p) = last_prio {
+                    assert!(t.priority <= prev_p);
+                }
+                // When priority is equal, use advice key ascending for determinism
+                if let (Some(prev_p), Some(prev_key)) = (last_prio, &last_key) {
+                    if t.priority == prev_p {
+                        let key = format!("{:?}", t.advice);
+                        assert!(key >= *prev_key);
+                    }
+                }
+            } else {
+                // New category boundary resets comparisons
+                last_cat = cat.clone();
+            }
+
+            last_prio = Some(t.priority);
+            last_key = Some(format!("{:?}", t.advice));
+        }
+
+        // Print a small sample for visual inspection
+        println!("Total returned: {}", result.len());
+        for t in result.iter().take(10) {
+            println!(
+                "{:?} | {:?} | {}",
+                t.advice,
+                t.priority,
+                t.timestamp.to_rfc3339()
+            );
+        }
     }
 }
