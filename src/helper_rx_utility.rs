@@ -589,6 +589,21 @@ pub fn start_interface_monitor() {
     let capture = CAPTURE.clone();
 
     rt.spawn(async move {
+        // Initialize the cache immediately on startup, not just on changes
+        let initial_interfaces = get_valid_network_interfaces();
+        *INTERFACES.write().await = initial_interfaces.clone();
+        *INTERFACES_SIGNATURE.write().await = initial_interfaces.signature();
+
+        if !initial_interfaces.is_empty() {
+            info!(
+                "Helper startup: Initializing local IP cache with {} interfaces",
+                initial_interfaces.len()
+            );
+            init_local_cache(&initial_interfaces);
+        } else {
+            warn!("Helper startup: No interfaces found for cache initialization");
+        }
+
         loop {
             if check_interfaces_changes().await {
                 let interfaces = INTERFACES.read().await.clone();
