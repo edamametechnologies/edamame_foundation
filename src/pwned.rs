@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use edamame_backend::pwned_breach_backend::PwnedCriticalityBackend;
+use edamame_backend::pwned_backend::*;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 
@@ -50,4 +50,21 @@ pub struct BreachDetail {
     pub dismissed: bool,
     pub timestamp_dismiss: DateTime<Utc>,
     pub criticality: PwnedCriticality,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Ord, PartialOrd, Eq, PartialEq)]
+pub struct BreachInfo {
+    pub name: String,
+    pub description: String,
+    pub is_service: bool,
+}
+
+impl BreachInfo {
+    pub fn from(c: BreachInfoBackend) -> Self {
+        Self {
+            name: c.name,
+            description: c.description,
+            is_service: c.is_service,
+        }
+    }
 }
