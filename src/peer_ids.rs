@@ -191,25 +191,32 @@ async fn discover_netbird() -> Vec<(String, String)> {
         };
         match run_cli(&cmd_string, "", false, Some(20)).await {
             Ok(stdout) => {
-                debug!("NetBird JSON response: {}", stdout);
-                match serde_json::from_str::<Value>(&stdout) {
-                    Ok(v) => {
-                        // Helper closure to push non-empty string values with a given tag
-                        let mut insert_if_present = |tag: &str, val_opt: Option<&str>| {
-                            if let Some(val) = val_opt {
-                                if !val.is_empty() {
-                                    out.push((tag.to_owned(), val.to_owned()));
-                                    debug!("Found NetBird {}: {}", tag, val);
+                if stdout.is_empty() {
+                    error!(
+                        "NetBird command execution returned empty string: {}",
+                        cmd_string
+                    );
+                } else {
+                    debug!("NetBird JSON response: {}", stdout);
+                    match serde_json::from_str::<Value>(&stdout) {
+                        Ok(v) => {
+                            // Helper closure to push non-empty string values with a given tag
+                            let mut insert_if_present = |tag: &str, val_opt: Option<&str>| {
+                                if let Some(val) = val_opt {
+                                    if !val.is_empty() {
+                                        out.push((tag.to_owned(), val.to_owned()));
+                                        debug!("Found NetBird {}: {}", tag, val);
+                                    }
                                 }
-                            }
-                        };
-                        insert_if_present(
-                            "netbird/netbirdIp",
-                            v.get("netbirdIp").and_then(|ip| ip.as_str()),
-                        );
-                    }
-                    Err(e) => {
-                        error!("Failed to parse NetBird status JSON: {}", e);
+                            };
+                            insert_if_present(
+                                "netbird/netbirdIp",
+                                v.get("netbirdIp").and_then(|ip| ip.as_str()),
+                            );
+                        }
+                        Err(e) => {
+                            error!("Failed to parse NetBird status JSON: {}", e);
+                        }
                     }
                 }
             }
