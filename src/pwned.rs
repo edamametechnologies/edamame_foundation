@@ -59,12 +59,12 @@ pub struct BreachInfo {
     pub is_service: bool,
 }
 
-impl BreachInfo {
-    pub fn from(c: BreachInfoBackend) -> Self {
-        Self {
-            name: c.name,
-            description: c.description,
-            is_service: c.is_service,
+impl From<BreachInfo> for BreachInfoBackend {
+    fn from(breach_info: BreachInfo) -> Self {
+        BreachInfoBackend {
+            name: breach_info.name,
+            description: breach_info.description,
+            is_service: breach_info.is_service,
         }
     }
 }
