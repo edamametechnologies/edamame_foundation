@@ -5,6 +5,7 @@ use edamame_backend::lanscan_device_info_backend::*;
 use edamame_backend::lanscan_dislike_device_info_backend::DislikeDeviceInfoBackend;
 use edamame_backend::policy_backend::*;
 use edamame_backend::pwned_breach_backend::BreachDetailBackend;
+use edamame_backend::pwned_breach_backend::BreachInfoBackend;
 use edamame_backend::score_backend::*;
 use edamame_backend::session_info_backend::SessionInfoBackend;
 use serde::{Deserialize, Serialize};
@@ -108,10 +109,7 @@ pub trait Backend {
     async fn get_remediation_pwned(
         &self,
         language: &str,
-        name: &str,
-        user_skills: &str,
-        description: &str,
-        is_service: bool,
+        breach_info: &BreachInfoBackend,
     ) -> Result<String>;
 
     async fn send_user_feedback(&self, feedback_info_backend: &FeedbackInfoBackend) -> Result<()>;

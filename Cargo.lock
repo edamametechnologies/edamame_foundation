@@ -894,12 +894,12 @@ checksum = "da692b8d1080ea3045efaab14434d40468c3d8657e42abddfffca87b428f4c1b"
 
 [[package]]
 name = "deranged"
-version = "0.5.3"
+version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d630bccd429a5bb5a64b5e94f693bfc48c9f8566418fda4c494cc94f911f87cc"
+checksum = "a41953f86f8a05768a6cda24def994fd2f424b04ec5c719cf89989779f199071"
 dependencies = [
  "powerfmt",
- "serde",
+ "serde_core",
 ]
 
 [[package]]
@@ -958,8 +958,8 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
 name = "edamame_backend"
-version = "0.3.4"
-source = "git+https://github.com/edamametechnologies/edamame_backend?branch=main#f9877c15b1b67efd6393387732f2243cc195f408"
+version = "0.3.5"
+source = "git+https://github.com/edamametechnologies/edamame_backend?branch=main#4ce448ef4b950533e9ae5848a5852fe55de5d256"
 dependencies = [
  "anyhow",
  "blake3",
@@ -972,7 +972,7 @@ dependencies = [
 
 [[package]]
 name = "edamame_foundation"
-version = "0.9.66"
+version = "0.9.67"
 dependencies = [
  "anyhow",
  "arp-toolkit",
@@ -1252,8 +1252,8 @@ dependencies = [
 
 [[package]]
 name = "flodbadd"
-version = "0.9.66"
-source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#01162928e6e5d7ef4d262d3ade0deb9be54bcae6"
+version = "0.9.67"
+source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#040e227c2245b28cbf14157de211bcf3e31111f3"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -1445,20 +1445,6 @@ dependencies = [
  "pin-project-lite",
  "pin-utils",
  "slab",
-]
-
-[[package]]
-name = "generator"
-version = "0.8.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "605183a538e3e2a9c1038635cc5c2d194e2ee8fd0d1b66b8349fad7dbacce5a2"
-dependencies = [
- "cc",
- "cfg-if",
- "libc",
- "log",
- "rustversion",
- "windows 0.61.3",
 ]
 
 [[package]]
@@ -2073,9 +2059,9 @@ checksum = "2c4a545a15244c7d945065b5d392b2d2d7f21526fba56ce51467b06ed445e8f7"
 
 [[package]]
 name = "libc"
-version = "0.2.175"
+version = "0.2.176"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6a82ae493e598baaea5209805c49bbf2ea7de956d50d7da0da1164f9c6d28543"
+checksum = "58f929b4d672ea937a23a1ab494143d968337a5f47e56d0815df1e0890ddf174"
 
 [[package]]
 name = "libloading"
@@ -2141,19 +2127,6 @@ name = "log"
 version = "0.4.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "34080505efa8e45a4b816c349525ebe327ceaa8559756f0356cba97ef3bf7432"
-
-[[package]]
-name = "loom"
-version = "0.7.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "419e0dc8046cb947daa77eb95ae174acfbddb7673b4151f56d1eed8e93fbfaca"
-dependencies = [
- "cfg-if",
- "generator",
- "scoped-tls",
- "tracing",
- "tracing-subscriber",
-]
 
 [[package]]
 name = "lru-slab"
@@ -2252,20 +2225,19 @@ dependencies = [
 
 [[package]]
 name = "moka"
-version = "0.12.10"
+version = "0.12.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a9321642ca94a4282428e6ea4af8cc2ca4eac48ac7a6a4ea8f33f76d0ce70926"
+checksum = "8261cd88c312e0004c1d51baad2980c66528dfdb2bee62003e643a4d8f86b077"
 dependencies = [
  "crossbeam-channel",
  "crossbeam-epoch",
  "crossbeam-utils",
- "loom",
+ "equivalent",
  "parking_lot",
  "portable-atomic",
  "rustc_version",
  "smallvec",
  "tagptr",
- "thiserror 1.0.69",
  "uuid",
 ]
 
@@ -3429,12 +3401,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "scoped-tls"
-version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e1cf6437eb19a8f4a6cc0f7dca544973b0b78843adbfeb3683d1a94a0024a294"
-
-[[package]]
 name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3855,9 +3821,9 @@ checksum = "7b2093cf4c8eb1e67749a6762251bc9cd836b6fc171623bd0a9d324d37af2417"
 
 [[package]]
 name = "tempfile"
-version = "3.22.0"
+version = "3.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "84fa4d11fadde498443cca10fd3ac23c951f0dc59e080e9f4b93d4df4e4eea53"
+checksum = "2d31c77bdf42a745371d260a26ca7163f1e0924b64afa0b688e61b5a9fa02f16"
 dependencies = [
  "fastrand 2.3.0",
  "getrandom 0.3.3",
