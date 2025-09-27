@@ -24,16 +24,16 @@ edamame_backend = { git = "https://github.com/edamametechnologies/edamame_backen
 #undeadlock = { path = "../undeadlock" }
 undeadlock = { git = "https://github.com/edamametechnologies/undeadlock", branch = "main" }
 # Local copy in order to allow rapid development/debug
-flodbadd = { path = "../flodbadd" }
-#flodbadd = { git = "https://github.com/edamametechnologies/flodbadd", branch = "main" }
+#flodbadd = { path = "../flodbadd" }
+flodbadd = { git = "https://github.com/edamametechnologies/flodbadd", branch = "main" }
 # Local copy in order to allow rapid development/debug
 #edamame_models = { path = "../edamame_models" }
 edamame_models = { git = "https://github.com/edamametechnologies/threatmodels-rs", branch = "main" }
 
 # Sentry
 # Beware it will use reqwest with native-tls by default, not rustls
-sentry = { version = "0.42.0", default-features = false, features = ["reqwest", "rustls"] }
-sentry-tracing = "0.42.0"
+sentry = { version = "0.43.0", default-features = false, features = ["reqwest", "rustls"] }
+sentry-tracing = "0.43.0"
 
 # Global statics w/ mutex
 lazy_static = "1.5.0"
