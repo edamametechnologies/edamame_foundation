@@ -1,6 +1,6 @@
 // Built in default threat model
 pub static THREAT_METRICS_LINUX: &str = r#"{
-  "date": "August 09th 2025",
+  "date": "September 27th 2025",
   "extends": "none",
   "metrics": [
     {
@@ -1238,7 +1238,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
           {
             "class": "link",
             "locale": "EN",
-            "target": "https://manpages.ubuntu.com/manpages/oracular/en/man3/pwquality.3.html"
+            "target": "https://manpages.ubuntu.com/manpages/questing/en/man3/pwquality.3.html"
           }
         ],
         "elevation": "",
@@ -1253,7 +1253,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
           {
             "class": "link",
             "locale": "EN",
-            "target": "https://manpages.ubuntu.com/manpages/oracular/en/man3/pwquality.3.html"
+            "target": "https://manpages.ubuntu.com/manpages/questing/en/man3/pwquality.3.html"
           }
         ],
         "elevation": "",
@@ -1339,5 +1339,5 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
     }
   ],
   "name": "threat model Linux",
-  "signature": "a389783440bf7c2dc7ef12f51041bcedd0c1ba2ba496258ca171f9792c1fa868"
+  "signature": "9b0fa053d4fabf51e990897807bb72923237ec1cb136de009977f7a569f17a76"
 }"#;

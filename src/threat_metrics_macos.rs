@@ -1,6 +1,6 @@
 // Built in default threat model
 pub static THREAT_METRICS_MACOS: &str = r#"{
-  "date": "August 09th 2025",
+  "date": "September 27th 2025",
   "extends": "none",
   "metrics": [
     {
@@ -164,7 +164,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "profiles -P | grep profileIdentifier"
+        "target": "profiles -P | grep profileIdentifier | grep -v digital_health_restrictions | grep -v dateandtime"
       },
       "metrictype": "bool",
       "name": "MDM profiles",
@@ -2040,5 +2040,5 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
     }
   ],
   "name": "threat model macOS",
-  "signature": "eaaf5d4cc0b050120ddea8cd30fdbc69d8f6bd8135cf5ca614c9002bfc4ca535"
+  "signature": "ba7e723f2c93666736708f021eaa15b1b4b03643bc09b414a832df6cd9cd0102"
 }"#;
