@@ -820,6 +820,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ctor"
+version = "0.2.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32a2785755761f3ddc1492979ce1e48d2c00d09311c39e4466429188f3dd6501"
+dependencies = [
+ "quote",
+ "syn 2.0.106",
+]
+
+[[package]]
 name = "darling"
 version = "0.21.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1251,13 +1261,14 @@ dependencies = [
 [[package]]
 name = "flodbadd"
 version = "0.9.71"
-source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#28de292cbc35f7ecef7a64dc99ea9b13b9524eea"
+source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#3d494190b40aea3b33dc9fd6f3c4a64e45170200"
 dependencies = [
  "anyhow",
  "arc-swap",
  "arp-toolkit",
  "chrono",
  "csv",
+ "ctor",
  "dashmap",
  "dns-parser",
  "edamame_backend",
@@ -4544,9 +4555,9 @@ dependencies = [
 
 [[package]]
 name = "webpki-roots"
-version = "1.0.2"
+version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7e8983c3ab33d6fb807cfcdad2491c4ea8cbc8ed839181c7dfd9c67c83e261b2"
+checksum = "32b130c0d2d49f8b6889abc456e795e82525204f27c42cf767cf0d7734e089b8"
 dependencies = [
  "rustls-pki-types",
 ]
