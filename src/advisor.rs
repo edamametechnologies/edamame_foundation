@@ -95,25 +95,13 @@ impl AdvisorTodo {
         todos
             .retain(|t| t.priority == AdvicePriority::High || t.priority == AdvicePriority::Medium);
 
-        // Helper to map an Advice to a coarse category (variant-level)
-        fn advice_category(advice: &Advice) -> &'static str {
-            match advice {
-                Advice::RemediatePolicy { .. } => "Policy",
-                Advice::RemediateThreat { .. } => "Threat",
-                Advice::RemediateNetworkPort { .. } => "NetworkPort",
-                Advice::RemediateNetworkSession { .. } => "NetworkSession",
-                Advice::RemediatePwnedBreach { .. } => "PwnedBreach",
-                Advice::ConfigureLanScanMonitoring
-                | Advice::ConfigurePwnedMonitoring
-                | Advice::ConfigureSessionMonitoring => "Configure",
-            }
-        }
+        // Use the shared category mapping from advice_type_str to avoid drift
 
         // Group todos by category, sort each group by timestamp desc, and keep only the most recent 20
         let mut todos_by_category: HashMap<String, Vec<AdvisorTodo>> = HashMap::new();
 
         for todo in todos.into_iter() {
-            let key = advice_category(&todo.advice).to_string();
+            let key = advice_type_str(&todo.advice).to_string();
             todos_by_category.entry(key).or_default().push(todo);
         }
 
@@ -142,8 +130,8 @@ impl AdvisorTodo {
 
         // Deterministic final ordering: by category name, then priority desc, then stable advice key (no timestamp)
         limited.sort_by(|a, b| {
-            let a_cat = advice_category(&a.advice);
-            let b_cat = advice_category(&b.advice);
+            let a_cat = advice_type_str(&a.advice);
+            let b_cat = advice_type_str(&b.advice);
             let cat_cmp = a_cat.cmp(&b_cat);
             if cat_cmp == std::cmp::Ordering::Equal {
                 let pr_cmp = b.priority.cmp(&a.priority);
@@ -450,6 +438,31 @@ impl AdvisorStateDiff {
     }
 }
 
+/// Return a stable category string for an `Advice` variant
+pub fn advice_type_str(advice: &Advice) -> &'static str {
+    match advice {
+        Advice::RemediatePolicy { .. } => "Policy",
+        Advice::RemediateThreat { .. } => "Threat",
+        Advice::RemediateNetworkPort { .. } => "NetworkPort",
+        Advice::RemediateNetworkSession { .. } => "NetworkSession",
+        Advice::RemediatePwnedBreach { .. } => "PwnedBreach",
+        Advice::ConfigureLanScanMonitoring
+        | Advice::ConfigurePwnedMonitoring
+        | Advice::ConfigureSessionMonitoring => "Configure",
+    }
+}
+
+/// Compute a short, stable identifier for a todo.
+///
+/// We derive the ID from the advice payload only so it stays consistent with
+/// API-facing IDs generated elsewhere. The first 8 hex chars are returned.
+pub fn advisor_todo_id(todo: &AdvisorTodo) -> String {
+    // Debug representation of advice is deterministic for our enums/fields
+    let digest = md5::compute(format!("{:?}", todo.advice));
+    let hex = format!("{:x}", digest);
+    hex[..8.min(hex.len())].to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -557,18 +570,7 @@ mod tests {
         assert!(!has_done, "done items should be filtered out");
 
         // Verify deterministic ordering: category asc, then priority desc, then stable advice key asc
-        let category = |a: &Advice| -> &'static str {
-            match a {
-                Advice::RemediatePolicy { .. } => "Policy",
-                Advice::RemediateThreat { .. } => "Threat",
-                Advice::RemediateNetworkPort { .. } => "NetworkPort",
-                Advice::RemediateNetworkSession { .. } => "NetworkSession",
-                Advice::RemediatePwnedBreach { .. } => "PwnedBreach",
-                Advice::ConfigureLanScanMonitoring
-                | Advice::ConfigurePwnedMonitoring
-                | Advice::ConfigureSessionMonitoring => "Configure",
-            }
-        };
+        let category = |a: &Advice| -> &'static str { advice_type_str(a) };
 
         let mut last_cat = "".to_string();
         let mut last_prio: Option<AdvicePriority> = None;
