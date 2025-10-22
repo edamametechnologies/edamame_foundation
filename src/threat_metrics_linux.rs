@@ -1,6 +1,6 @@
 // Built in default threat model
 pub static THREAT_METRICS_LINUX: &str = r#"{
-  "date": "September 27th 2025",
+  "date": "October 22th 2025",
   "extends": "none",
   "metrics": [
     {
@@ -214,7 +214,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "apt update -qq > /dev/null 2>&1 || true && apt install virt-what -y > /dev/null 2>&1 && [ -z \"$(virt-what)\" ] && { root_dev=$(findmnt -n -o SOURCE /); swap_dev=$(swapon --show=NAME --noheadings 2>/dev/null | head -n1); root_parent=$(lsblk -n -o NAME,TYPE,MOUNTPOINT -p | grep \" $(readlink -f \"$root_dev\")$\" | cut -d\" \" -f1); lsblk -n -o NAME,TYPE -p | grep -q \"^$root_parent.*crypt$\" || echo \"root_encryption_disabled\"; if [ -n \"$swap_dev\" ]; then swap_parent=$(lsblk -n -o NAME,TYPE,MOUNTPOINT -p | grep \" $(readlink -f \"$swap_dev\")$\" | cut -d\" \" -f1); lsblk -n -o NAME,TYPE -p | grep -q \"^$swap_parent.*crypt$\" || echo \"swap_encryption_disabled\"; fi; }"
+        "target": "apt install virt-what -y > /dev/null 2>&1 && [ -z \"$(virt-what)\" ] && { root_dev=$(findmnt -n -o SOURCE /); swap_dev=$(swapon --show=NAME --noheadings 2>/dev/null | head -n1); root_parent=$(lsblk -n -o NAME,TYPE,MOUNTPOINT -p | grep \" $(readlink -f \"$root_dev\")$\" | cut -d\" \" -f1); lsblk -n -o NAME,TYPE -p | grep -q \"^$root_parent.*crypt$\" || echo \"root_encryption_disabled\"; if [ -n \"$swap_dev\" ]; then swap_parent=$(lsblk -n -o NAME,TYPE,MOUNTPOINT -p | grep \" $(readlink -f \"$swap_dev\")$\" | cut -d\" \" -f1); lsblk -n -o NAME,TYPE -p | grep -q \"^$swap_parent.*crypt$\" || echo \"swap_encryption_disabled\"; fi; }"
       },
       "metrictype": "bool",
       "name": "encrypted disk disabled",
@@ -843,7 +843,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "apt update -qq > /dev/null 2>&1 || true && apt install ufw -y > /dev/null 2>&1 && ufw enable"
+        "target": "apt install ufw -y > /dev/null 2>&1 && ufw enable"
       },
       "rollback": {
         "class": "",
@@ -994,7 +994,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "apt update -qq > /dev/null 2>&1 || true && apt install xrdp -y > /dev/null 2>&1 && systemctl start xrdp && systemctl enable xrdp"
+        "target": "apt install xrdp -y > /dev/null 2>&1 && systemctl start xrdp && systemctl enable xrdp"
       },
       "scope": "generic",
       "severity": 4,
@@ -1065,7 +1065,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "apt update -qq > /dev/null 2>&1 || true && apt install samba -y > /dev/null 2>&1 && systemctl start smbd && systemctl enable smbd && apt install nfs-kernel-server -y > /dev/null 2>&1 && systemctl start nfs-kernel-server && systemctl enable nfs-kernel-server"
+        "target": "apt install samba -y > /dev/null 2>&1 && systemctl start smbd && systemctl enable smbd && apt install nfs-kernel-server -y > /dev/null 2>&1 && systemctl start nfs-kernel-server && systemctl enable nfs-kernel-server"
       },
       "scope": "generic",
       "severity": 4,
@@ -1339,5 +1339,5 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
     }
   ],
   "name": "threat model Linux",
-  "signature": "9b0fa053d4fabf51e990897807bb72923237ec1cb136de009977f7a569f17a76"
+  "signature": "a1fef83053a46eb478085b36e39177be135c705b4f2b26d07c75c8f3d967fb5a"
 }"#;

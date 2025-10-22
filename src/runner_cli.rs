@@ -138,7 +138,9 @@ fn execute_unix_command(
     let args = vec![];
 
     let extcmd = if personate {
-        format!("sudo -u {} /bin/bash -c '{}'", username, cmd)
+        // -H sets the HOME environment variable to the home directory of the user
+        // -u sets the user to the specified user
+        format!("sudo -H -u {} /bin/bash -c '{}'", username, cmd)
     } else {
         cmd.to_string()
     };
