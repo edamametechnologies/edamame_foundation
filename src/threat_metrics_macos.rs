@@ -1,6 +1,6 @@
 // Built in default threat model
 pub static THREAT_METRICS_MACOS: &str = r#"{
-  "date": "October 07th 2025",
+  "date": "October 21th 2025",
   "extends": "none",
   "metrics": [
     {
@@ -1294,7 +1294,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "([ -d \"/Applications/1Password.app\" ] || [ -d \"/Applications/LastPass.app\" ] || [ -d \"/Applications/KeePassXC.app\" ] || [ -d \"/Applications/Bitwarden.app\" ]) >/dev/null 2>&1 || echo \"No password manager installed\""
+        "target": "([ -d \"/Applications/1Password.app\" ] || [ -d \"/Applications/LastPass.app\" ] || [ -d \"/Applications/KeePassXC.app\" ] || [ -d \"/Applications/1Password7.app\" ] || [ -d \"$HOME/Applications/Chrome Apps.localized/Google Password Manager.app\" ] || [ -d \"/Applications/Bitwarden.app\" ]) >/dev/null 2>&1 || echo \"No password manager installed\""
       },
       "metrictype": "bool",
       "name": "no password manager",
@@ -2040,5 +2040,5 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
     }
   ],
   "name": "threat model macOS",
-  "signature": "c9160bd7425e108d872b7fd013397a3600c9fda8b8f3ed8a6353168f8109c7d3"
+  "signature": "39e05535cad0aff514def001e1e053b428ef5e52c6f33d39417bc83521504cee"
 }"#;
