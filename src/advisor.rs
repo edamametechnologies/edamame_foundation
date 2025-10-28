@@ -340,6 +340,24 @@ pub struct AdvisorStateDiff {
     pub resolved_suspicious_sessions: HashSet<String>,
 }
 
+/// Filter threat descriptions to EN locale only (for LLM prompts)
+///
+/// Extracts only EN locale descriptions to reduce payload size
+///
+/// # Arguments
+/// * `descriptions` - All threat descriptions as (locale, title, summary) tuples
+/// # Returns
+/// Vector of EN-only summaries
+pub fn filter_threat_descriptions_en_only(
+    descriptions: &[(String, String, String)], // (locale, title, summary)
+) -> Vec<String> {
+    descriptions
+        .iter()
+        .filter(|(locale, _, _)| locale == "EN")
+        .map(|(_, _, summary)| summary.clone())
+        .collect()
+}
+
 /// Sanitize RemediateThreat advice with threat metric data
 pub fn sanitized_remediate_threat(
     name: &str,

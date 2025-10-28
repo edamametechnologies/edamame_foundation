@@ -13,6 +13,7 @@ pub mod helper_state;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub mod helper_tx;
 pub mod history;
+pub mod llm_client;
 pub mod logger;
 pub mod order;
 pub mod order_type;
