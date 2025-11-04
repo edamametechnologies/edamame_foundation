@@ -2,7 +2,6 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::net::IpAddr;
 use tracing::debug;
 
 /// Internal service threats that should be filtered out from user-visible threat counts
@@ -23,15 +22,17 @@ pub enum Advice {
     },
 
     /// Recommend remediation for an open or vulnerable network port on a specific device.
+    /// Uses a stable device identifier to avoid churn from changing IPv6 addresses.
     RemediateNetworkPort {
-        /// IP address of the affected device
-        ip_addr: IpAddr,
+        /// Stable device identifier: MAC address or composite key (vendor:type:ipv4)
+        device_id: String,
     },
 
-    /// Recommend remediation for a suspicious network session. Carries the session UID.
+    /// Recommend remediation for a suspicious network session.
+    /// Uses a stable session group identifier to avoid churn from traffic changes.
     RemediateNetworkSession {
-        /// Unique identifier of the network session
-        uid: String,
+        /// Stable identifier computed from (protocol, src_ip, dst_ip, dst_port)
+        session_group_id: String,
     },
 
     /// Recommend remediation for a pwned breach affecting a specific email address.
@@ -161,16 +162,20 @@ pub struct AdvisorState {
     pub failed_policies: HashSet<String>,
     /// Does the LAN contain any unsafe devices or hasn't been scanned yet?
     pub lanscan_monitoring_active: bool,
-    /// List of IP addresses for devices with high criticality that have open ports
-    pub critical_devices: HashSet<IpAddr>,
+    /// Stable identifiers for devices with high criticality that have open ports
+    pub critical_devices: HashSet<String>,
+    /// Mapping from stable device identifiers to the latest known inspection handle (IP or hostname)
+    pub device_handles: HashMap<String, String>,
     /// Either one of the email has been pwned recently or no emails in the list of emails to check
     pub pwned_monitoring_active: bool,
     /// List of pwned breaches as (name, email) pairs
     pub pwned_breaches: HashSet<(String, String)>,
     /// Are we monitoring the network for suspicious sessions?
     pub sessions_monitoring_active: bool,
-    /// List of suspicious network session UIDs
+    /// Stable identifiers for suspicious network session groups
     pub suspicious_sessions: HashSet<String>,
+    /// Mapping from stable session group identifiers to the latest observed session UID
+    pub session_handles: HashMap<String, String>,
     /// Number of grouped suspicious session patterns (sessions differing only by source port count as 1)
     pub grouped_suspicious_sessions_count: usize,
 }
@@ -329,13 +334,13 @@ impl AdvisorState {
 pub struct AdvisorStateDiff {
     pub new_active_threats: HashSet<String>,
     pub new_failed_policies: HashSet<String>,
-    pub new_critical_devices: HashSet<IpAddr>,
+    pub new_critical_devices: HashSet<String>,
     pub new_pwned_breaches: HashSet<(String, String)>,
     pub new_suspicious_sessions: HashSet<String>,
 
     pub resolved_active_threats: HashSet<String>,
     pub resolved_failed_policies: HashSet<String>,
-    pub resolved_critical_devices: HashSet<IpAddr>,
+    pub resolved_critical_devices: HashSet<String>,
     pub resolved_pwned_breaches: HashSet<(String, String)>,
     pub resolved_suspicious_sessions: HashSet<String>,
 }
@@ -423,12 +428,33 @@ pub fn sanitized_remediate_network_session(
     dst_service: Option<&str>,
     criticality: &str,
 ) -> String {
+    fn normalized_addr(addr: std::net::IpAddr) -> String {
+        match addr {
+            std::net::IpAddr::V4(v4) => v4.to_string(),
+            std::net::IpAddr::V6(v6) => {
+                let masked = (u128::from(v6) >> 64) << 64;
+                let prefix = std::net::Ipv6Addr::from(masked);
+                format!("{}/64", prefix)
+            }
+        }
+    }
+
     let process_name = process_name.unwrap_or("unknown process");
     let process_path = process_path.unwrap_or("unknown process path");
     let (target, is_inbound) = if is_local_src {
-        (dst_domain.unwrap_or(&dst_ip.to_string()).to_string(), false)
+        (
+            dst_domain
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| normalized_addr(dst_ip)),
+            false,
+        )
     } else {
-        (src_domain.unwrap_or(&src_ip.to_string()).to_string(), true)
+        (
+            src_domain
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| normalized_addr(src_ip)),
+            true,
+        )
     };
     let target_service = dst_service.unwrap_or("unknown service");
 
@@ -500,7 +526,7 @@ mod tests {
     fn mk_session(i: i64, minutes_ago: i64) -> AdvisorTodo {
         AdvisorTodo {
             advice: Advice::RemediateNetworkSession {
-                uid: format!("sess-{i}"),
+                session_group_id: format!("session-group-{i}"),
             },
             priority: AdvicePriority::High,
             timestamp: Utc::now() - Duration::minutes(minutes_ago),
@@ -509,10 +535,9 @@ mod tests {
     }
 
     fn mk_port(i: i64, minutes_ago: i64) -> AdvisorTodo {
-        use std::net::Ipv4Addr;
         AdvisorTodo {
             advice: Advice::RemediateNetworkPort {
-                ip_addr: IpAddr::V4(Ipv4Addr::new(10, 0, 0, (i % 250 + 1) as u8)),
+                device_id: format!("device-{i}"),
             },
             priority: AdvicePriority::High,
             timestamp: Utc::now() - Duration::minutes(minutes_ago),
