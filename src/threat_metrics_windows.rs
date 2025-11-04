@@ -1,6 +1,6 @@
 // Built in default threat model
 pub static THREAT_METRICS_WINDOWS: &str = r#"{
-  "date": "August 09th 2025",
+  "date": "October 31th 2025",
   "extends": "none",
   "metrics": [
     {
@@ -1773,12 +1773,12 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
       "description": [
         {
           "locale": "EN",
-          "summary": "One or more business rules are not respected. Please check the command output for more details.",
+          "summary": "One or more business rules are not respected. Please check the command output for more details. To enable business rules, set the EDAMAME_BUSINESS_RULES_CMD environment variable. See: https://github.com/edamametechnologies/edamame_posture_cli?tab=readme-ov-file#business-rules",
           "title": "Business rule not respected"
         },
         {
           "locale": "FR",
-          "summary": "Une ou plusieurs règles métier ne sont pas respectées. Veuillez vérifier la sortie de la commande pour plus de détails.",
+          "summary": "Une ou plusieurs règles métier ne sont pas respectées. Veuillez consulter la sortie de la commande pour plus de détails. Pour activer les règles métier, définissez la variable d'environnement EDAMAME_BUSINESS_RULES_CMD. Voir : https://github.com/edamametechnologies/edamame_posture_cli?tab=readme-ov-file#business-rules",
           "title": "Règle métier non respectée"
         }
       ],
@@ -1840,5 +1840,5 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
     }
   ],
   "name": "threat model Windows",
-  "signature": "035cc0e5b95a8271d6362fab8826846e579252a87b163662c319ad8958cb722c"
+  "signature": "fb1f7a0331092a8ac9942142146af7dc709ba7bad77de8cb7a4811accef22e7e"
 }"#;

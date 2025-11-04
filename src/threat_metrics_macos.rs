@@ -1,6 +1,6 @@
 // Built in default threat model
 pub static THREAT_METRICS_MACOS: &str = r#"{
-  "date": "October 21th 2025",
+  "date": "November 04th 2025",
   "extends": "none",
   "metrics": [
     {
@@ -1032,7 +1032,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "target": "spctl --global-enable"
       },
       "rollback": {
-        "class": "education",
+        "class": "cli",
         "education": [
           {
             "class": "html",
@@ -1049,7 +1049,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": ""
+        "target": "spctl --global-disable"
       },
       "scope": "generic",
       "severity": 4,
@@ -1222,7 +1222,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "if ! { pgrep BDLDaemon >/dev/null || pgrep RTProtectionDaemon >/dev/null || sentinelctl version 2>/dev/null | grep -q \"SentinelOne\"; }; then echo epp_disabled; fi"
+        "target": "if ! ( pgrep BDLDaemon >/dev/null || pgrep RTProtectionDaemon >/dev/null || sentinelctl version 2>/dev/null | grep -q \"SentinelOne\" || ( xprotect status 2>/dev/null | grep -q \"launch scans: enabled\" && xprotect status 2>/dev/null | grep -q \"background scans: enabled\" ) ); then echo \"epp_disabled\"; fi;"
       },
       "metrictype": "bool",
       "name": "no EPP",
@@ -1973,12 +1973,12 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
       "description": [
         {
           "locale": "EN",
-          "summary": "One or more business rules are not respected. Please check the command output for more details.",
+          "summary": "One or more business rules are not respected. Please check the command output for more details. To enable business rules, set the EDAMAME_BUSINESS_RULES_CMD environment variable. See: https://github.com/edamametechnologies/edamame_posture_cli?tab=readme-ov-file#business-rules",
           "title": "Business rule not respected"
         },
         {
           "locale": "FR",
-          "summary": "Une ou plusieurs règles métier ne sont pas respectées. Veuillez vérifier la sortie de la commande pour plus de détails.",
+          "summary": "Une ou plusieurs règles métier ne sont pas respectées. Veuillez consulter la sortie de la commande pour plus de détails. Pour activer les règles métier, définissez la variable d'environnement EDAMAME_BUSINESS_RULES_CMD. Voir : https://github.com/edamametechnologies/edamame_posture_cli?tab=readme-ov-file#business-rules",
           "title": "Règle métier non respectée"
         }
       ],
@@ -2037,8 +2037,79 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
       "scope": "generic",
       "severity": 1,
       "tags": []
+    },
+    {
+      "description": [
+        {
+          "locale": "EN",
+          "summary": "Command-line interface (CLI) access is not restricted for standard users. Non-administrator users can access interactive shell environments, which may allow unauthorized system modifications or circumvention of security policies.",
+          "title": "CLI not restricted for standard users"
+        },
+        {
+          "locale": "FR",
+          "summary": "L'accès à l'interface de ligne de commande (CLI) n'est pas restreint pour les utilisateurs standard. Les utilisateurs non-administrateurs peuvent accéder aux environnements shell interactifs, ce qui peut permettre des modifications système non autorisées ou le contournement des politiques de sécurité.",
+          "title": "CLI non restreint pour les utilisateurs standard"
+        }
+      ],
+      "dimension": "system integrity",
+      "implementation": {
+        "class": "cli",
+        "education": [],
+        "elevation": "user",
+        "maxversion": 0,
+        "minversion": 12,
+        "system": "macOS",
+        "target": "grep -q \"BEGIN RESTRICT_ZSH_NONADMINS\" /etc/zshrc || echo CLI not restricted"
+      },
+      "metrictype": "bool",
+      "name": "CLI not restricted for standard users",
+      "remediation": {
+        "class": "cli",
+        "education": [
+          {
+            "class": "html",
+            "locale": "EN",
+            "target": "Restricting command-line access for standard users prevents unauthorized system modifications and helps enforce security policies. This measure is particularly important in managed environments where users should not have direct shell access."
+          },
+          {
+            "class": "html",
+            "locale": "FR",
+            "target": "Restreindre l'accès à la ligne de commande pour les utilisateurs standard empêche les modifications système non autorisées et aide à appliquer les politiques de sécurité. Cette mesure est particulièrement importante dans les environnements gérés où les utilisateurs ne devraient pas avoir d'accès shell direct."
+          }
+        ],
+        "elevation": "system",
+        "maxversion": 0,
+        "minversion": 12,
+        "system": "macOS",
+        "target": "grep -q \"BEGIN RESTRICT_ZSH_NONADMINS\" /etc/zshrc || printf \"# BEGIN RESTRICT_ZSH_NONADMINS\\n## Prevent non-admin users from using interactive zsh shells\\nif [[ -t 1 ]]; then\\n  if ! id -Gn | grep -qw admin; then\\n    echo \\\"\\\\nCommand-line access is restricted by your administrator.\\\"\\n    osascript -e \\\"display alert \\\\\\\"Access Restricted\\\\\\\" message \\\\\\\"Command-line tools are blocked for standard users.\\\\\\\" buttons {\\\\\\\"OK\\\\\\\"}\\\" 2>/dev/null || true\\n    exit 1\\n  fi\\nfi\\n# END RESTRICT_ZSH_NONADMINS\" >> /etc/zshrc"
+      },
+      "rollback": {
+        "class": "cli",
+        "education": [
+          {
+            "class": "html",
+            "locale": "EN",
+            "target": "Removing CLI restrictions will allow standard users to access interactive shell environments again. This may be necessary for users who require command-line access for legitimate purposes, but it reduces system security in managed environments."
+          },
+          {
+            "class": "html",
+            "locale": "FR",
+            "target": "Supprimer les restrictions CLI permettra aux utilisateurs standard d'accéder à nouveau aux environnements shell interactifs. Cela peut être nécessaire pour les utilisateurs qui ont besoin d'un accès en ligne de commande à des fins légitimes, mais cela réduit la sécurité du système dans les environnements gérés."
+          }
+        ],
+        "elevation": "system",
+        "maxversion": 0,
+        "minversion": 12,
+        "system": "macOS",
+        "target": "python3 - <<\"PY\"\nskip = False\nlines = []\nwith open(\"/etc/zshrc\") as src:\n    for line in src:\n        if \"BEGIN RESTRICT_ZSH_NONADMINS\" in line:\n            skip = True\n            continue\n        if \"END RESTRICT_ZSH_NONADMINS\" in line:\n            skip = False\n            continue\n        if not skip:\n            lines.append(line)\nwith open(\"/etc/zshrc\", \"w\") as dst:\n    dst.writelines(lines)\nprint(\"[OK] zsh block removed\")\nPY\n"
+      },
+      "scope": "macOS",
+      "severity": 3,
+      "tags": [
+        "Personal Posture"
+      ]
     }
   ],
   "name": "threat model macOS",
-  "signature": "39e05535cad0aff514def001e1e053b428ef5e52c6f33d39417bc83521504cee"
+  "signature": "fee820b7748ab35cb56eb00259ac7ad541a3e1d5709534205049652902388fc4"
 }"#;
