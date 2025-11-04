@@ -2055,7 +2055,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
       "implementation": {
         "class": "cli",
         "education": [],
-        "elevation": "user",
+        "elevation": "admin",
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
