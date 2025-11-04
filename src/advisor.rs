@@ -496,15 +496,21 @@ pub fn advice_type_str(advice: &Advice) -> &'static str {
     }
 }
 
-/// Compute a short, stable identifier for a todo.
+/// Compute a stable, human-readable identifier for a todo.
 ///
-/// We derive the ID from the advice payload only so it stays consistent with
-/// API-facing IDs generated elsewhere. The first 8 hex chars are returned.
+/// Returns the semantic stable key directly (device_id, session_group_id, threat name, etc.)
+/// instead of hashing it. This makes todo IDs stable across metadata changes while remaining
+/// human-readable for debugging and tracking dismissals.
 pub fn advisor_todo_id(todo: &AdvisorTodo) -> String {
-    // Debug representation of advice is deterministic for our enums/fields
-    let digest = md5::compute(format!("{:?}", todo.advice));
-    let hex = format!("{:x}", digest);
-    hex[..8.min(hex.len())].to_string()
+    match &todo.advice {
+        Advice::RemediateNetworkPort { device_id } => device_id.clone(),
+        Advice::RemediateNetworkSession { session_group_id } => session_group_id.clone(),
+        Advice::RemediateThreat { name } | Advice::RemediatePolicy { name } => name.clone(),
+        Advice::RemediatePwnedBreach { name, email } => format!("{}:{}", email, name),
+        Advice::ConfigureLanScanMonitoring => "configure:lanscan".to_string(),
+        Advice::ConfigurePwnedMonitoring => "configure:pwned".to_string(),
+        Advice::ConfigureSessionMonitoring => "configure:sessions".to_string(),
+    }
 }
 
 #[cfg(test)]
