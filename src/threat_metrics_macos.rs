@@ -2111,5 +2111,5 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
     }
   ],
   "name": "threat model macOS",
-  "signature": "c0b8d5ccb492bc136b7ece07d0f46330c06d0a165446346b452d3eb57587d604"
+  "signature": "6521722ece1a157df92b0f60fb30a352d9cc88fce28c569aec6f2ba69eaef9f3"
 }"#;
