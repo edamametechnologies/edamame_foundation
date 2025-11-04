@@ -2081,7 +2081,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "grep -q \"BEGIN RESTRICT_ZSH_NONADMINS\" /etc/zshrc || printf \"# BEGIN RESTRICT_ZSH_NONADMINS\\n## Prevent non-admin users from using interactive zsh shells\\nif [[ -t 1 ]]; then\\n  if ! id -Gn | grep -qw admin; then\\n    echo \\\"\\\\nCommand-line access is restricted by your administrator.\\\"\\n    osascript -e \\\"display alert \\\\\\\"Access Restricted\\\\\\\" message \\\\\\\"Command-line tools are blocked for standard users.\\\\\\\" buttons {\\\\\\\"OK\\\\\\\"}\\\" 2>/dev/null || true\\n    exit 1\\n  fi\\nfi\\n# END RESTRICT_ZSH_NONADMINS\" >> /etc/zshrc"
+        "target": "grep -q \"BEGIN RESTRICT_ZSH_NONADMINS\" /etc/zshrc || cat <<'EOF' >> /etc/zshrc\n# BEGIN RESTRICT_ZSH_NONADMINS\n## Prevent non-admin users from using interactive zsh shells\nif [[ -t 1 ]]; then\n  if ! id -Gn | grep -qw admin; then\n    echo \"\"\n    echo \"Command-line access is restricted by your administrator.\"\n    osascript -e \"display alert \\\"Access Restricted\\\" message \\\"Command-line tools are blocked for standard users.\\\" buttons {\\\"OK\\\"}\" 2>/dev/null || true\n    exit 1\n  fi\nfi\n# END RESTRICT_ZSH_NONADMINS\nEOF"
       },
       "rollback": {
         "class": "cli",
@@ -2101,7 +2101,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "python3 - <<\"PY\"\nskip = False\nlines = []\nwith open(\"/etc/zshrc\") as src:\n    for line in src:\n        if \"BEGIN RESTRICT_ZSH_NONADMINS\" in line:\n            skip = True\n            continue\n        if \"END RESTRICT_ZSH_NONADMINS\" in line:\n            skip = False\n            continue\n        if not skip:\n            lines.append(line)\nwith open(\"/etc/zshrc\", \"w\") as dst:\n    dst.writelines(lines)\nprint(\"[OK] zsh block removed\")\nPY\n"
+        "target": "python3 - <<'PY'\nskip = False\nlines = []\nwith open(\"/etc/zshrc\") as src:\n    for line in src:\n        if \"BEGIN RESTRICT_ZSH_NONADMINS\" in line:\n            skip = True\n            continue\n        if \"END RESTRICT_ZSH_NONADMINS\" in line:\n            skip = False\n            continue\n        if not skip:\n            lines.append(line)\nwith open(\"/etc/zshrc\", \"w\") as dst:\n    dst.writelines(lines)\nprint(\"[OK] zsh block removed\")\nPY\n"
       },
       "scope": "macOS",
       "severity": 3,
@@ -2111,5 +2111,5 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
     }
   ],
   "name": "threat model macOS",
-  "signature": "fee820b7748ab35cb56eb00259ac7ad541a3e1d5709534205049652902388fc4"
+  "signature": "c0b8d5ccb492bc136b7ece07d0f46330c06d0a165446346b452d3eb57587d604"
 }"#;
