@@ -353,6 +353,26 @@ pub async fn utility_merge_custom_whitelists(
     any(target_os = "macos", target_os = "linux", target_os = "windows"),
     feature = "packetcapture"
 ))]
+pub async fn utility_compare_custom_whitelists(
+    whitelist1_json: &str,
+    whitelist2_json: &str,
+) -> Result<f64> {
+    let diff_percentage =
+        match FlodbaddCapture::compare_custom_whitelists(whitelist1_json, whitelist2_json).await {
+            Ok(diff) => diff,
+            Err(e) => {
+                error!("Error comparing custom whitelists: {}", e);
+                return Err(anyhow::anyhow!("error comparing custom whitelists: {}", e));
+            }
+        };
+    tracing::debug!("Returning whitelist difference: {}%", diff_percentage);
+    Ok(diff_percentage)
+}
+
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux", target_os = "windows"),
+    feature = "packetcapture"
+))]
 pub async fn utility_set_custom_blacklists(blacklist_json: &str) -> Result<String> {
     let _ = CAPTURE
         .write()
