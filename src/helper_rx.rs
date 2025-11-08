@@ -438,6 +438,18 @@ pub async fn rpc_run(
                 any(target_os = "macos", target_os = "linux", target_os = "windows"),
                 feature = "packetcapture"
             ))]
+            "compare_custom_whitelists" => {
+                match utility_compare_custom_whitelists(arg1, arg2).await {
+                    Ok(diff_percentage) => Ok(diff_percentage.to_string()),
+                    Err(e) => {
+                        order_error(&format!("error comparing custom whitelists: {}", e), false)
+                    }
+                }
+            }
+            #[cfg(all(
+                any(target_os = "macos", target_os = "linux", target_os = "windows"),
+                feature = "packetcapture"
+            ))]
             "set_custom_blacklists" => utility_set_custom_blacklists(arg1).await,
             #[cfg(all(
                 any(target_os = "macos", target_os = "linux", target_os = "windows"),
