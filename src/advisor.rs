@@ -29,9 +29,13 @@ pub enum Advice {
     },
 
     /// Recommend remediation for a suspicious network session.
-    /// Uses a stable session group identifier to avoid churn from traffic changes.
+    /// Groups sessions by process name (except "unknown") to reduce todo clutter.
     RemediateNetworkSession {
-        /// Stable identifier computed from (protocol, src_ip, dst_ip, dst_port)
+        /// Process group identifier: "process:{process_name}" or fallback to session_group_id for "unknown"
+        process_group_id: String,
+        /// List of session UIDs in this process group
+        session_uids: Vec<String>,
+        /// Legacy: session_group_id for backward compatibility (fallback grouping for "unknown" processes)
         session_group_id: String,
     },
 
@@ -504,7 +508,9 @@ pub fn advice_type_str(advice: &Advice) -> &'static str {
 pub fn advisor_todo_id(todo: &AdvisorTodo) -> String {
     match &todo.advice {
         Advice::RemediateNetworkPort { device_id } => device_id.clone(),
-        Advice::RemediateNetworkSession { session_group_id } => session_group_id.clone(),
+        Advice::RemediateNetworkSession {
+            process_group_id, ..
+        } => process_group_id.clone(),
         Advice::RemediateThreat { name } | Advice::RemediatePolicy { name } => name.clone(),
         Advice::RemediatePwnedBreach { name, email } => format!("{}:{}", email, name),
         Advice::ConfigureLanScanMonitoring => "configure:lanscan".to_string(),
@@ -532,6 +538,8 @@ mod tests {
     fn mk_session(i: i64, minutes_ago: i64) -> AdvisorTodo {
         AdvisorTodo {
             advice: Advice::RemediateNetworkSession {
+                process_group_id: format!("process:test-process-{i}"),
+                session_uids: vec![format!("session-uid-{i}")],
                 session_group_id: format!("session-group-{i}"),
             },
             priority: AdvicePriority::High,
