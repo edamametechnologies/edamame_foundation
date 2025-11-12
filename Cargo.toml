@@ -32,8 +32,8 @@ edamame_models = { git = "https://github.com/edamametechnologies/threatmodels-rs
 
 # Sentry
 # Beware it will use reqwest with native-tls by default, not rustls
-sentry = { version = "0.43.0", default-features = false, features = ["reqwest", "rustls"] }
-sentry-tracing = "0.43.0"
+sentry = { version = "0.45.0", default-features = false, features = ["reqwest", "rustls"] }
+sentry-tracing = "0.45.0"
 
 # Global statics w/ mutex
 lazy_static = "1.5.0"
