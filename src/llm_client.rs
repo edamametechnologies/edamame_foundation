@@ -76,10 +76,10 @@ pub fn sanitize_device_for_llm(
 /// Sanitize session info for LLM prompts (comprehensive summary excluding TCP history)
 ///
 /// Excludes: TCP flag history, internal segment tracking
-/// Includes: All network metadata, process info, ASN data, packet/byte stats
+/// Includes: All network metadata, process info (including full L7 details), ASN data, packet/byte stats
 ///
 /// # Returns
-/// JSON string with session summary (~2-4 KB vs 65 KB for full object)
+/// JSON string with session summary (~3-6 KB vs 65 KB for full object)
 pub fn sanitize_session_for_llm(
     uid: &str,
     protocol: &str,
@@ -94,6 +94,15 @@ pub fn sanitize_session_for_llm(
     process_path: Option<&str>,
     process_username: Option<&str>,
     process_pid: Option<u32>,
+    process_cmd: Option<&[String]>,
+    process_cwd: Option<&str>,
+    process_memory: Option<u64>,
+    process_start_time: Option<u64>,
+    process_run_time: Option<u64>,
+    process_cpu_usage: Option<u32>,
+    process_accumulated_cpu_time: Option<u64>,
+    process_disk_usage: Option<&(u64, u64, u64, u64)>, // (total_written_bytes, written_bytes, total_read_bytes, read_bytes)
+    process_open_files: Option<u64>,
     src_asn: Option<(u32, String, String)>, // (as_number, country, owner)
     dst_asn: Option<(u32, String, String)>,
     criticality: &str,
@@ -129,6 +138,20 @@ pub fn sanitize_session_for_llm(
         "process_path": process_path,
         "process_username": process_username,
         "process_pid": process_pid,
+        "process_cmd": process_cmd,
+        "process_cwd": process_cwd,
+        "process_memory": process_memory,
+        "process_start_time": process_start_time,
+        "process_run_time": process_run_time,
+        "process_cpu_usage": process_cpu_usage,
+        "process_accumulated_cpu_time": process_accumulated_cpu_time,
+        "process_disk_usage": process_disk_usage.map(|(tw, w, tr, r)| json!({
+            "total_written_bytes": tw,
+            "written_bytes": w,
+            "total_read_bytes": tr,
+            "read_bytes": r,
+        })),
+        "process_open_files": process_open_files,
         "source_asn": src_asn.map(|(num, country, owner)| json!({
             "as_number": num,
             "country": country,
@@ -206,6 +229,9 @@ mod tests {
     fn test_sanitize_session_for_llm() {
         use std::net::Ipv4Addr;
 
+        let cmd = vec!["firefox".to_string(), "--new-window".to_string()];
+        let disk_usage = (1000, 500, 2000, 1000);
+
         let result = sanitize_session_for_llm(
             "test-uid-123",
             "TCP",
@@ -220,6 +246,15 @@ mod tests {
             Some("/usr/bin/firefox"),
             Some("user"),
             Some(1234),
+            Some(cmd.as_slice()),
+            Some("/home/user"),
+            Some(1048576),
+            Some(1698508800),
+            Some(3600),
+            Some(5),
+            Some(1000000),
+            Some(&disk_usage),
+            Some(42),
             None,
             Some((13335, "US".to_string(), "Cloudflare".to_string())),
             "anomaly:suspicious",
@@ -249,6 +284,13 @@ mod tests {
         assert!(result.contains("1024")); // inbound_bytes value
         assert!(result.contains("2048")); // outbound_bytes value
         assert!(result.contains("segment_count"));
+        // Check L7 process fields are included
+        assert!(result.contains("process_cmd"));
+        assert!(result.contains("process_cwd"));
+        assert!(result.contains("process_memory"));
+        assert!(result.contains("process_cpu_usage"));
+        assert!(result.contains("process_disk_usage"));
+        assert!(result.contains("process_open_files"));
         // Should NOT contain history field
         assert!(!result.contains("history"));
     }
