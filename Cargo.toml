@@ -1,6 +1,6 @@
 [package]
 name = "edamame_foundation"
-version = "0.9.75"
+version = "0.9.77"
 edition = "2021"
 
 [lints.rust]
@@ -149,3 +149,7 @@ serial_test = "3.2.0"
 # Conditional compilation for build dependencies
 # protobuf->Rust compiler
 tonic-prost-build = "0.14.2"
+
+# Local copy in order to allow rapid development/debug
+#flodbadd = { path = "../flodbadd" }
+flodbadd = { git = "https://github.com/edamametechnologies/flodbadd", branch = "main" }
