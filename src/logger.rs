@@ -150,6 +150,54 @@ impl<'a> Write for MemoryWriterGuard<'a> {
     }
 }
 
+#[derive(Clone)]
+struct SanitizingMakeWriter<M> {
+    inner: M,
+}
+
+impl<M> SanitizingMakeWriter<M> {
+    fn new(inner: M) -> Self {
+        Self { inner }
+    }
+}
+
+struct SanitizingWriter<W> {
+    inner: W,
+}
+
+impl<'a, M> MakeWriter<'a> for SanitizingMakeWriter<M>
+where
+    M: MakeWriter<'a>,
+{
+    type Writer = SanitizingWriter<M::Writer>;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        SanitizingWriter {
+            inner: self.inner.make_writer(),
+        }
+    }
+}
+
+impl<W> Write for SanitizingWriter<W>
+where
+    W: Write,
+{
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if cfg!(debug_assertions) {
+            self.inner.write(buf)
+        } else {
+            let log = String::from_utf8_lossy(buf);
+            let sanitized = sanitize_keywords(&log, &[]);
+            self.inner.write_all(sanitized.as_bytes())?;
+            Ok(buf.len())
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
+
 fn sanitize_keywords(input: &str, _keywords: &[&str]) -> String {
     SANITIZE_REGEX
         .replace_all(input, |caps: &regex::Captures| {
@@ -413,7 +461,7 @@ pub fn init_logger(
     // Optional file writer
     // Duplicate to file on Windows for the app and helper,
     // Or for posture for all platforms, except if installed in /usr or /opt
-    let file_writer = if (matches!(executable_type, "cli") && !is_installed)
+    let (file_writer, file_guard) = if (matches!(executable_type, "cli") && !is_installed)
         || (cfg!(target_os = "windows"))
     {
         let log_dir = if matches!(executable_type, "helper") || matches!(executable_type, "cli") {
@@ -446,11 +494,14 @@ pub fn init_logger(
     };
 
     // Duplicate to stdout except for posture
-    let stdout_writer = if matches!(executable_type, "cli") {
+    let (stdout_writer, stdout_guard) = if matches!(executable_type, "cli") {
         NonBlocking::new(io::sink())
     } else {
         NonBlocking::new(io::stdout())
     };
+
+    let file_make_writer = SanitizingMakeWriter::new(file_writer);
+    let stdout_make_writer = SanitizingMakeWriter::new(stdout_writer);
 
     // Register the proper layers based on sentry availability and platform
     if !url.is_empty() {
@@ -477,11 +528,11 @@ pub fn init_logger(
                     #[cfg(feature = "tokio-console")]
                     match tracing_subscriber::registry()
                         .with(filter_layer)
-                        .with(fmt::layer().with_writer(file_writer.0))
+                        .with(fmt::layer().with_writer(file_make_writer.clone()))
                         .with(fmt::layer().with_writer(logger.memory_writer.clone()))
                         .with(sentry_layer)
                         // Must be here when using sentry
-                        .with(fmt::layer().with_writer(stdout_writer.0))
+                        .with(fmt::layer().with_writer(stdout_make_writer.clone()))
                         .with(console_subscriber::spawn())
                         .try_init()
                     {
@@ -491,11 +542,11 @@ pub fn init_logger(
                     #[cfg(not(feature = "tokio-console"))]
                     match tracing_subscriber::registry()
                         .with(filter_layer)
-                        .with(fmt::layer().with_writer(file_writer.0))
+                        .with(fmt::layer().with_writer(file_make_writer.clone()))
                         .with(fmt::layer().with_writer(logger.memory_writer.clone()))
                         .with(sentry_layer)
                         // Must be here when using sentry
-                        .with(fmt::layer().with_writer(stdout_writer.0))
+                        .with(fmt::layer().with_writer(stdout_make_writer.clone()))
                         .try_init()
                     {
                         Ok(_) => {}
@@ -506,11 +557,11 @@ pub fn init_logger(
                     #[cfg(feature = "tokio-console")]
                     match tracing_subscriber::registry()
                         .with(filter_layer)
-                        .with(fmt::layer().with_writer(file_writer.0))
+                        .with(fmt::layer().with_writer(file_make_writer.clone()))
                         .with(fmt::layer().with_writer(logger.memory_writer.clone()))
                         .with(sentry_layer)
                         // Must be here when using sentry
-                        .with(fmt::layer().with_writer(stdout_writer.0))
+                        .with(fmt::layer().with_writer(stdout_make_writer.clone()))
                         // Use console layer for edamame_helper
                         .with(console_subscriber::spawn())
                         .try_init()
@@ -523,11 +574,11 @@ pub fn init_logger(
                     #[cfg(not(feature = "tokio-console"))]
                     match tracing_subscriber::registry()
                         .with(filter_layer)
-                        .with(fmt::layer().with_writer(file_writer.0))
+                        .with(fmt::layer().with_writer(file_make_writer.clone()))
                         .with(fmt::layer().with_writer(logger.memory_writer.clone()))
                         .with(sentry_layer)
                         // Must be here when using sentry
-                        .with(fmt::layer().with_writer(stdout_writer.0))
+                        .with(fmt::layer().with_writer(stdout_make_writer.clone()))
                         .try_init()
                     {
                         Ok(_) => {}
@@ -542,7 +593,7 @@ pub fn init_logger(
 
                 match tracing_subscriber::registry()
                     .with(filter_layer)
-                    .with(fmt::layer().with_writer(stdout_writer.0))
+                    .with(fmt::layer().with_writer(stdout_make_writer.clone()))
                     .with(fmt::layer().with_writer(logger.memory_writer.clone()))
                     .with(sentry_layer)
                     .with(android_layer)
@@ -556,11 +607,11 @@ pub fn init_logger(
             // Windows
             match tracing_subscriber::registry()
                 .with(filter_layer)
-                .with(fmt::layer().with_writer(file_writer.0))
+                .with(fmt::layer().with_writer(file_make_writer.clone()))
                 .with(fmt::layer().with_writer(logger.memory_writer.clone()))
                 .with(sentry_layer)
                 // Must be here when using sentry
-                .with(fmt::layer().with_writer(stdout_writer.0))
+                .with(fmt::layer().with_writer(stdout_make_writer.clone()))
                 .try_init()
             {
                 Ok(_) => {}
@@ -570,11 +621,11 @@ pub fn init_logger(
             // Linux
             match tracing_subscriber::registry()
                 .with(filter_layer)
-                .with(fmt::layer().with_writer(file_writer.0))
+                .with(fmt::layer().with_writer(file_make_writer.clone()))
                 .with(fmt::layer().with_writer(logger.memory_writer.clone()))
                 .with(sentry_layer)
                 // Must be here when using sentry
-                .with(fmt::layer().with_writer(stdout_writer.0))
+                .with(fmt::layer().with_writer(stdout_make_writer.clone()))
                 .try_init()
             {
                 Ok(_) => {}
@@ -589,8 +640,8 @@ pub fn init_logger(
                 if !matches!(executable_type, "helper") && !matches!(executable_type, "cli") {
                     match tracing_subscriber::registry()
                         .with(filter_layer)
-                        .with(fmt::layer().with_writer(stdout_writer.0))
-                        .with(fmt::layer().with_writer(file_writer.0))
+                        .with(fmt::layer().with_writer(stdout_make_writer.clone()))
+                        .with(fmt::layer().with_writer(file_make_writer.clone()))
                         .with(fmt::layer().with_writer(logger.memory_writer.clone()))
                         .try_init()
                     {
@@ -600,8 +651,8 @@ pub fn init_logger(
                 } else {
                     match tracing_subscriber::registry()
                         .with(filter_layer)
-                        .with(fmt::layer().with_writer(stdout_writer.0))
-                        .with(fmt::layer().with_writer(file_writer.0))
+                        .with(fmt::layer().with_writer(stdout_make_writer.clone()))
+                        .with(fmt::layer().with_writer(file_make_writer.clone()))
                         .with(fmt::layer().with_writer(logger.memory_writer.clone()))
                         .try_init()
                     {
@@ -617,7 +668,7 @@ pub fn init_logger(
 
                 match tracing_subscriber::registry()
                     .with(filter_layer)
-                    .with(fmt::layer().with_writer(stdout_writer.0))
+                    .with(fmt::layer().with_writer(stdout_make_writer.clone()))
                     .with(fmt::layer().with_writer(logger.memory_writer.clone()))
                     .with(android_layer)
                     .try_init()
@@ -630,8 +681,8 @@ pub fn init_logger(
             // Windows
             match tracing_subscriber::registry()
                 .with(filter_layer)
-                .with(fmt::layer().with_writer(stdout_writer.0))
-                .with(fmt::layer().with_writer(file_writer.0))
+                .with(fmt::layer().with_writer(stdout_make_writer.clone()))
+                .with(fmt::layer().with_writer(file_make_writer.clone()))
                 .with(fmt::layer().with_writer(logger.memory_writer.clone()))
                 .try_init()
             {
@@ -642,8 +693,8 @@ pub fn init_logger(
             // Linux
             match tracing_subscriber::registry()
                 .with(filter_layer)
-                .with(fmt::layer().with_writer(stdout_writer.0))
-                .with(fmt::layer().with_writer(file_writer.0))
+                .with(fmt::layer().with_writer(stdout_make_writer.clone()))
+                .with(fmt::layer().with_writer(file_make_writer.clone()))
                 .with(fmt::layer().with_writer(logger.memory_writer.clone()))
                 .try_init()
             {
@@ -653,8 +704,8 @@ pub fn init_logger(
         }
     }
 
-    forget(stdout_writer.1);
-    forget(file_writer.1);
+    forget(stdout_guard);
+    forget(file_guard);
 }
 
 pub fn get_new_logs() -> String {
