@@ -1,6 +1,6 @@
 // Built in default threat model
 pub static THREAT_METRICS_MACOS: &str = r#"{
-  "date": "November 04th 2025",
+  "date": "November 23th 2025",
   "extends": "none",
   "metrics": [
     {
@@ -66,7 +66,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "/Library/Application\\ Support/Edamame/Edamame-Helper/uninstall.sh"
+        "target": "printf '%s\\n' '/Library/Application\\ Support/Edamame/Edamame-Helper/uninstall.sh' | /bin/bash"
       },
       "scope": "generic",
       "severity": 5,
@@ -93,7 +93,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "/usr/libexec/ApplicationFirewall/socketfilterfw --getstealthmode | grep -E \"disabled|is off\""
+        "target": "printf '%s\\n' '/usr/libexec/ApplicationFirewall/socketfilterfw --getstealthmode | grep -E \"disabled|is off\"' | /bin/bash"
       },
       "metrictype": "bool",
       "name": "response to ping enabled",
@@ -115,7 +115,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "/usr/libexec/ApplicationFirewall/socketfilterfw --setstealthmode on"
+        "target": "printf '%s\\n' '/usr/libexec/ApplicationFirewall/socketfilterfw --setstealthmode on' | /bin/bash"
       },
       "rollback": {
         "class": "cli",
@@ -135,7 +135,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "/usr/libexec/ApplicationFirewall/socketfilterfw --setstealthmode off"
+        "target": "printf '%s\\n' '/usr/libexec/ApplicationFirewall/socketfilterfw --setstealthmode off' | /bin/bash"
       },
       "scope": "generic",
       "severity": 3,
@@ -164,7 +164,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "profiles -P | grep profileIdentifier | grep -v digital_health_restrictions | grep -v dateandtime"
+        "target": "printf '%s\\n' 'profiles -P | grep profileIdentifier | grep -v digital_health_restrictions | grep -v dateandtime' | /bin/bash"
       },
       "metrictype": "bool",
       "name": "MDM profiles",
@@ -186,7 +186,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "profiles remove -all -forced"
+        "target": "printf '%s\\n' 'profiles remove -all -forced' | /bin/bash"
       },
       "rollback": {
         "class": "",
@@ -235,7 +235,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "pgrep jamf"
+        "target": "printf '%s\\n' 'pgrep jamf' | /bin/bash"
       },
       "metrictype": "bool",
       "name": "MDM remote admin",
@@ -246,7 +246,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "jamf removeFramework"
+        "target": "printf '%s\\n' 'jamf removeFramework' | /bin/bash"
       },
       "rollback": {
         "class": "",
@@ -295,7 +295,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "systemsetup getwakeonnetworkaccess | grep -v Off"
+        "target": "printf '%s\\n' 'systemsetup getwakeonnetworkaccess | grep -v Off' | /bin/bash"
       },
       "metrictype": "bool",
       "name": "WOL enabled",
@@ -317,7 +317,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "systemsetup -setwakeonnetworkaccess off"
+        "target": "printf '%s\\n' 'systemsetup -setwakeonnetworkaccess off' | /bin/bash"
       },
       "rollback": {
         "class": "cli",
@@ -326,7 +326,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "systemsetup -setwakeonnetworkaccess on"
+        "target": "printf '%s\\n' 'systemsetup -setwakeonnetworkaccess on' | /bin/bash"
       },
       "scope": "generic",
       "severity": 1,
@@ -355,7 +355,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "defaults read /Library/Preferences/com.apple.commerce.plist AutoUpdate 2>&1 | grep -v 1"
+        "target": "printf '%s\\n' 'defaults read /Library/Preferences/com.apple.commerce.plist AutoUpdate 2>&1 | grep -v 1' | /bin/bash"
       },
       "metrictype": "bool",
       "name": "manual store application updates",
@@ -377,7 +377,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "defaults write /Library/Preferences/com.apple.commerce.plist AutoUpdate -bool true; defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticallyInstallAppUpdates -bool true; defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticallyInstallMacOSUpdates -bool true"
+        "target": "printf '%s\\n' 'defaults write /Library/Preferences/com.apple.commerce.plist AutoUpdate -bool true;' 'defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticallyInstallAppUpdates -bool true;' 'defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticallyInstallMacOSUpdates -bool true' | /bin/bash"
       },
       "rollback": {
         "class": "cli",
@@ -397,7 +397,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "defaults write /Library/Preferences/com.apple.commerce.plist AutoUpdate -bool false; defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticallyInstallAppUpdates -bool false; defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticallyInstallMacOSUpdates -bool false"
+        "target": "printf '%s\\n' 'defaults write /Library/Preferences/com.apple.commerce.plist AutoUpdate -bool false;' 'defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticallyInstallAppUpdates -bool false;' 'defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticallyInstallMacOSUpdates -bool false' | /bin/bash"
       },
       "scope": "generic",
       "severity": 3,
@@ -426,7 +426,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "/usr/libexec/ApplicationFirewall/socketfilterfw --getglobalstate | grep disabled"
+        "target": "printf '%s\\n' '/usr/libexec/ApplicationFirewall/socketfilterfw --getglobalstate | grep disabled' | /bin/bash"
       },
       "metrictype": "bool",
       "name": "local firewall disabled",
@@ -448,7 +448,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "/usr/libexec/ApplicationFirewall/socketfilterfw --setglobalstate on"
+        "target": "printf '%s\\n' '/usr/libexec/ApplicationFirewall/socketfilterfw --setglobalstate on' | /bin/bash"
       },
       "rollback": {
         "class": "cli",
@@ -468,7 +468,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "/usr/libexec/ApplicationFirewall/socketfilterfw --setglobalstate off"
+        "target": "printf '%s\\n' '/usr/libexec/ApplicationFirewall/socketfilterfw --setglobalstate off' | /bin/bash"
       },
       "scope": "generic",
       "severity": 2,
@@ -508,7 +508,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "defaults read /Library/Preferences/com.apple.loginwindow | grep autoLoginUser"
+        "target": "printf '%s\\n' 'defaults read /Library/Preferences/com.apple.loginwindow | grep autoLoginUser' | /bin/bash"
       },
       "metrictype": "bool",
       "name": "automatic login enabled",
@@ -530,7 +530,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "defaults delete /Library/Preferences/com.apple.loginwindow autoLoginUser"
+        "target": "printf '%s\\n' 'defaults delete /Library/Preferences/com.apple.loginwindow autoLoginUser' | /bin/bash"
       },
       "rollback": {
         "class": "link",
@@ -579,7 +579,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "systemsetup -getremotelogin | grep On"
+        "target": "printf '%s\\n' 'systemsetup -getremotelogin | grep On' | /bin/bash"
       },
       "metrictype": "bool",
       "name": "remote login enabled",
@@ -601,7 +601,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "echo yes | systemsetup -setremotelogin off"
+        "target": "printf '%s\\n' 'echo yes | systemsetup -setremotelogin off' | /bin/bash"
       },
       "rollback": {
         "class": "cli",
@@ -621,7 +621,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "systemsetup -setremotelogin on"
+        "target": "printf '%s\\n' 'systemsetup -setremotelogin on' | /bin/bash"
       },
       "scope": "generic",
       "severity": 4,
@@ -650,7 +650,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "pgrep ARDAgent"
+        "target": "printf '%s\\n' 'pgrep ARDAgent' | /bin/bash"
       },
       "metrictype": "bool",
       "name": "remote desktop enabled",
@@ -672,7 +672,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -deactivate -stop"
+        "target": "printf '%s\\n' '/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -deactivate -stop' | /bin/bash"
       },
       "rollback": {
         "class": "cli",
@@ -692,7 +692,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate"
+        "target": "printf '%s\\n' '/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate' | /bin/bash"
       },
       "scope": "generic",
       "severity": 4,
@@ -721,7 +721,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "launchctl list | grep smbd"
+        "target": "printf '%s\\n' 'launchctl list | grep smbd' | /bin/bash"
       },
       "metrictype": "bool",
       "name": "file sharing enabled",
@@ -743,7 +743,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "launchctl unload -w /System/Library/LaunchDaemons/com.apple.smbd.plist"
+        "target": "printf '%s\\n' 'launchctl unload -w /System/Library/LaunchDaemons/com.apple.smbd.plist' | /bin/bash"
       },
       "rollback": {
         "class": "cli",
@@ -763,7 +763,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "launchctl load -w /System/Library/LaunchDaemons/com.apple.smbd.plist && defaults write /Library/Preferences/SystemConfiguration/com.apple.smb.server.plist EnabledServices -array disk"
+        "target": "printf '%s\\n' 'launchctl load -w /System/Library/LaunchDaemons/com.apple.smbd.plist &&' 'defaults write /Library/Preferences/SystemConfiguration/com.apple.smb.server.plist EnabledServices -array disk' | /bin/bash"
       },
       "scope": "generic",
       "severity": 4,
@@ -792,7 +792,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "launchctl print-disabled system | grep com.apple.AEServer | grep -E 'enabled|false'"
+        "target": "printf '%s\\n' 'launchctl print-disabled system | grep com.apple.AEServer | grep -E '\"'\"'enabled|false'\"'\"'' | /bin/bash"
       },
       "metrictype": "bool",
       "name": "remote events enabled",
@@ -814,7 +814,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "systemsetup -setremoteappleevents off"
+        "target": "printf '%s\\n' 'systemsetup -setremoteappleevents off' | /bin/bash"
       },
       "rollback": {
         "class": "cli",
@@ -834,7 +834,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "systemsetup -setremoteappleevents on"
+        "target": "printf '%s\\n' 'systemsetup -setremoteappleevents on' | /bin/bash"
       },
       "scope": "macOS",
       "severity": 4,
@@ -863,7 +863,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "fdesetup hasinstitutionalrecoverykey | grep true"
+        "target": "printf '%s\\n' 'fdesetup hasinstitutionalrecoverykey | grep true' | /bin/bash"
       },
       "metrictype": "bool",
       "name": "encrypted disk organizational recovery",
@@ -934,7 +934,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "system_profiler SPHardwareDataType | grep -q 'Virtual' || fdesetup isactive | grep false"
+        "target": "printf '%s\\n' 'system_profiler SPHardwareDataType | grep -q '\"'\"'Virtual'\"'\"' ||' 'fdesetup isactive | grep false' | /bin/bash"
       },
       "metrictype": "bool",
       "name": "encrypted disk disabled",
@@ -1007,7 +1007,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "spctl --status | grep disabled"
+        "target": "printf '%s\\n' 'spctl --status | grep disabled' | /bin/bash"
       },
       "metrictype": "bool",
       "name": "unsigned applications allowed",
@@ -1029,7 +1029,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "spctl --global-enable"
+        "target": "printf '%s\\n' 'spctl --global-enable' | /bin/bash"
       },
       "rollback": {
         "class": "cli",
@@ -1049,7 +1049,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "spctl --global-disable"
+        "target": "printf '%s\\n' 'spctl --global-disable' | /bin/bash"
       },
       "scope": "generic",
       "severity": 4,
@@ -1078,7 +1078,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "defaults read /Library/Preferences/com.apple.SoftwareUpdate AutomaticallyInstallMacOSUpdates 2>/dev/null | grep -q 1 || echo macosupdate_disabled"
+        "target": "printf '%s\\n' 'defaults read /Library/Preferences/com.apple.SoftwareUpdate AutomaticallyInstallMacOSUpdates 2>/dev/null | grep -q 1 ||' 'echo macosupdate_disabled' | /bin/bash"
       },
       "metrictype": "bool",
       "name": "manual system updates",
@@ -1100,7 +1100,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticCheckEnabled -bool true; defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticDownload -bool true; defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticallyInstallMacOSUpdates -bool true; defaults write /Library/Preferences/com.apple.SoftwareUpdate CriticalUpdateInstall -bool true; defaults write /Library/Preferences/com.apple.SoftwareUpdate ConfigDataInstall -bool true; softwareupdate --schedule on"
+        "target": "printf '%s\\n' 'defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticCheckEnabled -bool true;' 'defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticDownload -bool true;' 'defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticallyInstallMacOSUpdates -bool true;' 'defaults write /Library/Preferences/com.apple.SoftwareUpdate CriticalUpdateInstall -bool true;' 'defaults write /Library/Preferences/com.apple.SoftwareUpdate ConfigDataInstall -bool true;' 'softwareupdate --schedule on' | /bin/bash"
       },
       "rollback": {
         "class": "cli",
@@ -1120,7 +1120,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticCheckEnabled -bool false; defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticDownload -bool false; defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticallyInstallMacOSUpdates -bool false; defaults write /Library/Preferences/com.apple.SoftwareUpdate CriticalUpdateInstall -bool false; defaults write /Library/Preferences/com.apple.SoftwareUpdate ConfigDataInstall -bool false; softwareupdate --schedule off"
+        "target": "printf '%s\\n' 'defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticCheckEnabled -bool false;' 'defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticDownload -bool false;' 'defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticallyInstallMacOSUpdates -bool false;' 'defaults write /Library/Preferences/com.apple.SoftwareUpdate CriticalUpdateInstall -bool false;' 'defaults write /Library/Preferences/com.apple.SoftwareUpdate ConfigDataInstall -bool false;' 'softwareupdate --schedule off' | /bin/bash"
       },
       "scope": "generic",
       "severity": 4,
@@ -1149,7 +1149,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "sysadminctl -screenLock status 2>&1 | grep off"
+        "target": "printf '%s\\n' 'sysadminctl -screenLock status 2>&1 | grep off' | /bin/bash"
       },
       "metrictype": "bool",
       "name": "too slow or disabled screensaver lock",
@@ -1222,7 +1222,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "if ! ( pgrep BDLDaemon >/dev/null || pgrep RTProtectionDaemon >/dev/null || sentinelctl version 2>/dev/null | grep -q \"SentinelOne\" || ( xprotect status 2>/dev/null | grep -q \"launch scans: enabled\" && xprotect status 2>/dev/null | grep -q \"background scans: enabled\" ) ); then echo \"epp_disabled\"; fi;"
+        "target": "printf '%s\\n' 'set -euo pipefail' '' 'is_proc()  { pgrep -x \"$1\" >/dev/null 2>&1; }' 'is_fproc() { pgrep -f \"$1\" >/dev/null 2>&1; }' '' 'has_crowdstrike() {' '  # CrowdStrike Falcon (system extension + app/CLI)' '  [[ -e \"/Library/LaunchDaemons/com.crowdstrike.falcon.Agent.plist\" ]] && return 0' '  command -v systemextensionsctl >/dev/null 2>&1 && \\' '    systemextensionsctl list 2>/dev/null | grep -Fq \"com.crowdstrike.falcon.Agent\" && return 0' '  [[ -x \"/Applications/Falcon.app/Contents/Resources/falconctl\" ]] && return 0' '  return 1' '}' '' 'has_carbonblack() {' '  # VMware Carbon Black Cloud / EDR (daemon plist names)' '  [[ -e \"/Library/LaunchDaemons/com.vmware.carbonblack.cloud.daemon.plist\" ]] && return 0' '  [[ -e \"/Library/LaunchDaemons/com.carbonblack.daemon.plist\" ]] && return 0' '  command -v systemextensionsctl >/dev/null 2>&1 && \\' '    systemextensionsctl list 2>/dev/null | grep -iq \"carbonblack\" && return 0' '  return 1' '}' '' 'has_ms_defender() {' '  # Microsoft Defender for Endpoint' '  if command -v mdatp >/dev/null 2>&1; then' '    # Prefer a health probe if available' '    ( mdatp health --field real_time_protection_enabled 2>/dev/null | grep -qi \"true\" ) && return 0' '    ( mdatp health --field healthy 2>/dev/null | grep -qi \"true\" ) && return 0' '  fi' '  is_fproc \"wdavdaemon\" && return 0' '  return 1' '}' '' 'has_sophos() {' '  # Sophos Intercept X / Endpoint' '  is_proc \"SophosScanD\" && return 0' '  is_fproc \"com.sophos\" && return 0' '  return 1' '}' '' 'has_symantec() {' '  # Symantec Endpoint Protection' '  is_proc \"SymDaemon\" && return 0' '  return 1' '}' '' 'has_trendmicro() {' '  # Trend Micro Apex One (macOS)' '  is_proc \"iCoreService\" && return 0' '  command -v systemextensionsctl >/dev/null 2>&1 && \\' '    systemextensionsctl list 2>/dev/null | grep -Fq \"com.trendmicro.icore.es\" && return 0' '  return 1' '}' '' 'has_cortex_xdr() {' '  # Palo Alto Networks Cortex XDR (aka Traps)' '  [[ -x \"/Library/Application Support/PaloAltoNetworks/Traps/bin/cytool\" ]] && return 0' '  is_fproc \"/Library/Application Support/PaloAltoNetworks/Traps/bin/pmd\" && return 0' '  [[ -e \"/Library/LaunchDaemons/com.paloaltonetworks.cortex.pmd.plist\" ]] && return 0' '  return 1' '}' '' 'has_jamf_protect() {' '  is_proc \"JamfProtectAgent\" && return 0' '  # protectctl exists but may not be on PATH everywhere' '  if [[ -x \"/usr/local/bin/protectctl\" ]]; then /usr/local/bin/protectctl version >/dev/null 2>&1 && return 0; fi' '  if command -v protectctl >/dev/null 2>&1; then protectctl version >/dev/null 2>&1 && return 0; fi' '  return 1' '}' '' 'has_cylance() {' '  # Cylance / BlackBerry Protect' '  [[ -e \"/Library/LaunchDaemons/com.cylance.agent_service.plist\" ]] && return 0' '  is_fproc \"CylanceSvc\" && return 0' '  return 1' '}' '' 'has_eset() {' '  # ESET Endpoint Security for macOS' '  is_proc \"esets_daemon\" && return 0' '  return 1' '}' '' 'has_bitdefender() { is_proc \"BDLDaemon\" && return 0; return 1; }   # Bitdefender' 'has_malwarebytes() { is_proc \"RTProtectionDaemon\" && return 0; return 1; } # Malwarebytes' 'has_sentinelone() { command -v sentinelctl >/dev/null 2>&1 && sentinelctl version 2>/dev/null | grep -q \"SentinelOne\" && return 0; return 1; }' '' 'has_xprotect() {' '  # Apple XProtect Remediator (built-in)' '  if command -v xprotect >/dev/null 2>&1; then' '    xprotect status 2>/dev/null | grep -Fq \"launch scans: enabled\" || return 1' '    xprotect status 2>/dev/null | grep -Fq \"background scans: enabled\" || return 1' '    return 0' '  fi' '' '  # Fallback for older macOS versions where only the XProtect process exists' '  is_fproc \"xprotect\" && return 0' '  is_proc \"XProtect\" && return 0' '  return 1' '}' '' 'has_any_edr() {' '  has_bitdefender      && return 0' '  has_malwarebytes     && return 0' '  has_sentinelone      && return 0' '  has_crowdstrike      && return 0' '  has_carbonblack      && return 0' '  has_ms_defender      && return 0' '  has_sophos           && return 0' '  has_symantec         && return 0' '  has_trendmicro       && return 0' '  has_cortex_xdr       && return 0' '  has_jamf_protect     && return 0' '  has_cylance          && return 0' '  has_eset             && return 0' '  has_xprotect         && return 0  # treat “good XProtect status” as EPP present' '  return 1' '}' '' 'if ! has_any_edr; then' '  echo \"epp_disabled\"' 'fi' | /bin/bash"
       },
       "metrictype": "bool",
       "name": "no EPP",
@@ -1294,7 +1294,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "([ -d \"/Applications/1Password.app\" ] || [ -d \"/Applications/LastPass.app\" ] || [ -d \"/Applications/KeePassXC.app\" ] || [ -d \"/Applications/1Password7.app\" ] || [ -d \"$HOME/Applications/Chrome Apps.localized/Google Password Manager.app\" ] || [ -d \"/Applications/Bitwarden.app\" ]) >/dev/null 2>&1 || echo \"No password manager installed\""
+        "target": "printf '%s\\n' 'set -euo pipefail' '' 'found_pm=0' '' '# --- Native (desktop or App Store “container” apps incl. Safari extensions) ---' 'app_paths=(' '  \"/Applications/1Password.app\"' '  \"/Applications/1Password 7.app\"      # legacy' '  \"/Applications/1Password7.app\"       # legacy naming' '  \"/Applications/1Password for Safari.app\"' '  \"/Applications/Bitwarden.app\"' '  \"/Applications/LastPass.app\"' '  \"/Applications/LastPass for Safari.app\"' '  \"/Applications/Dashlane.app\"' '  \"/Applications/Keeper Password Manager.app\"' '  \"/Applications/Keeper for Safari.app\"' '  \"/Applications/Enpass.app\"' '  \"/Applications/KeePassXC.app\"' '  \"/Applications/NordPass.app\"' '  \"/Applications/RoboForm.app\"' '  \"/Applications/Zoho Vault.app\"' '  \"/Applications/Proton Pass.app\"' '  \"$HOME/Applications/Chrome Apps.localized/Google Password Manager.app\"' ')' '' 'for p in \"${app_paths[@]}\"; do' '  if [[ -d \"$p\" ]]; then' '    found_pm=1; break' '  fi' 'done' '' '# --- Chromium-family extensions (Chrome, Edge, Brave, Vivaldi) ---' '# Known extension IDs' 'chrome_ids=(' '  \"aeblfdkhhhdcdjpifhhbdiojplfjncoa\"   # 1Password – Password Manager (stable)' '  \"khgocmkkpikpnmmkgmdnfckapcdkgfaf\"   # 1Password Beta' '  \"nngceckbapebfimnlniiiahkandclblb\"   # Bitwarden' '  \"hdokiejnpimakedhajhdlcegeplioahd\"   # LastPass' '  \"fdjamakpfbbddfjaooikfcpapjohcfmg\"   # Dashlane' '  \"bfogiafebfohielmmehodmfbbebbbpei\"   # Keeper' '  \"igkpcodhieompeloncfnbekccinhapdb\"   # Zoho Vault' '  \"eiaeiblijfjekdanodkjadfinkhbfgcd\"   # NordPass' '  \"pnlccmojcmeohlpggmfnbbiapkmbliob\"   # RoboForm' '  \"oboonakemofpalcgghocfoadofidjkkk\"   # KeePassXC-Browser' '  \"kmcfomidfpdkfieipokbalgegidffkal\"   # Enpass' '  \"ghmbeldphafepmbegfdlkpapadhbakde\"   # Proton Pass' ')' '' 'chromium_bases=(' '  \"$HOME/Library/Application Support/Google/Chrome\"' '  \"$HOME/Library/Application Support/Microsoft Edge\"' '  \"$HOME/Library/Application Support/BraveSoftware/Brave-Browser\"' '  \"$HOME/Library/Application Support/Vivaldi\"' ')' '' 'if [[ $found_pm -eq 0 ]]; then' '  for base in \"${chromium_bases[@]}\"; do' '    [[ -d \"$base\" ]] || continue' '    for profile in \"$base\"/*; do' '      [[ -d \"$profile/Extensions\" ]] || continue' '      for id in \"${chrome_ids[@]}\"; do' '        if [[ -d \"$profile/Extensions/$id\" ]]; then' '          found_pm=1; break' '        fi' '      done' '      [[ $found_pm -eq 1 ]] && break' '    done' '    [[ $found_pm -eq 1 ]] && break' '  done' 'fi' '' '# --- Firefox extensions (look for known names in extensions.json) ---' 'if [[ $found_pm -eq 0 ]]; then' '  ff_root=\"$HOME/Library/Application Support/Firefox/Profiles\"' '  if [[ -d \"$ff_root\" ]]; then' '    for prof in \"$ff_root\"/*; do' '      ej=\"$prof/extensions.json\"' '      if [[ -f \"$ej\" ]] && \\' '         grep -Eiq '\"'\"'\"name\".*\"(1Password|Bitwarden|LastPass|Dashlane|Keeper|Enpass|NordPass|Zoho Vault|Proton Pass|KeePassXC)\"'\"'\"' \"$ej\"; then' '        found_pm=1; break' '      fi' '    done' '  fi' 'fi' '' '# --- Result ---' 'if [[ $found_pm -eq 0 ]]; then' '  echo \"No password manager installed\"' 'fi' | /bin/bash"
       },
       "metrictype": "bool",
       "name": "no password manager",
@@ -1353,7 +1353,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "csrutil status | grep disabled"
+        "target": "printf '%s\\n' 'csrutil status | grep disabled' | /bin/bash"
       },
       "metrictype": "bool",
       "name": "SIP disabled",
@@ -1424,7 +1424,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "sysadminctl -guestAccount status 2>&1 | grep enabled"
+        "target": "printf '%s\\n' 'sysadminctl -guestAccount status 2>&1 | grep enabled' | /bin/bash"
       },
       "metrictype": "bool",
       "name": "guest account enabled",
@@ -1446,7 +1446,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "sysadminctl -guestAccount off"
+        "target": "printf '%s\\n' 'sysadminctl -guestAccount off' | /bin/bash"
       },
       "rollback": {
         "class": "cli",
@@ -1466,7 +1466,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "sysadminctl -guestAccount on"
+        "target": "printf '%s\\n' 'sysadminctl -guestAccount on' | /bin/bash"
       },
       "scope": "macOS",
       "severity": 2,
@@ -1495,7 +1495,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "dscl . -read /Users/root Password | grep '\\*\\*'"
+        "target": "printf '%s\\n' 'dscl . -read /Users/root Password | grep '\"'\"'\\*\\*'\"'\"'' | /bin/bash"
       },
       "metrictype": "bool",
       "name": "root user enabled",
@@ -1566,7 +1566,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "security authorizationdb read system.preferences 2> /dev/null | grep -A1 shared | grep true"
+        "target": "printf '%s\\n' 'security authorizationdb read system.preferences 2> /dev/null | grep -A1 shared | grep true' | /bin/bash"
       },
       "metrictype": "bool",
       "name": "unprotected system wide changes",
@@ -1588,7 +1588,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "security authorizationdb read system.preferences > /tmp/system.preferences.plist; /usr/libexec/PlistBuddy -c \"Set :shared false\" /tmp/system.preferences.plist; security authorizationdb write system.preferences < /tmp/system.preferences.plist"
+        "target": "printf '%s\\n' 'security authorizationdb read system.preferences > /tmp/system.preferences.plist;' '/usr/libexec/PlistBuddy -c \"Set :shared false\" /tmp/system.preferences.plist;' 'security authorizationdb write system.preferences < /tmp/system.preferences.plist' | /bin/bash"
       },
       "rollback": {
         "class": "cli",
@@ -1608,7 +1608,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "security authorizationdb read system.preferences > /tmp/system.preferences.plist; /usr/libexec/PlistBuddy -c \"Set :shared true\" /tmp/system.preferences.plist; security authorizationdb write system.preferences < /tmp/system.preferences.plist"
+        "target": "printf '%s\\n' 'security authorizationdb read system.preferences > /tmp/system.preferences.plist;' '/usr/libexec/PlistBuddy -c \"Set :shared true\" /tmp/system.preferences.plist;' 'security authorizationdb write system.preferences < /tmp/system.preferences.plist' | /bin/bash"
       },
       "scope": "macOS",
       "severity": 3,
@@ -1850,7 +1850,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "defaults read /Library/Preferences/com.apple.SoftwareUpdate.plist | grep macOS"
+        "target": "printf '%s\\n' 'defaults read /Library/Preferences/com.apple.SoftwareUpdate.plist | grep macOS' | /bin/bash"
       },
       "metrictype": "bool",
       "name": "latest os",
@@ -1921,7 +1921,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "defaults read /Applications/Google\\ Chrome.app/Contents/Info.plist CFBundleShortVersionString &>/dev/null && { local_version=$(defaults read /Applications/Google\\ Chrome.app/Contents/Info.plist CFBundleShortVersionString); latest_version=$(curl -s \"https://formulae.brew.sh/api/cask/google-chrome.json\" | sed -n 's/.*\\\"version\\\": \\\"\\([^\\\"]*\\)\\\".*/\\1/p'); if [ \"$(printf '%s\\n%s\\n' \"$local_version\" \"$latest_version\" | sort -V | tail -n1)\" = \"$latest_version\" ] && [ \"$local_version\" != \"$latest_version\" ]; then echo \"Chrome is not up to date (Installed: $local_version, Latest: $latest_version)\"; fi; }"
+        "target": "printf '%s\\n' 'defaults read /Applications/Google\\ Chrome.app/Contents/Info.plist CFBundleShortVersionString &>/dev/null &&' '{ local_version=$(defaults read /Applications/Google\\ Chrome.app/Contents/Info.plist CFBundleShortVersionString);' 'latest_version=$(curl -s \"https://formulae.brew.sh/api/cask/google-chrome.json\" | sed -n '\"'\"'s/.*\\\"version\\\": \\\"\\([^\\\"]*\\)\\\".*/\\1/p'\"'\"');' 'if [ \"$(printf '\"'\"'%s\\n%s\\n'\"'\"' \"$local_version\" \"$latest_version\" | sort -V | tail -n1)\" = \"$latest_version\" ] &&' '[ \"$local_version\" != \"$latest_version\" ];' 'then echo \"Chrome is not up to date (Installed: $local_version, Latest: $latest_version)\";' 'fi;' '}' | /bin/bash"
       },
       "metrictype": "bool",
       "name": "Chrome not uptodate",
@@ -2059,7 +2059,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "grep -q \"BEGIN RESTRICT_ZSH_NONADMINS\" /etc/zshrc || echo CLI not restricted"
+        "target": "printf '%s\\n' 'grep -q \"BEGIN RESTRICT_ZSH_NONADMINS\" /etc/zshrc ||' 'echo CLI not restricted' | /bin/bash"
       },
       "metrictype": "bool",
       "name": "CLI not restricted for standard users",
@@ -2081,7 +2081,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "grep -q \"BEGIN RESTRICT_ZSH_NONADMINS\" /etc/zshrc || cat <<'EOF' >> /etc/zshrc\n# BEGIN RESTRICT_ZSH_NONADMINS\n## Prevent non-admin users from using interactive zsh shells\nif [[ -t 1 ]]; then\n  if ! id -Gn | grep -qw admin; then\n    echo \"\"\n    echo \"Command-line access is restricted by your administrator.\"\n    osascript -e \"display alert \\\"Access Restricted\\\" message \\\"Command-line tools are blocked for standard users.\\\" buttons {\\\"OK\\\"}\" 2>/dev/null || true\n    exit 1\n  fi\nfi\n# END RESTRICT_ZSH_NONADMINS\nEOF"
+        "target": "printf '%s\\n' 'grep -q \"BEGIN RESTRICT_ZSH_NONADMINS\" /etc/zshrc ||' 'cat <<'\"'\"'EOF'\"'\"' >> /etc/zshrc' '# BEGIN RESTRICT_ZSH_NONADMINS' '## Prevent non-admin users from using interactive zsh shells' 'if [[ -t 1 ]];' 'then' '  if ! id -Gn | grep -qw admin;' 'then' '    echo \"\"' '    echo \"Command-line access is restricted by your administrator.\"' '    osascript -e \"display alert \\\"Access Restricted\\\" message \\\"Command-line tools are blocked for standard users.\\\" buttons {\\\"OK\\\"}\" 2>/dev/null ||' 'true' '    exit 1' '  fi' 'fi' '# END RESTRICT_ZSH_NONADMINS' 'EOF' | /bin/bash"
       },
       "rollback": {
         "class": "cli",
@@ -2101,7 +2101,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "python3 - <<'PY'\nskip = False\nlines = []\nwith open(\"/etc/zshrc\") as src:\n    for line in src:\n        if \"BEGIN RESTRICT_ZSH_NONADMINS\" in line:\n            skip = True\n            continue\n        if \"END RESTRICT_ZSH_NONADMINS\" in line:\n            skip = False\n            continue\n        if not skip:\n            lines.append(line)\nwith open(\"/etc/zshrc\", \"w\") as dst:\n    dst.writelines(lines)\nprint(\"[OK] zsh block removed\")\nPY\n"
+        "target": "printf '%s\\n' 'python3 - <<'\"'\"'PY'\"'\"'' 'skip = False' 'lines = []' 'with open(\"/etc/zshrc\") as src:' '    for line in src:' '        if \"BEGIN RESTRICT_ZSH_NONADMINS\" in line:' '            skip = True' '            continue' '        if \"END RESTRICT_ZSH_NONADMINS\" in line:' '            skip = False' '            continue' '        if not skip:' '            lines.append(line)' 'with open(\"/etc/zshrc\", \"w\") as dst:' '    dst.writelines(lines)' 'print(\"[OK] zsh block removed\")' 'PY' | /bin/bash"
       },
       "scope": "macOS",
       "severity": 3,
@@ -2111,5 +2111,5 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
     }
   ],
   "name": "threat model macOS",
-  "signature": "6521722ece1a157df92b0f60fb30a352d9cc88fce28c569aec6f2ba69eaef9f3"
+  "signature": "a4886db9250551d4f37cadb96a8a6958e6b3493eba895e5e2ec633cb8bff738d"
 }"#;
