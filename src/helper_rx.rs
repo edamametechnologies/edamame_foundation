@@ -316,8 +316,8 @@ pub async fn rpc_run(
                     let target = implementation_clone.target.as_str();
                     // The personate parameter forces the execution into the context of username
                     // We could use an empty username to indicate there is no need to personate, but we keep it as is for now in case we find other use cases for the username
-                    // Only apply to admin class
-                    let personate = &implementation_clone.class == "admin";
+                    // Only apply to admin elevation
+                    let personate = &implementation_clone.elevation == "admin";
                     trace!("Running target {} and class {}", target, class);
                     if !class.is_empty() {
                         return if personate && username.is_empty() {
