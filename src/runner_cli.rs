@@ -23,7 +23,14 @@ pub async fn run_cli(
         let (mut code, mut stdout, mut stderr) = (0, String::new(), String::new());
 
         if cfg!(target_os = "windows") {
-            match execute_windows_ps(&cmd_clone, &mut code, &mut stdout, &mut stderr) {
+            match execute_windows_ps(
+                &cmd_clone,
+                &username_clone,
+                personate,
+                &mut code,
+                &mut stdout,
+                &mut stderr,
+            ) {
                 Ok(_) => (),
                 Err(e) => error!("Error executing {:?} : {:?}", &cmd_clone, e),
             }
@@ -94,18 +101,29 @@ fn check_platform_support() -> Result<()> {
 
 fn execute_windows_ps(
     cmd: &str,
+    username: &str,
+    personate: bool,
     code: &mut i32,
     stdout: &mut String,
     stderr: &mut String,
 ) -> Result<()> {
+    let mut script = String::new();
+    if personate && !username.is_empty() {
+        if let Some(env_block) = build_windows_env_block(username) {
+            script.push_str(&env_block);
+            script.push('\n');
+        }
+    }
+    script.push_str(cmd);
+
     let ps = PsScriptBuilder::new()
         .no_profile(true)
         .non_interactive(true)
         .hidden(true)
         .print_commands(false)
         .build();
-    debug!("Executing powershell command: {}", cmd);
-    match ps.run(cmd) {
+    debug!("Executing powershell command: {}", script);
+    match ps.run(&script) {
         Ok(output) => {
             *stdout = output.stdout().as_deref().unwrap_or("").to_string();
             *stderr = output.stderr().as_deref().unwrap_or("").to_string();
@@ -124,6 +142,52 @@ fn execute_windows_ps(
             Err(anyhow!("Powershell execution error: {}", e))
         }
     }
+}
+
+fn escape_pwsh_single_quoted(value: &str) -> String {
+    value.replace('\'', "''")
+}
+
+fn build_windows_env_block(username: &str) -> Option<String> {
+    let user_segment = username
+        .rsplit(|c| c == '\\' || c == '/')
+        .next()
+        .unwrap_or(username);
+    let escaped_username = escape_pwsh_single_quoted(username);
+    let escaped_segment = escape_pwsh_single_quoted(user_segment);
+
+    Some(format!(
+        concat!(
+            "$edamameUser = '{username}'\n",
+            "$edamameUserFolder = '{segment}'\n",
+            "$userProfilePath = Join-Path $env:SystemDrive ('Users\\' + $edamameUserFolder)\n",
+            "if (-not (Test-Path $userProfilePath)) {{\n",
+            "  try {{\n",
+            "    $profileObj = Get-CimInstance Win32_UserProfile -ErrorAction Stop |\n",
+            "      Where-Object {{ $_.LocalPath -like \"*\\\\{segment}\" }} |\n",
+            "      Select-Object -First 1\n",
+            "    if ($profileObj -and (Test-Path $profileObj.LocalPath)) {{\n",
+            "      $userProfilePath = $profileObj.LocalPath\n",
+            "    }}\n",
+            "  }} catch {{ }}\n",
+            "}}\n",
+            "if (-not (Test-Path $userProfilePath)) {{\n",
+            "  $userProfilePath = Join-Path $env:SystemDrive ('Users\\' + $edamameUserFolder)\n",
+            "}}\n",
+            "$env:USERPROFILE = $userProfilePath\n",
+            "try {{\n",
+            "  $env:HOMEDRIVE = Split-Path $userProfilePath -Qualifier\n",
+            "  $env:HOMEPATH = $userProfilePath.Substring($env:HOMEDRIVE.Length)\n",
+            "}} catch {{\n",
+            "  $env:HOMEDRIVE = $env:SystemDrive\n",
+            "  $env:HOMEPATH = $userProfilePath.Substring($env:HOMEDRIVE.Length)\n",
+            "}}\n",
+            "$env:LOCALAPPDATA = Join-Path $userProfilePath 'AppData\\Local'\n",
+            "$env:APPDATA = Join-Path $userProfilePath 'AppData\\Roaming'\n"
+        ),
+        username = escaped_username,
+        segment = escaped_segment
+    ))
 }
 
 fn execute_unix_command(

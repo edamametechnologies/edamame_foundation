@@ -1,4 +1,5 @@
 use edamame_backend::threat_backend::*;
+use edamame_models::CloudDate;
 use serde::{Deserialize, Serialize};
 
 // Only Strings in order to easily read the JSON array
@@ -222,6 +223,16 @@ impl Into<ThreatMetricsBackend> for ThreatMetrics {
             extends: self.extends,
             date: self.date,
             signature: self.signature,
+        }
+    }
+}
+
+impl CloudDate for ThreatMetrics {
+    fn get_date(&self) -> Option<&str> {
+        if self.date.is_empty() {
+            None
+        } else {
+            Some(&self.date)
         }
     }
 }
