@@ -1840,5 +1840,5 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
     }
   ],
   "name": "threat model Windows",
-  "signature": "722a4b4d58852b083ecb182c9b59ba84079453a67b3606df180a496966905ef1"
+  "signature": "94f5ae8f89b11c3b928f0f86add6bd5744679417d5ab42b8ca3e81bd1eb044e5"
 }"#;
