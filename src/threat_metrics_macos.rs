@@ -1,6 +1,6 @@
 // Built in default threat model
 pub static THREAT_METRICS_MACOS: &str = r#"{
-  "date": "November 23th 2025",
+  "date": "November 24th 2025",
   "extends": "none",
   "metrics": [
     {
@@ -1294,7 +1294,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
         "maxversion": 0,
         "minversion": 12,
         "system": "macOS",
-        "target": "printf '%s\\n' 'set -euo pipefail' '' 'if [[ -z \"${HOME:-}\" ]]; then' '  HOME=\"$(eval echo \"~$(id -un)\")\"' 'fi' '' 'found_pm=0' '' '# --- Native (desktop or App Store “container” apps incl. Safari extensions) ---' 'app_paths=(' '  \"/Applications/1Password.app\"' '  \"/Applications/1Password 7.app\"      # legacy' '  \"/Applications/1Password7.app\"       # legacy naming' '  \"/Applications/1Password for Safari.app\"' '  \"/Applications/Bitwarden.app\"' '  \"/Applications/LastPass.app\"' '  \"/Applications/LastPass for Safari.app\"' '  \"/Applications/Dashlane.app\"' '  \"/Applications/Keeper Password Manager.app\"' '  \"/Applications/Keeper for Safari.app\"' '  \"/Applications/Enpass.app\"' '  \"/Applications/KeePassXC.app\"' '  \"/Applications/NordPass.app\"' '  \"/Applications/RoboForm.app\"' '  \"/Applications/Zoho Vault.app\"' '  \"/Applications/Proton Pass.app\"' '  \"$HOME/Applications/Chrome Apps.localized/Google Password Manager.app\"' ')' '' 'for p in \"${app_paths[@]}\"; do' '  if [[ -d \"$p\" ]]; then' '    found_pm=1; break' '  fi' 'done' '' '# --- Chromium-family extensions (Chrome, Edge, Brave, Vivaldi) ---' '# Known extension IDs' 'chrome_ids=(' '  \"aeblfdkhhhdcdjpifhhbdiojplfjncoa\"   # 1Password – Password Manager (stable)' '  \"khgocmkkpikpnmmkgmdnfckapcdkgfaf\"   # 1Password Beta' '  \"nngceckbapebfimnlniiiahkandclblb\"   # Bitwarden' '  \"hdokiejnpimakedhajhdlcegeplioahd\"   # LastPass' '  \"fdjamakpfbbddfjaooikfcpapjohcfmg\"   # Dashlane' '  \"bfogiafebfohielmmehodmfbbebbbpei\"   # Keeper' '  \"igkpcodhieompeloncfnbekccinhapdb\"   # Zoho Vault' '  \"eiaeiblijfjekdanodkjadfinkhbfgcd\"   # NordPass' '  \"pnlccmojcmeohlpggmfnbbiapkmbliob\"   # RoboForm' '  \"oboonakemofpalcgghocfoadofidjkkk\"   # KeePassXC-Browser' '  \"kmcfomidfpdkfieipokbalgegidffkal\"   # Enpass' '  \"ghmbeldphafepmbegfdlkpapadhbakde\"   # Proton Pass' ')' '' 'chromium_bases=(' '  \"$HOME/Library/Application Support/Google/Chrome\"' '  \"$HOME/Library/Application Support/Microsoft Edge\"' '  \"$HOME/Library/Application Support/BraveSoftware/Brave-Browser\"' '  \"$HOME/Library/Application Support/Vivaldi\"' ')' '' 'if [[ $found_pm -eq 0 ]]; then' '  for base in \"${chromium_bases[@]}\"; do' '    [[ -d \"$base\" ]] || continue' '    for profile in \"$base\"/*; do' '      [[ -d \"$profile/Extensions\" ]] || continue' '      for id in \"${chrome_ids[@]}\"; do' '        if [[ -d \"$profile/Extensions/$id\" ]]; then' '          found_pm=1; break' '        fi' '      done' '      [[ $found_pm -eq 1 ]] && break' '    done' '    [[ $found_pm -eq 1 ]] && break' '  done' 'fi' '' '# --- Firefox extensions (look for known names in extensions.json) ---' 'if [[ $found_pm -eq 0 ]]; then' '  ff_root=\"$HOME/Library/Application Support/Firefox/Profiles\"' '  if [[ -d \"$ff_root\" ]]; then' '    for prof in \"$ff_root\"/*; do' '      ej=\"$prof/extensions.json\"' '      if [[ -f \"$ej\" ]] && \\' '         grep -Eiq '\"'\"'\"name\".*\"(1Password|Bitwarden|LastPass|Dashlane|Keeper|Enpass|NordPass|Zoho Vault|Proton Pass|KeePassXC)\"'\"'\"' \"$ej\"; then' '        found_pm=1; break' '      fi' '    done' '  fi' 'fi' '' '# --- Result ---' 'if [[ $found_pm -eq 0 ]]; then' '  echo \"No password manager installed\"' 'fi' | /bin/bash"
+        "target": "printf '%s\\n' 'set -euo pipefail' '' 'ensure_home() {' '  if [[ -n \"${HOME:-}\" && -d \"${HOME}\" ]]; then' '    return' '  fi' '' '  local user' '  user=\"$(id -un)\"' '' '  # macOS: prefer dscl lookup' '  if HOME=\"$(/usr/bin/dscl . -read \"/Users/${user}\" NFSHomeDirectory 2>/dev/null | awk '\"'\"'{print $2}'\"'\"')\"; then' '    if [[ -n \"${HOME}\" && -d \"${HOME}\" ]]; then' '      return' '    fi' '  fi' '' '  # Fallback to tilde expansion' '  if HOME=\"$(eval echo \"~${user}\")\" && [[ -n \"${HOME}\" && -d \"${HOME}\" ]]; then' '    return' '  fi' '' '  # Absolute last resort' '  HOME=\"/var/root\"' '}' '' 'ensure_home' '' 'found_pm=0' '' '# --- Native (desktop or App Store “container” apps incl. Safari extensions) ---' 'app_paths=(' '  \"/Applications/1Password.app\"' '  \"/Applications/1Password 7.app\"      # legacy' '  \"/Applications/1Password7.app\"       # legacy naming' '  \"/Applications/1Password for Safari.app\"' '  \"/Applications/Bitwarden.app\"' '  \"/Applications/LastPass.app\"' '  \"/Applications/LastPass for Safari.app\"' '  \"/Applications/Dashlane.app\"' '  \"/Applications/Keeper Password Manager.app\"' '  \"/Applications/Keeper for Safari.app\"' '  \"/Applications/Enpass.app\"' '  \"/Applications/KeePassXC.app\"' '  \"/Applications/NordPass.app\"' '  \"/Applications/RoboForm.app\"' '  \"/Applications/Zoho Vault.app\"' '  \"/Applications/Proton Pass.app\"' '  \"$HOME/Applications/Chrome Apps.localized/Google Password Manager.app\"' ')' '' 'for p in \"${app_paths[@]}\"; do' '  if [[ -d \"$p\" ]]; then' '    found_pm=1; break' '  fi' 'done' '' '# --- Chromium-family extensions (Chrome, Edge, Brave, Vivaldi) ---' '# Known extension IDs' 'chrome_ids=(' '  \"aeblfdkhhhdcdjpifhhbdiojplfjncoa\"   # 1Password – Password Manager (stable)' '  \"khgocmkkpikpnmmkgmdnfckapcdkgfaf\"   # 1Password Beta' '  \"nngceckbapebfimnlniiiahkandclblb\"   # Bitwarden' '  \"hdokiejnpimakedhajhdlcegeplioahd\"   # LastPass' '  \"fdjamakpfbbddfjaooikfcpapjohcfmg\"   # Dashlane' '  \"bfogiafebfohielmmehodmfbbebbbpei\"   # Keeper' '  \"igkpcodhieompeloncfnbekccinhapdb\"   # Zoho Vault' '  \"eiaeiblijfjekdanodkjadfinkhbfgcd\"   # NordPass' '  \"pnlccmojcmeohlpggmfnbbiapkmbliob\"   # RoboForm' '  \"oboonakemofpalcgghocfoadofidjkkk\"   # KeePassXC-Browser' '  \"kmcfomidfpdkfieipokbalgegidffkal\"   # Enpass' '  \"ghmbeldphafepmbegfdlkpapadhbakde\"   # Proton Pass' ')' '' 'chromium_bases=(' '  \"$HOME/Library/Application Support/Google/Chrome\"' '  \"$HOME/Library/Application Support/Microsoft Edge\"' '  \"$HOME/Library/Application Support/BraveSoftware/Brave-Browser\"' '  \"$HOME/Library/Application Support/Vivaldi\"' ')' '' 'if [[ $found_pm -eq 0 ]]; then' '  for base in \"${chromium_bases[@]}\"; do' '    [[ -d \"$base\" ]] || continue' '    for profile in \"$base\"/*; do' '      [[ -d \"$profile/Extensions\" ]] || continue' '      for id in \"${chrome_ids[@]}\"; do' '        if [[ -d \"$profile/Extensions/$id\" ]]; then' '          found_pm=1; break' '        fi' '      done' '      [[ $found_pm -eq 1 ]] && break' '    done' '    [[ $found_pm -eq 1 ]] && break' '  done' 'fi' '' '# --- Firefox extensions (look for known names in extensions.json) ---' 'if [[ $found_pm -eq 0 ]]; then' '  ff_root=\"$HOME/Library/Application Support/Firefox/Profiles\"' '  if [[ -d \"$ff_root\" ]]; then' '    for prof in \"$ff_root\"/*; do' '      ej=\"$prof/extensions.json\"' '      if [[ -f \"$ej\" ]] && \\' '         grep -Eiq '\"'\"'\"name\".*\"(1Password|Bitwarden|LastPass|Dashlane|Keeper|Enpass|NordPass|Zoho Vault|Proton Pass|KeePassXC)\"'\"'\"' \"$ej\"; then' '        found_pm=1; break' '      fi' '    done' '  fi' 'fi' '' '# --- Result ---' 'if [[ $found_pm -eq 0 ]]; then' '  echo \"No password manager installed\"' 'fi' | /bin/bash"
       },
       "metrictype": "bool",
       "name": "no password manager",
@@ -1305,6 +1305,11 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
             "class": "link",
             "locale": "EN",
             "target": "https://en.wikipedia.org/wiki/Password_manager"
+          },
+          {
+            "class": "link",
+            "locale": "FR",
+            "target": "https://fr.wikipedia.org/wiki/Gestionnaire_de_mots_de_passe"
           }
         ],
         "elevation": "",
@@ -1316,6 +1321,11 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
       "rollback": {
         "class": "",
         "education": [
+          {
+            "class": "link",
+            "locale": "EN",
+            "target": "https://en.wikipedia.org/wiki/Password_manager"
+          },
           {
             "class": "link",
             "locale": "FR",
@@ -2111,5 +2121,5 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
     }
   ],
   "name": "threat model macOS",
-  "signature": "c37c50993bc24e808888c7cff94a40db24e5efa2ca2bfc6a895fe8a30b7a3e91"
+  "signature": "26a075778bc7cfc60c4bc2b69ca55bbdc4f7caad3d2bc1cf29e12a03f2b87147"
 }"#;

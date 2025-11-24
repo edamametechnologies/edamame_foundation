@@ -204,7 +204,8 @@ fn execute_unix_command(
     let extcmd = if personate {
         // -H sets the HOME environment variable to the home directory of the user
         // -u sets the user to the specified user
-        format!("sudo -H -u {} /bin/bash -c '{}'", username, cmd)
+        // No need for bash -c wrapper since cmd is already a complete command
+        format!("sudo -H -u {} {}", username, cmd)
     } else {
         cmd.to_string()
     };
