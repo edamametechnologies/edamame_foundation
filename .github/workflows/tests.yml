@@ -29,8 +29,7 @@ env:
 
 jobs:
   test-native:
-    # We need to wait a long time for aarch64 due to the use of qemu
-    timeout-minutes: 240
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
