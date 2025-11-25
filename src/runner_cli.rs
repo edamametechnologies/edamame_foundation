@@ -129,8 +129,8 @@ fn execute_windows_ps(
             *stderr = output.stderr().as_deref().unwrap_or("").to_string();
             *code = if output.success() { 0 } else { 1 };
             debug!(
-                "Execution results: code : {:?} - stdout : {:?} - stderr : {:?}",
-                code, stdout, stderr
+                "Execution results for command {:?} : code : {:?} - stdout : {:?} - stderr : {:?}",
+                cmd, code, stdout, stderr
             );
             Ok(())
         }
@@ -174,7 +174,9 @@ fn build_windows_env_block(username: &str) -> Option<String> {
             "if (-not (Test-Path $userProfilePath)) {{\n",
             "  $userProfilePath = Join-Path $env:SystemDrive ('Users\\' + $edamameUserFolder)\n",
             "}}\n",
+            // Set core path variables
             "$env:USERPROFILE = $userProfilePath\n",
+            "$env:HOME = $userProfilePath\n",
             "try {{\n",
             "  $env:HOMEDRIVE = Split-Path $userProfilePath -Qualifier\n",
             "  $env:HOMEPATH = $userProfilePath.Substring($env:HOMEDRIVE.Length)\n",
@@ -183,7 +185,29 @@ fn build_windows_env_block(username: &str) -> Option<String> {
             "  $env:HOMEPATH = $userProfilePath.Substring($env:HOMEDRIVE.Length)\n",
             "}}\n",
             "$env:LOCALAPPDATA = Join-Path $userProfilePath 'AppData\\Local'\n",
-            "$env:APPDATA = Join-Path $userProfilePath 'AppData\\Roaming'\n"
+            "$env:APPDATA = Join-Path $userProfilePath 'AppData\\Roaming'\n",
+            "$env:TEMP = Join-Path $userProfilePath 'AppData\\Local\\Temp'\n",
+            "$env:TMP = Join-Path $userProfilePath 'AppData\\Local\\Temp'\n",
+            // Load user's environment variables from registry
+            // Get the user's SID to access their registry hive
+            "try {{\n",
+            "  $userSid = (New-Object System.Security.Principal.NTAccount($edamameUser)).Translate([System.Security.Principal.SecurityIdentifier]).Value\n",
+            "  $regPath = \"Registry::HKEY_USERS\\$userSid\\Environment\"\n",
+            "  if (Test-Path $regPath) {{\n",
+            "    Get-ItemProperty -Path $regPath -ErrorAction SilentlyContinue | Get-Member -MemberType NoteProperty | ForEach-Object {{\n",
+            "      $name = $_.Name\n",
+            "      # Skip PS built-in properties\n",
+            "      if ($name -notin @('PSPath','PSParentPath','PSChildName','PSDrive','PSProvider')) {{\n",
+            "        $value = (Get-ItemProperty -Path $regPath -Name $name -ErrorAction SilentlyContinue).$name\n",
+            "        if ($null -ne $value) {{\n",
+            "          # Expand any environment variable references in the value\n",
+            "          $expandedValue = [System.Environment]::ExpandEnvironmentVariables($value)\n",
+            "          Set-Item -Path \"env:$name\" -Value $expandedValue -ErrorAction SilentlyContinue\n",
+            "        }}\n",
+            "      }}\n",
+            "    }}\n",
+            "  }}\n",
+            "}} catch {{ }}\n"
         ),
         username = escaped_username,
         segment = escaped_segment
@@ -201,11 +225,21 @@ fn execute_unix_command(
     let options = ScriptOptions::new();
     let args = vec![];
 
-    let extcmd = if personate {
-        // -H sets the HOME environment variable to the home directory of the user
-        // -u sets the user to the specified user
-        // No need for bash -c wrapper since cmd is already a complete command
-        format!("sudo -H -u {} {}", username, cmd)
+    let extcmd = if personate && !username.is_empty() {
+        // Like Windows: run as root but set user's environment variables
+        // Determine HOME dynamically using platform-specific methods
+        format!(
+            concat!(
+                "HOME=$(getent passwd {} 2>/dev/null | cut -d: -f6) || ",
+                "HOME=$(dscl . -read /Users/{} NFSHomeDirectory 2>/dev/null | awk '{{print $2}}') || ",
+                "{{ [ \"$(uname)\" = \"Darwin\" ] && HOME=\"/Users/{}\" || HOME=\"/home/{}\"; }}; ",
+                "USER='{}'; ",
+                "LOGNAME='{}'; ",
+                "export HOME USER LOGNAME; ",
+                "{}"
+            ),
+            username, username, username, username, username, username, cmd
+        )
     } else {
         cmd.to_string()
     };
@@ -215,8 +249,8 @@ fn execute_unix_command(
     *stdout = output.1;
     *stderr = output.2;
     debug!(
-        "Execution results: code : {:?} - stdout : {:?} - stderr : {:?}",
-        code, stdout, stderr
+        "Execution results for command {:?} : code : {:?} - stdout : {:?} - stderr : {:?}",
+        cmd, code, stdout, stderr
     );
     Ok(())
 }
