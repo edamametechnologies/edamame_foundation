@@ -1,8 +1,9 @@
 use anyhow::{anyhow, Error, Result};
 use powershell_script::PsScriptBuilder;
 use run_script::ScriptOptions;
+use serde::Deserialize;
 use tokio::time::{timeout, Duration};
-use tracing::{debug, error};
+use tracing::{debug, error, info};
 
 // The personate parameter forces the execution into the context of username
 // We could use an empty username to indicate there is no need to personate but we keep it as is for now in case we find other use cases for the username
@@ -99,6 +100,98 @@ fn check_platform_support() -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug, Deserialize)]
+struct WindowsUserContext {
+    home_dir: String,
+    app_data: String,
+    local_app_data: String,
+}
+
+fn resolve_windows_context(username: &str) -> Result<WindowsUserContext> {
+    let user_segment = username
+        .rsplit(|c| c == '\\' || c == '/')
+        .next()
+        .unwrap_or(username);
+    let escaped_username = escape_pwsh_single_quoted(username);
+    let escaped_segment = escape_pwsh_single_quoted(user_segment);
+
+    let script = format!(
+        concat!(
+            "$edamameUser = '{username}'\n",
+            "$edamameUserFolder = '{segment}'\n",
+            "$userProfilePath = Join-Path $env:SystemDrive ('Users\\' + $edamameUserFolder)\n",
+            "if (-not (Test-Path $userProfilePath)) {{\n",
+            "  try {{\n",
+            "    $profileObj = Get-CimInstance Win32_UserProfile -ErrorAction Stop |\n",
+            "      Where-Object {{ $_.LocalPath -like \"*\\\\{segment}\" }} |\n",
+            "      Select-Object -First 1\n",
+            "    if ($profileObj -and (Test-Path $profileObj.LocalPath)) {{\n",
+            "      $userProfilePath = $profileObj.LocalPath\n",
+            "    }}\n",
+            "  }} catch {{ }}\n",
+            "}}\n",
+            "if (-not (Test-Path $userProfilePath)) {{\n",
+            "  $userProfilePath = Join-Path $env:SystemDrive ('Users\\' + $edamameUserFolder)\n",
+            "}}\n",
+            // Defaults
+            "$appData = Join-Path $userProfilePath 'AppData\\Roaming'\n",
+            "$localAppData = Join-Path $userProfilePath 'AppData\\Local'\n",
+            // Try to get from Registry
+            "try {{\n",
+            "  $userSid = (New-Object System.Security.Principal.NTAccount($edamameUser)).Translate([System.Security.Principal.SecurityIdentifier]).Value\n",
+            "  $shellFoldersPath = \"Registry::HKEY_USERS\\$userSid\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders\"\n",
+            "  if (Test-Path $shellFoldersPath) {{\n",
+            "    $regAppData = (Get-ItemProperty -Path $shellFoldersPath -Name AppData -ErrorAction SilentlyContinue).AppData\n",
+            "    if ($regAppData) {{ $appData = $regAppData }}\n",
+            "    $regLocal = (Get-ItemProperty -Path $shellFoldersPath -Name 'Local AppData' -ErrorAction SilentlyContinue).'Local AppData'\n",
+            "    if ($regLocal) {{ $localAppData = $regLocal }}\n",
+            "  }}\n",
+            "}} catch {{ }}\n",
+            // Expand if needed (often contains %USERPROFILE%)
+            "$appData = [System.Environment]::ExpandEnvironmentVariables($appData)\n",
+            "$localAppData = [System.Environment]::ExpandEnvironmentVariables($localAppData)\n",
+            // Output JSON
+            "Write-Output (ConvertTo-Json @{{\n",
+            "  home_dir = $userProfilePath\n",
+            "  app_data = $appData\n",
+            "  local_app_data = $localAppData\n",
+            "}} -Compress)"
+        ),
+        username = escaped_username,
+        segment = escaped_segment
+    );
+
+    let ps = PsScriptBuilder::new()
+        .no_profile(true)
+        .non_interactive(true)
+        .hidden(true)
+        .print_commands(false)
+        .build();
+
+    match ps.run(&script) {
+        Ok(output) => {
+            if output.success() {
+                let stdout_str = output.stdout().as_deref().unwrap_or("").to_string();
+                let json_str = stdout_str.trim();
+                let context: WindowsUserContext = serde_json::from_str(json_str).map_err(|e| {
+                    anyhow!(
+                        "Failed to parse windows context JSON: {}. Output: {}",
+                        e,
+                        json_str
+                    )
+                })?;
+                Ok(context)
+            } else {
+                Err(anyhow!(
+                    "Failed to resolve windows context. Stderr: {:?}",
+                    output.stderr()
+                ))
+            }
+        }
+        Err(e) => Err(anyhow!("Failed to execute resolution script: {}", e)),
+    }
+}
+
 fn execute_windows_ps(
     cmd: &str,
     username: &str,
@@ -109,7 +202,13 @@ fn execute_windows_ps(
 ) -> Result<()> {
     let mut script = String::new();
     if personate && !username.is_empty() {
-        if let Some(env_block) = build_windows_env_block(username) {
+        let context = resolve_windows_context(username)?;
+        info!(
+            "Setting up execution for user: {} with home: {}, AppData: {}, LocalAppData: {}",
+            username, context.home_dir, context.app_data, context.local_app_data
+        );
+
+        if let Some(env_block) = build_windows_env_block(username, &context) {
             script.push_str(&env_block);
             script.push('\n');
         }
@@ -148,33 +247,16 @@ fn escape_pwsh_single_quoted(value: &str) -> String {
     value.replace('\'', "''")
 }
 
-fn build_windows_env_block(username: &str) -> Option<String> {
-    let user_segment = username
-        .rsplit(|c| c == '\\' || c == '/')
-        .next()
-        .unwrap_or(username);
+fn build_windows_env_block(username: &str, context: &WindowsUserContext) -> Option<String> {
     let escaped_username = escape_pwsh_single_quoted(username);
-    let escaped_segment = escape_pwsh_single_quoted(user_segment);
+    let escaped_home = escape_pwsh_single_quoted(&context.home_dir);
+    let escaped_appdata = escape_pwsh_single_quoted(&context.app_data);
+    let escaped_localappdata = escape_pwsh_single_quoted(&context.local_app_data);
 
     Some(format!(
         concat!(
             "$edamameUser = '{username}'\n",
-            "$edamameUserFolder = '{segment}'\n",
-            "$userProfilePath = Join-Path $env:SystemDrive ('Users\\' + $edamameUserFolder)\n",
-            "if (-not (Test-Path $userProfilePath)) {{\n",
-            "  try {{\n",
-            "    $profileObj = Get-CimInstance Win32_UserProfile -ErrorAction Stop |\n",
-            "      Where-Object {{ $_.LocalPath -like \"*\\\\{segment}\" }} |\n",
-            "      Select-Object -First 1\n",
-            "    if ($profileObj -and (Test-Path $profileObj.LocalPath)) {{\n",
-            "      $userProfilePath = $profileObj.LocalPath\n",
-            "    }}\n",
-            "  }} catch {{ }}\n",
-            "}}\n",
-            "if (-not (Test-Path $userProfilePath)) {{\n",
-            "  $userProfilePath = Join-Path $env:SystemDrive ('Users\\' + $edamameUserFolder)\n",
-            "}}\n",
-            // Set core path variables
+            "$userProfilePath = '{home_dir}'\n",
             "$env:USERPROFILE = $userProfilePath\n",
             "$env:HOME = $userProfilePath\n",
             "try {{\n",
@@ -184,12 +266,13 @@ fn build_windows_env_block(username: &str) -> Option<String> {
             "  $env:HOMEDRIVE = $env:SystemDrive\n",
             "  $env:HOMEPATH = $userProfilePath.Substring($env:HOMEDRIVE.Length)\n",
             "}}\n",
-            "$env:LOCALAPPDATA = Join-Path $userProfilePath 'AppData\\Local'\n",
-            "$env:APPDATA = Join-Path $userProfilePath 'AppData\\Roaming'\n",
-            "$env:TEMP = Join-Path $userProfilePath 'AppData\\Local\\Temp'\n",
-            "$env:TMP = Join-Path $userProfilePath 'AppData\\Local\\Temp'\n",
+            // Use the resolved paths
+            "$env:APPDATA = '{app_data}'\n",
+            "$env:LOCALAPPDATA = '{local_app_data}'\n",
+            // These are typically subdirs of LocalAppData, so we derive them
+            "$env:TEMP = Join-Path '{local_app_data}' 'Temp'\n",
+            "$env:TMP = Join-Path '{local_app_data}' 'Temp'\n",
             // Load user's environment variables from registry
-            // Get the user's SID to access their registry hive
             "try {{\n",
             "  $userSid = (New-Object System.Security.Principal.NTAccount($edamameUser)).Translate([System.Security.Principal.SecurityIdentifier]).Value\n",
             "  $regPath = \"Registry::HKEY_USERS\\$userSid\\Environment\"\n",
@@ -200,7 +283,6 @@ fn build_windows_env_block(username: &str) -> Option<String> {
             "      if ($name -notin @('PSPath','PSParentPath','PSChildName','PSDrive','PSProvider')) {{\n",
             "        $value = (Get-ItemProperty -Path $regPath -Name $name -ErrorAction SilentlyContinue).$name\n",
             "        if ($null -ne $value) {{\n",
-            "          # Expand any environment variable references in the value\n",
             "          $expandedValue = [System.Environment]::ExpandEnvironmentVariables($value)\n",
             "          Set-Item -Path \"env:$name\" -Value $expandedValue -ErrorAction SilentlyContinue\n",
             "        }}\n",
@@ -210,8 +292,44 @@ fn build_windows_env_block(username: &str) -> Option<String> {
             "}} catch {{ }}\n"
         ),
         username = escaped_username,
-        segment = escaped_segment
+        home_dir = escaped_home,
+        app_data = escaped_appdata,
+        local_app_data = escaped_localappdata
     ))
+}
+
+fn resolve_home_unix(username: &str) -> Result<String> {
+    let cmd = format!(
+        concat!(
+            "HOME=$(getent passwd {} 2>/dev/null | cut -d: -f6) || ",
+            "HOME=$(dscl . -read /Users/{} NFSHomeDirectory 2>/dev/null | awk '{{print $2}}') || ",
+            "{{ [ \"$(uname)\" = \"Darwin\" ] && HOME=\"/Users/{}\" || HOME=\"/home/{}\"; }}; ",
+            "echo $HOME"
+        ),
+        username, username, username, username
+    );
+
+    let options = ScriptOptions::new();
+    let (code, stdout, stderr) = run_script::run(&cmd, &vec![], &options)
+        .map_err(|e| anyhow!("Failed to run home resolution script: {}", e))?;
+
+    if code != 0 {
+        return Err(anyhow!(
+            "Failed to resolve unix home. Exit code: {}. Stderr: {}",
+            code,
+            stderr
+        ));
+    }
+    let home = stdout.trim().to_string();
+    // If it's empty, fallback to just using /Users/{username} on mac or /home/{username} on linux as a best guess
+    if home.is_empty() {
+        if cfg!(target_os = "macos") {
+            return Ok(format!("/Users/{}", username));
+        } else {
+            return Ok(format!("/home/{}", username));
+        }
+    }
+    Ok(home)
 }
 
 fn execute_unix_command(
@@ -226,19 +344,18 @@ fn execute_unix_command(
     let args = vec![];
 
     let extcmd = if personate && !username.is_empty() {
-        // Like Windows: run as root but set user's environment variables
-        // Determine HOME dynamically using platform-specific methods
+        // Determine HOME dynamically using helper
+        let home_dir = resolve_home_unix(username)?;
+        info!(
+            "Setting up execution for user: {} with home: {}",
+            username, home_dir
+        );
+
+        // On Unix, explicitly setting SHELL can help some scripts
+        // We assume /bin/bash or /bin/sh usually, but let's stick to minimal env
         format!(
-            concat!(
-                "HOME=$(getent passwd {} 2>/dev/null | cut -d: -f6) || ",
-                "HOME=$(dscl . -read /Users/{} NFSHomeDirectory 2>/dev/null | awk '{{print $2}}') || ",
-                "{{ [ \"$(uname)\" = \"Darwin\" ] && HOME=\"/Users/{}\" || HOME=\"/home/{}\"; }}; ",
-                "USER='{}'; ",
-                "LOGNAME='{}'; ",
-                "export HOME USER LOGNAME; ",
-                "{}"
-            ),
-            username, username, username, username, username, username, cmd
+            "HOME='{}'; USER='{}'; LOGNAME='{}'; SHELL='/bin/bash'; export HOME USER LOGNAME SHELL; {}",
+            home_dir, username, username, cmd
         )
     } else {
         cmd.to_string()
