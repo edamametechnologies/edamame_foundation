@@ -967,6 +967,7 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 [[package]]
 name = "edamame_backend"
 version = "0.3.5"
+source = "git+https://github.com/edamametechnologies/edamame_backend?branch=main#3ac8248e38d64f60ad67b1b2720164fec682b250"
 dependencies = [
  "anyhow",
  "blake3",
@@ -1043,6 +1044,7 @@ dependencies = [
 [[package]]
 name = "edamame_models"
 version = "0.1.1"
+source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#a32aae16a1427a9f301bf06f578a35ec4ee43db4"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1191,6 +1193,7 @@ dependencies = [
 [[package]]
 name = "extended-isolation-forest"
 version = "0.2.3"
+source = "git+https://github.com/edamametechnologies/extended-isolation-forest?branch=main#b373e9dd5681447d5fff50c106a73ec2ee0f4377"
 dependencies = [
  "num-traits",
  "rand 0.8.5",
@@ -1260,6 +1263,7 @@ dependencies = [
 [[package]]
 name = "flodbadd"
 version = "0.9.80"
+source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#88b123cb006fa2160d4c8674557394ec970fbe13"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -1634,12 +1638,11 @@ dependencies = [
 
 [[package]]
 name = "http"
-version = "1.3.1"
+version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f4a85d31aea989eead29a3aaf9e1115a180df8282431156e533de47660892565"
+checksum = "e3ba2a386d7f85a81f119ad7498ebe444d2e22c2af0b86b069416ace48b3311a"
 dependencies = [
  "bytes",
- "fnv",
  "itoa",
 ]
 
@@ -4127,9 +4130,9 @@ dependencies = [
 
 [[package]]
 name = "tower-http"
-version = "0.6.6"
+version = "0.6.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "adc82fd73de2a9722ac5da747f12383d2bfdb93591ee6c58486e0097890f05f2"
+checksum = "9cf146f99d442e8e68e585f5d798ccd3cad9a7835b917e09728880a862706456"
 dependencies = [
  "bitflags 2.10.0",
  "bytes",
@@ -4254,6 +4257,7 @@ checksum = "562d481066bde0658276a35467c4af00bdc6ee726305698a55b86e61d7ad82bb"
 [[package]]
 name = "undeadlock"
 version = "0.9.80"
+source = "git+https://github.com/edamametechnologies/undeadlock?branch=main#74640529bc7448091f113020fb6cc7ecea4135f8"
 dependencies = [
  "dashmap",
  "futures",
@@ -5075,18 +5079,18 @@ dependencies = [
 
 [[package]]
 name = "zerocopy"
-version = "0.8.28"
+version = "0.8.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43fa6694ed34d6e57407afbccdeecfa268c470a7d2a5b0cf49ce9fcc345afb90"
+checksum = "4ea879c944afe8a2b25fef16bb4ba234f47c694565e97383b36f3a878219065c"
 dependencies = [
  "zerocopy-derive",
 ]
 
 [[package]]
 name = "zerocopy-derive"
-version = "0.8.28"
+version = "0.8.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c640b22cd9817fae95be82f0d2f90b11f7605f6c319d16705c459b27ac2cbc26"
+checksum = "cf955aa904d6040f70dc8e9384444cb1030aed272ba3cb09bbc4ab9e7c1f34f5"
 dependencies = [
  "proc-macro2",
  "quote",
