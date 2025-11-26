@@ -1,6 +1,6 @@
 // Built in default threat model
 pub static THREAT_METRICS_LINUX: &str = r#"{
-  "date": "November 23th 2025",
+  "date": "November 26th 2025",
   "extends": "none",
   "metrics": [
     {
@@ -1339,5 +1339,5 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
     }
   ],
   "name": "threat model Linux",
-  "signature": "27b859e2b9f422093c77208876151036244e77aa5e05cb61842b924226e0e0a4"
+  "signature": "5f55f50b0a5f5719c01be445a00ba744b2eb4c234e40ae2fb801a371ca140867"
 }"#;
