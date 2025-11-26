@@ -33,7 +33,11 @@ pub async fn run_cli(
                 &mut stderr,
             ) {
                 Ok(_) => (),
-                Err(e) => error!("Error executing {:?} : {:?}", &cmd_clone, e),
+                Err(e) => {
+                    error!("Error executing {:?} : {:?}", &cmd_clone, e);
+                    code = 1;
+                    stderr = e.to_string();
+                }
             }
         } else {
             match execute_unix_command(
@@ -45,7 +49,11 @@ pub async fn run_cli(
                 &mut stderr,
             ) {
                 Ok(_) => (),
-                Err(e) => error!("Error executing {:?} : {:?}", &cmd_clone, e),
+                Err(e) => {
+                    error!("Error executing {:?} : {:?}", &cmd_clone, e);
+                    code = 1;
+                    stderr = e.to_string();
+                }
             }
         };
 
@@ -83,8 +91,8 @@ pub async fn run_cli(
 }
 
 // This is our convention for detecting a failed execution
-fn execution_failed(code: i32, stderr: &str) -> bool {
-    code != 0 && !stderr.is_empty()
+fn execution_failed(code: i32, _stderr: &str) -> bool {
+    code != 0
 }
 
 fn check_platform_support() -> Result<()> {
