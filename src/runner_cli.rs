@@ -1,9 +1,18 @@
 use anyhow::{anyhow, Error, Result};
+#[cfg(target_os = "windows")]
+use anyhow::Context;
 use powershell_script::PsScriptBuilder;
 use run_script::ScriptOptions;
 use serde::Deserialize;
+use std::env;
+#[cfg(target_os = "windows")]
+use std::io::Write;
 use tokio::time::{timeout, Duration};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
+#[cfg(target_os = "windows")]
+use tempfile::NamedTempFile;
+
+const MAX_INLINE_POWERSHELL_SCRIPT_LEN: usize = 4000;
 
 // The personate parameter forces the execution into the context of username
 // We could use an empty username to indicate there is no need to personate but we keep it as is for now in case we find other use cases for the username
@@ -91,8 +100,8 @@ pub async fn run_cli(
 }
 
 // This is our convention for detecting a failed execution
-fn execution_failed(code: i32, _stderr: &str) -> bool {
-    code != 0
+fn execution_failed(code: i32, stderr: &str) -> bool {
+    code != 0 && !stderr.is_empty()
 }
 
 fn check_platform_support() -> Result<()> {
@@ -126,44 +135,75 @@ fn resolve_windows_context(username: &str) -> Result<WindowsUserContext> {
     let script = format!(
         concat!(
             "$edamameUser = '{username}'\n",
-            "$edamameUserFolder = '{segment}'\n",
-            "$userProfilePath = Join-Path $env:SystemDrive ('Users\\' + $edamameUserFolder)\n",
-            "if (-not (Test-Path $userProfilePath)) {{\n",
-            "  try {{\n",
-            "    $profileObj = Get-CimInstance Win32_UserProfile -ErrorAction Stop |\n",
-            "      Where-Object {{ $_.LocalPath -like \"*\\\\{segment}\" }} |\n",
-            "      Select-Object -First 1\n",
-            "    if ($profileObj -and (Test-Path $profileObj.LocalPath)) {{\n",
-            "      $userProfilePath = $profileObj.LocalPath\n",
-            "    }}\n",
-            "  }} catch {{ }}\n",
-            "}}\n",
-            "if (-not (Test-Path $userProfilePath)) {{\n",
-            "  $userProfilePath = Join-Path $env:SystemDrive ('Users\\' + $edamameUserFolder)\n",
-            "}}\n",
-            // Defaults
-            "$appData = Join-Path $userProfilePath 'AppData\\Roaming'\n",
-            "$localAppData = Join-Path $userProfilePath 'AppData\\Local'\n",
-            // Try to get from Registry
+            "$ErrorActionPreference = 'Stop'\n",
             "try {{\n",
-            "  $userSid = (New-Object System.Security.Principal.NTAccount($edamameUser)).Translate([System.Security.Principal.SecurityIdentifier]).Value\n",
-            "  $shellFoldersPath = \"Registry::HKEY_USERS\\$userSid\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders\"\n",
-            "  if (Test-Path $shellFoldersPath) {{\n",
-            "    $regAppData = (Get-ItemProperty -Path $shellFoldersPath -Name AppData -ErrorAction SilentlyContinue).AppData\n",
-            "    if ($regAppData) {{ $appData = $regAppData }}\n",
-            "    $regLocal = (Get-ItemProperty -Path $shellFoldersPath -Name 'Local AppData' -ErrorAction SilentlyContinue).'Local AppData'\n",
-            "    if ($regLocal) {{ $localAppData = $regLocal }}\n",
-            "  }}\n",
-            "}} catch {{ }}\n",
-            // Expand if needed (often contains %USERPROFILE%)
+            "    $userObj = New-Object System.Security.Principal.NTAccount($edamameUser)\n",
+            "    $userSid = $userObj.Translate([System.Security.Principal.SecurityIdentifier]).Value\n",
+            "}} catch {{\n",
+            "    $userSid = $null\n",
+            "}}\n",
+            "\n",
+            "$userProfilePath = $null\n",
+            "\n",
+            // 1. Try ProfileList in HKLM (Works even if user is not logged in)
+            "if ($userSid) {{\n",
+            "    $profileListKey = \"Registry::HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList\\$userSid\"\n",
+            "    if (Test-Path $profileListKey) {{\n",
+            "        $regPath = (Get-ItemProperty -Path $profileListKey -Name ProfileImagePath -ErrorAction SilentlyContinue).ProfileImagePath\n",
+            "        if ($regPath) {{\n",
+            "            $userProfilePath = [System.Environment]::ExpandEnvironmentVariables($regPath)\n",
+            "        }}\n",
+            "    }}\n",
+            "}}\n",
+            "\n",
+            // 2. Fallback to Win32_UserProfile (WMI)
+            "if (-not $userProfilePath) {{\n",
+            "    try {{\n",
+            "        $profileObj = Get-CimInstance Win32_UserProfile -Filter \"LocalPath LIKE '%\\\\{segment}'\" -ErrorAction SilentlyContinue | Select-Object -First 1\n",
+            "        if ($profileObj) {{\n",
+            "             $userProfilePath = $profileObj.LocalPath\n",
+            "        }}\n",
+            "    }} catch {{}}\n",
+            "}}\n",
+            "\n",
+            // 3. Fallback to standard path
+            "if (-not $userProfilePath) {{\n",
+            "     $userProfilePath = Join-Path $env:SystemDrive ('Users\\' + '{segment}')\n",
+            "}}\n",
+            "\n",
+            // AppData resolution
+            "$appData = $null\n",
+            "$localAppData = $null\n",
+            "\n",
+            // 4. Try User Shell Folders (Only works if hive is mounted / user logged in)
+            "if ($userSid) {{\n",
+            "    $shellFoldersKey = \"Registry::HKEY_USERS\\$userSid\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders\"\n",
+            "    if (Test-Path $shellFoldersKey) {{\n",
+            "        $regAppData = (Get-ItemProperty -Path $shellFoldersKey -Name AppData -ErrorAction SilentlyContinue).AppData\n",
+            "        if ($regAppData) {{ $appData = $regAppData }}\n",
+            "        \n",
+            "        $regLocal = (Get-ItemProperty -Path $shellFoldersKey -Name \"Local AppData\" -ErrorAction SilentlyContinue).\"Local AppData\"\n",
+            "        if ($regLocal) {{ $localAppData = $regLocal }}\n",
+            "    }}\n",
+            "}}\n",
+            "\n",
+            // 5. Defaults
+            "if (-not $appData) {{\n",
+            "    $appData = Join-Path $userProfilePath 'AppData\\Roaming'\n",
+            "}}\n",
+            "if (-not $localAppData) {{\n",
+            "    $localAppData = Join-Path $userProfilePath 'AppData\\Local'\n",
+            "}}\n",
+            "\n",
+            // Expand env vars
             "$appData = [System.Environment]::ExpandEnvironmentVariables($appData)\n",
             "$localAppData = [System.Environment]::ExpandEnvironmentVariables($localAppData)\n",
-            // Output JSON
+            "\n",
             "Write-Output (ConvertTo-Json @{{\n",
             "  home_dir = $userProfilePath\n",
             "  app_data = $appData\n",
             "  local_app_data = $localAppData\n",
-            "}} -Compress)"
+            "}} -Compress)\n"
         ),
         username = escaped_username,
         segment = escaped_segment
@@ -175,28 +215,61 @@ fn resolve_windows_context(username: &str) -> Result<WindowsUserContext> {
         .print_commands(false)
         .build();
 
-    match ps.run(&script) {
+    let fallback_context = || {
+        let ctx = build_default_windows_context(user_segment);
+        warn!(
+            "Falling back to default Windows context for user {} at {}",
+            username, ctx.home_dir
+        );
+        ctx
+    };
+
+    let materialized_script = MaterializedPsScript::new(script).unwrap_or_else(|e| {
+        error!("Failed to materialize resolution script: {}", e);
+        MaterializedPsScript {
+            command: String::new(),
+            temp_file: None,
+        }
+    });
+
+    if materialized_script.command.is_empty() {
+        return Ok(fallback_context());
+    }
+
+    match ps.run(materialized_script.command()) {
         Ok(output) => {
             if output.success() {
                 let stdout_str = output.stdout().as_deref().unwrap_or("").to_string();
                 let json_str = stdout_str.trim();
-                let context: WindowsUserContext = serde_json::from_str(json_str).map_err(|e| {
-                    anyhow!(
-                        "Failed to parse windows context JSON: {}. Output: {}. Stderr: {}",
-                        e,
-                        json_str,
-                        output.stderr().as_deref().unwrap_or("")
-                    )
-                })?;
-                Ok(context)
+
+                if json_str.is_empty() {
+                    return Ok(fallback_context());
+                }
+
+                match serde_json::from_str(json_str) {
+                    Ok(context) => Ok(context),
+                    Err(e) => {
+                        warn!(
+                            "Failed to parse windows context JSON: {}. Output: {}. Stderr: {}",
+                            e,
+                            json_str,
+                            output.stderr().as_deref().unwrap_or("")
+                        );
+                        Ok(fallback_context())
+                    }
+                }
             } else {
-                Err(anyhow!(
-                    "Failed to resolve windows context. Stderr: {:?}",
+                warn!(
+                    "Windows context resolution script failed. Stderr: {:?}",
                     output.stderr()
-                ))
+                );
+                Ok(fallback_context())
             }
         }
-        Err(e) => Err(anyhow!("Failed to execute resolution script: {}", e)),
+        Err(e) => {
+            warn!("Failed to execute resolution script: {}. Using fallback.", e);
+            Ok(fallback_context())
+        }
     }
 }
 
@@ -229,7 +302,8 @@ fn execute_windows_ps(
         .print_commands(false)
         .build();
     debug!("Executing powershell command: {}", script);
-    match ps.run(&script) {
+    let materialized_script = MaterializedPsScript::new(script)?;
+    match ps.run(materialized_script.command()) {
         Ok(output) => {
             *stdout = output.stdout().as_deref().unwrap_or("").to_string();
             *stderr = output.stderr().as_deref().unwrap_or("").to_string();
@@ -252,6 +326,62 @@ fn execute_windows_ps(
 
 fn escape_pwsh_single_quoted(value: &str) -> String {
     value.replace('\'', "''")
+}
+
+struct MaterializedPsScript {
+    command: String,
+    #[allow(dead_code)]
+    #[cfg(target_os = "windows")]
+    temp_file: Option<NamedTempFile>,
+    #[allow(dead_code)]
+    #[cfg(not(target_os = "windows"))]
+    temp_file: Option<()>,
+}
+
+impl MaterializedPsScript {
+    fn new(script: String) -> Result<Self> {
+        if cfg!(target_os = "windows") && script.len() > MAX_INLINE_POWERSHELL_SCRIPT_LEN {
+            #[cfg(target_os = "windows")]
+            {
+                let mut temp = tempfile::Builder::new()
+                    .prefix("edamame_ps_")
+                    .suffix(".ps1")
+                    .tempfile()
+                    .context("Failed to create temp PowerShell script")?;
+                temp.write_all(script.as_bytes())
+                    .context("Failed to write temp PowerShell script")?;
+
+                let path = temp.path().to_string_lossy().to_string();
+                let escaped_path = escape_pwsh_single_quoted(&path);
+                debug!(
+                    "Materialized PowerShell script ({} chars) to {:?}",
+                    script.len(),
+                    temp.path()
+                );
+                Ok(Self {
+                    command: format!("& '{}'", escaped_path),
+                    temp_file: Some(temp),
+                })
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                // This branch is technically unreachable given the outer if condition
+                Ok(Self {
+                    command: script,
+                    temp_file: None,
+                })
+            }
+        } else {
+            Ok(Self {
+                command: script,
+                temp_file: None,
+            })
+        }
+    }
+
+    fn command(&self) -> &str {
+        &self.command
+    }
 }
 
 fn build_windows_env_block(username: &str, context: &WindowsUserContext) -> Option<String> {
@@ -303,6 +433,19 @@ fn build_windows_env_block(username: &str, context: &WindowsUserContext) -> Opti
         app_data = escaped_appdata,
         local_app_data = escaped_localappdata
     ))
+}
+
+fn build_default_windows_context(user_segment: &str) -> WindowsUserContext {
+    let system_drive = env::var("SystemDrive").unwrap_or_else(|_| "C:".to_string());
+    let home_dir = format!(r"{}\Users\{}", system_drive, user_segment);
+    let app_data = format!(r"{}\AppData\Roaming", home_dir);
+    let local_app_data = format!(r"{}\AppData\Local", home_dir);
+
+    WindowsUserContext {
+        home_dir,
+        app_data,
+        local_app_data,
+    }
 }
 
 fn resolve_home_unix(username: &str) -> Result<String> {
@@ -530,6 +673,42 @@ mod tests {
                      println!("Warning: Resolved APPDATA '{}' differs from env APPDATA '{}'", out.trim(), expected_appdata);
                  }
             }
+        }
+    }
+
+    #[test]
+    fn test_build_default_windows_context_uses_system_drive() {
+        let original = std::env::var("SystemDrive").ok();
+        std::env::set_var("SystemDrive", "Z:");
+
+        let ctx = build_default_windows_context("alice");
+        assert!(ctx.home_dir.starts_with("Z:"));
+        assert!(ctx.app_data.ends_with(r"AppData\Roaming"));
+        assert!(ctx.local_app_data.ends_with(r"AppData\Local"));
+
+        if let Some(value) = original {
+            std::env::set_var("SystemDrive", value);
+        } else {
+            std::env::remove_var("SystemDrive");
+        }
+    }
+
+    #[test]
+    fn test_materialized_ps_script_inline() {
+        let script = "Write-Output 'hello'".to_string();
+        let materialized = MaterializedPsScript::new(script.clone()).unwrap();
+        assert_eq!(materialized.command(), script);
+    }
+
+    #[test]
+    fn test_materialized_ps_script_tempfile() {
+        let long_script = "A".repeat(MAX_INLINE_POWERSHELL_SCRIPT_LEN + 10);
+        let materialized = MaterializedPsScript::new(long_script).unwrap();
+
+        if cfg!(target_os = "windows") {
+            assert!(materialized.command().starts_with("& '"));
+        } else {
+            assert!(!materialized.command().starts_with("& '"));
         }
     }
 }
