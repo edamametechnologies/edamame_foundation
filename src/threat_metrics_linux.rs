@@ -66,7 +66,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "printf '%s\\n' '# Metric: edamame helper disabled' '' 'apt remove edamame_helper' | /bin/bash"
+        "target": "printf '%s\\n' '# Metric: edamame helper disabled' '' 'if command -v apk >/dev/null 2>&1; then' '    apk del edamame_helper' 'else' '    apt remove edamame_helper' 'fi' | /bin/sh"
       },
       "scope": "generic",
       "severity": 5,
@@ -93,7 +93,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "printf '%s\\n' 'set -euo pipefail' '' 'service_active() {' '  # systemd or sysvinit' '  if command -v systemctl >/dev/null 2>&1; then' '    systemctl is-active --quiet \"$1\"' '  elif command -v service >/dev/null 2>&1; then' '    service \"$1\" status >/dev/null 2>&1' '  else' '    return 1' '  fi' '}' '' 'has_sentinelone() {' '  # SentinelOne (Linux)' '  # CLI path is typically /opt/sentinelone/bin/sentinelctl' '  /opt/sentinelone/bin/sentinelctl version 2>/dev/null | grep -q . && return 0' '  command -v sentinelctl >/dev/null 2>&1 && sentinelctl version 2>/dev/null | grep -q . && return 0' '  return 1' '}' '' 'has_crowdstrike() {' '  # CrowdStrike Falcon on Linux (service: falcon-sensor; CLI: /opt/CrowdStrike/falconctl)' '  service_active \"falcon-sensor\" && return 0' '  [[ -x /opt/CrowdStrike/falconctl ]] && /opt/CrowdStrike/falconctl -g --version 2>/dev/null | grep -q . && return 0' '  return 1' '}' '' 'has_ms_defender() {' '  # Microsoft Defender for Endpoint (Linux)' '  command -v mdatp >/dev/null 2>&1 || return 1' '  mdatp health --field real_time_protection_enabled 2>/dev/null | grep -qi \"true\" && return 0' '  # If the health field isn'\"'\"'t available, consider presence of the binary as a weak signal:' '  mdatp --version >/dev/null 2>&1 && return 0' '  return 1' '}' '' 'has_carbon_black() {' '  # VMware Carbon Black Cloud sensor (RepCLI present under /opt/carbonblack/psc/bin/)' '  [[ -x /opt/carbonblack/psc/bin/repcli ]] && /opt/carbonblack/psc/bin/repcli status >/dev/null 2>&1 && return 0' '  [[ -d /opt/carbonblack/psc/bin ]] && return 0' '  return 1' '}' '' 'has_cortex_xdr() {' '  # Palo Alto Networks Cortex XDR / Traps (cytool at /opt/traps/bin/cytool)' '  [[ -x /opt/traps/bin/cytool ]] && /opt/traps/bin/cytool runtime query >/dev/null 2>&1 && return 0' '  [[ -d /opt/traps/bin ]] && return 0' '  return 1' '}' '' 'has_cisco_secure_endpoint() {' '  # Cisco Secure Endpoint (AMP) CLI' '  [[ -x /opt/cisco/amp/bin/ampcli ]] && /opt/cisco/amp/bin/ampcli status >/dev/null 2>&1 && return 0' '  [[ -x /opt/cisco/amp/ampcli ]] && /opt/cisco/amp/ampcli status >/dev/null 2>&1 && return 0' '  [[ -d /opt/cisco/amp ]] && return 0' '  return 1' '}' '' 'has_sophos() {' '  # Sophos Protection for Linux (SPL) installs under /opt/sophos-spl and runs sophos-spl.service' '  service_active \"sophos-spl.service\" && return 0' '  [[ -d /opt/sophos-spl ]] && return 0' '  return 1' '}' '' 'has_cylance() {' '  # CylancePROTECT (Linux service: cylancesvc)' '  service_active \"cylancesvc\" && return 0' '  return 1' '}' '' 'has_eset() {' '  # ESET Endpoint for Linux (daemon: esets_daemon / service: esets.service)' '  pgrep -x esets_daemon >/dev/null 2>&1 && return 0' '  service_active \"esets\" && return 0' '  return 1' '}' '' 'if ! (' '  has_sentinelone ||      # your original vendor' '  has_crowdstrike   ||' '  has_ms_defender   ||' '  has_carbon_black  ||' '  has_cortex_xdr    ||' '  has_cisco_secure_endpoint ||' '  has_sophos        ||' '  has_cylance       ||' '  has_eset' '); then' '  echo \"epp_disabled\"' 'fi' | /bin/bash"
+        "target": "printf '%s\\n' '# Remove bashisms' 'service_active() {' '  # systemd, sysvinit, openrc' '  if command -v systemctl >/dev/null 2>&1; then' '    systemctl is-active --quiet \"$1\"' '  elif command -v service >/dev/null 2>&1; then' '    service \"$1\" status >/dev/null 2>&1' '  elif command -v rc-service >/dev/null 2>&1; then' '    rc-service \"$1\" status >/dev/null 2>&1' '  else' '    return 1' '  fi' '}' '' 'has_sentinelone() {' '  # SentinelOne (Linux)' '  if [ -x /opt/sentinelone/bin/sentinelctl ]; then' '     /opt/sentinelone/bin/sentinelctl version 2>/dev/null | grep -q . && return 0' '  fi' '  command -v sentinelctl >/dev/null 2>&1 && sentinelctl version 2>/dev/null | grep -q . && return 0' '  return 1' '}' '' 'has_crowdstrike() {' '  # CrowdStrike Falcon on Linux' '  service_active \"falcon-sensor\" && return 0' '  if [ -x /opt/CrowdStrike/falconctl ]; then' '     /opt/CrowdStrike/falconctl -g --version 2>/dev/null | grep -q . && return 0' '  fi' '  return 1' '}' '' 'has_ms_defender() {' '  # Microsoft Defender for Endpoint (Linux)' '  command -v mdatp >/dev/null 2>&1 || return 1' '  mdatp health --field real_time_protection_enabled 2>/dev/null | grep -qi \"true\" && return 0' '  mdatp --version >/dev/null 2>&1 && return 0' '  return 1' '}' '' 'has_carbon_black() {' '  # VMware Carbon Black Cloud sensor' '  if [ -x /opt/carbonblack/psc/bin/repcli ]; then' '     /opt/carbonblack/psc/bin/repcli status >/dev/null 2>&1 && return 0' '  fi' '  [ -d /opt/carbonblack/psc/bin ] && return 0' '  return 1' '}' '' 'has_cortex_xdr() {' '  # Palo Alto Networks Cortex XDR / Traps' '  if [ -x /opt/traps/bin/cytool ]; then' '     /opt/traps/bin/cytool runtime query >/dev/null 2>&1 && return 0' '  fi' '  [ -d /opt/traps/bin ] && return 0' '  return 1' '}' '' 'has_cisco_secure_endpoint() {' '  # Cisco Secure Endpoint (AMP) CLI' '  if [ -x /opt/cisco/amp/bin/ampcli ]; then' '     /opt/cisco/amp/bin/ampcli status >/dev/null 2>&1 && return 0' '  fi' '  if [ -x /opt/cisco/amp/ampcli ]; then' '     /opt/cisco/amp/ampcli status >/dev/null 2>&1 && return 0' '  fi' '  [ -d /opt/cisco/amp ] && return 0' '  return 1' '}' '' 'has_sophos() {' '  # Sophos Protection for Linux (SPL)' '  service_active \"sophos-spl.service\" && return 0' '  [ -d /opt/sophos-spl ] && return 0' '  return 1' '}' '' 'has_cylance() {' '  # CylancePROTECT' '  service_active \"cylancesvc\" && return 0' '  return 1' '}' '' 'has_eset() {' '  # ESET Endpoint for Linux' '  pgrep -x esets_daemon >/dev/null 2>&1 && return 0' '  service_active \"esets\" && return 0' '  return 1' '}' '' 'if ! (' '  has_sentinelone ||' '  has_crowdstrike   ||' '  has_ms_defender   ||' '  has_carbon_black  ||' '  has_cortex_xdr    ||' '  has_cisco_secure_endpoint ||' '  has_sophos        ||' '  has_cylance       ||' '  has_eset' '); then' '  echo \"epp_disabled\"' 'fi' | /bin/sh"
       },
       "metrictype": "bool",
       "name": "no EPP",
@@ -155,7 +155,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "printf '%s\\n' 'set -euo pipefail' '' 'ensure_home() {' '  if [[ -n \"${HOME:-}\" && -d \"${HOME}\" ]]; then' '    return' '  fi' '' '  local user' '  user=\"$(id -un)\"' '' '  if HOME=\"$(getent passwd \"${user}\" | cut -d: -f6)\"; then' '    if [[ -n \"${HOME}\" && -d \"${HOME}\" ]]; then' '      return' '    fi' '  fi' '' '  if HOME=\"$(eval echo \"~${user}\")\" && [[ -n \"${HOME}\" && -d \"${HOME}\" ]]; then' '    return' '  fi' '' '  HOME=\"/root\"' '}' '' 'ensure_home' '' 'found_pm=0' '' '# --- Native CLIs / desktop apps (best-effort) ---' '# Command names cover common Linux PMs (binary/CLI)' 'for bin in \\' '  1password op \\' '  keepassxc keepassxc-cli \\' '  bitwarden bw \\' '  enpass \\' '  pass gopass \\' '  lpass \\' '  proton-pass protonpass \\' '  keeper; do' '  if command -v \"$bin\" >/dev/null 2>&1; then' '    found_pm=1; break' '  fi' 'done' '' '# --- Chromium-family browser extensions (Chrome/Chromium/Edge/Brave/Vivaldi) ---' '# Known Chrome Web Store IDs:' '#  1Password  aeblfdkhhhdcdjpifhhbdiojplfjncoa' '#  Bitwarden  nngceckbapebfimnlniiiahkandclblb' '#  LastPass   hdokiejnpimakedhajhdlcegeplioahd' '#  Dashlane   fdjamakpfbbddfjaooikfcpapjohcfmg' '#  Keeper     bfogiafebfohielmmehodmfbbebbbpei' '#  KeePassXC  oboonakemofpalcgghocfoadofidjkkk' '#  Enpass     kmcfomidfpdkfieipokbalgegidffkal' '' 'if [[ $found_pm -eq 0 ]]; then' '  ext_ids=(' '    aeblfdkhhhdcdjpifhhbdiojplfjncoa' '    nngceckbapebfimnlniiiahkandclblb' '    hdokiejnpimakedhajhdlcegeplioahd' '    fdjamakpfbbddfjaooikfcpapjohcfmg' '    bfogiafebfohielmmehodmfbbebbbpei' '    oboonakemofpalcgghocfoadofidjkkk' '    kmcfomidfpdkfieipokbalgegidffkal' '  )' '' '  chromium_bases=(' '    \"$HOME/.config/google-chrome\"' '    \"$HOME/.config/chromium\"' '    \"$HOME/.config/microsoft-edge\"' '    \"$HOME/.config/BraveSoftware/Brave-Browser\"' '    \"$HOME/.config/vivaldi\"' '    # Flatpak variants:' '    \"$HOME/.var/app/com.google.Chrome/config/google-chrome\"' '    \"$HOME/.var/app/org.chromium.Chromium/config/chromium\"' '    \"$HOME/.var/app/com.microsoft.Edge/config/microsoft-edge\"' '    \"$HOME/.var/app/com.brave.Browser/config/BraveSoftware/Brave-Browser\"' '    \"$HOME/.var/app/com.vivaldi.Vivaldi/config/vivaldi\"' '  )' '' '  for base in \"${chromium_bases[@]}\"; do' '    [[ -d \"$base\" ]] || continue' '    # scan all profiles under the browser data root' '    while IFS= read -r -d '\"'\"''\"'\"' profile; do' '      [[ -d \"$profile/Extensions\" ]] || continue' '      for id in \"${ext_ids[@]}\"; do' '        if [[ -d \"$profile/Extensions/$id\" ]]; then' '          found_pm=1; break 3' '        fi' '      done' '    done < <(find \"$base\" -maxdepth 1 -mindepth 1 -type d -print0 2>/dev/null)' '  done' 'fi' '' '# --- Firefox extensions (search extensions.json for well-known names) ---' 'if [[ $found_pm -eq 0 ]]; then' '  ff_root=\"$HOME/.mozilla/firefox\"' '  if [[ -d \"$ff_root\" ]]; then' '    while IFS= read -r -d '\"'\"''\"'\"' ej; do' '      if grep -Eiq '\"'\"'\"name\".*\"(1Password|Bitwarden|LastPass|Dashlane|Keeper|KeePassXC|Enpass)\"'\"'\"' \"$ej\"; then' '        found_pm=1; break' '      fi' '    done < <(find \"$ff_root\" -type f -name '\"'\"'extensions.json'\"'\"' -print0 2>/dev/null)' '  fi' 'fi' '' '# --- Result ---' 'if [[ $found_pm -eq 0 ]]; then' '  echo \"No password manager installed\"' 'fi' | /bin/bash"
+        "target": "printf '%s\\n' 'ensure_home() {' '  if [ -n \"${HOME:-}\" ] && [ -d \"${HOME}\" ]; then' '    return' '  fi' '' '  local user' '  user=\"$(id -un)\"' '' '  if command -v getent >/dev/null 2>&1; then' '    HOME=\"$(getent passwd \"${user}\" | cut -d: -f6)\"' '    if [ -n \"${HOME}\" ] && [ -d \"${HOME}\" ]; then' '        return' '    fi' '  fi' '' '  HOME=\"$(eval echo \"~${user}\")\"' '  if [ -n \"${HOME}\" ] && [ -d \"${HOME}\" ]; then' '    return' '  fi' '' '  HOME=\"/root\"' '}' '' 'ensure_home' '' 'found_pm=0' '' '# --- Native CLIs ---' 'pm_bins=\"1password op keepassxc keepassxc-cli bitwarden bw enpass pass gopass lpass proton-pass protonpass keeper\"' '' 'for bin in $pm_bins; do' '  if command -v \"$bin\" >/dev/null 2>&1; then' '    found_pm=1' '    break' '  fi' 'done' '' 'if [ \"$found_pm\" -eq 1 ]; then' '    exit 0' 'fi' '' '# --- Chrome Extensions ---' 'ext_ids=\"aeblfdkhhhdcdjpifhhbdiojplfjncoa nngceckbapebfimnlniiiahkandclblb hdokiejnpimakedhajhdlcegeplioahd fdjamakpfbbddfjaooikfcpapjohcfmg bfogiafebfohielmmehodmfbbebbbpei oboonakemofpalcgghocfoadofidjkkk kmcfomidfpdkfieipokbalgegidffkal\"' '' 'chromium_bases=\"$HOME/.config/google-chrome $HOME/.config/chromium $HOME/.config/microsoft-edge $HOME/.config/BraveSoftware/Brave-Browser $HOME/.config/vivaldi $HOME/.var/app/com.google.Chrome/config/google-chrome $HOME/.var/app/org.chromium.Chromium/config/chromium $HOME/.var/app/com.microsoft.Edge/config/microsoft-edge $HOME/.var/app/com.brave.Browser/config/BraveSoftware/Brave-Browser $HOME/.var/app/com.vivaldi.Vivaldi/config/vivaldi\"' '' 'for base in $chromium_bases; do' '  if [ -d \"$base\" ]; then' '      # Iterate over profiles (subdirectories)' '      for profile in \"$base\"/*; do' '        if [ -d \"$profile\" ] && [ -d \"$profile/Extensions\" ]; then' '            for id in $ext_ids; do' '                if [ -d \"$profile/Extensions/$id\" ]; then' '                    found_pm=1' '                    exit 0' '                fi' '            done' '        fi' '      done' '  fi' 'done' '' '# --- Firefox ---' 'ff_root=\"$HOME/.mozilla/firefox\"' 'if [ -d \"$ff_root\" ]; then' '    # Search for extensions.json containing known names' '    if find \"$ff_root\" -type f -name '\"'\"'extensions.json'\"'\"' -exec grep -Eiq '\"'\"'\"name\".*\"(1Password|Bitwarden|LastPass|Dashlane|Keeper|KeePassXC|Enpass)\"'\"'\"' {} +; then' '        found_pm=1' '        exit 0' '    fi' 'fi' '' 'if [ \"$found_pm\" -eq 0 ]; then' '  echo \"No password manager installed\"' 'fi' | /bin/sh"
       },
       "metrictype": "bool",
       "name": "no password manager",
@@ -214,7 +214,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "printf '%s\\n' 'apt update -qq > /dev/null 2>&1 || true && apt install virt-what -y > /dev/null 2>&1 && [ -z \"$(virt-what)\" ] && { root_dev=$(findmnt -n -o SOURCE /); swap_dev=$(swapon --show=NAME --noheadings 2>/dev/null | head -n1); root_parent=$(lsblk -n -o NAME,TYPE,MOUNTPOINT -p | grep \" $(readlink -f \"$root_dev\")$\" | awk '\"'\"'{print $1}'\"'\"'); lsblk -n -o NAME,TYPE -p | grep -q \"^$root_parent.*crypt$\" || echo \"root_encryption_disabled\"; if [ -n \"$swap_dev\" ]; then swap_parent=$(lsblk -n -o NAME,TYPE,MOUNTPOINT -p | grep \" $(readlink -f \"$swap_dev\")$\" | awk '\"'\"'{print $1}'\"'\"'); lsblk -n -o NAME,TYPE -p | grep -q \"^$swap_parent.*crypt$\" || echo \"swap_encryption_disabled\"; fi; }' | /bin/bash"
+        "target": "printf '%s\\n' 'if command -v apk >/dev/null 2>&1; then' '    apk update >/dev/null 2>&1' '    apk add virt-what util-linux >/dev/null 2>&1' 'else' '    apt update -qq > /dev/null 2>&1 || true' '    apt install virt-what -y > /dev/null 2>&1' 'fi' '' 'if [ -z \"$(virt-what)\" ]; then' '    root_dev=$(findmnt -n -o SOURCE /)' '    swap_dev=$(swapon --show=NAME --noheadings 2>/dev/null | head -n1)' '    root_parent=$(lsblk -n -o NAME,TYPE,MOUNTPOINT -p | grep \" $(readlink -f \"$root_dev\")$\" | awk '\"'\"'{print $1}'\"'\"')' '    lsblk -n -o NAME,TYPE -p | grep -q \"^$root_parent.*crypt$\" || echo \"root_encryption_disabled\"' '    if [ -n \"$swap_dev\" ]; then' '        swap_parent=$(lsblk -n -o NAME,TYPE,MOUNTPOINT -p | grep \" $(readlink -f \"$swap_dev\")$\" | awk '\"'\"'{print $1}'\"'\"')' '        lsblk -n -o NAME,TYPE -p | grep -q \"^$swap_parent.*crypt$\" || echo \"swap_encryption_disabled\"' '    fi' 'fi' | /bin/sh"
       },
       "metrictype": "bool",
       "name": "encrypted disk disabled",
@@ -485,7 +485,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "printf '%s\\n' 'stat /etc/passwd | grep -q '\"'\"'(0644/-rw-r--r--)'\"'\"' ||' 'echo bad_permissions' | /bin/bash"
+        "target": "printf '%s\\n' '# Use stat -c %a for portable permission check' 'perms=$(stat -c %a /etc/passwd 2>/dev/null)' 'if [ \"$perms\" != \"644\" ]; then' '    echo bad_permissions' 'fi' | /bin/sh"
       },
       "metrictype": "bool",
       "name": "passwd permissions",
@@ -496,7 +496,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "printf '%s\\n' 'chmod 644 /etc/passwd' | /bin/bash"
+        "target": "printf '%s\\n' 'chmod 644 /etc/passwd' | /bin/sh"
       },
       "rollback": {
         "class": "",
@@ -534,7 +534,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "printf '%s\\n' 'stat /etc/shadow | grep -q '\"'\"'(0640/-rw-r-----)'\"'\"' ||' 'echo bad_permissions' | /bin/bash"
+        "target": "printf '%s\\n' '# Use stat -c %a for portable permission check' 'perms=$(stat -c %a /etc/shadow 2>/dev/null)' 'if [ \"$perms\" != \"640\" ]; then' '    echo bad_permissions' 'fi' | /bin/sh"
       },
       "metrictype": "bool",
       "name": "shadow permissions",
@@ -545,7 +545,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "printf '%s\\n' 'chmod 640 /etc/shadow' | /bin/bash"
+        "target": "printf '%s\\n' 'chmod 640 /etc/shadow' | /bin/sh"
       },
       "rollback": {
         "class": "",
@@ -583,7 +583,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "printf '%s\\n' 'stat /etc/fstab | grep -q '\"'\"'(0644/-rw-r--r--)'\"'\"' ||' 'echo bad_permissions' | /bin/bash"
+        "target": "printf '%s\\n' '# Use stat -c %a for portable permission check (works on GNU and Busybox)' 'perms=$(stat -c %a /etc/fstab 2>/dev/null)' 'if [ \"$perms\" != \"644\" ]; then' '    echo bad_permissions' 'fi' | /bin/sh"
       },
       "metrictype": "bool",
       "name": "fstab permissions",
@@ -594,7 +594,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "printf '%s\\n' 'chmod 644 /etc/fstab' | /bin/bash"
+        "target": "printf '%s\\n' 'chmod 644 /etc/fstab' | /bin/sh"
       },
       "rollback": {
         "class": "",
@@ -630,7 +630,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "printf '%s\\n' 'stat /etc/group | grep -q '\"'\"'(0644/-rw-r--r--)'\"'\"' ||' 'echo bad_permissions' | /bin/bash"
+        "target": "printf '%s\\n' 'perms=$(stat -c %a /etc/group 2>/dev/null)' 'if [ \"$perms\" != \"644\" ]; then' '    echo bad_permissions' 'fi' | /bin/sh"
       },
       "metrictype": "bool",
       "name": "group permissions",
@@ -641,7 +641,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "printf '%s\\n' 'chmod 644 /etc/group' | /bin/bash"
+        "target": "printf '%s\\n' 'chmod 644 /etc/group' | /bin/sh"
       },
       "rollback": {
         "class": "",
@@ -679,7 +679,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "printf '%s\\n' 'ls -l /etc/group | grep -q '\"'\"'root root'\"'\"' ||' 'echo bad_group' | /bin/bash"
+        "target": "printf '%s\\n' '# Use stat -c for portable owner/group check' 'ownership=$(stat -c \"%U %G\" /etc/group 2>/dev/null)' 'if [ \"$ownership\" != \"root root\" ]; then' '    echo bad_group' 'fi' | /bin/sh"
       },
       "metrictype": "bool",
       "name": "group group",
@@ -690,7 +690,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "printf '%s\\n' 'chown root:root /etc/group' | /bin/bash"
+        "target": "printf '%s\\n' 'chown root:root /etc/group' | /bin/sh"
       },
       "rollback": {
         "class": "",
@@ -728,7 +728,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "printf '%s\\n' 'ls -l /etc/shadow | grep -q '\"'\"'root shadow'\"'\"' ||' 'echo bad_group' | /bin/bash"
+        "target": "printf '%s\\n' '# Use stat -c for portable owner/group check' 'ownership=$(stat -c \"%U %G\" /etc/shadow 2>/dev/null)' 'if [ \"$ownership\" != \"root shadow\" ]; then' '    echo bad_group' 'fi' | /bin/sh"
       },
       "metrictype": "bool",
       "name": "shadow group",
@@ -739,7 +739,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "printf '%s\\n' 'chown root:shadow /etc/shadow' | /bin/bash"
+        "target": "printf '%s\\n' 'chown root:shadow /etc/shadow' | /bin/sh"
       },
       "rollback": {
         "class": "",
@@ -777,7 +777,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "printf '%s\\n' 'LANG=C apt update -qq > /dev/null 2>&1 ||' 'true &&' 'apt list --upgradeable 2>/dev/null | grep -q '\"'\"'upgradable'\"'\"' &&' 'echo os_outdated' | /bin/bash"
+        "target": "printf '%s\\n' 'if command -v apk >/dev/null 2>&1; then' '    apk update >/dev/null 2>&1' '    # apk list -u lists upgradeable packages. If output is not empty, updates are available.' '    if [ -n \"$(apk list -u 2>/dev/null)\" ]; then' '        echo os_outdated' '    fi' 'else' '    LANG=C apt update -qq > /dev/null 2>&1 || true' '    apt list --upgradeable 2>/dev/null | grep -q '\"'\"'upgradable'\"'\"' && echo os_outdated' 'fi' | /bin/sh"
       },
       "metrictype": "bool",
       "name": "latest os",
@@ -788,7 +788,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "printf '%s\\n' 'apt update -qq > /dev/null 2>&1 ||' 'true &&' 'apt upgrade -y' | /bin/bash"
+        "target": "printf '%s\\n' 'if command -v apk >/dev/null 2>&1; then' '    apk update >/dev/null 2>&1' '    apk upgrade >/dev/null 2>&1' 'else' '    apt update -qq > /dev/null 2>&1 || true' '    apt upgrade -y' 'fi' | /bin/sh"
       },
       "rollback": {
         "class": "",
@@ -826,7 +826,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "printf '%s\\n' 'LANG=C ufw status | grep -qi '\"'\"'Status: active'\"'\"' ||' 'echo firewall_disabled' | /bin/bash"
+        "target": "printf '%s\\n' 'if command -v ufw >/dev/null 2>&1; then' '    LANG=C ufw status | grep -qi '\"'\"'Status: active'\"'\"' || echo firewall_disabled' 'else' '    # If ufw is missing, report as disabled (remediation will attempt to install)' '    echo firewall_disabled' 'fi' | /bin/sh"
       },
       "metrictype": "bool",
       "name": "local firewall disabled",
@@ -843,7 +843,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "printf '%s\\n' 'apt update -qq > /dev/null 2>&1 ||' 'true &&' 'apt install ufw -y > /dev/null 2>&1 &&' 'ufw enable' | /bin/bash"
+        "target": "printf '%s\\n' 'if command -v apk >/dev/null 2>&1; then' '    apk update >/dev/null 2>&1' '    apk add ufw >/dev/null 2>&1' '    ufw enable' 'else' '    apt update -qq > /dev/null 2>&1 || true' '    apt install ufw -y > /dev/null 2>&1' '    ufw enable' 'fi' | /bin/sh"
       },
       "rollback": {
         "class": "",
@@ -881,7 +881,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "printf '%s\\n' 'LANG=C systemctl is-active ssh | grep -q '\"'\"'inactive'\"'\"' ||' 'echo remote_login_enabled' | /bin/bash"
+        "target": "printf '%s\\n' 'if command -v systemctl >/dev/null 2>&1; then' '    # Check both ssh and sshd service names' '    if LANG=C systemctl is-active ssh 2>/dev/null | grep -q '\"'\"'active'\"'\"'; then' '        echo remote_login_enabled' '    elif LANG=C systemctl is-active sshd 2>/dev/null | grep -q '\"'\"'active'\"'\"'; then' '        echo remote_login_enabled' '    fi' 'elif command -v rc-service >/dev/null 2>&1; then' '    # Alpine typically uses sshd' '    if rc-service sshd status >/dev/null 2>&1; then' '        echo remote_login_enabled' '    elif rc-service ssh status >/dev/null 2>&1; then' '        echo remote_login_enabled' '    fi' 'fi' | /bin/sh"
       },
       "metrictype": "bool",
       "name": "remote login enabled",
@@ -903,7 +903,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "printf '%s\\n' 'systemctl stop ssh &&' 'systemctl disable ssh' | /bin/bash"
+        "target": "printf '%s\\n' 'if command -v systemctl >/dev/null 2>&1; then' '    systemctl stop ssh 2>/dev/null' '    systemctl disable ssh 2>/dev/null' '    systemctl stop sshd 2>/dev/null' '    systemctl disable sshd 2>/dev/null' 'elif command -v rc-service >/dev/null 2>&1; then' '    rc-service sshd stop 2>/dev/null' '    rc-update del sshd default 2>/dev/null' '    rc-service ssh stop 2>/dev/null' '    rc-update del ssh default 2>/dev/null' 'fi' | /bin/sh"
       },
       "rollback": {
         "class": "cli",
@@ -923,7 +923,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "printf '%s\\n' 'systemctl enable ssh &&' 'systemctl start ssh' | /bin/bash"
+        "target": "printf '%s\\n' 'if command -v apk >/dev/null 2>&1; then' '    # ssh usually installed, but ensure service enabled' '    rc-update add sshd default 2>/dev/null' '    rc-service sshd start 2>/dev/null' 'else' '    systemctl enable ssh 2>/dev/null' '    systemctl start ssh 2>/dev/null' '    systemctl enable sshd 2>/dev/null' '    systemctl start sshd 2>/dev/null' 'fi' | /bin/sh"
       },
       "scope": "generic",
       "severity": 4,
@@ -952,7 +952,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "printf '%s\\n' 'LANG=C systemctl is-active xrdp 2>/dev/null | grep -q '\"'\"'inactive'\"'\"' ||' 'echo rdp_enabled' | /bin/bash"
+        "target": "printf '%s\\n' 'if command -v systemctl >/dev/null 2>&1; then' '    LANG=C systemctl is-active xrdp 2>/dev/null | grep -q '\"'\"'inactive'\"'\"' || echo rdp_enabled' 'elif command -v rc-service >/dev/null 2>&1; then' '    rc-service xrdp status >/dev/null 2>&1 && echo rdp_enabled' 'fi' | /bin/sh"
       },
       "metrictype": "bool",
       "name": "remote desktop enabled",
@@ -974,7 +974,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "printf '%s\\n' 'systemctl stop xrdp &&' 'systemctl disable xrdp' | /bin/bash"
+        "target": "printf '%s\\n' 'if command -v systemctl >/dev/null 2>&1; then' '    systemctl stop xrdp 2>/dev/null' '    systemctl disable xrdp 2>/dev/null' 'elif command -v rc-service >/dev/null 2>&1; then' '    rc-service xrdp stop 2>/dev/null' '    rc-update del xrdp default 2>/dev/null' 'fi' | /bin/sh"
       },
       "rollback": {
         "class": "cli",
@@ -994,7 +994,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "printf '%s\\n' 'apt update -qq > /dev/null 2>&1 ||' 'true &&' 'apt install xrdp -y > /dev/null 2>&1 &&' 'systemctl start xrdp &&' 'systemctl enable xrdp' | /bin/bash"
+        "target": "printf '%s\\n' 'if command -v apk >/dev/null 2>&1; then' '    apk update >/dev/null 2>&1' '    apk add xrdp >/dev/null 2>&1' '    rc-service xrdp start 2>/dev/null' '    rc-update add xrdp default 2>/dev/null' 'else' '    apt update -qq > /dev/null 2>&1 || true' '    apt install xrdp -y > /dev/null 2>&1' '    systemctl start xrdp' '    systemctl enable xrdp' 'fi' | /bin/sh"
       },
       "scope": "generic",
       "severity": 4,
@@ -1023,7 +1023,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "printf '%s\\n' 'LANG=C systemctl is-active nfs-kernel-server 2>/dev/null | grep -q '\"'\"'inactive'\"'\"' ||' 'echo nfs_enabled;' 'LANG=C systemctl is-active smbd 2>/dev/null | grep -q '\"'\"'inactive'\"'\"' ||' 'echo smb_enabled' | /bin/bash"
+        "target": "printf '%s\\n' 'if command -v systemctl >/dev/null 2>&1; then' '    LANG=C systemctl is-active nfs-kernel-server 2>/dev/null | grep -q '\"'\"'inactive'\"'\"' || echo nfs_enabled' '    LANG=C systemctl is-active smbd 2>/dev/null | grep -q '\"'\"'inactive'\"'\"' || echo smb_enabled' 'elif command -v rc-service >/dev/null 2>&1; then' '    rc-service nfs status >/dev/null 2>&1 && echo nfs_enabled' '    rc-service samba status >/dev/null 2>&1 && echo smb_enabled' 'fi' | /bin/sh"
       },
       "metrictype": "bool",
       "name": "file sharing enabled",
@@ -1045,7 +1045,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "printf '%s\\n' 'systemctl stop smbd &&' 'systemctl disable smbd;' 'systemctl stop nfs-kernel-server &&' 'systemctl disable nfs-kernel-server' | /bin/bash"
+        "target": "printf '%s\\n' 'if command -v systemctl >/dev/null 2>&1; then' '    systemctl stop smbd && systemctl disable smbd' '    systemctl stop nfs-kernel-server && systemctl disable nfs-kernel-server' 'elif command -v rc-service >/dev/null 2>&1; then' '    rc-service samba stop 2>/dev/null' '    rc-update del samba default 2>/dev/null' '    rc-service nfs stop 2>/dev/null' '    rc-update del nfs default 2>/dev/null' 'fi' | /bin/sh"
       },
       "rollback": {
         "class": "cli",
@@ -1065,7 +1065,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "printf '%s\\n' 'apt update -qq > /dev/null 2>&1 ||' 'true &&' 'apt install samba -y > /dev/null 2>&1 &&' 'systemctl start smbd &&' 'systemctl enable smbd &&' 'apt install nfs-kernel-server -y > /dev/null 2>&1 &&' 'systemctl start nfs-kernel-server &&' 'systemctl enable nfs-kernel-server' | /bin/bash"
+        "target": "printf '%s\\n' 'if command -v apk >/dev/null 2>&1; then' '    apk update >/dev/null 2>&1' '    apk add samba nfs-utils >/dev/null 2>&1' '    if command -v rc-service >/dev/null 2>&1; then' '        rc-service samba start' '        rc-update add samba default' '        rc-service nfs start' '        rc-update add nfs default' '    fi' 'else' '    apt update -qq > /dev/null 2>&1 || true' '    apt install samba -y > /dev/null 2>&1' '    systemctl start smbd' '    systemctl enable smbd' '    apt install nfs-kernel-server -y > /dev/null 2>&1' '    systemctl start nfs-kernel-server' '    systemctl enable nfs-kernel-server' 'fi' | /bin/sh"
       },
       "scope": "generic",
       "severity": 4,
@@ -1094,7 +1094,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "printf '%s\\n' 'LANG=C gsettings get org.gnome.desktop.screensaver lock-enabled | grep -q '\"'\"'true'\"'\"' ||' 'echo screensaver_lock_disabled' | /bin/bash"
+        "target": "printf '%s\\n' 'if command -v gsettings >/dev/null 2>&1; then' '    LANG=C gsettings get org.gnome.desktop.screensaver lock-enabled | grep -q '\"'\"'true'\"'\"' || echo screensaver_lock_disabled' 'else' '    # If gsettings is missing, we can'\"'\"'t verify, but existing logic implies disabled if check fails' '    echo screensaver_lock_disabled' 'fi' | /bin/sh"
       },
       "metrictype": "bool",
       "name": "too slow or disabled screensaver lock",
@@ -1116,7 +1116,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "printf '%s\\n' 'gsettings set org.gnome.desktop.screensaver lock-enabled true' | /bin/bash"
+        "target": "printf '%s\\n' 'gsettings set org.gnome.desktop.screensaver lock-enabled true' | /bin/sh"
       },
       "rollback": {
         "class": "cli",
@@ -1136,7 +1136,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "printf '%s\\n' 'gsettings set org.gnome.desktop.screensaver lock-enabled false' | /bin/bash"
+        "target": "printf '%s\\n' 'gsettings set org.gnome.desktop.screensaver lock-enabled false' | /bin/sh"
       },
       "scope": "generic",
       "severity": 3,
@@ -1167,7 +1167,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "printf '%s\\n' ' and reports the finding using the commands below.' '' 'LANG=C mokutil --sb-state | grep -q '\"'\"'SecureBoot enabled'\"'\"' ||' 'echo secure_boot_disabled' | /bin/bash"
+        "target": "printf '%s\\n' 'if command -v mokutil >/dev/null 2>&1; then' '    LANG=C mokutil --sb-state | grep -q '\"'\"'SecureBoot enabled'\"'\"' || echo secure_boot_disabled' 'else' '    # If mokutil is missing, we can'\"'\"'t verify, but assuming disabled if we can'\"'\"'t check might be safe or noisy.' '    # For now, only report if we can check and it says disabled.' '    # Or echo \"unknown\" ?' '    # Existing script echoed \"secure_boot_disabled\" if mokutil failed or grep failed.' '    # I'\"'\"'ll stick to that behavior but clean up the garbage line.' '    LANG=C mokutil --sb-state 2>/dev/null | grep -q '\"'\"'SecureBoot enabled'\"'\"' || echo secure_boot_disabled' 'fi' | /bin/sh"
       },
       "metrictype": "bool",
       "name": "secure boot disabled",
@@ -1228,7 +1228,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "printf '%s\\n' '[ ! -f /etc/security/pwquality.conf ] &&' 'echo '\"'\"'weak password_policy: pwquality is not in use'\"'\"' ||' '! grep -qvE '\"'\"'^\\s*#|^\\s*$'\"'\"' /etc/security/pwquality.conf &&' 'echo '\"'\"'weak password policy: conf file uses defaults'\"'\"'' | /bin/bash"
+        "target": "printf '%s\\n' 'if [ ! -f /etc/security/pwquality.conf ]; then' '    echo '\"'\"'weak password_policy: pwquality is not in use'\"'\"'' 'elif ! grep -qvE '\"'\"'^\\s*#|^\\s*$'\"'\"' /etc/security/pwquality.conf; then' '    echo '\"'\"'weak password policy: conf file uses defaults'\"'\"'' 'fi' | /bin/sh"
       },
       "metrictype": "bool",
       "name": "password is too weak",
