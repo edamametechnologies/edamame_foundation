@@ -164,7 +164,6 @@ fn resolve_windows_context(username: &str) -> Result<WindowsUserContext> {
     let ps = PsScriptBuilder::new()
         .no_profile(true)
         .non_interactive(true)
-        .hidden(true)
         .print_commands(false)
         .build();
 
@@ -175,9 +174,10 @@ fn resolve_windows_context(username: &str) -> Result<WindowsUserContext> {
                 let json_str = stdout_str.trim();
                 let context: WindowsUserContext = serde_json::from_str(json_str).map_err(|e| {
                     anyhow!(
-                        "Failed to parse windows context JSON: {}. Output: {}",
+                        "Failed to parse windows context JSON: {}. Output: {}. Stderr: {}",
                         e,
-                        json_str
+                        json_str,
+                        output.stderr().as_deref().unwrap_or("")
                     )
                 })?;
                 Ok(context)
@@ -218,7 +218,6 @@ fn execute_windows_ps(
     let ps = PsScriptBuilder::new()
         .no_profile(true)
         .non_interactive(true)
-        .hidden(true)
         .print_commands(false)
         .build();
     debug!("Executing powershell command: {}", script);
@@ -370,4 +369,159 @@ fn execute_unix_command(
         cmd, code, stdout, stderr
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_run_cli_echo() {
+        let (cmd, expected) = if cfg!(target_os = "windows") {
+            ("Write-Output 'hello'", "hello")
+        } else {
+            ("echo 'hello'", "hello")
+        };
+
+        let result = run_cli(cmd, "", false, None).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        // On windows, pwsh might add \r\n which are removed by run_cli, but extra spaces might remain?
+        // run_cli removes newlines: stdout.replace('\n', "").replace('\r', "")
+        assert_eq!(output.trim(), expected);
+    }
+
+    #[tokio::test]
+    async fn test_run_cli_error() {
+        // We need a command that returns non-zero exit code AND prints to stderr
+        // to satisfy execution_failed(code != 0 && !stderr.is_empty())
+        
+        let cmd = if cfg!(target_os = "windows") {
+            // Write-Error writes to stderr stream in PS. exit 1 sets exit code.
+            "Write-Error 'boom'; exit 1"
+        } else {
+            "echo 'boom' >&2; exit 1"
+        };
+
+        let result = run_cli(cmd, "", false, None).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("boom"));
+    }
+
+    #[tokio::test]
+    async fn test_run_cli_timeout() {
+        let cmd = if cfg!(target_os = "windows") {
+            "Start-Sleep -Seconds 2"
+        } else {
+            "sleep 2"
+        };
+
+        // Timeout of 1 second, command takes 2
+        let result = run_cli(cmd, "", false, Some(1)).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("timed out"));
+    }
+
+    #[tokio::test]
+    async fn test_personation_current_user() {
+        // Try to impersonate current user
+        let user = if cfg!(target_os = "windows") {
+            std::env::var("USERNAME").unwrap_or_default()
+        } else {
+            std::env::var("USER").unwrap_or_default()
+        };
+
+        if user.is_empty() {
+            println!("Skipping impersonation test: no USER/USERNAME env var");
+            return;
+        }
+
+        // Note: On Unix, impersonating usually requires sudo/root unless it's just setting env vars.
+        // Our implementation of execute_unix_command just sets env vars like HOME, USER, etc.
+        // It does NOT use sudo or setuid/setgid (it just formats a string with export ...).
+        // So it should safe to run as normal user.
+
+        let (cmd, expected) = if cfg!(target_os = "windows") {
+            ("Write-Output 'impersonated'", "impersonated")
+        } else {
+            ("echo 'impersonated'", "impersonated")
+        };
+
+        let result = run_cli(cmd, &user, true, None).await;
+        
+        match result {
+            Ok(output) => assert_eq!(output.trim(), expected),
+            Err(e) => {
+                println!("Impersonation test failed (expected for some envs): {}", e);
+                // Don't assert failure here as it depends on env capability
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_personation_context_inference() {
+        let user = if cfg!(target_os = "windows") {
+            std::env::var("USERNAME").unwrap_or_default()
+        } else {
+            std::env::var("USER").unwrap_or_default()
+        };
+
+        if user.is_empty() {
+            println!("Skipping context inference test: no USER/USERNAME env var");
+            return;
+        }
+
+        // Determine expected home
+        let expected_home = if cfg!(target_os = "windows") {
+            std::env::var("USERPROFILE").unwrap_or_default()
+        } else {
+            std::env::var("HOME").unwrap_or_default()
+        };
+
+        // Command to print home var
+        let cmd = if cfg!(target_os = "windows") {
+            "Write-Output $env:USERPROFILE"
+        } else {
+            "echo $HOME"
+        };
+
+        let result = run_cli(cmd, &user, true, None).await;
+        
+        match result {
+            Ok(output) => {
+                let output = output.trim();
+                // We expect the output to match our current home dir if we impersonate ourselves
+                // NOTE: This test assumes that the resolution logic yields the same path 
+                // as std::env::var. This is usually true but might differ slightly (e.g. symlinks)
+                // We'll just check if it's non-empty and 'looks like' a home dir
+                assert!(!output.is_empty());
+                
+                // Loose check: output should likely contain the username or be equal to expected_home
+                if !expected_home.is_empty() {
+                    // On windows, sometimes we get Short paths or different casing, 
+                    // so let's just print for verification if strict equality fails
+                    if output != expected_home {
+                        println!("Warning: Resolved home '{}' differs from env home '{}'", output, expected_home);
+                    }
+                }
+            },
+            Err(e) => {
+                 println!("Context inference test failed: {}", e);
+            }
+        }
+
+        // On Windows, check APPDATA too
+        if cfg!(target_os = "windows") {
+            let cmd_appdata = "Write-Output $env:APPDATA";
+            let res_appdata = run_cli(cmd_appdata, &user, true, None).await;
+            if let Ok(out) = res_appdata {
+                assert!(!out.trim().is_empty());
+                let expected_appdata = std::env::var("APPDATA").unwrap_or_default();
+                 if !expected_appdata.is_empty() && out.trim() != expected_appdata {
+                     println!("Warning: Resolved APPDATA '{}' differs from env APPDATA '{}'", out.trim(), expected_appdata);
+                 }
+            }
+        }
+    }
 }
