@@ -1,18 +1,10 @@
 use anyhow::{anyhow, Error, Result};
-#[cfg(target_os = "windows")]
-use anyhow::Context;
 use powershell_script::PsScriptBuilder;
 use run_script::ScriptOptions;
 use serde::Deserialize;
 use std::env;
-#[cfg(target_os = "windows")]
-use std::io::Write;
 use tokio::time::{timeout, Duration};
 use tracing::{debug, error, info, warn};
-#[cfg(target_os = "windows")]
-use tempfile::NamedTempFile;
-
-const MAX_INLINE_POWERSHELL_SCRIPT_LEN: usize = 4000;
 
 // The personate parameter forces the execution into the context of username
 // We could use an empty username to indicate there is no need to personate but we keep it as is for now in case we find other use cases for the username
@@ -224,19 +216,7 @@ fn resolve_windows_context(username: &str) -> Result<WindowsUserContext> {
         ctx
     };
 
-    let materialized_script = MaterializedPsScript::new(script).unwrap_or_else(|e| {
-        error!("Failed to materialize resolution script: {}", e);
-        MaterializedPsScript {
-            command: String::new(),
-            temp_file: None,
-        }
-    });
-
-    if materialized_script.command.is_empty() {
-        return Ok(fallback_context());
-    }
-
-    match ps.run(materialized_script.command()) {
+    match ps.run(&script) {
         Ok(output) => {
             if output.success() {
                 let stdout_str = output.stdout().as_deref().unwrap_or("").to_string();
@@ -267,7 +247,10 @@ fn resolve_windows_context(username: &str) -> Result<WindowsUserContext> {
             }
         }
         Err(e) => {
-            warn!("Failed to execute resolution script: {}. Using fallback.", e);
+            warn!(
+                "Failed to execute resolution script: {}. Using fallback.",
+                e
+            );
             Ok(fallback_context())
         }
     }
@@ -302,8 +285,7 @@ fn execute_windows_ps(
         .print_commands(false)
         .build();
     debug!("Executing powershell command: {}", script);
-    let materialized_script = MaterializedPsScript::new(script)?;
-    match ps.run(materialized_script.command()) {
+    match ps.run(&script) {
         Ok(output) => {
             *stdout = output.stdout().as_deref().unwrap_or("").to_string();
             *stderr = output.stderr().as_deref().unwrap_or("").to_string();
@@ -326,62 +308,6 @@ fn execute_windows_ps(
 
 fn escape_pwsh_single_quoted(value: &str) -> String {
     value.replace('\'', "''")
-}
-
-struct MaterializedPsScript {
-    command: String,
-    #[allow(dead_code)]
-    #[cfg(target_os = "windows")]
-    temp_file: Option<NamedTempFile>,
-    #[allow(dead_code)]
-    #[cfg(not(target_os = "windows"))]
-    temp_file: Option<()>,
-}
-
-impl MaterializedPsScript {
-    fn new(script: String) -> Result<Self> {
-        if cfg!(target_os = "windows") && script.len() > MAX_INLINE_POWERSHELL_SCRIPT_LEN {
-            #[cfg(target_os = "windows")]
-            {
-                let mut temp = tempfile::Builder::new()
-                    .prefix("edamame_ps_")
-                    .suffix(".ps1")
-                    .tempfile()
-                    .context("Failed to create temp PowerShell script")?;
-                temp.write_all(script.as_bytes())
-                    .context("Failed to write temp PowerShell script")?;
-
-                let path = temp.path().to_string_lossy().to_string();
-                let escaped_path = escape_pwsh_single_quoted(&path);
-                debug!(
-                    "Materialized PowerShell script ({} chars) to {:?}",
-                    script.len(),
-                    temp.path()
-                );
-                Ok(Self {
-                    command: format!("& '{}'", escaped_path),
-                    temp_file: Some(temp),
-                })
-            }
-            #[cfg(not(target_os = "windows"))]
-            {
-                // This branch is technically unreachable given the outer if condition
-                Ok(Self {
-                    command: script,
-                    temp_file: None,
-                })
-            }
-        } else {
-            Ok(Self {
-                command: script,
-                temp_file: None,
-            })
-        }
-    }
-
-    fn command(&self) -> &str {
-        &self.command
-    }
 }
 
 fn build_windows_env_block(username: &str, context: &WindowsUserContext) -> Option<String> {
@@ -546,7 +472,7 @@ mod tests {
     async fn test_run_cli_error() {
         // We need a command that returns non-zero exit code AND prints to stderr
         // to satisfy execution_failed(code != 0 && !stderr.is_empty())
-        
+
         let cmd = if cfg!(target_os = "windows") {
             // Write-Error writes to stderr stream in PS. exit 1 sets exit code.
             "Write-Error 'boom'; exit 1"
@@ -600,7 +526,7 @@ mod tests {
         };
 
         let result = run_cli(cmd, &user, true, None).await;
-        
+
         match result {
             Ok(output) => assert_eq!(output.trim(), expected),
             Err(e) => {
@@ -638,27 +564,30 @@ mod tests {
         };
 
         let result = run_cli(cmd, &user, true, None).await;
-        
+
         match result {
             Ok(output) => {
                 let output = output.trim();
                 // We expect the output to match our current home dir if we impersonate ourselves
-                // NOTE: This test assumes that the resolution logic yields the same path 
+                // NOTE: This test assumes that the resolution logic yields the same path
                 // as std::env::var. This is usually true but might differ slightly (e.g. symlinks)
                 // We'll just check if it's non-empty and 'looks like' a home dir
                 assert!(!output.is_empty());
-                
+
                 // Loose check: output should likely contain the username or be equal to expected_home
                 if !expected_home.is_empty() {
-                    // On windows, sometimes we get Short paths or different casing, 
+                    // On windows, sometimes we get Short paths or different casing,
                     // so let's just print for verification if strict equality fails
                     if output != expected_home {
-                        println!("Warning: Resolved home '{}' differs from env home '{}'", output, expected_home);
+                        println!(
+                            "Warning: Resolved home '{}' differs from env home '{}'",
+                            output, expected_home
+                        );
                     }
                 }
-            },
+            }
             Err(e) => {
-                 println!("Context inference test failed: {}", e);
+                println!("Context inference test failed: {}", e);
             }
         }
 
@@ -669,9 +598,13 @@ mod tests {
             if let Ok(out) = res_appdata {
                 assert!(!out.trim().is_empty());
                 let expected_appdata = std::env::var("APPDATA").unwrap_or_default();
-                 if !expected_appdata.is_empty() && out.trim() != expected_appdata {
-                     println!("Warning: Resolved APPDATA '{}' differs from env APPDATA '{}'", out.trim(), expected_appdata);
-                 }
+                if !expected_appdata.is_empty() && out.trim() != expected_appdata {
+                    println!(
+                        "Warning: Resolved APPDATA '{}' differs from env APPDATA '{}'",
+                        out.trim(),
+                        expected_appdata
+                    );
+                }
             }
         }
     }
@@ -690,25 +623,6 @@ mod tests {
             std::env::set_var("SystemDrive", value);
         } else {
             std::env::remove_var("SystemDrive");
-        }
-    }
-
-    #[test]
-    fn test_materialized_ps_script_inline() {
-        let script = "Write-Output 'hello'".to_string();
-        let materialized = MaterializedPsScript::new(script.clone()).unwrap();
-        assert_eq!(materialized.command(), script);
-    }
-
-    #[test]
-    fn test_materialized_ps_script_tempfile() {
-        let long_script = "A".repeat(MAX_INLINE_POWERSHELL_SCRIPT_LEN + 10);
-        let materialized = MaterializedPsScript::new(long_script).unwrap();
-
-        if cfg!(target_os = "windows") {
-            assert!(materialized.command().starts_with("& '"));
-        } else {
-            assert!(!materialized.command().starts_with("& '"));
         }
     }
 }
