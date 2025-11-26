@@ -76,6 +76,7 @@ base64 = "0.22.1"
 # CLI support
 run_script = "0.11.0"
 powershell_script = "1.1.0"
+tempfile = "3.13.0"
 
 # Async
 async-trait = "0.1.89"
