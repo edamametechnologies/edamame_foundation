@@ -198,20 +198,17 @@ jobs:
           cargo test --features packetcapture -- --nocapture
         continue-on-error: true
 
-      - name: Dump logs (Non-Windows)
-        if: always() && runner.os != 'Windows'
+      - name: Dump logs
+        if: always()
         shell: bash
         run: |
+          if [ "${{ runner.os }}" = "macos" ] || [ "${{ runner.os }}" = "linux" ]; then
+            SUDO="sudo"
+          else
+            SUDO=""
+          fi
           echo "--- Dumping Native Logs (${{ matrix.os }}-${{ matrix.platform }}) --- "
-          find . -name "edamame_*.2*-*-*" -exec echo "--- {} ---" \; -exec sudo cat {} \; || echo "No logs found in default directory"
-          echo "--- Native Log Dump Complete ---"
-
-      - name: Dump logs (Windows)
-        if: always() && runner.os == 'Windows'
-        shell: bash
-        run: |
-          echo "--- Dumping Native Logs (${{ matrix.os }}-${{ matrix.platform }}) --- "
-          find . -name "edamame_*.2*-*-*" -exec echo "--- {} ---" \; -exec cat {} \; || echo "No logs found in default directory"
+          find . -name "edamame_*.2*-*-*" -exec echo "--- {} ---" \; -exec $SUDO cat {} \; || echo "No logs found in default directory"
           echo "--- Native Log Dump Complete ---"
 
       - name: Slack alerts
