@@ -104,7 +104,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "minversion": 10,
         "system": "Windows",
-        "target": "$__EDAMAME_LINES = @('if(((Get-ItemProperty -Path ''HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\CredUI'' -Name ''DisablePasswordCaching'' -ErrorAction SilentlyContinue).DisablePasswordCaching) -ne 1) { ''Password caching is not disabled'' } else { '''' }'); $__EDAMAME_SCRIPT = $__EDAMAME_LINES -join \"`n\"; Invoke-Expression $__EDAMAME_SCRIPT"
+        "target": "if(((Get-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\CredUI' -Name 'DisablePasswordCaching' -ErrorAction SilentlyContinue).DisablePasswordCaching) -ne 1) { 'Password caching is not disabled' } else { '' }"
       },
       "metrictype": "bool",
       "name": "Cached logon credentials enabled",
@@ -126,7 +126,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "minversion": 10,
         "system": "Windows",
-        "target": "$__EDAMAME_LINES = @('reg add HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\CredUI /v DisablePasswordCaching /t REG_DWORD /d 1 /f'); $__EDAMAME_SCRIPT = $__EDAMAME_LINES -join \"`n\"; Invoke-Expression $__EDAMAME_SCRIPT"
+        "target": "reg add HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\CredUI /v DisablePasswordCaching /t REG_DWORD /d 1 /f"
       },
       "rollback": {
         "class": "cli",
@@ -135,7 +135,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "minversion": 10,
         "system": "Windows",
-        "target": "$__EDAMAME_LINES = @('reg add HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\CredUI /v DisablePasswordCaching /t REG_DWORD /d 0 /f'); $__EDAMAME_SCRIPT = $__EDAMAME_LINES -join \"`n\"; Invoke-Expression $__EDAMAME_SCRIPT"
+        "target": "reg add HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\CredUI /v DisablePasswordCaching /t REG_DWORD /d 0 /f"
       },
       "scope": "generic",
       "severity": 4,
@@ -164,7 +164,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "minversion": 10,
         "system": "Windows",
-        "target": "$__EDAMAME_LINES = @('Function Get-AVStatus {', '  [CmdletBinding()]', '  Param()', '  Process {', '    # 1) Primary: Windows Security Center (workstations; some Server SKUs won’t populate this)', '    $enabledAVs = @()', '    try {', '      $av = Get-CimInstance -Namespace ''root/SecurityCenter2'' -ClassName ''AntivirusProduct'' -ErrorAction Stop', '      foreach ($p in $av) {', '        $productStateHex = (''0x{0:x}'' -f $p.ProductState)', '        # Your logic: \"enabled\" when the 3rd byte is 0x10 or 0x11', '        if ($productStateHex.Length -ge 5) {', '          $enabled = $productStateHex.Substring(3,2) -match ''10|11''', '          if ($enabled) { $enabledAVs += $p }', '        }', '      }', '    } catch {', '      # SecurityCenter2 may not exist (e.g., some Server editions) – rely on fallbacks below', '    }', '', '    if ($enabledAVs) { return }  # at least one AV registered as enabled', '', '    # 2) Defender explicit health (if present)', '    $defenderOn = $false', '    try {', '      $mp = Get-MpComputerStatus -ErrorAction Stop', '      if ($mp.RealTimeProtectionEnabled -and $mp.AntiSpywareEnabled -and $mp.AntivirusEnabled) { $defenderOn = $true }', '    } catch { }', '    if ($defenderOn) { return }', '', '    # 3) EDR/EPP fallbacks: services/processes/known install dirs', '    $svcNames = @(', '      # Microsoft Defender AV/XDR', '      ''WinDefend''                                  # MsMpEng.exe service backend', '      # SentinelOne', '      ''SentinelAgent''', '      # CrowdStrike', '      ''CSFalconService''', '      # Sophos', '      ''SEDService'',''SSPService''', '      # Symantec Endpoint Protection', '      ''SepMasterService'',''sepWscSvc''', '      # Trend Micro Apex One', '      ''TMBMSRV'',''TmPfw'',''ntrtscan''', '      # Palo Alto Cortex XDR / Traps (old/new)', '      ''cyserver'',''CyveraService''', '      # Cylance / BlackBerry Protect', '      ''CylanceSvc''', '      # ESET', '      ''ekrn''', '      # Trellix / McAfee Endpoint Security platform bits', '      ''mfemms'',''mfevtps'',''mfefire''', '      # Malwarebytes', '      ''MBAMService''', '      # Bitdefender (service object name sometimes bdservicehost)', '      ''bdservicehost''', '    )', '', '    foreach ($svc in $svcNames) {', '      $s = Get-Service -Name $svc -ErrorAction SilentlyContinue', '      if ($s -and $s.Status -eq ''Running'') { return }', '    }', '', '    # Also consider key processes when service name varies by version', '    $procNames = @(''MsMpEng'',''SentinelAgent'',''CSFalconService'',''ekrn'',''MBAMService'',''bdservicehost'',''ntrtscan'')', '    foreach ($pn in $procNames) {', '      if (Get-Process -Name $pn -ErrorAction SilentlyContinue) { return }', '    }', '', '    # Known install directories that strongly indicate an EDR/EPP', '    $edrDirs = @(', '      ''C:\\Program Files\\Confer'',                                 # VMware Carbon Black Cloud/Defense (RepCLI path)', '      ''C:\\Program Files\\SentinelOne'',                            # SentinelOne Agent', '      ''C:\\Program Files\\Palo Alto Networks\\Traps'',               # Cortex XDR / Traps', '      ''C:\\Windows\\System32\\drivers\\CrowdStrike'',                 # CrowdStrike driver directory', '      ''C:\\Program Files\\CrowdStrike''                             # some CS installers', '    )', '    foreach ($d in $edrDirs) {', '      if (Test-Path -LiteralPath $d) { return }', '    }', '', '    # If nothing matched, treat as missing EPP', '    Write-Output ''epp_disabled''', '  }', '}', 'Get-AVStatus'); $__EDAMAME_SCRIPT = $__EDAMAME_LINES -join \"`n\"; Invoke-Expression $__EDAMAME_SCRIPT"
+        "target": "Function Get-AVStatus {; [CmdletBinding()]; Param(); Process {; $enabledAVs = @(); try {; $av = Get-CimInstance -Namespace 'root/SecurityCenter2' -ClassName 'AntivirusProduct' -ErrorAction Stop; foreach ($p in $av) {; $productStateHex = ('0x{0:x}' -f $p.ProductState); if ($productStateHex.Length -ge 5) {; $enabled = $productStateHex.Substring(3,2) -match '10|11'; if ($enabled) { $enabledAVs += $p }; }; }; } catch {; }; if ($enabledAVs) { return }  # at least one AV registered as enabled; $defenderOn = $false; try {; $mp = Get-MpComputerStatus -ErrorAction Stop; if ($mp.RealTimeProtectionEnabled -and $mp.AntiSpywareEnabled -and $mp.AntivirusEnabled) { $defenderOn = $true }; } catch { }; if ($defenderOn) { return }; $svcNames = @(; 'WinDefend'                                  # MsMpEng.exe service backend; 'SentinelAgent'; 'CSFalconService'; 'SEDService','SSPService'; 'SepMasterService','sepWscSvc'; 'TMBMSRV','TmPfw','ntrtscan'; 'cyserver','CyveraService'; 'CylanceSvc'; 'ekrn'; 'mfemms','mfevtps','mfefire'; 'MBAMService'; 'bdservicehost'; ); foreach ($svc in $svcNames) {; $s = Get-Service -Name $svc -ErrorAction SilentlyContinue; if ($s -and $s.Status -eq 'Running') { return }; }; $procNames = @('MsMpEng','SentinelAgent','CSFalconService','ekrn','MBAMService','bdservicehost','ntrtscan'); foreach ($pn in $procNames) {; if (Get-Process -Name $pn -ErrorAction SilentlyContinue) { return }; }; $edrDirs = @(; 'C:\\Program Files\\Confer',                                 # VMware Carbon Black Cloud/Defense (RepCLI path); 'C:\\Program Files\\SentinelOne',                            # SentinelOne Agent; 'C:\\Program Files\\Palo Alto Networks\\Traps',               # Cortex XDR / Traps; 'C:\\Windows\\System32\\drivers\\CrowdStrike',                 # CrowdStrike driver directory; 'C:\\Program Files\\CrowdStrike'                             # some CS installers; ); foreach ($d in $edrDirs) {; if (Test-Path -LiteralPath $d) { return }; }; Write-Output 'epp_disabled'; }; }; Get-AVStatus"
       },
       "metrictype": "bool",
       "name": "no EPP",
@@ -237,7 +237,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "minversion": 10,
         "system": "Windows",
-        "target": "$__EDAMAME_LINES = @('# ------------ Settings ------------', '# App name patterns (installed programs and Store apps)', '$pmNameRegex = ''(1Password|Bitwarden|LastPass|Dashlane|Keeper|Enpass|KeePass|KeePassXC|NordPass|RoboForm|Zoho Vault|Proton Pass|Sticky Password|Kaspersky Password Manager)''', '', '# Known Chromium extension IDs (Chrome/Edge/Brave/Vivaldi/Opera based)', '#   Chrome Web Store IDs:', '$chromeIds = @(', '  ''aeblfdkhhhdcdjpifhhbdiojplfjncoa'', # 1Password – Password Manager', '  ''khgocmkkpikpnmmkgmdnfckapcdkgfaf'', # 1Password Beta', '  ''nngceckbapebfimnlniiiahkandclblb'', # Bitwarden (Chrome)', '  ''hdokiejnpimakedhajhdlcegeplioahd'', # LastPass (Chrome)', '  ''fdjamakpfbbddfjaooikfcpapjohcfmg'', # Dashlane (Chrome)', '  ''bfogiafebfohielmmehodmfbbebbbpei'', # Keeper (Chrome)', '  ''igkpcodhieompeloncfnbekccinhapdb'', # Zoho Vault (Chrome)', '  ''eiaeiblijfjekdanodkjadfinkhbfgcd'', # NordPass (Chrome)', '  ''pnlccmojcmeohlpggmfnbbiapkmbliob'', # RoboForm (Chrome)', '  ''oboonakemofpalcgghocfoadofidjkkk'', # KeePassXC-Browser (Chrome)', '  ''kmcfomidfpdkfieipokbalgegidffkal'', # Enpass (Chrome)', '  ''ghmbeldphafepmbegfdlkpapadhbakde''  # Proton Pass (Chrome)', ')', '#   Microsoft Edge Add-ons IDs (where they differ from Chrome):', '$edgeIds = @(', '  ''dppgmdbiimibapkepcbdbmkaabgiofem'', # 1Password (Edge store)', '  ''jbkfoedolllekgbhcbcoahefnbanhhlh'', # Bitwarden (Edge store)', '  ''pdffhmdngciaglkoonimfcmckehcpafo''  # KeePassXC-Browser (Edge store)', ')', '', '# Browser profile base directories', '$chromiumBases = @(', '  \"$env:LOCALAPPDATA\\Google\\Chrome\\User Data\",', '  \"$env:LOCALAPPDATA\\Microsoft\\Edge\\User Data\",', '  \"$env:LOCALAPPDATA\\BraveSoftware\\Brave-Browser\\User Data\",', '  \"$env:LOCALAPPDATA\\Vivaldi\\User Data\",', '  \"$env:APPDATA\\Opera Software\\Opera Stable\"  # Opera keeps profiles under %AppData%', ')', '', '# Name pattern fallback for extension manifests (catches Edge-store IDs we didn’t hardcode)', '$namePatterns = @(''1Password'',''Bitwarden'',''LastPass'',''Dashlane'',''Keeper'',''Enpass'',''NordPass'',''RoboForm'',''Zoho Vault'',''KeePassXC'',''Proton Pass'')', '', '# ------------ Impl ------------', '$found = $false', '', '# 1) Native installs (machine + per-user), 32/64-bit', '$uninstallHives = @(', '  ''HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'',', '  ''HKLM:\\Software\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'',', '  ''HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*''', ')', 'foreach ($h in $uninstallHives) {', '  $items = Get-ItemProperty $h -ErrorAction SilentlyContinue |', '           Where-Object { $_.DisplayName -match $pmNameRegex }', '  if ($items) { $found = $true; break }', '}', '', '# 2) Microsoft Store apps (best-effort; may require user context)', 'if (-not $found) {', '  $keywords = @(''1password'',''bitwarden'',''lastpass'',''dashlane'',''keeper'',''enpass'',''nordpass'',''roboform'',''zoho'',''proton pass'',''keepass'',''keepassxc'')', '  foreach ($k in $keywords) {', '    if (Get-AppxPackage -AllUsers \"*$k*\" -ErrorAction SilentlyContinue) { $found = $true; break }', '  }', '}', '', '# Helper: scan Chromium profiles for known IDs, else scan manifest.json names', 'function Test-ChromiumPM {', '  param([string[]]$Bases, [string[]]$Ids, [string[]]$Names)', '  foreach ($base in $Bases) {', '    if (-not (Test-Path $base)) { continue }', '    foreach ($profile in Get-ChildItem -Path $base -Directory -ErrorAction SilentlyContinue) {', '      $extRoot = Join-Path $profile.FullName ''Extensions''', '      if (-not (Test-Path $extRoot)) { continue }', '', '      # a) direct ID match', '      foreach ($id in $Ids) {', '        if (Test-Path (Join-Path $extRoot $id)) { return $true }', '      }', '', '      # b) manifest \"name\" fallback (covers Edge add-ons with different IDs)', '      $manifests = Get-ChildItem -Path $extRoot -Recurse -Filter manifest.json -ErrorAction SilentlyContinue -Depth 2', '      foreach ($m in $manifests) {', '        try {', '          $json = Get-Content -Raw -Path $m.FullName | ConvertFrom-Json', '          foreach ($n in $Names) { if ($json.name -match $n) { return $true } }', '        } catch { }', '      }', '    }', '  }', '  return $false', '}', '', '# 3) Chromium-family extensions (Chrome, Edge, Brave, Vivaldi, Opera)', 'if (-not $found) {', '  $allIds = $chromeIds + $edgeIds', '  if (Test-ChromiumPM -Bases $chromiumBases -Ids $allIds -Names $namePatterns) { $found = $true }', '}', '', '# 4) Firefox extensions (parse extensions.json in each profile)', 'if (-not $found) {', '  $ffRoot = Join-Path $env:APPDATA ''Mozilla\\Firefox\\Profiles''', '  if (Test-Path $ffRoot) {', '    foreach ($p in Get-ChildItem -Path $ffRoot -Directory -ErrorAction SilentlyContinue) {', '      $ej = Join-Path $p.FullName ''extensions.json''', '      if (Test-Path $ej) {', '        try {', '          $data = Get-Content -Raw $ej | ConvertFrom-Json', '          $addons = @()', '          if ($data.addons) { $addons = $data.addons }', '          if ($addons | Where-Object {', '                ($_.defaultLocale.name -match $pmNameRegex) -or', '                ($_.name -match $pmNameRegex) }) { $found = $true; break }', '        } catch { }', '      }', '    }', '  }', '}', '', 'if (-not $found) { Write-Output ''No password manager installed'' }'); $__EDAMAME_SCRIPT = $__EDAMAME_LINES -join \"`n\"; Invoke-Expression $__EDAMAME_SCRIPT"
+        "target": "$pmNameRegex = '(1Password|Bitwarden|LastPass|Dashlane|Keeper|Enpass|KeePass|KeePassXC|NordPass|RoboForm|Zoho Vault|Proton Pass|Sticky Password|Kaspersky Password Manager)'; $chromeIds = @(; 'aeblfdkhhhdcdjpifhhbdiojplfjncoa', # 1Password – Password Manager; 'khgocmkkpikpnmmkgmdnfckapcdkgfaf', # 1Password Beta; 'nngceckbapebfimnlniiiahkandclblb', # Bitwarden (Chrome); 'hdokiejnpimakedhajhdlcegeplioahd', # LastPass (Chrome); 'fdjamakpfbbddfjaooikfcpapjohcfmg', # Dashlane (Chrome); 'bfogiafebfohielmmehodmfbbebbbpei', # Keeper (Chrome); 'igkpcodhieompeloncfnbekccinhapdb', # Zoho Vault (Chrome); 'eiaeiblijfjekdanodkjadfinkhbfgcd', # NordPass (Chrome); 'pnlccmojcmeohlpggmfnbbiapkmbliob', # RoboForm (Chrome); 'oboonakemofpalcgghocfoadofidjkkk', # KeePassXC-Browser (Chrome); 'kmcfomidfpdkfieipokbalgegidffkal', # Enpass (Chrome); 'ghmbeldphafepmbegfdlkpapadhbakde'  # Proton Pass (Chrome); ); $edgeIds = @(; 'dppgmdbiimibapkepcbdbmkaabgiofem', # 1Password (Edge store); 'jbkfoedolllekgbhcbcoahefnbanhhlh', # Bitwarden (Edge store); 'pdffhmdngciaglkoonimfcmckehcpafo'  # KeePassXC-Browser (Edge store); ); $chromiumBases = @(; \"$env:LOCALAPPDATA\\Google\\Chrome\\User Data\",; \"$env:LOCALAPPDATA\\Microsoft\\Edge\\User Data\",; \"$env:LOCALAPPDATA\\BraveSoftware\\Brave-Browser\\User Data\",; \"$env:LOCALAPPDATA\\Vivaldi\\User Data\",; \"$env:APPDATA\\Opera Software\\Opera Stable\"  # Opera keeps profiles under %AppData%; ); $namePatterns = @('1Password','Bitwarden','LastPass','Dashlane','Keeper','Enpass','NordPass','RoboForm','Zoho Vault','KeePassXC','Proton Pass'); $found = $false; $uninstallHives = @(; 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',; 'HKLM:\\Software\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',; 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'; ); foreach ($h in $uninstallHives) {; $items = Get-ItemProperty $h -ErrorAction SilentlyContinue |; Where-Object { $_.DisplayName -match $pmNameRegex }; if ($items) { $found = $true; break }; }; if (-not $found) {; $keywords = @('1password','bitwarden','lastpass','dashlane','keeper','enpass','nordpass','roboform','zoho','proton pass','keepass','keepassxc'); foreach ($k in $keywords) {; if (Get-AppxPackage -AllUsers \"*$k*\" -ErrorAction SilentlyContinue) { $found = $true; break }; }; }; function Test-ChromiumPM {; param([string[]]$Bases, [string[]]$Ids, [string[]]$Names); foreach ($base in $Bases) {; if (-not (Test-Path $base)) { continue }; foreach ($profile in Get-ChildItem -Path $base -Directory -ErrorAction SilentlyContinue) {; $extRoot = Join-Path $profile.FullName 'Extensions'; if (-not (Test-Path $extRoot)) { continue }; foreach ($id in $Ids) {; if (Test-Path (Join-Path $extRoot $id)) { return $true }; }; $manifests = Get-ChildItem -Path $extRoot -Recurse -Filter manifest.json -ErrorAction SilentlyContinue -Depth 2; foreach ($m in $manifests) {; try {; $json = Get-Content -Raw -Path $m.FullName | ConvertFrom-Json; foreach ($n in $Names) { if ($json.name -match $n) { return $true } }; } catch { }; }; }; }; return $false; }; if (-not $found) {; $allIds = $chromeIds + $edgeIds; if (Test-ChromiumPM -Bases $chromiumBases -Ids $allIds -Names $namePatterns) { $found = $true }; }; if (-not $found) {; $ffRoot = Join-Path $env:APPDATA 'Mozilla\\Firefox\\Profiles'; if (Test-Path $ffRoot) {; foreach ($p in Get-ChildItem -Path $ffRoot -Directory -ErrorAction SilentlyContinue) {; $ej = Join-Path $p.FullName 'extensions.json'; if (Test-Path $ej) {; try {; $data = Get-Content -Raw $ej | ConvertFrom-Json; $addons = @(); if ($data.addons) { $addons = $data.addons }; if ($addons | Where-Object {; ($_.defaultLocale.name -match $pmNameRegex) -or; ($_.name -match $pmNameRegex) }) { $found = $true; break }; } catch { }; }; }; }; }; if (-not $found) { Write-Output 'No password manager installed' }"
       },
       "metrictype": "bool",
       "name": "no password manager",
@@ -301,7 +301,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "minversion": 10,
         "system": "Windows",
-        "target": "$__EDAMAME_LINES = @('if ((Get-WmiObject -Class Win32_ComputerSystem).Model -notmatch ''Virtual'') { if ((Get-BitLockerVolume).ProtectionStatus -eq ''Off'') { Write-Output ''File system not encrypted'' } }'); $__EDAMAME_SCRIPT = $__EDAMAME_LINES -join \"`n\"; Invoke-Expression $__EDAMAME_SCRIPT"
+        "target": "if ((Get-WmiObject -Class Win32_ComputerSystem).Model -notmatch 'Virtual') { if ((Get-BitLockerVolume).ProtectionStatus -eq 'Off') { Write-Output 'File system not encrypted' } }"
       },
       "metrictype": "bool",
       "name": "encrypted disk disabled",
@@ -374,7 +374,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "minversion": 10,
         "system": "Windows",
-        "target": "$__EDAMAME_LINES = @('if((Get-ItemProperty -Path ''HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System'' -ErrorAction SilentlyContinue).EnableLUA -eq 0) { ''UAC disabled'' } else { '''' }'); $__EDAMAME_SCRIPT = $__EDAMAME_LINES -join \"`n\"; Invoke-Expression $__EDAMAME_SCRIPT"
+        "target": "if((Get-ItemProperty -Path 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System' -ErrorAction SilentlyContinue).EnableLUA -eq 0) { 'UAC disabled' } else { '' }"
       },
       "metrictype": "bool",
       "name": "UAC disabled",
@@ -396,7 +396,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "minversion": 10,
         "system": "Windows",
-        "target": "$__EDAMAME_LINES = @('Set-ItemProperty -Path ''HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System'' -Name EnableLUA -Value 1 -Type DWord'); $__EDAMAME_SCRIPT = $__EDAMAME_LINES -join \"`n\"; Invoke-Expression $__EDAMAME_SCRIPT"
+        "target": "Set-ItemProperty -Path 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System' -Name EnableLUA -Value 1 -Type DWord"
       },
       "rollback": {
         "class": "cli",
@@ -416,7 +416,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "minversion": 10,
         "system": "Windows",
-        "target": "$__EDAMAME_LINES = @('Set-ItemProperty -Path ''HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System'' -Name EnableLUA -Value 0 -Type DWord'); $__EDAMAME_SCRIPT = $__EDAMAME_LINES -join \"`n\"; Invoke-Expression $__EDAMAME_SCRIPT"
+        "target": "Set-ItemProperty -Path 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System' -Name EnableLUA -Value 0 -Type DWord"
       },
       "scope": "generic",
       "severity": 5,
@@ -445,7 +445,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "minversion": 10,
         "system": "Windows",
-        "target": "$__EDAMAME_LINES = @('if((Get-ItemProperty -Path ''HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon'' -ErrorAction SilentlyContinue).AutoAdminLogon -eq ''1'') { ''Automatic logon enabled'' } else { '''' }'); $__EDAMAME_SCRIPT = $__EDAMAME_LINES -join \"`n\"; Invoke-Expression $__EDAMAME_SCRIPT"
+        "target": "if((Get-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon' -ErrorAction SilentlyContinue).AutoAdminLogon -eq '1') { 'Automatic logon enabled' } else { '' }"
       },
       "metrictype": "bool",
       "name": "automatic login enabled",
@@ -467,7 +467,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "minversion": 10,
         "system": "Windows",
-        "target": "$__EDAMAME_LINES = @('Set-ItemProperty -Path ''HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon'' -Name AutoAdminLogon -Value 0'); $__EDAMAME_SCRIPT = $__EDAMAME_LINES -join \"`n\"; Invoke-Expression $__EDAMAME_SCRIPT"
+        "target": "Set-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon' -Name AutoAdminLogon -Value 0"
       },
       "rollback": {
         "class": "cli",
@@ -487,7 +487,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "minversion": 10,
         "system": "Windows",
-        "target": "$__EDAMAME_LINES = @('Set-ItemProperty -Path ''HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon'' -Name AutoAdminLogon -Value 1'); $__EDAMAME_SCRIPT = $__EDAMAME_LINES -join \"`n\"; Invoke-Expression $__EDAMAME_SCRIPT"
+        "target": "Set-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon' -Name AutoAdminLogon -Value 1"
       },
       "scope": "generic",
       "severity": 4,
@@ -729,7 +729,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "minversion": 10,
         "system": "Windows",
-        "target": "$__EDAMAME_LINES = @('if((Get-ItemProperty -Path ''HKLM:\\SOFTWARE\\Microsoft\\Windows Script Host\\Settings'' -Name Enabled -ErrorAction SilentlyContinue).Enabled -eq 1) { ''Windows Script Host enabled'' } else { '''' }'); $__EDAMAME_SCRIPT = $__EDAMAME_LINES -join \"`n\"; Invoke-Expression $__EDAMAME_SCRIPT"
+        "target": "if((Get-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows Script Host\\Settings' -Name Enabled -ErrorAction SilentlyContinue).Enabled -eq 1) { 'Windows Script Host enabled' } else { '' }"
       },
       "metrictype": "bool",
       "name": "Windows Script Host enabled",
@@ -751,7 +751,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "minversion": 10,
         "system": "Windows",
-        "target": "$__EDAMAME_LINES = @('reg add HKLM\\SOFTWARE\\Microsoft\\''Windows Script Host''\\Settings /v Enabled /t REG_DWORD /d 0 /f'); $__EDAMAME_SCRIPT = $__EDAMAME_LINES -join \"`n\"; Invoke-Expression $__EDAMAME_SCRIPT"
+        "target": "reg add HKLM\\SOFTWARE\\Microsoft\\'Windows Script Host'\\Settings /v Enabled /t REG_DWORD /d 0 /f"
       },
       "rollback": {
         "class": "cli",
@@ -771,7 +771,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "minversion": 10,
         "system": "Windows",
-        "target": "$__EDAMAME_LINES = @('reg add HKLM\\SOFTWARE\\Microsoft\\''Windows Script Host''\\Settings /v Enabled /t REG_DWORD /d 1 /f'); $__EDAMAME_SCRIPT = $__EDAMAME_LINES -join \"`n\"; Invoke-Expression $__EDAMAME_SCRIPT"
+        "target": "reg add HKLM\\SOFTWARE\\Microsoft\\'Windows Script Host'\\Settings /v Enabled /t REG_DWORD /d 1 /f"
       },
       "scope": "generic",
       "severity": 4,
@@ -800,7 +800,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "minversion": 10,
         "system": "Windows",
-        "target": "$__EDAMAME_LINES = @('if((Get-ItemProperty -Path ''HKLM:\\System\\CurrentControlSet\\Control\\Terminal Server'' -Name fDenyTSConnections -ErrorAction SilentlyContinue).fDenyTSConnections -eq 0) { ''Terminal Services connections allowed'' } else { '''' }'); $__EDAMAME_SCRIPT = $__EDAMAME_LINES -join \"`n\"; Invoke-Expression $__EDAMAME_SCRIPT"
+        "target": "if((Get-ItemProperty -Path 'HKLM:\\System\\CurrentControlSet\\Control\\Terminal Server' -Name fDenyTSConnections -ErrorAction SilentlyContinue).fDenyTSConnections -eq 0) { 'Terminal Services connections allowed' } else { '' }"
       },
       "metrictype": "bool",
       "name": "remote desktop enabled",
@@ -822,7 +822,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "minversion": 10,
         "system": "Windows",
-        "target": "$__EDAMAME_LINES = @('Set-ItemProperty -Path ''HKLM:\\System\\CurrentControlSet\\Control\\Terminal Server'' -Name fDenyTSConnections -Value 1'); $__EDAMAME_SCRIPT = $__EDAMAME_LINES -join \"`n\"; Invoke-Expression $__EDAMAME_SCRIPT"
+        "target": "Set-ItemProperty -Path 'HKLM:\\System\\CurrentControlSet\\Control\\Terminal Server' -Name fDenyTSConnections -Value 1"
       },
       "rollback": {
         "class": "cli",
@@ -842,7 +842,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "minversion": 10,
         "system": "Windows",
-        "target": "$__EDAMAME_LINES = @('Set-ItemProperty -Path ''HKLM:\\System\\CurrentControlSet\\Control\\Terminal Server'' -Name fDenyTSConnections -Value 0'); $__EDAMAME_SCRIPT = $__EDAMAME_LINES -join \"`n\"; Invoke-Expression $__EDAMAME_SCRIPT"
+        "target": "Set-ItemProperty -Path 'HKLM:\\System\\CurrentControlSet\\Control\\Terminal Server' -Name fDenyTSConnections -Value 0"
       },
       "scope": "generic",
       "severity": 4,
@@ -871,7 +871,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "minversion": 10,
         "system": "Windows",
-        "target": "$__EDAMAME_LINES = @('$registryPath = ''HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate\\AU''', '$noAutoUpdate = (Get-ItemProperty -Path $registryPath -Name NoAutoUpdate -ErrorAction SilentlyContinue).NoAutoUpdate', '$useWUServer = (Get-ItemProperty -Path $registryPath -Name UseWUServer -ErrorAction SilentlyContinue).UseWUServer', 'Write-Output ($(if ($noAutoUpdate -eq 0 -or $useWUServer -eq 1) { '''' } else { $messages = @()', 'if ($noAutoUpdate -ne 0) {$messages += ''NoAutoUpdate is set.''}', 'if ($useWUServer -ne 1) {$messages += ''Updates are not managed through GPO.''}', '$messages -join '' '' }))'); $__EDAMAME_SCRIPT = $__EDAMAME_LINES -join \"`n\"; Invoke-Expression $__EDAMAME_SCRIPT"
+        "target": "$registryPath = 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate\\AU'; $noAutoUpdate = (Get-ItemProperty -Path $registryPath -Name NoAutoUpdate -ErrorAction SilentlyContinue).NoAutoUpdate; $useWUServer = (Get-ItemProperty -Path $registryPath -Name UseWUServer -ErrorAction SilentlyContinue).UseWUServer; Write-Output ($(if ($noAutoUpdate -eq 0 -or $useWUServer -eq 1) { '' } else { $messages = @(); if ($noAutoUpdate -ne 0) {$messages += 'NoAutoUpdate is set.'}; if ($useWUServer -ne 1) {$messages += 'Updates are not managed through GPO.'}; $messages -join ' ' }))"
       },
       "metrictype": "bool",
       "name": "manual system updates",
@@ -893,7 +893,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "minversion": 10,
         "system": "Windows",
-        "target": "$__EDAMAME_LINES = @('reg add HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate\\AU /v NoAutoUpdate /t REG_DWORD /d 0 /f'); $__EDAMAME_SCRIPT = $__EDAMAME_LINES -join \"`n\"; Invoke-Expression $__EDAMAME_SCRIPT"
+        "target": "reg add HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate\\AU /v NoAutoUpdate /t REG_DWORD /d 0 /f"
       },
       "rollback": {
         "class": "cli",
@@ -913,7 +913,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "minversion": 10,
         "system": "Windows",
-        "target": "$__EDAMAME_LINES = @('reg add HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate\\AU /v NoAutoUpdate /t REG_DWORD /d 1 /f'); $__EDAMAME_SCRIPT = $__EDAMAME_LINES -join \"`n\"; Invoke-Expression $__EDAMAME_SCRIPT"
+        "target": "reg add HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate\\AU /v NoAutoUpdate /t REG_DWORD /d 1 /f"
       },
       "scope": "generic",
       "severity": 5,
@@ -942,7 +942,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "minversion": 10,
         "system": "Windows",
-        "target": "$__EDAMAME_LINES = @('$guestAccount = Get-LocalUser | Where-Object {$_.SID -like ''*-501''}', 'if ($guestAccount.Enabled) {''Guest account is active''} else {''''}'); $__EDAMAME_SCRIPT = $__EDAMAME_LINES -join \"`n\"; Invoke-Expression $__EDAMAME_SCRIPT"
+        "target": "$guestAccount = Get-LocalUser | Where-Object {$_.SID -like '*-501'}; if ($guestAccount.Enabled) {'Guest account is active'} else {''}"
       },
       "metrictype": "bool",
       "name": "guest account enabled",
@@ -964,7 +964,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "minversion": 10,
         "system": "Windows",
-        "target": "$__EDAMAME_LINES = @('$guestAccount = Get-LocalUser | Where-Object {$_.SID -like ''*-501''}', 'if ($guestAccount.Enabled) {Disable-LocalUser -Name $guestAccount.Name}'); $__EDAMAME_SCRIPT = $__EDAMAME_LINES -join \"`n\"; Invoke-Expression $__EDAMAME_SCRIPT"
+        "target": "$guestAccount = Get-LocalUser | Where-Object {$_.SID -like '*-501'}; if ($guestAccount.Enabled) {Disable-LocalUser -Name $guestAccount.Name}"
       },
       "rollback": {
         "class": "cli",
@@ -984,7 +984,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "minversion": 10,
         "system": "Windows",
-        "target": "$__EDAMAME_LINES = @('$guestAccount = Get-LocalUser | Where-Object {$_.SID -like ''*-501''}', 'if (-not $guestAccount.Enabled) {Enable-LocalUser -Name $guestAccount.Name}'); $__EDAMAME_SCRIPT = $__EDAMAME_LINES -join \"`n\"; Invoke-Expression $__EDAMAME_SCRIPT"
+        "target": "$guestAccount = Get-LocalUser | Where-Object {$_.SID -like '*-501'}; if (-not $guestAccount.Enabled) {Enable-LocalUser -Name $guestAccount.Name}"
       },
       "scope": "generic",
       "severity": 4,
@@ -1013,7 +1013,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "minversion": 10,
         "system": "Windows",
-        "target": "$__EDAMAME_LINES = @('$adminAccount = Get-LocalUser | Where-Object {$_.SID -like ''*-500''}', 'if ($adminAccount.Enabled) {''Built-in Administrator account enabled''} else {''''}'); $__EDAMAME_SCRIPT = $__EDAMAME_LINES -join \"`n\"; Invoke-Expression $__EDAMAME_SCRIPT"
+        "target": "$adminAccount = Get-LocalUser | Where-Object {$_.SID -like '*-500'}; if ($adminAccount.Enabled) {'Built-in Administrator account enabled'} else {''}"
       },
       "metrictype": "bool",
       "name": "root user enabled",
@@ -1035,7 +1035,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "minversion": 10,
         "system": "Windows",
-        "target": "$__EDAMAME_LINES = @('$adminAccount = Get-LocalUser | Where-Object {$_.SID -like ''*-500''}', 'if ($adminAccount.Enabled) {Disable-LocalUser -Name $adminAccount.Name}'); $__EDAMAME_SCRIPT = $__EDAMAME_LINES -join \"`n\"; Invoke-Expression $__EDAMAME_SCRIPT"
+        "target": "$adminAccount = Get-LocalUser | Where-Object {$_.SID -like '*-500'}; if ($adminAccount.Enabled) {Disable-LocalUser -Name $adminAccount.Name}"
       },
       "rollback": {
         "class": "cli",
@@ -1055,7 +1055,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "minversion": 10,
         "system": "Windows",
-        "target": "$__EDAMAME_LINES = @('$adminAccount = Get-LocalUser | Where-Object {$_.SID -like ''*-500''}', 'if (-not $adminAccount.Enabled) {Enable-LocalUser -Name $adminAccount.Name}'); $__EDAMAME_SCRIPT = $__EDAMAME_LINES -join \"`n\"; Invoke-Expression $__EDAMAME_SCRIPT"
+        "target": "$adminAccount = Get-LocalUser | Where-Object {$_.SID -like '*-500'}; if (-not $adminAccount.Enabled) {Enable-LocalUser -Name $adminAccount.Name}"
       },
       "scope": "generic",
       "severity": 5,
@@ -1084,7 +1084,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "minversion": 10,
         "system": "Windows",
-        "target": "$__EDAMAME_LINES = @('if((Get-NetFirewallProfile -All | Where-Object { $_.Enabled -eq ''False'' })) { ''One or more firewall profiles are disabled'' } else { '''' }'); $__EDAMAME_SCRIPT = $__EDAMAME_LINES -join \"`n\"; Invoke-Expression $__EDAMAME_SCRIPT"
+        "target": "if((Get-NetFirewallProfile -All | Where-Object { $_.Enabled -eq 'False' })) { 'One or more firewall profiles are disabled' } else { '' }"
       },
       "metrictype": "bool",
       "name": "local firewall disabled",
@@ -1106,7 +1106,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "minversion": 10,
         "system": "Windows",
-        "target": "$__EDAMAME_LINES = @('Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled True'); $__EDAMAME_SCRIPT = $__EDAMAME_LINES -join \"`n\"; Invoke-Expression $__EDAMAME_SCRIPT"
+        "target": "Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled True"
       },
       "rollback": {
         "class": "cli",
@@ -1126,7 +1126,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "minversion": 10,
         "system": "Windows",
-        "target": "$__EDAMAME_LINES = @('Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled False'); $__EDAMAME_SCRIPT = $__EDAMAME_LINES -join \"`n\"; Invoke-Expression $__EDAMAME_SCRIPT"
+        "target": "Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled False"
       },
       "scope": "generic",
       "severity": 5,
@@ -1155,7 +1155,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "minversion": 10,
         "system": "Windows",
-        "target": "$__EDAMAME_LINES = @('if((Get-Service -Name RemoteRegistry).Status -eq ''Running'') { ''RemoteRegistry service is running'' } else { '''' }'); $__EDAMAME_SCRIPT = $__EDAMAME_LINES -join \"`n\"; Invoke-Expression $__EDAMAME_SCRIPT"
+        "target": "if((Get-Service -Name RemoteRegistry).Status -eq 'Running') { 'RemoteRegistry service is running' } else { '' }"
       },
       "metrictype": "bool",
       "name": "Remote Registry Service enabled",
@@ -1177,7 +1177,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "minversion": 10,
         "system": "Windows",
-        "target": "$__EDAMAME_LINES = @('(sc.exe config RemoteRegistry start= disabled) -and (sc.exe stop RemoteRegistry)'); $__EDAMAME_SCRIPT = $__EDAMAME_LINES -join \"`n\"; Invoke-Expression $__EDAMAME_SCRIPT"
+        "target": "(sc.exe config RemoteRegistry start= disabled) -and (sc.exe stop RemoteRegistry)"
       },
       "rollback": {
         "class": "cli",
@@ -1197,7 +1197,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "minversion": 10,
         "system": "Windows",
-        "target": "$__EDAMAME_LINES = @('(sc.exe config RemoteRegistry start= auto) -and (sc.exe start RemoteRegistry)'); $__EDAMAME_SCRIPT = $__EDAMAME_LINES -join \"`n\"; Invoke-Expression $__EDAMAME_SCRIPT"
+        "target": "(sc.exe config RemoteRegistry start= auto) -and (sc.exe start RemoteRegistry)"
       },
       "scope": "generic",
       "severity": 3,
@@ -1226,7 +1226,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "minversion": 0,
         "system": "Windows",
-        "target": "$__EDAMAME_LINES = @('if(((Get-ItemProperty -Path ''HKLM:\\SYSTEM\\CurrentControlSet\\Control\\LSA'' -ErrorAction SilentlyContinue).LMCompatibilityLevel -lt 5) -or ((Get-ItemProperty -Path ''HKLM:\\SYSTEM\\CurrentControlSet\\Control\\LSA\\MSV1_0'' -ErrorAction SilentlyContinue).NtlmMinClientSec -lt 537395200) -or ((Get-ItemProperty -Path ''HKLM:\\SYSTEM\\CurrentControlSet\\Control\\LSA\\MSV1_0'' -ErrorAction SilentlyContinue).NtlmMinServerSec -lt 537395200)) { ''Weak NTLM settings'' } else { '''' }'); $__EDAMAME_SCRIPT = $__EDAMAME_LINES -join \"`n\"; Invoke-Expression $__EDAMAME_SCRIPT"
+        "target": "if(((Get-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\LSA' -ErrorAction SilentlyContinue).LMCompatibilityLevel -lt 5) -or ((Get-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\LSA\\MSV1_0' -ErrorAction SilentlyContinue).NtlmMinClientSec -lt 537395200) -or ((Get-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\LSA\\MSV1_0' -ErrorAction SilentlyContinue).NtlmMinServerSec -lt 537395200)) { 'Weak NTLM settings' } else { '' }"
       },
       "metrictype": "bool",
       "name": "LM and NTLMv1 enabled",
@@ -1248,7 +1248,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "minversion": 0,
         "system": "Windows",
-        "target": "$__EDAMAME_LINES = @('Set-ItemProperty -Path ''HKLM:\\SYSTEM\\CurrentControlSet\\Control\\LSA'' -Name ''LMCompatibilityLevel'' -Value ''5'' -Type DWord', 'Set-ItemProperty -Path ''HKLM:\\SYSTEM\\CurrentControlSet\\Control\\LSA\\MSV1_0'' -Name ''NtlmMinClientSec'' -Value ''537395200'' -Type DWord', 'Set-ItemProperty -Path ''HKLM:\\SYSTEM\\CurrentControlSet\\Control\\LSA\\MSV1_0'' -Name ''NtlmMinServerSec'' -Value ''537395200'' -Type DWord'); $__EDAMAME_SCRIPT = $__EDAMAME_LINES -join \"`n\"; Invoke-Expression $__EDAMAME_SCRIPT"
+        "target": "Set-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\LSA' -Name 'LMCompatibilityLevel' -Value '5' -Type DWord; Set-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\LSA\\MSV1_0' -Name 'NtlmMinClientSec' -Value '537395200' -Type DWord; Set-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\LSA\\MSV1_0' -Name 'NtlmMinServerSec' -Value '537395200' -Type DWord"
       },
       "rollback": {
         "class": "cli",
@@ -1268,7 +1268,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "minversion": 0,
         "system": "Windows",
-        "target": "$__EDAMAME_LINES = @('Set-ItemProperty -Path ''HKLM:\\SYSTEM\\CurrentControlSet\\Control\\LSA'' -Name ''LmCompatibilityLevel'' -Value ''1'' -Type DWord', 'Set-ItemProperty -Path ''HKLM:\\SYSTEM\\CurrentControlSet\\Control\\LSA\\MSV1_0'' -Name ''NtlmMinClientSec'' -Value ''262144'' -Type DWord', 'Set-ItemProperty -Path ''HKLM:\\SYSTEM\\CurrentControlSet\\Control\\LSA\\MSV1_0'' -Name ''NtlmMinServerSec'' -Value ''537395200'' -Type DWord'); $__EDAMAME_SCRIPT = $__EDAMAME_LINES -join \"`n\"; Invoke-Expression $__EDAMAME_SCRIPT"
+        "target": "Set-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\LSA' -Name 'LmCompatibilityLevel' -Value '1' -Type DWord; Set-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\LSA\\MSV1_0' -Name 'NtlmMinClientSec' -Value '262144' -Type DWord; Set-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\LSA\\MSV1_0' -Name 'NtlmMinServerSec' -Value '537395200' -Type DWord"
       },
       "scope": "generic",
       "severity": 5,
@@ -1297,7 +1297,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "minversion": 10,
         "system": "Windows",
-        "target": "$__EDAMAME_LINES = @('if((Get-ItemProperty -Path ''HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Lsa'' -Name ''RunAsPPL'' -ErrorAction SilentlyContinue).RunAsPPL -eq 0) { ''RunAsPPL is a REG_DWORD with value 0'' } else { '''' }'); $__EDAMAME_SCRIPT = $__EDAMAME_LINES -join \"`n\"; Invoke-Expression $__EDAMAME_SCRIPT"
+        "target": "if((Get-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Lsa' -Name 'RunAsPPL' -ErrorAction SilentlyContinue).RunAsPPL -eq 0) { 'RunAsPPL is a REG_DWORD with value 0' } else { '' }"
       },
       "metrictype": "bool",
       "name": "Lsass process protection",
@@ -1319,7 +1319,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "minversion": 10,
         "system": "Windows",
-        "target": "$__EDAMAME_LINES = @('reg add HKLM\\SYSTEM\\CurrentControlSet\\Control\\Lsa /v RunAsPPL /t REG_DWORD /d 1 /f'); $__EDAMAME_SCRIPT = $__EDAMAME_LINES -join \"`n\"; Invoke-Expression $__EDAMAME_SCRIPT"
+        "target": "reg add HKLM\\SYSTEM\\CurrentControlSet\\Control\\Lsa /v RunAsPPL /t REG_DWORD /d 1 /f"
       },
       "rollback": {
         "class": "cli",
@@ -1339,7 +1339,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "minversion": 10,
         "system": "Windows",
-        "target": "$__EDAMAME_LINES = @('reg add HKLM\\SYSTEM\\CurrentControlSet\\Control\\Lsa /v RunAsPPL /t REG_DWORD /d 0 /f'); $__EDAMAME_SCRIPT = $__EDAMAME_LINES -join \"`n\"; Invoke-Expression $__EDAMAME_SCRIPT"
+        "target": "reg add HKLM\\SYSTEM\\CurrentControlSet\\Control\\Lsa /v RunAsPPL /t REG_DWORD /d 0 /f"
       },
       "scope": "generic",
       "severity": 4,
@@ -1368,7 +1368,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "minversion": 10,
         "system": "Windows",
-        "target": "$__EDAMAME_LINES = @('$currentUserPolicy= Get-ExecutionPolicy -Scope CurrentUser', 'if($currentUserPolicy -eq ''Unrestricted'') { ''Execution Policy is unrestricted'' } else { '''' }'); $__EDAMAME_SCRIPT = $__EDAMAME_LINES -join \"`n\"; Invoke-Expression $__EDAMAME_SCRIPT"
+        "target": "$currentUserPolicy= Get-ExecutionPolicy -Scope CurrentUser; if($currentUserPolicy -eq 'Unrestricted') { 'Execution Policy is unrestricted' } else { '' }"
       },
       "metrictype": "bool",
       "name": "PS execution policy unrestricted",
@@ -1390,7 +1390,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "minversion": 10,
         "system": "Windows",
-        "target": "$__EDAMAME_LINES = @('Set-ExecutionPolicy -ExecutionPolicy Default -Scope CurrentUser -Force'); $__EDAMAME_SCRIPT = $__EDAMAME_LINES -join \"`n\"; Invoke-Expression $__EDAMAME_SCRIPT"
+        "target": "Set-ExecutionPolicy -ExecutionPolicy Default -Scope CurrentUser -Force"
       },
       "rollback": {
         "class": "cli",
@@ -1410,7 +1410,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "minversion": 10,
         "system": "Windows",
-        "target": "$__EDAMAME_LINES = @('Set-ExecutionPolicy -ExecutionPolicy Unrestricted -Scope CurrentUser -Force'); $__EDAMAME_SCRIPT = $__EDAMAME_LINES -join \"`n\"; Invoke-Expression $__EDAMAME_SCRIPT"
+        "target": "Set-ExecutionPolicy -ExecutionPolicy Unrestricted -Scope CurrentUser -Force"
       },
       "scope": "generic",
       "severity": 4,
@@ -1439,7 +1439,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "minversion": 10,
         "system": "Windows",
-        "target": "$__EDAMAME_LINES = @('$path = ''HKLM:\\SOFTWARE\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Google Chrome''', 'if (Test-Path $path) { $local_version = (Get-ItemProperty -Path $path).DisplayVersion', '$web_content = Invoke-WebRequest -UseBasicParsing ''https://chromiumdash.appspot.com/fetch_releases?channel=Stable&platform=Windows&num=1''', '$latest_version = ($web_content.Content | ConvertFrom-Json)[0].version', 'if ([version]$latest_version -le [version]$local_version) { Write-Output '''' } else { Write-Output ''Chrome is not up to date (Installed: $local_version, Latest: $latest_version)''', '} } else { Write-Output '''' }'); $__EDAMAME_SCRIPT = $__EDAMAME_LINES -join \"`n\"; Invoke-Expression $__EDAMAME_SCRIPT"
+        "target": "$path = 'HKLM:\\SOFTWARE\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Google Chrome'; if (Test-Path $path) { $local_version = (Get-ItemProperty -Path $path).DisplayVersion; $web_content = Invoke-WebRequest -UseBasicParsing 'https://chromiumdash.appspot.com/fetch_releases?channel=Stable&platform=Windows&num=1'; $latest_version = ($web_content.Content | ConvertFrom-Json)[0].version; if ([version]$latest_version -le [version]$local_version) { Write-Output '' } else { Write-Output 'Chrome is not up to date (Installed: $local_version, Latest: $latest_version)'; } } else { Write-Output '' }"
       },
       "metrictype": "bool",
       "name": "Chrome not uptodate",
@@ -1508,7 +1508,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "minversion": 10,
         "system": "Windows",
-        "target": "$__EDAMAME_LINES = @('if((Get-SmbServerConfiguration).EnableSMB1Protocol -eq $true) { ''SMBv1 enabled'' } else { '''' }'); $__EDAMAME_SCRIPT = $__EDAMAME_LINES -join \"`n\"; Invoke-Expression $__EDAMAME_SCRIPT"
+        "target": "if((Get-SmbServerConfiguration).EnableSMB1Protocol -eq $true) { 'SMBv1 enabled' } else { '' }"
       },
       "metrictype": "bool",
       "name": "SMBv1 enabled",
@@ -1530,7 +1530,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "minversion": 10,
         "system": "Windows",
-        "target": "$__EDAMAME_LINES = @('Disable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -norestart'); $__EDAMAME_SCRIPT = $__EDAMAME_LINES -join \"`n\"; Invoke-Expression $__EDAMAME_SCRIPT"
+        "target": "Disable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -norestart"
       },
       "rollback": {
         "class": "cli",
@@ -1550,7 +1550,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "minversion": 10,
         "system": "Windows",
-        "target": "$__EDAMAME_LINES = @('Enable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -norestart'); $__EDAMAME_SCRIPT = $__EDAMAME_LINES -join \"`n\"; Invoke-Expression $__EDAMAME_SCRIPT"
+        "target": "Enable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -norestart"
       },
       "scope": "generic",
       "severity": 5,
@@ -1579,7 +1579,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "minversion": 10,
         "system": "Windows",
-        "target": "$__EDAMAME_LINES = @('$lastLoggedOnProvider = (Get-ItemProperty -Path ''HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Authentication\\LogonUI'' -Name ''LastLoggedOnProvider'' -ErrorAction SilentlyContinue).LastLoggedOnProvider', 'if ($null -eq $lastLoggedOnProvider) { ''Registry entry not present'' } elseif ($lastLoggedOnProvider -like ''*NgcPin*'') { $pinLength = (Get-ItemProperty -Path ''HKLM:\\SOFTWARE\\Policies\\Microsoft\\PassportForWork\\PINComplexity'' -Name ''MinimumPINLength'' -ErrorAction SilentlyContinue).MinimumPINLength', 'if ($pinLength -lt 6) { ''Windows Hello PIN does not meet the minimum length requirement.'' } else { '''' } } else { '''' }'); $__EDAMAME_SCRIPT = $__EDAMAME_LINES -join \"`n\"; Invoke-Expression $__EDAMAME_SCRIPT"
+        "target": "$lastLoggedOnProvider = (Get-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Authentication\\LogonUI' -Name 'LastLoggedOnProvider' -ErrorAction SilentlyContinue).LastLoggedOnProvider; if ($null -eq $lastLoggedOnProvider) { 'Registry entry not present' } elseif ($lastLoggedOnProvider -like '*NgcPin*') { $pinLength = (Get-ItemProperty -Path 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\PassportForWork\\PINComplexity' -Name 'MinimumPINLength' -ErrorAction SilentlyContinue).MinimumPINLength; if ($pinLength -lt 6) { 'Windows Hello PIN does not meet the minimum length requirement.' } else { '' } } else { '' }"
       },
       "metrictype": "bool",
       "name": "no sign-in options protection",
@@ -1648,7 +1648,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "minversion": 10,
         "system": "Windows",
-        "target": "$__EDAMAME_LINES = @('if (Test-Path ''HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Authentication\\Ngc\\Status'') { '''' } else { ''Windows Hello is not available.'' }'); $__EDAMAME_SCRIPT = $__EDAMAME_LINES -join \"`n\"; Invoke-Expression $__EDAMAME_SCRIPT"
+        "target": "if (Test-Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Authentication\\Ngc\\Status') { '' } else { 'Windows Hello is not available.' }"
       },
       "metrictype": "bool",
       "name": "Windows Hello availability",
@@ -1717,7 +1717,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "minversion": 10,
         "system": "Windows",
-        "target": "$__EDAMAME_LINES = @('$screensaverTimeout = (Get-ItemProperty -Path ''HKCU:\\Control Panel\\Desktop'' -Name ''ScreenSaveTimeOut'' -ErrorAction SilentlyContinue).ScreenSaveTimeOut', '$screensaverActive = (Get-ItemProperty -Path ''HKCU:\\Control Panel\\Desktop'' -Name ''ScreenSaveActive'' -ErrorAction SilentlyContinue).ScreenSaveActive', '$secureScreensaver = (Get-ItemProperty -Path ''HKCU:\\Control Panel\\Desktop'' -Name ''ScreenSaverIsSecure'' -ErrorAction SilentlyContinue).ScreenSaverIsSecure', 'if ($screensaverActive -eq ''1'' -and $secureScreensaver -eq ''1'' -and $screensaverTimeout -le 600) { '''' } else { ''Screensaver lock is not properly configured.'' }'); $__EDAMAME_SCRIPT = $__EDAMAME_LINES -join \"`n\"; Invoke-Expression $__EDAMAME_SCRIPT"
+        "target": "$screensaverTimeout = (Get-ItemProperty -Path 'HKCU:\\Control Panel\\Desktop' -Name 'ScreenSaveTimeOut' -ErrorAction SilentlyContinue).ScreenSaveTimeOut; $screensaverActive = (Get-ItemProperty -Path 'HKCU:\\Control Panel\\Desktop' -Name 'ScreenSaveActive' -ErrorAction SilentlyContinue).ScreenSaveActive; $secureScreensaver = (Get-ItemProperty -Path 'HKCU:\\Control Panel\\Desktop' -Name 'ScreenSaverIsSecure' -ErrorAction SilentlyContinue).ScreenSaverIsSecure; if ($screensaverActive -eq '1' -and $secureScreensaver -eq '1' -and $screensaverTimeout -le 600) { '' } else { 'Screensaver lock is not properly configured.' }"
       },
       "metrictype": "bool",
       "name": "too slow or disabled screensaver lock",
@@ -1739,7 +1739,7 @@ pub static THREAT_METRICS_WINDOWS: &str = r#"{
         "maxversion": 0,
         "minversion": 10,
         "system": "Windows",
-        "target": "$__EDAMAME_LINES = @('Set-ItemProperty -Path ''HKCU:\\Control Panel\\Desktop'' -Name ''ScreenSaveTimeOut'' -Value 600', 'Set-ItemProperty -Path ''HKCU:\\Control Panel\\Desktop'' -Name ''ScreenSaveActive'' -Value 1', 'Set-ItemProperty -Path ''HKCU:\\Control Panel\\Desktop'' -Name ''ScreenSaverIsSecure'' -Value 1'); $__EDAMAME_SCRIPT = $__EDAMAME_LINES -join \"`n\"; Invoke-Expression $__EDAMAME_SCRIPT"
+        "target": "Set-ItemProperty -Path 'HKCU:\\Control Panel\\Desktop' -Name 'ScreenSaveTimeOut' -Value 600; Set-ItemProperty -Path 'HKCU:\\Control Panel\\Desktop' -Name 'ScreenSaveActive' -Value 1; Set-ItemProperty -Path 'HKCU:\\Control Panel\\Desktop' -Name 'ScreenSaverIsSecure' -Value 1"
       },
       "rollback": {
         "class": "link",
