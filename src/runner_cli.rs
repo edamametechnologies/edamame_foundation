@@ -17,7 +17,7 @@ use windows::{
     core::PCWSTR,
     Win32::{
         Foundation::ERROR_SUCCESS,
-        Security::{LookupAccountNameW, PSID, SID_NAME_USE, SECURITY_MAX_SID_SIZE},
+        Security::{LookupAccountNameW, PSID, SECURITY_MAX_SID_SIZE, SID_NAME_USE},
         System::Registry::{
             RegCloseKey, RegGetValueW, RegOpenKeyExW, HKEY, HKEY_LOCAL_MACHINE, KEY_READ,
             RRF_RT_REG_EXPAND_SZ, RRF_RT_REG_SZ,
@@ -249,8 +249,13 @@ fn profile_path_from_sid(sid: &str) -> Option<PathBuf> {
 
     unsafe {
         let mut hkey: HKEY = HKEY::default();
-        let status =
-            RegOpenKeyExW(HKEY_LOCAL_MACHINE, PCWSTR(subkey_w.as_ptr()), 0, KEY_READ, &mut hkey);
+        let status = RegOpenKeyExW(
+            HKEY_LOCAL_MACHINE,
+            PCWSTR(subkey_w.as_ptr()),
+            0,
+            KEY_READ,
+            &mut hkey,
+        );
         if status != ERROR_SUCCESS {
             warn!("RegOpenKeyExW({subkey}) failed with status {:?}", status);
             return None;
@@ -304,7 +309,10 @@ fn profile_path_from_sid(sid: &str) -> Option<PathBuf> {
 
 #[cfg(target_os = "windows")]
 fn widestring(value: &str) -> Vec<u16> {
-    OsStr::new(value).encode_wide().chain(std::iter::once(0)).collect()
+    OsStr::new(value)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect()
 }
 
 fn execute_windows_ps(
@@ -673,16 +681,10 @@ mod tests {
 
         let ctx = build_default_windows_context("alice");
         assert!(ctx.home_dir.to_string_lossy().starts_with("Z:"));
-        let app_data = ctx
-            .app_data
-            .to_string_lossy()
-            .replace('\\', "/");
+        let app_data = ctx.app_data.to_string_lossy().replace('\\', "/");
         assert!(app_data.ends_with("AppData/Roaming"));
 
-        let local_app_data = ctx
-            .local_app_data
-            .to_string_lossy()
-            .replace('\\', "/");
+        let local_app_data = ctx.local_app_data.to_string_lossy().replace('\\', "/");
         assert!(local_app_data.ends_with("AppData/Local"));
 
         if let Some(value) = original {
