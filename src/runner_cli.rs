@@ -14,7 +14,7 @@ use std::ffi::{c_void, OsStr, OsString};
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 #[cfg(target_os = "windows")]
 use windows::{
-    core::PCWSTR,
+    core::{PCWSTR, PWSTR},
     Win32::{
         Foundation::ERROR_SUCCESS,
         Security::{LookupAccountNameW, PSID, SECURITY_MAX_SID_SIZE, SID_NAME_USE},
@@ -185,16 +185,19 @@ fn resolve_windows_context(username: &str) -> Result<WindowsUserContext> {
 fn lookup_user_sid_string(username: &str) -> Option<String> {
     let mut sid_buffer = [0u8; SECURITY_MAX_SID_SIZE as usize];
     let mut sid_size = SECURITY_MAX_SID_SIZE;
-    let mut domain_size: u32 = 0;
+    let mut domain_buffer = [0u16; 256];
+    let mut domain_size: u32 = 256;
     let mut sid_use = SID_NAME_USE(0);
+
+    let username_w = widestring(username);
 
     unsafe {
         if let Err(e) = LookupAccountNameW(
-            None::<PCWSTR>,
-            username,
+            PCWSTR::null(),
+            PCWSTR(username_w.as_ptr()),
             Some(PSID(sid_buffer.as_mut_ptr() as *mut c_void)),
             &mut sid_size,
-            None,
+            Some(PWSTR(domain_buffer.as_mut_ptr())),
             &mut domain_size,
             &mut sid_use,
         ) {
@@ -252,7 +255,7 @@ fn profile_path_from_sid(sid: &str) -> Option<PathBuf> {
         let status = RegOpenKeyExW(
             HKEY_LOCAL_MACHINE,
             PCWSTR(subkey_w.as_ptr()),
-            0,
+            Some(0),
             KEY_READ,
             &mut hkey,
         );
@@ -264,7 +267,7 @@ fn profile_path_from_sid(sid: &str) -> Option<PathBuf> {
         let mut len_bytes: u32 = 0;
         let status = RegGetValueW(
             hkey,
-            None::<PCWSTR>,
+            PCWSTR::null(),
             PCWSTR(value_name.as_ptr()),
             RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ,
             None,
@@ -283,7 +286,7 @@ fn profile_path_from_sid(sid: &str) -> Option<PathBuf> {
         let mut buf: Vec<u16> = vec![0; (len_bytes as usize + 1) / 2];
         let status = RegGetValueW(
             hkey,
-            None::<PCWSTR>,
+            PCWSTR::null(),
             PCWSTR(value_name.as_ptr()),
             RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ,
             None,
@@ -707,24 +710,27 @@ mod tests {
 
         // Direct call to resolve_windows_context
         let context = resolve_windows_context(&username);
-        
+
         // If resolution fails (e.g. due to environment issues), we can't proceed with the test.
         // However, we should at least expect it to work for the current user.
         if let Err(e) = context {
-            println!("Skipping test_windows_resolution_matches_env due to resolution failure: {:?}", e);
+            println!(
+                "Skipping test_windows_resolution_matches_env due to resolution failure: {:?}",
+                e
+            );
             return;
         }
         let context = context.unwrap();
 
         let env_appdata = std::env::var("APPDATA").unwrap_or_default();
-        
+
         // If the system has a custom APPDATA (redirected), the env var will reflect it.
         // The resolution logic should also find it via Registry.
         // If resolution failed to check Registry, it would fallback to %USERPROFILE%\AppData\Roaming,
         // which would mismatch the redirected env_appdata.
         if !env_appdata.is_empty() {
             assert_eq!(
-                context.app_data.to_lowercase(), 
+                context.app_data.to_string_lossy().to_lowercase(),
                 env_appdata.to_lowercase(),
                 "Resolved AppData does not match environment AppData. This suggests we might be falling back to default paths incorrectly."
             );
