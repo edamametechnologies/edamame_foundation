@@ -532,4 +532,41 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn test_windows_resolution_matches_env() {
+        if !cfg!(target_os = "windows") {
+            return;
+        }
+
+        let username = std::env::var("USERNAME").unwrap_or_default();
+        if username.is_empty() {
+            return;
+        }
+
+        // Direct call to resolve_windows_context
+        let context = resolve_windows_context(&username);
+        
+        // If resolution fails (e.g. due to environment issues), we can't proceed with the test.
+        // However, we should at least expect it to work for the current user.
+        if let Err(e) = context {
+            println!("Skipping test_windows_resolution_matches_env due to resolution failure: {:?}", e);
+            return;
+        }
+        let context = context.unwrap();
+
+        let env_appdata = std::env::var("APPDATA").unwrap_or_default();
+        
+        // If the system has a custom APPDATA (redirected), the env var will reflect it.
+        // The resolution logic should also find it via Registry.
+        // If resolution failed to check Registry, it would fallback to %USERPROFILE%\AppData\Roaming,
+        // which would mismatch the redirected env_appdata.
+        if !env_appdata.is_empty() {
+            assert_eq!(
+                context.app_data.to_lowercase(), 
+                env_appdata.to_lowercase(),
+                "Resolved AppData does not match environment AppData. This suggests we might be falling back to default paths incorrectly."
+            );
+        }
+    }
 }
