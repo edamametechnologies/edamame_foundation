@@ -1,9 +1,29 @@
 use anyhow::{anyhow, Error, Result};
 use powershell_script::PsScriptBuilder;
 use run_script::ScriptOptions;
-use serde::Deserialize;
+use std::{env, path::PathBuf};
 use tokio::time::{timeout, Duration};
 use tracing::{debug, error, info};
+
+#[cfg(target_os = "windows")]
+use tracing::warn;
+
+#[cfg(target_os = "windows")]
+use std::ffi::{c_void, OsStr, OsString};
+#[cfg(target_os = "windows")]
+use std::os::windows::ffi::{OsStrExt, OsStringExt};
+#[cfg(target_os = "windows")]
+use windows::{
+    core::PCWSTR,
+    Win32::{
+        Foundation::ERROR_SUCCESS,
+        Security::{LookupAccountNameW, PSID, SECURITY_MAX_SID_SIZE, SID_NAME_USE},
+        System::Registry::{
+            RegCloseKey, RegGetValueW, RegOpenKeyExW, HKEY, HKEY_LOCAL_MACHINE, KEY_READ,
+            RRF_RT_REG_EXPAND_SZ, RRF_RT_REG_SZ,
+        },
+    },
+};
 
 // The personate parameter forces the execution into the context of username
 // We could use an empty username to indicate there is no need to personate but we keep it as is for now in case we find other use cases for the username
@@ -91,8 +111,8 @@ pub async fn run_cli(
 }
 
 // This is our convention for detecting a failed execution
-fn execution_failed(code: i32, _stderr: &str) -> bool {
-    code != 0
+fn execution_failed(code: i32, stderr: &str) -> bool {
+    code != 0 && !stderr.is_empty()
 }
 
 fn check_platform_support() -> Result<()> {
@@ -108,96 +128,191 @@ fn check_platform_support() -> Result<()> {
     Ok(())
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug)]
 struct WindowsUserContext {
-    home_dir: String,
-    app_data: String,
-    local_app_data: String,
+    home_dir: PathBuf,
+    app_data: PathBuf,
+    local_app_data: PathBuf,
 }
 
+#[cfg(target_os = "windows")]
 fn resolve_windows_context(username: &str) -> Result<WindowsUserContext> {
     let user_segment = username
         .rsplit(|c| c == '\\' || c == '/')
         .next()
         .unwrap_or(username);
-    let escaped_username = escape_pwsh_single_quoted(username);
-    let escaped_segment = escape_pwsh_single_quoted(user_segment);
 
-    let script = format!(
-        concat!(
-            "$edamameUser = '{username}'\n",
-            "$edamameUserFolder = '{segment}'\n",
-            "$userProfilePath = Join-Path $env:SystemDrive ('Users\\' + $edamameUserFolder)\n",
-            "if (-not (Test-Path $userProfilePath)) {{\n",
-            "  try {{\n",
-            "    $profileObj = Get-CimInstance Win32_UserProfile -ErrorAction Stop |\n",
-            "      Where-Object {{ $_.LocalPath -like \"*\\\\{segment}\" }} |\n",
-            "      Select-Object -First 1\n",
-            "    if ($profileObj -and (Test-Path $profileObj.LocalPath)) {{\n",
-            "      $userProfilePath = $profileObj.LocalPath\n",
-            "    }}\n",
-            "  }} catch {{ }}\n",
-            "}}\n",
-            "if (-not (Test-Path $userProfilePath)) {{\n",
-            "  $userProfilePath = Join-Path $env:SystemDrive ('Users\\' + $edamameUserFolder)\n",
-            "}}\n",
-            // Defaults
-            "$appData = Join-Path $userProfilePath 'AppData\\Roaming'\n",
-            "$localAppData = Join-Path $userProfilePath 'AppData\\Local'\n",
-            // Try to get from Registry
-            "try {{\n",
-            "  $userSid = (New-Object System.Security.Principal.NTAccount($edamameUser)).Translate([System.Security.Principal.SecurityIdentifier]).Value\n",
-            "  $shellFoldersPath = \"Registry::HKEY_USERS\\$userSid\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders\"\n",
-            "  if (Test-Path $shellFoldersPath) {{\n",
-            "    $regAppData = (Get-ItemProperty -Path $shellFoldersPath -Name AppData -ErrorAction SilentlyContinue).AppData\n",
-            "    if ($regAppData) {{ $appData = $regAppData }}\n",
-            "    $regLocal = (Get-ItemProperty -Path $shellFoldersPath -Name 'Local AppData' -ErrorAction SilentlyContinue).'Local AppData'\n",
-            "    if ($regLocal) {{ $localAppData = $regLocal }}\n",
-            "  }}\n",
-            "}} catch {{ }}\n",
-            // Expand if needed (often contains %USERPROFILE%)
-            "$appData = [System.Environment]::ExpandEnvironmentVariables($appData)\n",
-            "$localAppData = [System.Environment]::ExpandEnvironmentVariables($localAppData)\n",
-            // Output JSON
-            "Write-Output (ConvertTo-Json @{{\n",
-            "  home_dir = $userProfilePath\n",
-            "  app_data = $appData\n",
-            "  local_app_data = $localAppData\n",
-            "}} -Compress)"
-        ),
-        username = escaped_username,
-        segment = escaped_segment
-    );
+    let fallback_context = || {
+        let ctx = build_default_windows_context(user_segment);
+        warn!(
+            "Falling back to default Windows context for user {} at {}",
+            username,
+            ctx.home_dir.display()
+        );
+        ctx
+    };
 
-    let ps = PsScriptBuilder::new()
-        .no_profile(true)
-        .non_interactive(true)
-        .print_commands(false)
-        .build();
+    let sid_str = match lookup_user_sid_string(username) {
+        Some(s) => s,
+        None => return Ok(fallback_context()),
+    };
 
-    match ps.run(&script) {
-        Ok(output) => {
-            if output.success() {
-                let stdout_str = output.stdout().as_deref().unwrap_or("").to_string();
-                let json_str = stdout_str.trim();
-                let context: WindowsUserContext = serde_json::from_str(json_str).map_err(|e| {
-                    anyhow!(
-                        "Failed to parse windows context JSON: {}. Output: {}. Stderr: {}",
-                        e,
-                        json_str,
-                        output.stderr().as_deref().unwrap_or("")
-                    )
-                })?;
-                Ok(context)
-            } else {
-                Err(anyhow!(
-                    "Failed to resolve windows context. Stderr: {:?}",
-                    output.stderr()
-                ))
-            }
+    let home_dir = match profile_path_from_sid(&sid_str) {
+        Some(path) => path,
+        None => return Ok(fallback_context()),
+    };
+
+    let app_data = home_dir.join("AppData").join("Roaming");
+    let local_app_data = home_dir.join("AppData").join("Local");
+
+    Ok(WindowsUserContext {
+        home_dir,
+        app_data,
+        local_app_data,
+    })
+}
+
+#[cfg(not(target_os = "windows"))]
+fn resolve_windows_context(username: &str) -> Result<WindowsUserContext> {
+    let user_segment = username
+        .rsplit(|c| c == '\\' || c == '/')
+        .next()
+        .unwrap_or(username);
+    Ok(build_default_windows_context(user_segment))
+}
+
+#[cfg(target_os = "windows")]
+fn lookup_user_sid_string(username: &str) -> Option<String> {
+    let mut sid_buffer = [0u8; SECURITY_MAX_SID_SIZE as usize];
+    let mut sid_size = SECURITY_MAX_SID_SIZE;
+    let mut domain_size: u32 = 0;
+    let mut sid_use = SID_NAME_USE(0);
+
+    unsafe {
+        if let Err(e) = LookupAccountNameW(
+            None::<PCWSTR>,
+            username,
+            Some(PSID(sid_buffer.as_mut_ptr() as *mut c_void)),
+            &mut sid_size,
+            None,
+            &mut domain_size,
+            &mut sid_use,
+        ) {
+            warn!("LookupAccountNameW({username}) failed: {e:?}");
+            return None;
         }
-        Err(e) => Err(anyhow!("Failed to execute resolution script: {}", e)),
     }
+
+    Some(sid_to_string(&sid_buffer[..sid_size as usize]))
+}
+
+#[cfg(target_os = "windows")]
+fn sid_to_string(sid: &[u8]) -> String {
+    if sid.len() < 8 {
+        return String::new();
+    }
+
+    let revision = sid[0];
+    let sub_authority_count = sid[1] as usize;
+
+    let mut identifier_authority: u64 = 0;
+    for b in &sid[2..8] {
+        identifier_authority = (identifier_authority << 8) | (*b as u64);
+    }
+
+    let mut result = format!("S-{}-{}", revision, identifier_authority);
+
+    let mut offset = 8usize;
+    for _ in 0..sub_authority_count {
+        if offset + 4 > sid.len() {
+            break;
+        }
+        let value = u32::from_le_bytes([
+            sid[offset],
+            sid[offset + 1],
+            sid[offset + 2],
+            sid[offset + 3],
+        ]);
+        result.push('-');
+        result.push_str(&value.to_string());
+        offset += 4;
+    }
+
+    result
+}
+
+#[cfg(target_os = "windows")]
+fn profile_path_from_sid(sid: &str) -> Option<PathBuf> {
+    let subkey = format!(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\{sid}");
+    let subkey_w = widestring(subkey.as_str());
+    let value_name = widestring("ProfileImagePath");
+
+    unsafe {
+        let mut hkey: HKEY = HKEY::default();
+        let status = RegOpenKeyExW(
+            HKEY_LOCAL_MACHINE,
+            PCWSTR(subkey_w.as_ptr()),
+            0,
+            KEY_READ,
+            &mut hkey,
+        );
+        if status != ERROR_SUCCESS {
+            warn!("RegOpenKeyExW({subkey}) failed with status {:?}", status);
+            return None;
+        }
+
+        let mut len_bytes: u32 = 0;
+        let status = RegGetValueW(
+            hkey,
+            None::<PCWSTR>,
+            PCWSTR(value_name.as_ptr()),
+            RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ,
+            None,
+            None,
+            Some(&mut len_bytes),
+        );
+        if status != ERROR_SUCCESS || len_bytes < 2 {
+            warn!(
+                "RegGetValueW(size, ProfileImagePath) failed with status {:?}, len_bytes={}",
+                status, len_bytes
+            );
+            let _ = RegCloseKey(hkey);
+            return None;
+        }
+
+        let mut buf: Vec<u16> = vec![0; (len_bytes as usize + 1) / 2];
+        let status = RegGetValueW(
+            hkey,
+            None::<PCWSTR>,
+            PCWSTR(value_name.as_ptr()),
+            RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ,
+            None,
+            Some(buf.as_mut_ptr() as *mut c_void),
+            Some(&mut len_bytes),
+        );
+        let _ = RegCloseKey(hkey);
+
+        if status != ERROR_SUCCESS {
+            warn!(
+                "RegGetValueW(value, ProfileImagePath) failed with status {:?}",
+                status
+            );
+            return None;
+        }
+
+        let chars = (len_bytes as usize / 2).saturating_sub(1);
+        buf.truncate(chars);
+        let os = OsString::from_wide(&buf);
+        Some(PathBuf::from(os))
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn widestring(value: &str) -> Vec<u16> {
+    OsStr::new(value)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect()
 }
 
 fn execute_windows_ps(
@@ -213,7 +328,10 @@ fn execute_windows_ps(
         let context = resolve_windows_context(username)?;
         info!(
             "Setting up execution for user: {} with home: {}, AppData: {}, LocalAppData: {}",
-            username, context.home_dir, context.app_data, context.local_app_data
+            username,
+            context.home_dir.display(),
+            context.app_data.display(),
+            context.local_app_data.display()
         );
 
         if let Some(env_block) = build_windows_env_block(username, &context) {
@@ -256,9 +374,12 @@ fn escape_pwsh_single_quoted(value: &str) -> String {
 
 fn build_windows_env_block(username: &str, context: &WindowsUserContext) -> Option<String> {
     let escaped_username = escape_pwsh_single_quoted(username);
-    let escaped_home = escape_pwsh_single_quoted(&context.home_dir);
-    let escaped_appdata = escape_pwsh_single_quoted(&context.app_data);
-    let escaped_localappdata = escape_pwsh_single_quoted(&context.local_app_data);
+    let home_dir = context.home_dir.to_string_lossy().into_owned();
+    let app_data = context.app_data.to_string_lossy().into_owned();
+    let local_app_data = context.local_app_data.to_string_lossy().into_owned();
+    let escaped_home = escape_pwsh_single_quoted(&home_dir);
+    let escaped_appdata = escape_pwsh_single_quoted(&app_data);
+    let escaped_localappdata = escape_pwsh_single_quoted(&local_app_data);
 
     Some(format!(
         concat!(
@@ -303,6 +424,19 @@ fn build_windows_env_block(username: &str, context: &WindowsUserContext) -> Opti
         app_data = escaped_appdata,
         local_app_data = escaped_localappdata
     ))
+}
+
+fn build_default_windows_context(user_segment: &str) -> WindowsUserContext {
+    let system_drive = env::var("SystemDrive").unwrap_or_else(|_| "C:".to_string());
+    let home_dir = PathBuf::from(format!(r"{}\Users\{}", system_drive, user_segment));
+    let app_data = home_dir.join("AppData").join("Roaming");
+    let local_app_data = home_dir.join("AppData").join("Local");
+
+    WindowsUserContext {
+        home_dir,
+        app_data,
+        local_app_data,
+    }
 }
 
 fn resolve_home_unix(username: &str) -> Result<String> {
@@ -403,7 +537,7 @@ mod tests {
     async fn test_run_cli_error() {
         // We need a command that returns non-zero exit code AND prints to stderr
         // to satisfy execution_failed(code != 0 && !stderr.is_empty())
-        
+
         let cmd = if cfg!(target_os = "windows") {
             // Write-Error writes to stderr stream in PS. exit 1 sets exit code.
             "Write-Error 'boom'; exit 1"
@@ -457,7 +591,7 @@ mod tests {
         };
 
         let result = run_cli(cmd, &user, true, None).await;
-        
+
         match result {
             Ok(output) => assert_eq!(output.trim(), expected),
             Err(e) => {
@@ -495,27 +629,30 @@ mod tests {
         };
 
         let result = run_cli(cmd, &user, true, None).await;
-        
+
         match result {
             Ok(output) => {
                 let output = output.trim();
                 // We expect the output to match our current home dir if we impersonate ourselves
-                // NOTE: This test assumes that the resolution logic yields the same path 
+                // NOTE: This test assumes that the resolution logic yields the same path
                 // as std::env::var. This is usually true but might differ slightly (e.g. symlinks)
                 // We'll just check if it's non-empty and 'looks like' a home dir
                 assert!(!output.is_empty());
-                
+
                 // Loose check: output should likely contain the username or be equal to expected_home
                 if !expected_home.is_empty() {
-                    // On windows, sometimes we get Short paths or different casing, 
+                    // On windows, sometimes we get Short paths or different casing,
                     // so let's just print for verification if strict equality fails
                     if output != expected_home {
-                        println!("Warning: Resolved home '{}' differs from env home '{}'", output, expected_home);
+                        println!(
+                            "Warning: Resolved home '{}' differs from env home '{}'",
+                            output, expected_home
+                        );
                     }
                 }
-            },
+            }
             Err(e) => {
-                 println!("Context inference test failed: {}", e);
+                println!("Context inference test failed: {}", e);
             }
         }
 
@@ -526,10 +663,34 @@ mod tests {
             if let Ok(out) = res_appdata {
                 assert!(!out.trim().is_empty());
                 let expected_appdata = std::env::var("APPDATA").unwrap_or_default();
-                 if !expected_appdata.is_empty() && out.trim() != expected_appdata {
-                     println!("Warning: Resolved APPDATA '{}' differs from env APPDATA '{}'", out.trim(), expected_appdata);
-                 }
+                if !expected_appdata.is_empty() && out.trim() != expected_appdata {
+                    println!(
+                        "Warning: Resolved APPDATA '{}' differs from env APPDATA '{}'",
+                        out.trim(),
+                        expected_appdata
+                    );
+                }
             }
+        }
+    }
+
+    #[test]
+    fn test_build_default_windows_context_uses_system_drive() {
+        let original = std::env::var("SystemDrive").ok();
+        std::env::set_var("SystemDrive", "Z:");
+
+        let ctx = build_default_windows_context("alice");
+        assert!(ctx.home_dir.to_string_lossy().starts_with("Z:"));
+        let app_data = ctx.app_data.to_string_lossy().replace('\\', "/");
+        assert!(app_data.ends_with("AppData/Roaming"));
+
+        let local_app_data = ctx.local_app_data.to_string_lossy().replace('\\', "/");
+        assert!(local_app_data.ends_with("AppData/Local"));
+
+        if let Some(value) = original {
+            std::env::set_var("SystemDrive", value);
+        } else {
+            std::env::remove_var("SystemDrive");
         }
     }
 
