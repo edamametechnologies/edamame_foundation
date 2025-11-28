@@ -546,9 +546,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.2.47"
+version = "1.2.48"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cd405d82c84ff7f35739f175f67d8b9fb7687a0e84ccdc78bd3568839827cf07"
+checksum = "c481bdbf0ed3b892f6f806287d72acd515b352a4ec27a208489b8c1bc839633a"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -1045,7 +1045,7 @@ dependencies = [
 [[package]]
 name = "edamame_models"
 version = "0.1.1"
-source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#bf607a7ff3f0ab8af488d0377e26783ecd4f6d52"
+source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#f9effbd38b6db594efc5910b1094919ca1b4695d"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1264,7 +1264,7 @@ dependencies = [
 [[package]]
 name = "flodbadd"
 version = "0.9.82"
-source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#31d701fbf762ca1826606043a4a8ab042f958503"
+source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#ce20cf182831b4309e9754db6aab7ea465fb2691"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -3328,9 +3328,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-pki-types"
-version = "1.13.0"
+version = "1.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "94182ad936a0c91c324cd46c6511b9510ed16af436d7b5bab34beab0afd55f7a"
+checksum = "708c0f9d5f54ba0272468c1d306a52c495b31fa155e91bc25371e6df7996908c"
 dependencies = [
  "web-time",
  "zeroize",
@@ -4227,9 +4227,9 @@ dependencies = [
 
 [[package]]
 name = "tracing-subscriber"
-version = "0.3.20"
+version = "0.3.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2054a14f5307d601f88daf0553e1cbf472acc4f2c51afab632431cdcd72124d5"
+checksum = "2f30143827ddab0d256fd843b7a66d164e9f271cfa0dde49142c5ca0ca291f1e"
 dependencies = [
  "matchers",
  "nu-ansi-term",
@@ -4258,7 +4258,7 @@ checksum = "562d481066bde0658276a35467c4af00bdc6ee726305698a55b86e61d7ad82bb"
 [[package]]
 name = "undeadlock"
 version = "0.9.81"
-source = "git+https://github.com/edamametechnologies/undeadlock?branch=main#92b8eb52cc5ac122f33e87275d5fa248d6f99f1a"
+source = "git+https://github.com/edamametechnologies/undeadlock?branch=main#8ba63327864a593e6b7b2e0e30f7fe35681085e3"
 dependencies = [
  "dashmap",
  "futures",
