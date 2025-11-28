@@ -289,8 +289,6 @@ jobs:
           edamame_id: ${{ github.run_id }}-container-${{ matrix.container_name }}
           # Don't checkout the repo, as we will do that in the next step
           checkout: false
-          wait_for_api: true
-          wait_for_https: true
 
       # Manual checkout for containers (actions/checkout@v4 requires node20 which is not supported on older Ubuntu containers)
       - name: Manual checkout for containers
@@ -379,7 +377,7 @@ jobs:
             platform: linux
           - os: ubuntu
             # We can't use ubuntu-24.04-arm here because of setup-alpine incompatibility
-            runs-on: edamame-large-runner
+            runs-on: vm-runner-linux
             arch: aarch64
             target: aarch64-unknown-linux-musl
             platform: linux
