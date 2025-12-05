@@ -251,6 +251,20 @@ jobs:
             platform: linux
             arch: x86_64
             target: x86_64-unknown-linux-gnu
+          - os: ubuntu
+            runs-on: ubuntu-latest
+            container_image: alpine:3.15
+            container_name: alpine-3.15-x86_64
+            platform: linux
+            arch: x86_64
+            target: x86_64-unknown-linux-musl
+          - os: ubuntu
+            runs-on: ubuntu-24.04-arm
+            container_image: alpine:3.15
+            container_name: alpine-3.15-aarch64
+            platform: linux
+            arch: aarch64
+            target: aarch64-unknown-linux-musl
     runs-on: ${{ matrix.runs-on }}
     container:
       image: ${{ matrix.container_image }}
@@ -272,7 +286,16 @@ jobs:
 
     steps:
       # Needed when we are running in a container
-      - name: Setup permissions for git and install missing packages
+      - name: Setup permissions for git and install missing packages (apk)
+        if: ${{ contains(matrix.container_image, 'alpine') }}
+        shell: sh
+        run: |
+          apk update
+          apk add --no-cache build-base git curl bash sudo protobuf-dev libpcap-dev pkgconf
+          git config --global --add safe.directory '*'
+
+      - name: Setup permissions for git and install missing packages (apt)
+        if: ${{ !contains(matrix.container_image, 'alpine') }}
         shell: bash
         run: |
           export DEBIAN_FRONTEND=noninteractive
@@ -297,7 +320,14 @@ jobs:
           git clone https://github.com/${{ github.repository }}.git .
           git checkout "${{ github.head_ref || github.ref_name }}"
 
-      - name: Install additional packages
+      - name: Install additional packages (apk)
+        if: ${{ contains(matrix.container_image, 'alpine') }}
+        shell: sh
+        run: |
+          apk add --no-cache protobuf-dev libpcap-dev
+
+      - name: Install additional packages (apt)
+        if: ${{ !contains(matrix.container_image, 'alpine') }}
         shell: bash
         run: |
           apt-get update
@@ -363,153 +393,3 @@ jobs:
           echo "Forcing container job to fail because tests did not succeed."
           exit 1
 
-  test-alpine:
-    # We need to wait a long time for musl aarch64 due to the use of qemu
-    timeout-minutes: 240
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu
-            runs-on: ubuntu-latest
-            arch: x86_64
-            target: x86_64-unknown-linux-musl
-            platform: linux
-          - os: ubuntu
-            runs-on: ubuntu-24.04-arm
-            arch: aarch64
-            target: aarch64-unknown-linux-musl
-            platform: linux
-    runs-on: ${{ matrix.runs-on }}
-
-    env:
-      CARGO_TERM_COLOR: always
-      EDAMAME_TARGET: ${{ secrets.EDAMAME_TARGET }}
-      EDAMAME_SERVER: ${{ secrets.EDAMAME_SERVER }}
-      EDAMAME_SERVER_PEM: ${{ secrets.EDAMAME_SERVER_PEM }}
-      EDAMAME_SERVER_KEY: ${{ secrets.EDAMAME_SERVER_KEY }}
-      EDAMAME_CA_PEM: ${{ secrets.EDAMAME_CA_PEM }}
-      EDAMAME_CLIENT_PEM: ${{ secrets.EDAMAME_CLIENT_PEM }}
-      EDAMAME_CLIENT_KEY: ${{ secrets.EDAMAME_CLIENT_KEY }}
-      EDAMAME_CLIENT_CA_PEM: ${{ secrets.EDAMAME_CLIENT_CA_PEM }}
-      LAMBDA_SIGNATURE: ${{ secrets.LAMBDA_SIGNATURE }}
-      # Debug mode
-      EDAMAME_LOG_LEVEL: debug
-
-    steps:
-
-      # Setup Alpine Linux
-      - name: Setup Alpine Linux
-        uses: jirutka/setup-alpine@v1
-        with:
-          arch: ${{ matrix.arch }}
-          apk-tools-url: ${{ startsWith(matrix.arch, 'x86') && 'https://gitlab.alpinelinux.org/api/v4/projects/5/packages/generic/v2.14.7/x86_64/apk.static#!sha256!bdd044e0fd6cc388c5e571e1093efa5f35f7767cc5aa338b0a2576a429009a62' || 'https://gitlab.alpinelinux.org/api/v4/projects/5/packages/generic/v2.14.7/aarch64/apk.static#!sha256!27a975638ddc95a411c9f17c63383e335da9edf6bb7de2281d950c291a11f878' }}
-
-      # Install dependencies with apk
-      - name: Install dependencies with apk
-        run: |
-          apk add --no-cache \
-            build-base \
-            protobuf-dev \
-            libpcap-dev \
-            git \
-            curl \
-            pkgconf \
-            eudev-dev \
-            perl
-        shell: alpine.sh --root {0}
-
-      # We need to setup edamame_posture outside of the Alpine VM as otherwise IP address detection will fail and access will not be granted
-      #- name: Setup EDAMAME Posture
-      #  run: |
-      #    # Install bash and sudo first
-      #    apk add --no-cache bash sudo
-      #    # Download edamame_posture for MUSL
-      #    wget https://raw.githubusercontent.com/edamametechnologies/edamame_posture_cli/refs/heads/main/linux/edamame_setup.sh -O ./edamame_setup.sh
-      #    chmod +x ./edamame_setup.sh
-      #    # Use bash to run the script
-      #   bash ./edamame_setup.sh ${{ vars.EDAMAME_POSTURE_USER }} ${{ vars.EDAMAME_POSTURE_DOMAIN }} ${{ secrets.EDAMAME_POSTURE_PIN }} ${{ github.run_id }}-alpine-${{ matrix.arch }}
-      #  shell: alpine.sh --root {0}
-
-      # Setup EDAMAME Posture in host environment
-      - name: Setup EDAMAME Posture
-        uses: edamametechnologies/edamame_posture_action@v0
-        with:
-          edamame_user: ${{ vars.EDAMAME_POSTURE_USER }}
-          edamame_domain: ${{ vars.EDAMAME_POSTURE_DOMAIN }}
-          edamame_pin: ${{ secrets.EDAMAME_POSTURE_PIN }}
-          edamame_id: ${{ github.run_id }}-alpine-${{ matrix.arch }}
-          checkout: false
-
-      # Manual checkout in Alpine VM
-      - name: Manual checkout
-        run: |
-          mkdir temp
-          cd temp
-          git clone https://github.com/${{ github.repository }}.git .
-          git checkout "${{ github.head_ref || github.ref_name }}"
-        shell: alpine.sh {0}
-
-      # Install Rust in Alpine VM
-      - name: Install Rust
-        run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-          # Add rust to path for subsequent steps
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-          # This fails during build so rather use the standard toolchain and don't build Ebpf
-          # Install nightly toolchain first
-          #. "$HOME/.cargo/env"
-          #rustup toolchain install nightly
-          # Then add the target to the nightly toolchain
-          #rustup target add --toolchain nightly ${{ matrix.target }}
-          # For ebpf - add rust-src specifically for the target toolchain
-          #rustup component add rust-src --toolchain nightly-${{ matrix.target }}
-          #rustup component add --toolchain nightly llvm-tools-preview
-          # Use nightly by default so that build.rs picks it up automatically
-          #echo "RUSTUP_TOOLCHAIN=nightly" >> $HOME/.cargo/env
-        shell: alpine.sh {0}
-
-      # Must be in the Alpine VM
-      - name: Run tests
-        id: tests
-        run: |
-          cd temp
-          source $HOME/.cargo/env
-          cargo test --features packetcapture -- --nocapture
-        shell: alpine.sh --root {0}
-        continue-on-error: true
-        env:
-          VERGEN_GIT_BRANCH: ${{ github.ref_name }}
-
-      # Must be in the Alpine VM
-      - name: Dump logs
-        if: always()
-        run: |
-          echo "--- Dumping Alpine Logs (${{ matrix.arch }}-${{ matrix.target }}) --- "
-          find . -name "edamame_*.2*-*-*" -exec echo "--- {} ---" \; -exec cat {} \; || echo "No logs found in default directory"
-          echo "--- Alpine Log Dump Complete ---"
-        shell: alpine.sh --root {0}
-
-      # Must be in the host environment
-      - name: Slack alerts
-        if: steps.tests.outcome != 'success'
-        uses: slackapi/slack-github-action@v1.26.0
-        with:
-          channel-id: 'C072J0U9TH7'
-          slack-message: |
-            *Alpine Test Results for ${{ github.repository }} (${{ matrix.arch }})*:
-            - Tests: ${{ steps.tests.outcome == 'success' && '✅ Success' || '❌ Failed' }}
-            Branch: ${{ github.ref }}
-            More details: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        env:
-          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-
-      # Must be in the host environment
-      - name: Fail job if tests failed
-        if: steps.tests.outcome != 'success'
-        run: |
-          echo "## Test Results Summary (Alpine - ${{ matrix.arch }})"
-          echo "- Tests: ${{ steps.tests.outcome == 'success' && '✅ Success' || '❌ Failed' }}"
-          echo ""
-          echo "Forcing alpine job to fail because tests did not succeed."
-          exit 1
