@@ -39,37 +39,31 @@ jobs:
             platform: linux
             arch: x86_64
             target: x86_64-unknown-linux-gnu
-            protobuf_install: sudo apt-get update && sudo apt-get install -y protobuf-compiler libpcap-dev
           - os: macos
             runs-on: macos-latest
             platform: macos
             arch: x86_64
             target: x86_64-apple-darwin
-            protobuf_install: brew install protobuf
           - os: windows
             runs-on: windows-latest
             platform: windows
             arch: x86_64
             target: x86_64-pc-windows-msvc
-            protobuf_install: choco install protoc
           - os: macos
             runs-on: macos-latest
             platform: ios
             arch: aarch64
             target: aarch64-apple-ios
-            protobuf_install: brew install protobuf
           - os: ubuntu
             runs-on: ubuntu-latest
             platform: android
             arch: x86_64
             target: x86_64-linux-android
-            protobuf_install: sudo apt-get update && sudo apt-get install -y protobuf-compiler libpcap-dev
           - os: ubuntu
             runs-on: ubuntu-24.04-arm
             platform: linux
             arch: aarch64
             target: aarch64-unknown-linux-gnu
-            protobuf_install: sudo apt-get update && sudo apt-get install -y protobuf-compiler libpcap-dev
     runs-on: ${{ matrix.runs-on }}
     
     steps:
@@ -187,9 +181,78 @@ jobs:
           rustup target add x86_64-linux-android
           cargo install cross --git https://github.com/cross-rs/cross
 
-      - name: Install protobuf
+      - name: Install protobuf (with apt lock handling)
         shell: bash
-        run: ${{ matrix.protobuf_install }}
+        run: |
+          set -e
+          if [ "${{ matrix.os }}" = "ubuntu" ]; then
+            wait_for_apt_locks() {
+              echo "Checking for apt/dpkg locks..."
+              TIMEOUT=300
+              TIME_PASSED=0
+              LOCK_FILES=(
+                "/var/lib/apt/lists/lock"
+                "/var/lib/dpkg/lock-frontend"
+                "/var/lib/dpkg/lock"
+              )
+              if command -v fuser >/dev/null 2>&1; then
+                while sudo fuser "${LOCK_FILES[@]}" >/dev/null 2>&1; do
+                  echo "Waiting for apt/dpkg locks to be released..."
+                  sleep 5
+                  TIME_PASSED=$((TIME_PASSED + 5))
+                  if [ $TIME_PASSED -ge $TIMEOUT ]; then
+                    echo "Timed out waiting for apt/dpkg locks after $TIMEOUT seconds."
+                    exit 1
+                  fi
+                done
+              else
+                # Fallback: passive wait loop
+                while [ $TIME_PASSED -lt $TIMEOUT ]; do
+                  sleep 5
+                  TIME_PASSED=$((TIME_PASSED + 5))
+                  # Try a quick harmless dpkg query to probe readiness
+                  dpkg -l >/dev/null 2>&1 && break || true
+                done
+                if [ $TIME_PASSED -ge $TIMEOUT ]; then
+                  echo "Timed out waiting for apt/dpkg locks (fallback) after $TIMEOUT seconds."
+                  exit 1
+                fi
+              fi
+              echo "No apt/dpkg locks held, proceeding..."
+            }
+
+            run_apt() {
+              # Uses sudo if available
+              if command -v sudo >/dev/null 2>&1; then PREFIX="sudo -E "; else PREFIX=""; fi
+              ATTEMPTS=0
+              until $PREFIX apt-get "$@"; do
+                RC=$?
+                ATTEMPTS=$((ATTEMPTS+1))
+                if [ $ATTEMPTS -ge 10 ]; then
+                  echo "apt-get $* failed after $ATTEMPTS attempts (rc=$RC)"
+                  exit $RC
+                fi
+                echo "apt-get $* failed (rc=$RC). Waiting for locks and retrying ($ATTEMPTS)..."
+                wait_for_apt_locks
+                sleep 5
+              done
+            }
+
+            export DEBIAN_FRONTEND=noninteractive
+            wait_for_apt_locks
+            run_apt update -y
+            wait_for_apt_locks
+            run_apt install -y protobuf-compiler libpcap-dev
+          elif [ "${{ matrix.os }}" = "macos" ]; then
+            brew install protobuf
+          elif [ "${{ matrix.os }}" = "windows" ]; then
+            choco install protoc
+          else
+            # linux or other platforms: fall back to matrix command
+            echo "Unsupported platform: ${{ matrix.os }}"
+            exit 1
+            fi
+          fi
 
       - name: Run tests
         id: tests
