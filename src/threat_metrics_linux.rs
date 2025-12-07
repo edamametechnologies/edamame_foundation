@@ -1,6 +1,6 @@
 // Built in default threat model
 pub static THREAT_METRICS_LINUX: &str = r#"{
-  "date": "November 26th 2025",
+  "date": "December 07th 2025",
   "extends": "none",
   "metrics": [
     {
@@ -93,7 +93,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "printf '%s\\n' '# Remove bashisms' 'service_active() {' '  # systemd, sysvinit, openrc' '  if command -v systemctl >/dev/null 2>&1; then' '    systemctl is-active --quiet \"$1\"' '  elif command -v service >/dev/null 2>&1; then' '    service \"$1\" status >/dev/null 2>&1' '  elif command -v rc-service >/dev/null 2>&1; then' '    rc-service \"$1\" status >/dev/null 2>&1' '  else' '    return 1' '  fi' '}' '' 'has_sentinelone() {' '  # SentinelOne (Linux)' '  if [ -x /opt/sentinelone/bin/sentinelctl ]; then' '  /opt/sentinelone/bin/sentinelctl version 2>/dev/null | grep -q . && return 0' '  fi' '  command -v sentinelctl >/dev/null 2>&1 && sentinelctl version 2>/dev/null | grep -q . && return 0' '  return 1' '}' '' 'has_crowdstrike() {' '  # CrowdStrike Falcon on Linux' '  service_active \"falcon-sensor\" && return 0' '  if [ -x /opt/CrowdStrike/falconctl ]; then' '     /opt/CrowdStrike/falconctl -g --version 2>/dev/null | grep -q . && return 0' '  fi' '  return 1' '}' '' 'has_ms_defender() {' '  # Microsoft Defender for Endpoint (Linux)' '  command -v mdatp >/dev/null 2>&1 || return 1' '  mdatp health --field real_time_protection_enabled 2>/dev/null | grep -qi \"true\" && return 0' '  mdatp --version >/dev/null 2>&1 && return 0' '  return 1' '}' '' 'has_carbon_black() {' '  # VMware Carbon Black Cloud sensor' '  if [ -x /opt/carbonblack/psc/bin/repcli ]; then' '     /opt/carbonblack/psc/bin/repcli status >/dev/null 2>&1 && return 0' '  fi' '  [ -d /opt/carbonblack/psc/bin ] && return 0' '  return 1' '}' '' 'has_cortex_xdr() {' '  # Palo Alto Networks Cortex XDR / Traps' '  if [ -x /opt/traps/bin/cytool ]; then' '     /opt/traps/bin/cytool runtime query >/dev/null 2>&1 && return 0' '  fi' '  [ -d /opt/traps/bin ] && return 0' '  return 1' '}' '' 'has_cisco_secure_endpoint() {' '  # Cisco Secure Endpoint (AMP) CLI' '  if [ -x /opt/cisco/amp/bin/ampcli ]; then' '     /opt/cisco/amp/bin/ampcli status >/dev/null 2>&1 && return 0' '  fi' '  if [ -x /opt/cisco/amp/ampcli ]; then' '     /opt/cisco/amp/ampcli status >/dev/null 2>&1 && return 0' '  fi' '  [ -d /opt/cisco/amp ] && return 0' '  return 1' '}' '' 'has_sophos() {' '  # Sophos Protection for Linux (SPL)' '  service_active \"sophos-spl.service\" && return 0' '  [ -d /opt/sophos-spl ] && return 0' '  return 1' '}' '' 'has_cylance() {' '  # CylancePROTECT' '  service_active \"cylancesvc\" && return 0' '  return 1' '}' '' 'has_eset() {' '  # ESET Endpoint for Linux' '  pgrep -x esets_daemon >/dev/null 2>&1 && return 0' '  service_active \"esets\" && return 0' '  return 1' '}' '' 'if ! (' '  has_sentinelone ||' '  has_crowdstrike   ||' '  has_ms_defender   ||' '  has_carbon_black  ||' '  has_cortex_xdr    ||' '  has_cisco_secure_endpoint ||' '  has_sophos        ||' '  has_cylance       ||' '  has_eset' '); then' '  echo \"epp_disabled\"' 'fi' | /bin/sh"
+        "target": "printf '%s\\n' 'service_active() {' '  # systemd, sysvinit, openrc' '  if command -v systemctl >/dev/null 2>&1; then' '    systemctl is-active --quiet \"$1\"' '  elif command -v service >/dev/null 2>&1; then' '    service \"$1\" status >/dev/null 2>&1' '  elif command -v rc-service >/dev/null 2>&1; then' '    rc-service \"$1\" status >/dev/null 2>&1' '  else' '    return 1' '  fi' '}' '' 'has_sentinelone() {' '  # SentinelOne (Linux)' '  if [ -x /opt/sentinelone/bin/sentinelctl ]; then' '  /opt/sentinelone/bin/sentinelctl version 2>/dev/null | grep -q . && return 0' '  fi' '  command -v sentinelctl >/dev/null 2>&1 && sentinelctl version 2>/dev/null | grep -q . && return 0' '  return 1' '}' '' 'has_crowdstrike() {' '  # CrowdStrike Falcon on Linux' '  service_active \"falcon-sensor\" && return 0' '  if [ -x /opt/CrowdStrike/falconctl ]; then' '     /opt/CrowdStrike/falconctl -g --version 2>/dev/null | grep -q . && return 0' '  fi' '  return 1' '}' '' 'has_ms_defender() {' '  # Microsoft Defender for Endpoint (Linux)' '  command -v mdatp >/dev/null 2>&1 || return 1' '  mdatp health --field real_time_protection_enabled 2>/dev/null | grep -qi \"true\" && return 0' '  mdatp --version >/dev/null 2>&1 && return 0' '  return 1' '}' '' 'has_carbon_black() {' '  # VMware Carbon Black Cloud sensor' '  if [ -x /opt/carbonblack/psc/bin/repcli ]; then' '     /opt/carbonblack/psc/bin/repcli status >/dev/null 2>&1 && return 0' '  fi' '  [ -d /opt/carbonblack/psc/bin ] && return 0' '  return 1' '}' '' 'has_cortex_xdr() {' '  # Palo Alto Networks Cortex XDR / Traps' '  if [ -x /opt/traps/bin/cytool ]; then' '     /opt/traps/bin/cytool runtime query >/dev/null 2>&1 && return 0' '  fi' '  [ -d /opt/traps/bin ] && return 0' '  return 1' '}' '' 'has_cisco_secure_endpoint() {' '  # Cisco Secure Endpoint (AMP) CLI' '  if [ -x /opt/cisco/amp/bin/ampcli ]; then' '     /opt/cisco/amp/bin/ampcli status >/dev/null 2>&1 && return 0' '  fi' '  if [ -x /opt/cisco/amp/ampcli ]; then' '     /opt/cisco/amp/ampcli status >/dev/null 2>&1 && return 0' '  fi' '  [ -d /opt/cisco/amp ] && return 0' '  return 1' '}' '' 'has_sophos() {' '  # Sophos Protection for Linux (SPL)' '  service_active \"sophos-spl.service\" && return 0' '  [ -d /opt/sophos-spl ] && return 0' '  return 1' '}' '' 'has_cylance() {' '  # CylancePROTECT' '  service_active \"cylancesvc\" && return 0' '  return 1' '}' '' 'has_eset() {' '  # ESET Endpoint for Linux' '  pgrep -x esets_daemon >/dev/null 2>&1 && return 0' '  service_active \"esets\" && return 0' '  return 1' '}' '' 'if ! (' '  has_sentinelone ||' '  has_crowdstrike   ||' '  has_ms_defender   ||' '  has_carbon_black  ||' '  has_cortex_xdr    ||' '  has_cisco_secure_endpoint ||' '  has_sophos        ||' '  has_cylance       ||' '  has_eset' '); then' '  echo \"epp_disabled\"' 'fi' | /bin/sh"
       },
       "metrictype": "bool",
       "name": "no EPP",
@@ -214,7 +214,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "printf '%s\\n' 'if command -v apk >/dev/null 2>&1; then' '    apk update >/dev/null 2>&1' '    apk add virt-what util-linux >/dev/null 2>&1' 'else' '    apt update -qq > /dev/null 2>&1 || true' '    apt install virt-what -y > /dev/null 2>&1' 'fi' '' 'if [ -z \"$(virt-what)\" ]; then' '    root_dev=$(findmnt -n -o SOURCE /)' '    swap_dev=$(swapon --show=NAME --noheadings 2>/dev/null | head -n1)' '    root_parent=$(lsblk -n -o NAME,TYPE,MOUNTPOINT -p | grep \" $(readlink -f \"$root_dev\")$\" | awk '\"'\"'{print $1}'\"'\"')' '    lsblk -n -o NAME,TYPE -p | grep -q \"^$root_parent.*crypt$\" || echo \"root_encryption_disabled\"' '    if [ -n \"$swap_dev\" ]; then' '        swap_parent=$(lsblk -n -o NAME,TYPE,MOUNTPOINT -p | grep \" $(readlink -f \"$swap_dev\")$\" | awk '\"'\"'{print $1}'\"'\"')' '        lsblk -n -o NAME,TYPE -p | grep -q \"^$swap_parent.*crypt$\" || echo \"swap_encryption_disabled\"' '    fi' 'fi' | /bin/sh"
+        "target": "printf '%s\\n' 'if command -v apk >/dev/null 2>&1; then' '    apk add virt-what util-linux >/dev/null 2>&1' 'else' '    apt install virt-what -y > /dev/null 2>&1' 'fi' '' 'if [ -z \"$(virt-what)\" ]; then' '    root_dev=$(findmnt -n -o SOURCE /)' '    swap_dev=$(swapon --show=NAME --noheadings 2>/dev/null | head -n1)' '    root_parent=$(lsblk -n -o NAME,TYPE,MOUNTPOINT -p | grep \" $(readlink -f \"$root_dev\")$\" | awk '\"'\"'{print $1}'\"'\"')' '    lsblk -n -o NAME,TYPE -p | grep -q \"^$root_parent.*crypt$\" || echo \"root_encryption_disabled\"' '    if [ -n \"$swap_dev\" ]; then' '        swap_parent=$(lsblk -n -o NAME,TYPE,MOUNTPOINT -p | grep \" $(readlink -f \"$swap_dev\")$\" | awk '\"'\"'{print $1}'\"'\"')' '        lsblk -n -o NAME,TYPE -p | grep -q \"^$swap_parent.*crypt$\" || echo \"swap_encryption_disabled\"' '    fi' 'fi' | /bin/sh"
       },
       "metrictype": "bool",
       "name": "encrypted disk disabled",
@@ -777,7 +777,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "printf '%s\\n' 'if command -v apk >/dev/null 2>&1; then' '    apk update >/dev/null 2>&1' '    # apk list -u lists upgradeable packages. If output is not empty, updates are available.' '    if [ -n \"$(apk list -u 2>/dev/null)\" ]; then' 'echo os_outdated' '    fi' 'else' '    LANG=C apt update -qq > /dev/null 2>&1 || true' '    apt list --upgradeable 2>/dev/null | grep -q '\"'\"'upgradable'\"'\"' && echo os_outdated' 'fi' | /bin/sh"
+        "target": "printf '%s\\n' 'if command -v apk >/dev/null 2>&1; then' '    apk update >/dev/null 2>&1' '    # apk list -u lists upgradeable packages. If output is not empty, updates are available.' '    if [ -n \"$(apk list -u 2>/dev/null)\" ]; then' 'echo os_outdated' '    fi' 'else' '    LANG=C apt list --upgradeable 2>/dev/null | grep -q '\"'\"'upgradable'\"'\"' && echo os_outdated' 'fi' | /bin/sh"
       },
       "metrictype": "bool",
       "name": "latest os",
@@ -788,7 +788,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "printf '%s\\n' 'if command -v apk >/dev/null 2>&1; then' '    apk update >/dev/null 2>&1' '    apk upgrade >/dev/null 2>&1' 'else' '    apt update -qq > /dev/null 2>&1 || true' 'apt upgrade -y' 'fi' | /bin/sh"
+        "target": "printf '%s\\n' 'if command -v apk >/dev/null 2>&1; then' '    apk update >/dev/null 2>&1' '    apk upgrade >/dev/null 2>&1' 'else' '    apt update -qq > /dev/null 2>&1' '    apt upgrade -y > /dev/null 2>&1' 'fi' | /bin/sh"
       },
       "rollback": {
         "class": "",
@@ -843,7 +843,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "printf '%s\\n' 'if command -v apk >/dev/null 2>&1; then' '    apk update >/dev/null 2>&1' '    apk add ufw >/dev/null 2>&1' '    ufw enable' 'else' '    apt update -qq > /dev/null 2>&1 || true' '    apt install ufw -y > /dev/null 2>&1' 'ufw enable' 'fi' | /bin/sh"
+        "target": "printf '%s\\n' 'if command -v apk >/dev/null 2>&1; then' '    apk add ufw >/dev/null 2>&1' '    ufw enable' 'else' '    apt install ufw -y > /dev/null 2>&1' '    ufw enable' 'fi' | /bin/sh"
       },
       "rollback": {
         "class": "",
@@ -994,7 +994,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "printf '%s\\n' 'if command -v apk >/dev/null 2>&1; then' '    apk update >/dev/null 2>&1' '    apk add xrdp >/dev/null 2>&1' '    rc-service xrdp start 2>/dev/null' '    rc-update add xrdp default 2>/dev/null' 'else' '    apt update -qq > /dev/null 2>&1 || true' '    apt install xrdp -y > /dev/null 2>&1' '    systemctl start xrdp' 'systemctl enable xrdp' 'fi' | /bin/sh"
+        "target": "printf '%s\\n' 'if command -v apk >/dev/null 2>&1; then' '    apk update >/dev/null 2>&1' '    apk add xrdp >/dev/null 2>&1' '    rc-service xrdp start 2>/dev/null' '    rc-update add xrdp default 2>/dev/null' 'else' '    apt install xrdp -y > /dev/null 2>&1' '    systemctl start xrdp' 'systemctl enable xrdp' 'fi' | /bin/sh"
       },
       "scope": "generic",
       "severity": 4,
@@ -1065,7 +1065,7 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
         "maxversion": 0,
         "minversion": 3,
         "system": "Linux",
-        "target": "printf '%s\\n' 'if command -v apk >/dev/null 2>&1; then' '    apk update >/dev/null 2>&1' '    apk add samba nfs-utils >/dev/null 2>&1' '    if command -v rc-service >/dev/null 2>&1; then' '        rc-service samba start' '        rc-update add samba default' '        rc-service nfs start' '        rc-update add nfs default' '    fi' 'else' '    apt update -qq > /dev/null 2>&1 || true' '    apt install samba -y > /dev/null 2>&1' '    systemctl start smbd' '    systemctl enable smbd' '    apt install nfs-kernel-server -y > /dev/null 2>&1' '    systemctl start nfs-kernel-server' 'systemctl enable nfs-kernel-server' 'fi' | /bin/sh"
+        "target": "printf '%s\\n' 'if command -v apk >/dev/null 2>&1; then' '    apk update >/dev/null 2>&1' '    apk add samba nfs-utils >/dev/null 2>&1' '    if command -v rc-service >/dev/null 2>&1; then' '        rc-service samba start' '        rc-update add samba default' '        rc-service nfs start' '        rc-update add nfs default' '    fi' 'else' '    apt install samba -y > /dev/null 2>&1' '    systemctl start smbd' '    systemctl enable smbd' '    apt install nfs-kernel-server -y > /dev/null 2>&1' '    systemctl start nfs-kernel-server' 'systemctl enable nfs-kernel-server' 'fi' | /bin/sh"
       },
       "scope": "generic",
       "severity": 4,
@@ -1339,5 +1339,5 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
     }
   ],
   "name": "threat model Linux",
-  "signature": "5f55f50b0a5f5719c01be445a00ba744b2eb4c234e40ae2fb801a371ca140867"
+  "signature": "6bbd83b8ea13f2837632df64938321c76a70c2ce2a38e369fba33753511103d8"
 }"#;
