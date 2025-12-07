@@ -132,9 +132,9 @@ dependencies = [
 
 [[package]]
 name = "async-compression"
-version = "0.4.34"
+version = "0.4.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e86f6d3dc9dc4352edeea6b8e499e13e3f5dc3b964d7ca5fd411415a3498473"
+checksum = "07a926debf178f2d355197f9caddb08e54a9329d44748034bba349c5848cb519"
 dependencies = [
  "compression-codecs",
  "compression-core",
@@ -639,9 +639,9 @@ dependencies = [
 
 [[package]]
 name = "compression-codecs"
-version = "0.4.33"
+version = "0.4.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "302266479cb963552d11bd042013a58ef1adc56768016c8b82b4199488f2d4ad"
+checksum = "34a3cbbb8b6eca96f3a5c4bf6938d5b27ced3675d69f95bb51948722870bc323"
 dependencies = [
  "compression-core",
  "flate2",
@@ -1045,7 +1045,7 @@ dependencies = [
 [[package]]
 name = "edamame_models"
 version = "0.1.1"
-source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#6a5b4723f3352623a3f716b7e1d6f2ece2136b23"
+source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#9df5144c9632ec61640639d67abef936941b84ed"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1264,7 +1264,7 @@ dependencies = [
 [[package]]
 name = "flodbadd"
 version = "0.9.83"
-source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#bdd1aac2a542c0dee5838e099f0dcf529e0e0f62"
+source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#e3f2c5cb8c1057d387c5cbf56841608fd695f92f"
 dependencies = [
  "anyhow",
  "arc-swap",
