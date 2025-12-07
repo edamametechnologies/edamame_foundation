@@ -251,7 +251,6 @@ jobs:
             # linux or other platforms: fall back to matrix command
             echo "Unsupported platform: ${{ matrix.os }}"
             exit 1
-            fi
           fi
 
       - name: Run tests
