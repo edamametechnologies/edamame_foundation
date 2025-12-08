@@ -151,7 +151,7 @@ serial_test = "3.2.0"
 # protobuf->Rust compiler
 tonic-prost-build = "0.14.2"
 
-[target.'cfg(target_os = "windows")'.dependencies]
+[target.'cfg(target_os = "windows")'.build-dependencies]
 # For the winpcap installation support in Windows
 # Local copy in order to allow rapid development/debug
 #flodbadd = { path = "../flodbadd", features = [ "packetcapture", "asyncpacketcapture" ] }
