@@ -353,7 +353,7 @@ jobs:
         shell: sh
         run: |
           apk update
-          apk add --no-cache build-base git curl bash sudo protobuf-dev libpcap-dev pkgconf
+          apk add --no-cache build-base git curl bash sudo pkgconf
           git config --global --add safe.directory '*'
 
       - name: Setup permissions for git and install missing packages (apt)
