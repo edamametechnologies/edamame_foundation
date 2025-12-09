@@ -232,6 +232,12 @@ jobs:
                   echo "apt-get $* failed after $ATTEMPTS attempts (rc=$RC)"
                   exit $RC
                 fi
+                # Check if we have 'E: dpkg was interrupted, you must manually run 'sudo dpkg --configure -a' to correct the problem.'
+                if [ $RC -eq 100 ]; then
+                  sudo dpkg --configure -a
+                  sleep 5
+                  continue
+                fi
                 echo "apt-get $* failed (rc=$RC). Waiting for locks and retrying ($ATTEMPTS)..."
                 wait_for_apt_locks
                 sleep 5
@@ -239,9 +245,7 @@ jobs:
             }
 
             export DEBIAN_FRONTEND=noninteractive
-            wait_for_apt_locks
             run_apt update -y
-            wait_for_apt_locks
             run_apt install -y protobuf-compiler libpcap-dev
           elif [ "${{ matrix.os }}" = "macos" ]; then
             brew install protobuf
