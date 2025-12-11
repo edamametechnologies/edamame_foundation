@@ -136,4 +136,12 @@ pub trait Backend {
         language: &str,
         advisor_info: &AdvisorTodosBackend,
     ) -> Result<()>;
+
+    /// Analyze a security todo using the internal LLM proxy
+    /// The backend receives the pre-constructed prompt and forwards it to its internal LLM
+    async fn get_agentic_analysis(
+        &self,
+        device_id: &str,
+        request: &edamame_backend::agentic_backend::AgenticAnalysisRequestBackend,
+    ) -> Result<edamame_backend::agentic_backend::AgenticAnalysisResponseBackend>;
 }
