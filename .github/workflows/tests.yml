@@ -188,63 +188,82 @@ jobs:
           if [ "${{ matrix.os }}" = "ubuntu" ]; then
             wait_for_apt_locks() {
               echo "Checking for apt/dpkg locks..."
-              TIMEOUT=300
-              TIME_PASSED=0
-              LOCK_FILES=(
+              local TIMEOUT=300
+              local TIME_PASSED=0
+              local LOCK_FILES=(
                 "/var/lib/apt/lists/lock"
                 "/var/lib/dpkg/lock-frontend"
                 "/var/lib/dpkg/lock"
+                "/var/cache/apt/archives/lock"
               )
-              if command -v fuser >/dev/null 2>&1; then
-                while sudo fuser "${LOCK_FILES[@]}" >/dev/null 2>&1; do
-                  echo "Waiting for apt/dpkg locks to be released..."
-                  sleep 5
-                  TIME_PASSED=$((TIME_PASSED + 5))
-                  if [ $TIME_PASSED -ge $TIMEOUT ]; then
-                    echo "Timed out waiting for apt/dpkg locks after $TIMEOUT seconds."
-                    exit 1
-                  fi
-                done
-              else
-                # Fallback: passive wait loop
-                while [ $TIME_PASSED -lt $TIMEOUT ]; do
-                  sleep 5
-                  TIME_PASSED=$((TIME_PASSED + 5))
-                  # Try a quick harmless dpkg query to probe readiness
-                  dpkg -l >/dev/null 2>&1 && break || true
-                done
-                if [ $TIME_PASSED -ge $TIMEOUT ]; then
-                  echo "Timed out waiting for apt/dpkg locks (fallback) after $TIMEOUT seconds."
-                  exit 1
+              
+              while [ $TIME_PASSED -lt $TIMEOUT ]; do
+                local LOCKED=false
+                
+                if command -v fuser >/dev/null 2>&1; then
+                  for lock_file in "${LOCK_FILES[@]}"; do
+                    if [ -f "$lock_file" ] && sudo fuser "$lock_file" >/dev/null 2>&1; then
+                      LOCKED=true
+                      echo "  Lock held: $lock_file"
+                      break
+                    fi
+                  done
                 fi
-              fi
-              echo "No apt/dpkg locks held, proceeding..."
+                
+                if [ "$LOCKED" = "false" ]; then
+                  if ! sudo dpkg --configure -a 2>/dev/null; then
+                    LOCKED=true
+                  fi
+                fi
+                
+                if [ "$LOCKED" = "false" ]; then
+                  echo "No apt/dpkg locks held, proceeding..."
+                  return 0
+                fi
+                
+                echo "Waiting for apt/dpkg locks to be released... ($TIME_PASSED/${TIMEOUT}s)"
+                sleep 5
+                TIME_PASSED=$((TIME_PASSED + 5))
+              done
+              
+              echo "Timed out waiting for apt/dpkg locks after $TIMEOUT seconds."
+              return 1
             }
 
             run_apt() {
-              # Uses sudo if available
+              local MAX_ATTEMPTS=10
+              local ATTEMPTS=0
               if command -v sudo >/dev/null 2>&1; then PREFIX="sudo -E "; else PREFIX=""; fi
-              ATTEMPTS=0
-              until $PREFIX apt-get "$@"; do
-                RC=$?
-                ATTEMPTS=$((ATTEMPTS+1))
-                if [ $ATTEMPTS -ge 10 ]; then
-                  echo "apt-get $* failed after $ATTEMPTS attempts (rc=$RC)"
-                  exit $RC
-                fi
-                # Check if we have 'E: dpkg was interrupted, you must manually run 'sudo dpkg --configure -a' to correct the problem.'
-                if [ $RC -eq 100 ]; then
-                  sudo dpkg --configure -a
+              
+              while [ $ATTEMPTS -lt $MAX_ATTEMPTS ]; do
+                ATTEMPTS=$((ATTEMPTS + 1))
+                echo "apt-get $* (attempt $ATTEMPTS/$MAX_ATTEMPTS)"
+                
+                if ! wait_for_apt_locks; then
                   sleep 5
                   continue
                 fi
-                echo "apt-get $* failed (rc=$RC). Waiting for locks and retrying ($ATTEMPTS)..."
-                wait_for_apt_locks
+                
+                if $PREFIX apt-get "$@"; then
+                  return 0
+                fi
+                
+                RC=$?
+                echo "apt-get $* failed (rc=$RC)"
+                if [ $RC -eq 100 ]; then
+                  sudo dpkg --configure -a || true
+                fi
                 sleep 5
               done
+              
+              echo "apt-get $* failed after $MAX_ATTEMPTS attempts"
+              return 1
             }
 
             export DEBIAN_FRONTEND=noninteractive
+            echo "Waiting for any background apt processes to complete..."
+            wait_for_apt_locks
+            
             run_apt update -y
             run_apt install -y protobuf-compiler libpcap-dev
           elif [ "${{ matrix.os }}" = "macos" ]; then
