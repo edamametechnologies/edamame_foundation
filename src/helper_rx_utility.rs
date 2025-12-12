@@ -662,6 +662,7 @@ pub fn start_interface_monitor() {
 mod tests {
     use super::*;
     use chrono::{TimeZone, Utc};
+    use flodbadd::sessions::DomainResolutionType;
     use flodbadd::sessions::{
         Protocol, Session, SessionFilter, SessionInfo, SessionStats, SessionStatus, WhitelistState,
     };
@@ -783,6 +784,8 @@ mod tests {
             is_self_dst: false,
             src_domain: None,
             dst_domain: Some("dns.google".to_string()),
+            src_domain_type: DomainResolutionType::Forward,
+            dst_domain_type: DomainResolutionType::Forward,
             dst_service: Some("dns".to_string()),
             l7: None,
             src_asn: None,
