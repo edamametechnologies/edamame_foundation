@@ -199,8 +199,10 @@ jobs:
               
               while [ $TIME_PASSED -lt $TIMEOUT ]; do
                 local LOCKED=false
+                local HAS_LOCK_CHECKER=false
                 
                 if command -v fuser >/dev/null 2>&1; then
+                  HAS_LOCK_CHECKER=true
                   for lock_file in "${LOCK_FILES[@]}"; do
                     if [ -f "$lock_file" ] && sudo fuser "$lock_file" >/dev/null 2>&1; then
                       LOCKED=true
@@ -210,10 +212,10 @@ jobs:
                   done
                 fi
                 
-                if [ "$LOCKED" = "false" ]; then
-                  if ! sudo dpkg --configure -a 2>/dev/null; then
-                    LOCKED=true
-                  fi
+                # If no lock checker is available, just proceed
+                if [ "$HAS_LOCK_CHECKER" = "false" ]; then
+                  echo "No lock checker (fuser) available, proceeding..."
+                  return 0
                 fi
                 
                 if [ "$LOCKED" = "false" ]; then
