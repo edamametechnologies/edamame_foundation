@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use edamame_backend::advisor_todos_backend::{AdvicePriorityBackend, AdviceTypeBackend};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -497,6 +498,27 @@ pub fn advice_type_str(advice: &Advice) -> &'static str {
         Advice::ConfigureLanScanMonitoring
         | Advice::ConfigurePwnedMonitoring
         | Advice::ConfigureSessionMonitoring => "Configure",
+    }
+}
+
+pub fn map_advice_type_to_backend(advice: &Advice) -> AdviceTypeBackend {
+    match advice {
+        Advice::RemediatePolicy { .. } => AdviceTypeBackend::Policy,
+        Advice::RemediateThreat { .. } => AdviceTypeBackend::Threat,
+        Advice::RemediateNetworkPort { .. } => AdviceTypeBackend::NetworkPort,
+        Advice::RemediateNetworkSession { .. } => AdviceTypeBackend::NetworkSession,
+        Advice::RemediatePwnedBreach { .. } => AdviceTypeBackend::PwnedBreach,
+        Advice::ConfigureLanScanMonitoring
+        | Advice::ConfigurePwnedMonitoring
+        | Advice::ConfigureSessionMonitoring => AdviceTypeBackend::Configure,
+    }
+}
+
+pub fn map_priority_to_backend(priority: &AdvicePriority) -> AdvicePriorityBackend {
+    match priority {
+        AdvicePriority::Low => AdvicePriorityBackend::Low,
+        AdvicePriority::Medium => AdvicePriorityBackend::Medium,
+        AdvicePriority::High => AdvicePriorityBackend::High,
     }
 }
 
