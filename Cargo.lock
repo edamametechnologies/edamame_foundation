@@ -998,7 +998,7 @@ dependencies = [
 [[package]]
 name = "edamame_models"
 version = "0.1.1"
-source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#195c40d93878412b0ef32293f6a621a22fb419bb"
+source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#6f7027289b6470532a7c915f7b437fde6af2f7d6"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1217,7 +1217,7 @@ dependencies = [
 [[package]]
 name = "flodbadd"
 version = "0.9.83"
-source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#2e253839c9e4245ea297c067bfbbda4ebee88d36"
+source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#1eedd68174f754b4750bccf501287476323f0544"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -3090,9 +3090,9 @@ checksum = "7a2d987857b319362043e95f5353c0535c1f58eec5336fdfcf626430af7def58"
 
 [[package]]
 name = "reqwest"
-version = "0.12.25"
+version = "0.12.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6eff9328d40131d43bd911d42d79eb6a47312002a4daefc9e37f17e74a7701a"
+checksum = "3b4c14b2d9afca6a60277086b0cc6a6ae0b568f6f7916c943a8cdc79f8be240f"
 dependencies = [
  "base64 0.22.1",
  "bytes",
