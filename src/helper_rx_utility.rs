@@ -151,15 +151,24 @@ pub async fn utility_mdns_resolve(addresses: &str) -> Result<String> {
     let mut mdns_results: Vec<(IpAddr, String, MacAddr6, Vec<String>)> = Vec::new();
     for address in serde_json::from_str::<Vec<IpAddr>>(addresses)? {
         if let Some(mdns_info) = mdns_get_by_ip(&address).await {
-            // Combine instances & services
+            // Combine instances & services (extract just the service names)
             let mut mdns_services_instances = mdns_info.instances.to_vec();
-            mdns_services_instances.extend(mdns_info.services.to_vec());
+            mdns_services_instances.extend(mdns_info.services.iter().map(|e| e.service.clone()));
             mdns_services_instances.sort();
             mdns_services_instances.dedup();
+
+            // Get the most recent MAC (or first if all same timestamp)
+            let primary_mac = mdns_info
+                .mac_addresses
+                .iter()
+                .max_by_key(|e| e.last_seen)
+                .map(|e| e.address)
+                .unwrap_or(MacAddr6::nil());
+
             mdns_results.push((
                 address,
                 mdns_info.hostname,
-                mdns_info.mac_address,
+                primary_mac,
                 mdns_services_instances,
             ));
         } else {
@@ -175,8 +184,9 @@ pub async fn utility_mdns_resolve(addresses: &str) -> Result<String> {
 }
 
 pub async fn utility_getappleid_email(username: &str) -> Result<String> {
+    // Use full path to plist file since defaults doesn't respect HOME when running as root
     run_cli(
-        r#"defaults read MobileMeAccounts Accounts | grep AccountID | grep -o "\".*\"" | sed "s/\"//g" | tr -d "\n""#,
+        r#"defaults read "$HOME/Library/Preferences/MobileMeAccounts.plist" Accounts | grep AccountID | grep -o "\".*\"" | sed "s/\"//g" | tr -d "\n""#,
         username,
         true,
         None,
