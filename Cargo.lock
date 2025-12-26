@@ -480,9 +480,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.2.50"
+version = "1.2.51"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9f50d563227a1c37cc0a263f64eca3334388c01c5e4c4861a9def205c614383c"
+checksum = "7a0aeaff4ff1a90589618835a598e545176939b97874f7abc7851caa0618f203"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -1001,7 +1001,7 @@ dependencies = [
 [[package]]
 name = "edamame_models"
 version = "0.1.1"
-source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#6c95a29c8f6b0bd9b703830085188f1b95fbf418"
+source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#402692c10b5864b7dc1734085f82472c2793525a"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1196,9 +1196,9 @@ checksum = "37909eebbb50d72f9059c3b6d82c0463f2ff062c9e95845c43a6c9c0355411be"
 
 [[package]]
 name = "find-msvc-tools"
-version = "0.1.5"
+version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a3076410a55c90011c298b04d0cfa770b00fa04e1e3c97d3f6c9de105a03844"
+checksum = "645cbb3a84e60b7531617d5ae4e57f7e27308f6445f5abf653209ea76dec8dff"
 
 [[package]]
 name = "fixedbitset"
@@ -1220,7 +1220,7 @@ dependencies = [
 [[package]]
 name = "flodbadd"
 version = "0.9.83"
-source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#d83b120d7e82f62462b295122067655c319b72ee"
+source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#85952ac50628411fac299cb40ac7d76f2866c646"
 dependencies = [
  "anyhow",
  "arc-swap",
