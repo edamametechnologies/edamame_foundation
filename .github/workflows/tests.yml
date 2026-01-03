@@ -69,7 +69,7 @@ jobs:
     steps:
 
       - name: Setup EDAMAME Posture
-        uses: edamametechnologies/edamame_posture_action@v0
+        uses: edamametechnologies/edamame_posture_action@v1
         with:
           edamame_user: ${{ vars.EDAMAME_POSTURE_USER }}
           edamame_domain: ${{ vars.EDAMAME_POSTURE_DOMAIN }}
@@ -391,7 +391,7 @@ jobs:
           git config --global --add safe.directory '*'
 
       - name: Setup EDAMAME Posture
-        uses: edamametechnologies/edamame_posture_action@v0
+        uses: edamametechnologies/edamame_posture_action@v1
         with:
           edamame_user: ${{ vars.EDAMAME_POSTURE_USER }}
           edamame_domain: ${{ vars.EDAMAME_POSTURE_DOMAIN }}
