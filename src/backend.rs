@@ -27,6 +27,8 @@ pub enum BackendErrorCode {
     InvalidSignature,
     InvalidPolicy,
     SubscriptionLimitReached,
+    InternalServerError,
+    NonExistentDevice,
     None,
 }
 
@@ -48,6 +50,8 @@ impl fmt::Display for BackendErrorCode {
             BackendErrorCode::InvalidSignature => write!(f, "InvalidSignature"),
             BackendErrorCode::InvalidPolicy => write!(f, "InvalidPolicy"),
             BackendErrorCode::SubscriptionLimitReached => write!(f, "SubscriptionLimitReached"),
+            BackendErrorCode::InternalServerError => write!(f, "InternalServerError"),
+            BackendErrorCode::NonExistentDevice => write!(f, "NonExistentDevice"),
             BackendErrorCode::Unknown => write!(f, "Unknown"),
             BackendErrorCode::None => write!(f, "None"),
         }
