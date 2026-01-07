@@ -151,4 +151,12 @@ pub trait Backend {
         request: &edamame_backend::agentic_backend::AgenticAnalysisRequestBackend,
         oauth_bearer_token: Option<String>,
     ) -> Result<edamame_backend::agentic_backend::AgenticAnalysisResponseBackend>;
+
+    /// Get the user's agentic subscription status (plan name and usage)
+    /// Requires OAuth bearer token for authentication
+    async fn get_agentic_subscription_status(
+        &self,
+        device_id: &str,
+        oauth_bearer_token: String,
+    ) -> Result<edamame_backend::agentic_backend::AgenticSubscriptionStatusBackend>;
 }
