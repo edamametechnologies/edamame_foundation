@@ -145,5 +145,6 @@ pub trait Backend {
         &self,
         device_id: &str,
         request: &edamame_backend::agentic_backend::AgenticAnalysisRequestBackend,
+        oauth_bearer_token: Option<String>,
     ) -> Result<edamame_backend::agentic_backend::AgenticAnalysisResponseBackend>;
 }
