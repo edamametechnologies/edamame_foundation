@@ -1001,7 +1001,7 @@ dependencies = [
 [[package]]
 name = "edamame_models"
 version = "0.1.1"
-source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#a67ab03c95d395198699eec9b07753765e15996f"
+source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#03ccaa692df6fa5a9ac82661e2d090c23edeb41a"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1220,7 +1220,7 @@ dependencies = [
 [[package]]
 name = "flodbadd"
 version = "0.9.83"
-source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#3a36d040f2dae643d9ef0a9addb83d6c884ff67b"
+source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#82b033a707e7aafc056304c3df9a5416599df453"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -2010,9 +2010,9 @@ checksum = "2c4a545a15244c7d945065b5d392b2d2d7f21526fba56ce51467b06ed445e8f7"
 
 [[package]]
 name = "libc"
-version = "0.2.179"
+version = "0.2.180"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c5a2d376baa530d1238d133232d15e239abad80d05838b4b59354e5268af431f"
+checksum = "bcc35a38544a891a5f7c865aca548a982ccb3b8650a5b06d0fd33a10283c56fc"
 
 [[package]]
 name = "libloading"
@@ -4115,7 +4115,7 @@ checksum = "562d481066bde0658276a35467c4af00bdc6ee726305698a55b86e61d7ad82bb"
 [[package]]
 name = "undeadlock"
 version = "0.9.83"
-source = "git+https://github.com/edamametechnologies/undeadlock?branch=main#8d8a721b007dc5905ad5863399b1556dfd47604b"
+source = "git+https://github.com/edamametechnologies/undeadlock?branch=main#39bc2bac593c29695a5287f1cd66b8ffb24abe2e"
 dependencies = [
  "dashmap",
  "futures",
