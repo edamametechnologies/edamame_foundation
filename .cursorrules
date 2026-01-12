@@ -1,0 +1,36 @@
+# EDAMAME Foundation - Core Library
+
+## Documentation (Read First)
+Before making changes, consult these files:
+- **CLAUDE.md** - Build commands, testing, architecture overview
+- **ARCHITECTURE.md** - Helper protocol, threat model system, scoring
+- **README.md** - Library overview and ecosystem
+
+## Project Context
+EDAMAME Foundation provides:
+- Helper protocol (gRPC IPC with privileged daemon)
+- Threat assessment engine with platform-specific metrics
+- Security scoring algorithm
+- Network analysis integration (via flodbadd)
+
+## Key Files
+- `src/helper_rx.rs` - Server-side helper implementation
+- `src/helper_tx.rs` - Client-side helper interface
+- `src/threat.rs` - Core threat model structures
+- `src/threat_metrics_*.rs` - Platform-specific security checks
+- `src/score.rs` - Security score calculation
+
+## Build & Test
+```bash
+cargo build --features packetcapture
+cargo test --features packetcapture -- --nocapture
+```
+
+## Part of EDAMAME Ecosystem
+This library bridges `edamame_core` and `edamame_helper`. See `../edamame_core/CLAUDE.md` for the full ecosystem.
+
+## Code Patterns
+- Helper protocol uses Protocol Buffers (`proto/edamame.proto`)
+- Threat metrics are JSON-defined in `edamame_models` repo
+- Order types: `metricorder` (security ops) and `utilityorder` (system ops)
+- Platform detection via `#[cfg(target_os = "...")]`
