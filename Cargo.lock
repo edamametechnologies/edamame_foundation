@@ -1007,7 +1007,7 @@ dependencies = [
 [[package]]
 name = "edamame_models"
 version = "0.1.1"
-source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#189467fddc0d5bf65eb0284d67fc5818c5657d59"
+source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#dac5faf052f83e1992d527a11421ef8cb045d4ed"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1226,7 +1226,7 @@ dependencies = [
 [[package]]
 name = "flodbadd"
 version = "0.9.83"
-source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#83e55107464592a6e70125dabd4adf3d56bb75a1"
+source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#c93955fff5303ed5352bd2b85738a044f703d6d0"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -2973,7 +2973,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6db2770f06117d490610c7488547d543617b21bfa07796d7a12f6f1bd53850d1"
 dependencies = [
  "rand_chacha 0.9.0",
- "rand_core 0.9.3",
+ "rand_core 0.9.4",
 ]
 
 [[package]]
@@ -2993,7 +2993,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3022b5f1df60f26e1ffddd6c66e8aa15de382ae63b3a0c1bfc0e4d3e3f325cb"
 dependencies = [
  "ppv-lite86",
- "rand_core 0.9.3",
+ "rand_core 0.9.4",
 ]
 
 [[package]]
@@ -3007,9 +3007,9 @@ dependencies = [
 
 [[package]]
 name = "rand_core"
-version = "0.9.3"
+version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "99d9a13982dcf210057a8a78572b2217b667c3beacbf3a0d8b454f6f82837d38"
+checksum = "4f1b3bc831f92381018fd9c6350b917c7b21f1eed35a65a51900e0e55a3d7afa"
 dependencies = [
  "getrandom 0.3.4",
 ]
