@@ -8,6 +8,12 @@ EDAMAME Foundation provides core functionality for the EDAMAME security platform
 
 Part of the EDAMAME ecosystem - see `../edamame_core/CLAUDE.md` for full ecosystem documentation.
 
+## Documentation Index
+
+- **[ARCHITECTURE.md](ARCHITECTURE.md)** - Module structure, helper protocol, threat model system
+- **[README.md](README.md)** - Library overview and ecosystem
+- **[proto/edamame.proto](proto/edamame.proto)** - gRPC protocol definitions
+
 ## Build Commands
 
 ```bash
