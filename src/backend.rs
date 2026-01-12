@@ -153,10 +153,13 @@ pub trait Backend {
     ) -> Result<edamame_backend::agentic_backend::AgenticAnalysisResponseBackend>;
 
     /// Get the user's agentic subscription status (plan name and usage)
-    /// Requires OAuth bearer token for authentication
+    /// Requires OAuth bearer token for authentication.
+    /// device_type and suggested_name are optional parameters for auto-populating device info.
     async fn get_agentic_subscription_status(
         &self,
         device_id: &str,
         oauth_bearer_token: String,
+        device_type: Option<&str>,
+        suggested_name: Option<&str>,
     ) -> Result<edamame_backend::agentic_backend::AgenticSubscriptionStatusBackend>;
 }
