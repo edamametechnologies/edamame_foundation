@@ -140,16 +140,6 @@ Stars = overall * 5 / 100  // 0-5 scale
 └─────────────┘                      └─────────────────┘
 ```
 
-## Platform Support
-
-| Platform | Helper | Network Capture | Security Checks |
-|----------|--------|-----------------|-----------------|
-| macOS | LaunchDaemon | ✅ | Full |
-| Windows | Windows Service | ✅ (Npcap) | Full |
-| Linux | systemd | ✅ | Full |
-| iOS | N/A | Limited | Limited |
-| Android | N/A | Limited | Limited |
-
 ## Dependencies
 
 - `edamame_backend` - Backend data structures
