@@ -5,8 +5,9 @@ alwaysApply: true
 
 # EDAMAME Foundation - Core Library
 
+> **Master Repository:** `edamame_app` - See `../edamame_app/.cursor/rules/workspace.mdc` for workspace-wide rules.
+
 ## Documentation (Read First)
-Before making changes, consult these files:
 - **CLAUDE.md** - Build commands, testing, architecture overview
 - **ARCHITECTURE.md** - Helper protocol, threat model system, scoring
 - **README.md** - Library overview and ecosystem
@@ -31,11 +32,15 @@ cargo build --features packetcapture
 cargo test --features packetcapture -- --nocapture
 ```
 
-## Part of EDAMAME Ecosystem
-This library bridges `edamame_core` and `edamame_helper`. See `../edamame_core/CLAUDE.md` for the full ecosystem.
-
 ## Code Patterns
 - Helper protocol uses Protocol Buffers (`proto/edamame.proto`)
 - Threat metrics are JSON-defined in `edamame_models` repo
 - Order types: `metricorder` (security ops) and `utilityorder` (system ops)
 - Platform detection via `#[cfg(target_os = "...")]`
+
+## Local Development
+Toggle local/git dependencies (run from edamame_app):
+```bash
+cd ../edamame_app && ./flip.sh local
+cd ../edamame_app && ./flip.sh git
+```

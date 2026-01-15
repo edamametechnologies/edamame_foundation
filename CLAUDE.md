@@ -2,11 +2,11 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+> **Master Repository:** `edamame_app` - See `../edamame_app/CLAUDE.md` for workspace-wide rules and cross-repository guidance.
+
 ## Project Overview
 
 EDAMAME Foundation provides core functionality for the EDAMAME security platform. It implements the helper protocol for privileged operations, the threat assessment engine, and platform-specific security metrics.
-
-Part of the EDAMAME ecosystem - see `../edamame_core/CLAUDE.md` for full ecosystem documentation.
 
 ## Documentation Index
 
