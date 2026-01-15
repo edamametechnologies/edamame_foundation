@@ -8,7 +8,6 @@ alwaysApply: true
 > **Master Repository:** `edamame_app` - See `../edamame_app/.cursor/rules/workspace.mdc` for workspace-wide rules.
 
 ## Documentation (Read First)
-- **CLAUDE.md** - Build commands, testing, architecture overview
 - **ARCHITECTURE.md** - Helper protocol, threat model system, scoring
 - **README.md** - Library overview and ecosystem
 
@@ -20,17 +19,34 @@ EDAMAME Foundation provides:
 - Network analysis integration (via flodbadd)
 
 ## Key Files
-- `src/helper_rx.rs` - Server-side helper implementation
-- `src/helper_tx.rs` - Client-side helper interface
-- `src/threat.rs` - Core threat model structures
-- `src/threat_metrics_*.rs` - Platform-specific security checks
+
+### Helper Protocol (IPC with privileged daemon)
+- `src/helper_proto.rs` - Protocol Buffer definitions
+- `src/helper_rx.rs` - Server-side (helper) implementation
+- `src/helper_tx.rs` - Client-side interface
+- `src/helper_state.rs` - Helper activation state
+
+### Threat Assessment Engine
+- `src/threat.rs` - Core threat model data structures
+- `src/threat_factory.rs` - Threat model instantiation
+- `src/threat_metrics_macos.rs` - macOS-specific checks
+- `src/threat_metrics_windows.rs` - Windows-specific checks
+- `src/threat_metrics_linux.rs` - Linux-specific checks
+- `src/threat_metrics_ios.rs` - iOS-specific checks
+- `src/threat_metrics_android.rs` - Android-specific checks
+
+### Security & Scoring
 - `src/score.rs` - Security score calculation
+- `src/order.rs`, `src/order_type.rs` - Remediation order management
 
 ## Build & Test
 ```bash
 cargo build --features packetcapture
 cargo test --features packetcapture -- --nocapture
 ```
+
+## Protocol Buffers
+gRPC definitions in `proto/edamame.proto` for helper IPC.
 
 ## Code Patterns
 - Helper protocol uses Protocol Buffers (`proto/edamame.proto`)
