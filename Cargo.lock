@@ -1033,6 +1033,7 @@ dependencies = [
  "regex",
  "reqwest 0.13.1",
  "run_script",
+ "rustls",
  "sentry",
  "sentry-tracing",
  "serde",
