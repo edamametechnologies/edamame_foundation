@@ -32,8 +32,8 @@ edamame_models = { git = "https://github.com/edamametechnologies/threatmodels-rs
 
 # Sentry
 # Beware it will use reqwest with native-tls by default, not rustls
-# Use native-tls for sentry to avoid rustls CryptoProvider conflicts with reqwest 0.13
-sentry = { version = "0.46.0", default-features = false, features = ["reqwest", "native-tls"] }
+# Use rustls for sentry (reqwest 0.12 uses ring)
+sentry = { version = "0.46.0", default-features = false, features = ["reqwest", "rustls"] }
 sentry-tracing = "0.46.0"
 
 # Global statics w/ mutex
@@ -107,8 +107,8 @@ sorted-vec = "0.8.10"
 encoding_rs = "0.8.35"
 thiserror = "2.0.16"
 serial_test = "3.2.0"
-# Prevent reqwest from using native-tls, use rustls (aws-lc-rs default)
-reqwest = { version = "0.13.1", default-features = false, features = ["gzip", "rustls"] }
+# Use rustls with ring via reqwest 0.12
+reqwest = { version = "0.12.28", default-features = false, features = ["gzip", "rustls-tls-webpki-roots"] }
 
 # Encrypted env (weak)
 envcrypt = "0.5.0"
