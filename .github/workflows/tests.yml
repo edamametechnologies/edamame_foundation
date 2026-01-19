@@ -418,7 +418,23 @@ jobs:
         shell: bash
         run: |
           apt-get update
-          apt-get install -y protobuf-compiler libpcap-dev
+          apt-get install -y protobuf-compiler libpcap-dev software-properties-common
+          
+          # Install GCC 10+ on Ubuntu 20.04 to fix aws-lc-sys memcmp bug (GCC bug #95189)
+          # Ubuntu 20.04 ships with GCC 9 which has a known memcmp optimization bug
+          if grep -q "20.04" /etc/os-release 2>/dev/null; then
+            echo "Detected Ubuntu 20.04 - installing GCC 10 to fix aws-lc-sys compilation"
+            add-apt-repository -y ppa:ubuntu-toolchain-r/test
+            apt-get update
+            apt-get install -y gcc-10 g++-10
+            # Set GCC 10 as the default compiler
+            update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-10 100
+            update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-10 100
+            update-alternatives --install /usr/bin/cc cc /usr/bin/gcc-10 100
+            update-alternatives --install /usr/bin/c++ c++ /usr/bin/g++-10 100
+            echo "GCC version after update:"
+            gcc --version
+          fi
 
       # Install Rust in container
       - name: Install Rust in container
