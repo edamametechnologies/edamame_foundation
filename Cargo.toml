@@ -18,17 +18,17 @@ crate-type = [ "staticlib", "cdylib", "lib" ]
 
 [dependencies]
 # Local copy in order to allow rapid development/debug
-#edamame_backend = { path = "../edamame_backend" }
-edamame_backend = { git = "https://github.com/edamametechnologies/edamame_backend", branch = "main" }
+edamame_backend = { path = "../edamame_backend" }
+#edamame_backend = { git = "https://github.com/edamametechnologies/edamame_backend", branch = "main" }
 # Local copy in order to allow rapid development/debug
-#undeadlock = { path = "../undeadlock" }
-undeadlock = { git = "https://github.com/edamametechnologies/undeadlock", branch = "main" }
+undeadlock = { path = "../undeadlock" }
+#undeadlock = { git = "https://github.com/edamametechnologies/undeadlock", branch = "main" }
 # Local copy in order to allow rapid development/debug
-#flodbadd = { path = "../flodbadd" }
-flodbadd = { git = "https://github.com/edamametechnologies/flodbadd", branch = "main" }
+flodbadd = { path = "../flodbadd" }
+#flodbadd = { git = "https://github.com/edamametechnologies/flodbadd", branch = "main" }
 # Local copy in order to allow rapid development/debug
-#edamame_models = { path = "../edamame_models" }
-edamame_models = { git = "https://github.com/edamametechnologies/threatmodels-rs", branch = "main" }
+edamame_models = { path = "../edamame_models" }
+#edamame_models = { git = "https://github.com/edamametechnologies/threatmodels-rs", branch = "main" }
 
 # Sentry
 # Beware it will use reqwest with native-tls by default, not rustls
@@ -106,8 +106,10 @@ sorted-vec = "0.8.10"
 encoding_rs = "0.8.35"
 thiserror = "2.0.16"
 serial_test = "3.2.0"
-# Prevent reqwest from using native-tls (use rustls with aws-lc-rs default)
-reqwest = { version = "0.13.1", default-features = false, features = ["gzip", "rustls"] }
+# Prevent reqwest from using native-tls
+# Use ring crypto provider only - rustls-no-provider prevents reqwest from adding aws-lc-rs
+rustls = { version = "0.23.36", default-features = false, features = ["ring", "std", "tls12"] }
+reqwest = { version = "0.13.1", default-features = false, features = ["gzip", "rustls-no-provider", "webpki-roots"] }
 
 # Encrypted env (weak)
 envcrypt = "0.5.0"
@@ -154,5 +156,5 @@ tonic-prost-build = "0.14.2"
 [target.'cfg(target_os = "windows")'.build-dependencies]
 # For the winpcap installation support in Windows
 # Local copy in order to allow rapid development/debug
-#flodbadd = { path = "../flodbadd", features = [ "packetcapture", "asyncpacketcapture" ] }
-flodbadd = { git = "https://github.com/edamametechnologies/flodbadd", branch = "main", features = [ "packetcapture", "asyncpacketcapture" ] }
+flodbadd = { path = "../flodbadd", features = [ "packetcapture", "asyncpacketcapture" ] }
+#flodbadd = { git = "https://github.com/edamametechnologies/flodbadd", branch = "main", features = [ "packetcapture", "asyncpacketcapture" ] }
