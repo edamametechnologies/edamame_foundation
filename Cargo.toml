@@ -119,6 +119,7 @@ oui = "0.8.1"
 ipnet = "2.11.0"
 csv = "1.3.1"
 # Prevent reqwest from using native-tls
+rustls = { version = "0.23.36", features = ["ring"] }
 reqwest = { version = "0.13.1", default-features = false, features = ["gzip", "rustls"] }
 
 # macOS
