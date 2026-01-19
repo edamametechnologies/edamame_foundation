@@ -119,7 +119,7 @@ oui = "0.8.1"
 ipnet = "2.11.0"
 csv = "1.3.1"
 # Prevent reqwest from using native-tls
-reqwest = { version = "0.12.23", default-features = false, features = ["gzip", "rustls-tls"] }
+reqwest = { version = "0.13.1", default-features = false, features = ["gzip", "rustls-tls"] }
 
 # macOS
 [target.'cfg(target_os = "macos")'.dependencies]
