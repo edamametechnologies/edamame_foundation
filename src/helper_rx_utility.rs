@@ -440,7 +440,6 @@ pub async fn utility_get_sessions(incremental: bool) -> Result<String> {
     let sessions = CAPTURE.read().await.get_sessions(incremental).await;
     // Use bincode for efficient binary serialization (5-10x smaller/faster than JSON)
     // Then base64 encode for transport over the string-based protobuf channel
-    // Use serde compatibility mode since SessionInfo implements Serialize/Deserialize
     let bincode_sessions =
         match bincode::serde::encode_to_vec(&sessions, bincode::config::standard()) {
             Ok(bytes) => bytes,
@@ -468,7 +467,7 @@ pub async fn utility_get_sessions(incremental: bool) -> Result<String> {
 ))]
 pub async fn utility_get_current_sessions(incremental: bool) -> Result<String> {
     let active_sessions = CAPTURE.read().await.get_current_sessions(incremental).await;
-    // Use bincode for efficient binary serialization (5-10x smaller/faster than JSON)
+    // Use bincode for efficient binary serialization
     let bincode_sessions =
         match bincode::serde::encode_to_vec(&active_sessions, bincode::config::standard()) {
             Ok(bytes) => bytes,
@@ -535,7 +534,7 @@ pub async fn utility_get_whitelist_exceptions(incremental: bool) -> Result<Strin
         .await
         .get_whitelist_exceptions(incremental)
         .await;
-    // Use bincode for efficient binary serialization (5-10x smaller/faster than JSON)
+    // Use bincode for efficient binary serialization
     let bincode_exceptions =
         match bincode::serde::encode_to_vec(&exceptions, bincode::config::standard()) {
             Ok(bytes) => bytes,
@@ -582,7 +581,7 @@ pub async fn utility_get_blacklisted_sessions(incremental: bool) -> Result<Strin
         .await
         .get_blacklisted_sessions(incremental)
         .await;
-    // Use bincode for efficient binary serialization (5-10x smaller/faster than JSON)
+    // Use bincode for efficient binary serialization
     let bincode_sessions =
         match bincode::serde::encode_to_vec(&sessions, bincode::config::standard()) {
             Ok(bytes) => bytes,
