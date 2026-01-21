@@ -85,6 +85,31 @@ service EDAMAMEHelper {
 - `broadcast_ping` - Network discovery
 - `arp_resolve` / `mdns_resolve` - Address resolution
 
+### Serialization
+
+Session data is serialized using **bincode** (binary format) for performance:
+
+| Call | Serialization | Notes |
+|------|---------------|-------|
+| `get_sessions` | bincode + base64 | ~5-10x smaller than JSON |
+| `get_current_sessions` | bincode + base64 | ~5-10x smaller than JSON |
+| `get_whitelist_exceptions` | bincode + base64 | |
+| `get_blacklisted_sessions` | bincode + base64 | |
+| Other utility calls | JSON or plain strings | Small payloads |
+
+Base64 encoding is required because the protobuf `output` field is a string type.
+
+### Timeout Configuration
+
+Long-running operations (e.g., 50k+ sessions) require extended timeouts:
+
+| Setting | Client | Server | Purpose |
+|---------|--------|--------|---------|
+| HTTP/2 keep-alive interval | 30s | 30s | Detect dead connections |
+| HTTP/2 keep-alive timeout | 120s | 120s | Max wait for ping response |
+| Request timeout | 180s | - | Max time for RPC completion |
+| Connection timeout | 120s | - | Max time to establish connection |
+
 ## Threat Model System
 
 Hierarchical JSON schema with platform-specific implementations:

@@ -150,9 +150,15 @@ async fn helper_run(
         .identity(client_identity);
 
     debug!("Connecting to helper server: {}", target);
-    let channel = Channel::from_static(target).tls_config(tls)?;
+    // Configure HTTP/2 keep-alive to prevent connection drops during long operations
+    // like get_sessions which can take 100+ seconds with large session counts.
+    let channel = Channel::from_static(target)
+        .tls_config(tls)?
+        .http2_keep_alive_interval(Duration::from_secs(30))
+        .keep_alive_timeout(Duration::from_secs(120))
+        .keep_alive_while_idle(true);
 
-    // Timeout the connection after 120 seconds, this needs to be high enough as we are querying the helper in //
+    // Timeout the connection after 120 seconds, this needs to be high enough as we are querying the helper in parallel
     let connection = timeout(Duration::from_secs(120), channel.connect()).await??;
 
     let mut client = EdamameHelperClient::new(connection)
@@ -170,14 +176,23 @@ async fn helper_run(
         version: CARGO_PKG_VERSION.to_string(),
     });
 
-    let response = match client.execute(request).await {
-        Ok(response) => response,
-        Err(e) => {
+    // Timeout the request after 180 seconds - this needs to be high enough for get_sessions
+    // which can take 100+ seconds with large session counts (50k+ sessions).
+    let response = match timeout(Duration::from_secs(180), client.execute(request)).await {
+        Ok(Ok(response)) => response,
+        Ok(Err(e)) => {
             return Err(anyhow!(
                 "Error sending request {} / {} to helper: {:?}",
                 ordertype,
                 subordertype,
                 e
+            ))
+        }
+        Err(_) => {
+            return Err(anyhow!(
+                "Timeout sending request {} / {} to helper (180s exceeded)",
+                ordertype,
+                subordertype,
             ))
         }
     };

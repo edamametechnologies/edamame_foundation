@@ -149,7 +149,15 @@ impl ServerControl {
         );
 
         // Check TLS configuration
-        let server_future = match Server::builder().tls_config(tls) {
+        // Configure HTTP/2 keep-alive to prevent connection drops during long operations
+        // like get_sessions which can take 100+ seconds with large session counts.
+        // Without these settings, the default hyper keep-alive timeout (20s) can cause
+        // "Missing response message" errors.
+        let server_future = match Server::builder()
+            .http2_keepalive_interval(Some(std::time::Duration::from_secs(30)))
+            .http2_keepalive_timeout(Some(std::time::Duration::from_secs(120)))
+            .tls_config(tls)
+        {
             Ok(mut builder) => builder
                 .add_service(EdamameHelperServer::new(edamame_server))
                 .serve(sock),

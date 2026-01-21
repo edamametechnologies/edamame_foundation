@@ -23,6 +23,11 @@ use flodbadd::neighbors::scan_neighbors;
     feature = "packetcapture"
 ))]
 use flodbadd::sessions::SessionFilter;
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux", target_os = "windows"),
+    feature = "packetcapture"
+))]
+use base64::{engine::general_purpose, Engine as _};
 use lazy_static::lazy_static;
 #[cfg(target_os = "macos")]
 use libc::EACCES;
@@ -433,19 +438,25 @@ pub async fn utility_get_filter() -> Result<String> {
 ))]
 pub async fn utility_get_sessions(incremental: bool) -> Result<String> {
     let sessions = CAPTURE.read().await.get_sessions(incremental).await;
-    let json_sessions = match serde_json::to_string(&sessions) {
-        Ok(json) => json,
-        Err(e) => {
-            error!("Error serializing sessions to JSON: {}", e);
-            return order_error(&format!("error serializing sessions to JSON: {}", e), false);
-        }
-    };
+    // Use bincode for efficient binary serialization (5-10x smaller/faster than JSON)
+    // Then base64 encode for transport over the string-based protobuf channel
+    // Use serde compatibility mode since SessionInfo implements Serialize/Deserialize
+    let bincode_sessions =
+        match bincode::serde::encode_to_vec(&sessions, bincode::config::standard()) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                error!("Error serializing sessions to bincode: {}", e);
+                return order_error(&format!("error serializing sessions to bincode: {}", e), false);
+            }
+        };
+    let encoded = general_purpose::STANDARD.encode(&bincode_sessions);
     info!(
-        "Returning {} sessions, incremental: {}",
+        "Returning {} sessions, incremental: {}, size: {} bytes (bincode+base64)",
         sessions.len(),
-        incremental
+        incremental,
+        encoded.len()
     );
-    Ok(json_sessions)
+    Ok(encoded)
 }
 
 #[cfg(all(
@@ -454,22 +465,26 @@ pub async fn utility_get_sessions(incremental: bool) -> Result<String> {
 ))]
 pub async fn utility_get_current_sessions(incremental: bool) -> Result<String> {
     let active_sessions = CAPTURE.read().await.get_current_sessions(incremental).await;
-    let json_active_sessions = match serde_json::to_string(&active_sessions) {
-        Ok(json) => json,
-        Err(e) => {
-            error!("Error serializing current sessions to JSON: {}", e);
-            return order_error(
-                &format!("error serializing current sessions to JSON: {}", e),
-                false,
-            );
-        }
-    };
+    // Use bincode for efficient binary serialization (5-10x smaller/faster than JSON)
+    let bincode_sessions =
+        match bincode::serde::encode_to_vec(&active_sessions, bincode::config::standard()) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                error!("Error serializing current sessions to bincode: {}", e);
+                return order_error(
+                    &format!("error serializing current sessions to bincode: {}", e),
+                    false,
+                );
+            }
+        };
+    let encoded = general_purpose::STANDARD.encode(&bincode_sessions);
     info!(
-        "Returning {} current sessions, incremental: {}",
+        "Returning {} current sessions, incremental: {}, size: {} bytes (bincode+base64)",
         active_sessions.len(),
-        incremental
+        incremental,
+        encoded.len()
     );
-    Ok(json_active_sessions)
+    Ok(encoded)
 }
 
 #[cfg(all(
@@ -517,22 +532,26 @@ pub async fn utility_get_whitelist_exceptions(incremental: bool) -> Result<Strin
         .await
         .get_whitelist_exceptions(incremental)
         .await;
-    let json_exceptions = match serde_json::to_string(&exceptions) {
-        Ok(json) => json,
-        Err(e) => {
-            error!("Error serializing whitelist exceptions to JSON: {}", e);
-            return order_error(
-                &format!("error serializing whitelist exceptions to JSON: {}", e),
-                false,
-            );
-        }
-    };
+    // Use bincode for efficient binary serialization (5-10x smaller/faster than JSON)
+    let bincode_exceptions =
+        match bincode::serde::encode_to_vec(&exceptions, bincode::config::standard()) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                error!("Error serializing whitelist exceptions to bincode: {}", e);
+                return order_error(
+                    &format!("error serializing whitelist exceptions to bincode: {}", e),
+                    false,
+                );
+            }
+        };
+    let encoded = general_purpose::STANDARD.encode(&bincode_exceptions);
     info!(
-        "Returning {} whitelist exceptions, incremental: {}",
+        "Returning {} whitelist exceptions, incremental: {}, size: {} bytes (bincode+base64)",
         exceptions.len(),
-        incremental
+        incremental,
+        encoded.len()
     );
-    Ok(json_exceptions)
+    Ok(encoded)
 }
 
 #[cfg(all(
@@ -560,22 +579,26 @@ pub async fn utility_get_blacklisted_sessions(incremental: bool) -> Result<Strin
         .await
         .get_blacklisted_sessions(incremental)
         .await;
-    let json_sessions = match serde_json::to_string(&sessions) {
-        Ok(json) => json,
-        Err(e) => {
-            error!("Error serializing blacklisted sessions to JSON: {}", e);
-            return order_error(
-                &format!("error serializing blacklisted sessions to JSON: {}", e),
-                false,
-            );
-        }
-    };
+    // Use bincode for efficient binary serialization (5-10x smaller/faster than JSON)
+    let bincode_sessions =
+        match bincode::serde::encode_to_vec(&sessions, bincode::config::standard()) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                error!("Error serializing blacklisted sessions to bincode: {}", e);
+                return order_error(
+                    &format!("error serializing blacklisted sessions to bincode: {}", e),
+                    false,
+                );
+            }
+        };
+    let encoded = general_purpose::STANDARD.encode(&bincode_sessions);
     info!(
-        "Returning {} blacklisted sessions, incremental: {}",
+        "Returning {} blacklisted sessions, incremental: {}, size: {} bytes (bincode+base64)",
         sessions.len(),
-        incremental
+        incremental,
+        encoded.len()
     );
-    Ok(json_sessions)
+    Ok(encoded)
 }
 
 #[cfg(all(
