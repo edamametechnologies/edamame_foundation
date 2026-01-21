@@ -7,6 +7,11 @@ use crate::logger::get_all_logs;
 use crate::peer_ids::get_peer_ids;
 use crate::runner_cli::run_cli;
 use anyhow::Result;
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux", target_os = "windows"),
+    feature = "packetcapture"
+))]
+use base64::{engine::general_purpose, Engine as _};
 use flodbadd::arp::*;
 use flodbadd::broadcast::scan_hosts_broadcast;
 #[cfg(all(
@@ -23,11 +28,6 @@ use flodbadd::neighbors::scan_neighbors;
     feature = "packetcapture"
 ))]
 use flodbadd::sessions::SessionFilter;
-#[cfg(all(
-    any(target_os = "macos", target_os = "linux", target_os = "windows"),
-    feature = "packetcapture"
-))]
-use base64::{engine::general_purpose, Engine as _};
 use lazy_static::lazy_static;
 #[cfg(target_os = "macos")]
 use libc::EACCES;
@@ -446,7 +446,10 @@ pub async fn utility_get_sessions(incremental: bool) -> Result<String> {
             Ok(bytes) => bytes,
             Err(e) => {
                 error!("Error serializing sessions to bincode: {}", e);
-                return order_error(&format!("error serializing sessions to bincode: {}", e), false);
+                return order_error(
+                    &format!("error serializing sessions to bincode: {}", e),
+                    false,
+                );
             }
         };
     let encoded = general_purpose::STANDARD.encode(&bincode_sessions);
