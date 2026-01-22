@@ -12,11 +12,6 @@ use anyhow::Result;
     feature = "packetcapture"
 ))]
 use base64::{engine::general_purpose, Engine as _};
-#[cfg(all(
-    any(target_os = "macos", target_os = "linux", target_os = "windows"),
-    feature = "packetcapture"
-))]
-use std::time::Instant;
 use flodbadd::arp::*;
 use flodbadd::broadcast::scan_hosts_broadcast;
 #[cfg(all(
@@ -44,6 +39,11 @@ use std::fs::File;
 use std::io::ErrorKind;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux", target_os = "windows"),
+    feature = "packetcapture"
+))]
+use std::time::Instant;
 use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info, warn};
 use undeadlock::CustomRwLock;
@@ -482,7 +482,10 @@ pub async fn utility_get_sessions(incremental: bool) -> Result<String> {
 ))]
 pub async fn utility_get_current_sessions(incremental: bool) -> Result<String> {
     let start = Instant::now();
-    info!("Starting get_current_sessions (incremental: {})", incremental);
+    info!(
+        "Starting get_current_sessions (incremental: {})",
+        incremental
+    );
     let active_sessions = CAPTURE.read().await.get_current_sessions(incremental).await;
     let fetch_elapsed_ms = start.elapsed().as_millis();
     // Use bincode for efficient binary serialization
