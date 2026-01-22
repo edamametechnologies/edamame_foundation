@@ -159,7 +159,12 @@ impl ServerControl {
             .tls_config(tls)
         {
             Ok(mut builder) => builder
-                .add_service(EdamameHelperServer::new(edamame_server))
+                .add_service(
+                    EdamameHelperServer::new(edamame_server)
+                        // 4GB limit to handle high-activity devices with long uptime
+                        .max_decoding_message_size(4000 * 1024 * 1024)
+                        .max_encoding_message_size(4000 * 1024 * 1024),
+                )
                 .serve(sock),
             Err(e) => {
                 error!("TLS configuration error: {}", e);
