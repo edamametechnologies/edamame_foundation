@@ -12,6 +12,11 @@ use anyhow::Result;
     feature = "packetcapture"
 ))]
 use base64::{engine::general_purpose, Engine as _};
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux", target_os = "windows"),
+    feature = "packetcapture"
+))]
+use std::time::Instant;
 use flodbadd::arp::*;
 use flodbadd::broadcast::scan_hosts_broadcast;
 #[cfg(all(
@@ -437,7 +442,10 @@ pub async fn utility_get_filter() -> Result<String> {
     feature = "packetcapture"
 ))]
 pub async fn utility_get_sessions(incremental: bool) -> Result<String> {
+    let start = Instant::now();
+    info!("Starting get_sessions (incremental: {})", incremental);
     let sessions = CAPTURE.read().await.get_sessions(incremental).await;
+    let fetch_elapsed_ms = start.elapsed().as_millis();
     // Use bincode for efficient binary serialization (5-10x smaller/faster than JSON)
     // Then base64 encode for transport over the string-based protobuf channel
     let bincode_sessions =
@@ -451,12 +459,19 @@ pub async fn utility_get_sessions(incremental: bool) -> Result<String> {
                 );
             }
         };
+    let bincode_len = bincode_sessions.len();
+    let bincode_elapsed_ms = start.elapsed().as_millis();
     let encoded = general_purpose::STANDARD.encode(&bincode_sessions);
+    let base64_elapsed_ms = start.elapsed().as_millis();
     info!(
-        "Returning {} sessions, incremental: {}, size: {} bytes (bincode+base64)",
+        "Returning {} sessions, incremental: {}, size: {} bytes (bincode: {} bytes, fetch: {}ms, bincode: {}ms, base64: {}ms)",
         sessions.len(),
         incremental,
-        encoded.len()
+        encoded.len(),
+        bincode_len,
+        fetch_elapsed_ms,
+        bincode_elapsed_ms,
+        base64_elapsed_ms
     );
     Ok(encoded)
 }
@@ -466,7 +481,10 @@ pub async fn utility_get_sessions(incremental: bool) -> Result<String> {
     feature = "packetcapture"
 ))]
 pub async fn utility_get_current_sessions(incremental: bool) -> Result<String> {
+    let start = Instant::now();
+    info!("Starting get_current_sessions (incremental: {})", incremental);
     let active_sessions = CAPTURE.read().await.get_current_sessions(incremental).await;
+    let fetch_elapsed_ms = start.elapsed().as_millis();
     // Use bincode for efficient binary serialization
     let bincode_sessions =
         match bincode::serde::encode_to_vec(&active_sessions, bincode::config::standard()) {
@@ -479,12 +497,19 @@ pub async fn utility_get_current_sessions(incremental: bool) -> Result<String> {
                 );
             }
         };
+    let bincode_len = bincode_sessions.len();
+    let bincode_elapsed_ms = start.elapsed().as_millis();
     let encoded = general_purpose::STANDARD.encode(&bincode_sessions);
+    let base64_elapsed_ms = start.elapsed().as_millis();
     info!(
-        "Returning {} current sessions, incremental: {}, size: {} bytes (bincode+base64)",
+        "Returning {} current sessions, incremental: {}, size: {} bytes (bincode: {} bytes, fetch: {}ms, bincode: {}ms, base64: {}ms)",
         active_sessions.len(),
         incremental,
-        encoded.len()
+        encoded.len(),
+        bincode_len,
+        fetch_elapsed_ms,
+        bincode_elapsed_ms,
+        base64_elapsed_ms
     );
     Ok(encoded)
 }
