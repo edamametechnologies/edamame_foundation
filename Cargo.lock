@@ -942,7 +942,7 @@ dependencies = [
 
 [[package]]
 name = "edamame_foundation"
-version = "0.9.84"
+version = "0.9.85"
 dependencies = [
  "anyhow",
  "arp-toolkit",
@@ -1008,7 +1008,7 @@ dependencies = [
 [[package]]
 name = "edamame_models"
 version = "0.1.1"
-source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#4c5da18d503942597e947e83518fb06da29563f9"
+source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#660dd384b2324c0362f48b1d86e5473b970e887f"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1226,8 +1226,8 @@ dependencies = [
 
 [[package]]
 name = "flodbadd"
-version = "0.9.84"
-source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#c966ad6be271d0bed5cf78fafa01a33325740e92"
+version = "0.9.85"
+source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#de5f888f7d5037a096063ef2f059aef4191523ac"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -2250,9 +2250,9 @@ dependencies = [
 
 [[package]]
 name = "netlink-sys"
-version = "0.8.7"
+version = "0.8.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "16c903aa70590cb93691bf97a767c8d1d6122d2cc9070433deb3bbf36ce8bd23"
+checksum = "cd6c30ed10fa69cc491d491b85cc971f6bdeb8e7367b7cde2ee6cc878d583fae"
 dependencies = [
  "bytes",
  "libc",
@@ -2800,9 +2800,9 @@ dependencies = [
 
 [[package]]
 name = "proc-macro2"
-version = "1.0.105"
+version = "1.0.106"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "535d180e0ecab6268a3e718bb9fd44db66bbbc256257165fc699dadf70d16fe7"
+checksum = "8fd00f0bb2e90d81d1044c2b32617f68fcb9fa3bb7640c23e9c748e53fb30934"
 dependencies = [
  "unicode-ident",
 ]
@@ -4134,8 +4134,8 @@ checksum = "562d481066bde0658276a35467c4af00bdc6ee726305698a55b86e61d7ad82bb"
 
 [[package]]
 name = "undeadlock"
-version = "0.9.84"
-source = "git+https://github.com/edamametechnologies/undeadlock?branch=main#e456e5fcfba8998944e3ef5baa216d46d5634ec3"
+version = "0.9.85"
+source = "git+https://github.com/edamametechnologies/undeadlock?branch=main#8d7fdef62135111c0bf43f77cbda1e92a10f5b0f"
 dependencies = [
  "dashmap",
  "futures",
