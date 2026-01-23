@@ -162,10 +162,9 @@ async fn helper_run(
     let connection = timeout(Duration::from_secs(120), channel.connect()).await??;
 
     let mut client = EdamameHelperClient::new(connection)
-        // For session data, the messages can be large (sessions accumulate over time)
-        // 4GB limit to handle high-activity devices with long uptime
-        .max_decoding_message_size(4000 * 1024 * 1024)
-        .max_encoding_message_size(4000 * 1024 * 1024);
+        // For session data, the messages can be large
+        .max_decoding_message_size(1000 * 1024 * 1024)
+        .max_encoding_message_size(1000 * 1024 * 1024);
 
     trace!("Sending request to helper server");
     let request = tonic::Request::new(HelperRequest {
