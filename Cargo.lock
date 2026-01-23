@@ -984,7 +984,7 @@ dependencies = [
  "serde_with",
  "serial_test",
  "sha2",
- "socket2 0.6.1",
+ "socket2 0.6.2",
  "sorted-vec",
  "strum",
  "strum_macros",
@@ -1008,7 +1008,7 @@ dependencies = [
 [[package]]
 name = "edamame_models"
 version = "0.1.1"
-source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#f85f516a4f3feb74fbbeac7ac6f8770819c0a8e2"
+source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#2a3051d94fdec07a52155b855a1d5a32bd805720"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1226,8 +1226,8 @@ dependencies = [
 
 [[package]]
 name = "flodbadd"
-version = "0.9.87"
-source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#e5e71216c151aea76d7414805e47462363c5ad94"
+version = "0.9.88"
+source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#bbef0dfc61989f45fae4e9bd61ef8c48273f18f9"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -1265,7 +1265,7 @@ dependencies = [
  "serde_json",
  "serial_test",
  "sha2",
- "socket2 0.6.1",
+ "socket2 0.6.2",
  "sorted-vec",
  "strum_macros",
  "sysinfo",
@@ -1737,7 +1737,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.1",
+ "socket2 0.6.2",
  "tokio",
  "tower-service",
  "tracing",
@@ -2899,7 +2899,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash",
  "rustls",
- "socket2 0.6.1",
+ "socket2 0.6.2",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -2936,7 +2936,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.6.1",
+ "socket2 0.6.2",
  "tracing",
  "windows-sys 0.60.2",
 ]
@@ -3601,9 +3601,9 @@ dependencies = [
 
 [[package]]
 name = "socket2"
-version = "0.6.1"
+version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "17129e116933cf371d018bb80ae557e889637989d8638274fb25622827b03881"
+checksum = "86f4aa3ad99f2088c990dfa82d367e19cb29268ed67c574d10d0a4bfe71f07e0"
 dependencies = [
  "libc",
  "windows-sys 0.60.2",
@@ -3856,7 +3856,7 @@ dependencies = [
  "parking_lot",
  "pin-project-lite",
  "signal-hook-registry",
- "socket2 0.6.1",
+ "socket2 0.6.2",
  "tokio-macros",
  "tracing",
  "windows-sys 0.61.2",
@@ -3926,7 +3926,7 @@ dependencies = [
  "hyper-util",
  "percent-encoding",
  "pin-project",
- "socket2 0.6.1",
+ "socket2 0.6.2",
  "sync_wrapper",
  "tokio",
  "tokio-rustls",
@@ -4134,8 +4134,8 @@ checksum = "562d481066bde0658276a35467c4af00bdc6ee726305698a55b86e61d7ad82bb"
 
 [[package]]
 name = "undeadlock"
-version = "0.9.86"
-source = "git+https://github.com/edamametechnologies/undeadlock?branch=main#7744e5ca3f45499319dc34a81dcd53d9579c0f2e"
+version = "0.9.88"
+source = "git+https://github.com/edamametechnologies/undeadlock?branch=main#7814cf3220de3a95807ac705848caa039ff48728"
 dependencies = [
  "dashmap",
  "futures",
