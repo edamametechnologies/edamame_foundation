@@ -1151,7 +1151,10 @@ mod tests {
             version: env!("CARGO_PKG_VERSION").to_string(),
         });
 
-        info!("Sending get_sessions request for {} sessions", SESSION_COUNT);
+        info!(
+            "Sending get_sessions request for {} sessions",
+            SESSION_COUNT
+        );
         let start = std::time::Instant::now();
         let response = timeout(Duration::from_secs(60), client.execute(request)).await??;
         let elapsed = start.elapsed();
@@ -1233,7 +1236,10 @@ mod tests {
             version: env!("CARGO_PKG_VERSION").to_string(),
         });
 
-        info!("Sending get_sessions request for {} sessions", SESSION_COUNT);
+        info!(
+            "Sending get_sessions request for {} sessions",
+            SESSION_COUNT
+        );
         let start = std::time::Instant::now();
         let response = timeout(Duration::from_secs(120), client.execute(request)).await??;
         let elapsed = start.elapsed();
@@ -1291,9 +1297,7 @@ mod tests {
         const SESSION_COUNT: usize = 1_000_000;
         const TEST_PORT: u16 = 50059;
 
-        println!(
-            "Starting 1M session test - this will generate ~300-400MB payload"
-        );
+        println!("Starting 1M session test - this will generate ~300-400MB payload");
 
         let mock_helper = ComprehensiveMockHelper::default().with_session_count(SESSION_COUNT);
 
