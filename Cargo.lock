@@ -929,7 +929,6 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 [[package]]
 name = "edamame_backend"
 version = "0.3.5"
-source = "git+https://github.com/edamametechnologies/edamame_backend?branch=main#fe18388e34a9ad2a36465c4e7da5a6b6d98b5205"
 dependencies = [
  "anyhow",
  "blake3",
@@ -1008,7 +1007,6 @@ dependencies = [
 [[package]]
 name = "edamame_models"
 version = "0.1.1"
-source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#2a3051d94fdec07a52155b855a1d5a32bd805720"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1157,7 +1155,6 @@ dependencies = [
 [[package]]
 name = "extended-isolation-forest"
 version = "0.2.3"
-source = "git+https://github.com/edamametechnologies/extended-isolation-forest?branch=main#b373e9dd5681447d5fff50c106a73ec2ee0f4377"
 dependencies = [
  "num-traits",
  "rand 0.8.5",
@@ -1227,7 +1224,6 @@ dependencies = [
 [[package]]
 name = "flodbadd"
 version = "0.9.88"
-source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#bbef0dfc61989f45fae4e9bd61ef8c48273f18f9"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -4135,7 +4131,6 @@ checksum = "562d481066bde0658276a35467c4af00bdc6ee726305698a55b86e61d7ad82bb"
 [[package]]
 name = "undeadlock"
 version = "0.9.88"
-source = "git+https://github.com/edamametechnologies/undeadlock?branch=main#7814cf3220de3a95807ac705848caa039ff48728"
 dependencies = [
  "dashmap",
  "futures",
