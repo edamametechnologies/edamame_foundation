@@ -241,10 +241,15 @@ impl Logger {
     }
 
     pub fn get_new_logs(&self) -> String {
-        let logs = match self.memory_writer.data.lock() {
+        let logs: Vec<String> = match self.memory_writer.data.lock() {
             Ok(mut locked_data) => {
                 let count = locked_data.to_take;
-                let logs = locked_data.logs.iter().take(count).cloned().collect();
+                let logs = locked_data
+                    .logs
+                    .iter()
+                    .take(count)
+                    .cloned()
+                    .collect::<Vec<String>>();
                 locked_data.to_take = 0;
                 logs
             }
