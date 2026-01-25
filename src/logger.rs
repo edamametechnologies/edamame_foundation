@@ -52,6 +52,8 @@ lazy_static! {
         );
         Regex::new(&pattern).expect("Failed to compile sanitization regex")
     };
+    static ref ANSI_ESCAPE_REGEX: Regex =
+        Regex::new(r"\x1b\[[0-9;]*m").expect("Failed to compile ANSI escape regex");
 }
 
 static PANIC_HOOK_INIT: Once = Once::new();
@@ -95,8 +97,7 @@ impl MemoryWriter {
             sanitize_keywords(log_line, &[])
         };
         // Remove all escape codes (x1b\[[0-9;]*m) from the log line before storing it in the log buffer x1b\[[0-9;]*m
-        let re = Regex::new(r"\x1b\[[0-9;]*m").unwrap();
-        let log_line_formatted = re.replace_all(&log_line_sanitized, "");
+        let log_line_formatted = ANSI_ESCAPE_REGEX.replace_all(&log_line_sanitized, "");
         let log_line_formatted = log_line_formatted.trim().to_string();
 
         let mut locked_data = match self.data.lock() {
@@ -212,6 +213,22 @@ fn sanitize_keywords(input: &str, _keywords: &[&str]) -> String {
         .to_string()
 }
 
+fn build_log_output(logs: &[String]) -> String {
+    if logs.is_empty() {
+        return String::new();
+    }
+    let mut capacity = 0;
+    for line in logs {
+        capacity += line.len() + 1;
+    }
+    let mut output = String::with_capacity(capacity);
+    for line in logs {
+        output.push('\n');
+        output.push_str(line);
+    }
+    output
+}
+
 pub struct Logger {
     memory_writer: MemoryWriter,
 }
@@ -224,34 +241,30 @@ impl Logger {
     }
 
     pub fn get_new_logs(&self) -> String {
-        match self.memory_writer.data.lock() {
+        let logs = match self.memory_writer.data.lock() {
             Ok(mut locked_data) => {
-                let new_logs: String = locked_data
-                    .logs
-                    .iter()
-                    .take(locked_data.to_take)
-                    .fold(String::new(), |acc, x| format!("{}\n{}", acc, x));
+                let count = locked_data.to_take;
+                let logs = locked_data.logs.iter().take(count).cloned().collect();
                 locked_data.to_take = 0;
-                new_logs
+                logs
             }
             Err(e) => {
                 eprintln!("Error locking memory writer for new logs: {}", e);
-                String::new()
+                return String::new();
             }
-        }
+        };
+        build_log_output(&logs)
     }
 
     pub fn get_all_logs(&self) -> String {
-        match self.memory_writer.data.lock() {
-            Ok(locked_data) => locked_data
-                .logs
-                .iter()
-                .fold(String::new(), |acc, x| format!("{}\n{}", acc, x)),
+        let logs = match self.memory_writer.data.lock() {
+            Ok(locked_data) => locked_data.logs.iter().cloned().collect::<Vec<String>>(),
             Err(e) => {
                 eprintln!("Error locking memory writer for all logs: {}", e);
-                String::new()
+                return String::new();
             }
-        }
+        };
+        build_log_output(&logs)
     }
 
     pub fn flush_logs(&self) {
