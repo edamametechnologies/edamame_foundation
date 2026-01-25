@@ -1008,7 +1008,7 @@ dependencies = [
 [[package]]
 name = "edamame_models"
 version = "0.1.1"
-source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#54bbdb4b029cb3178e4b43e17dde9bec9ac2aa48"
+source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#db2dbf6fd5c3bbcb5cfba4f2a23fc2a0427a1b52"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1227,7 +1227,7 @@ dependencies = [
 [[package]]
 name = "flodbadd"
 version = "1.0.0"
-source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#ddbbc5d64c5c032aef3b1667663b8cf3d5a88987"
+source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#9f9e72494f215887de009f1687dfbe667694d0c1"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -4135,7 +4135,7 @@ checksum = "562d481066bde0658276a35467c4af00bdc6ee726305698a55b86e61d7ad82bb"
 [[package]]
 name = "undeadlock"
 version = "1.0.0"
-source = "git+https://github.com/edamametechnologies/undeadlock?branch=main#96080fe5fd29e531dd47114c405298bf14aab8cf"
+source = "git+https://github.com/edamametechnologies/undeadlock?branch=main#95ab34d7871459ac8af1714db3e11121e48a232f"
 dependencies = [
  "dashmap",
  "futures",
@@ -5087,9 +5087,9 @@ checksum = "40990edd51aae2c2b6907af74ffb635029d5788228222c4bb811e9351c0caad3"
 
 [[package]]
 name = "zmij"
-version = "1.0.16"
+version = "1.0.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dfcd145825aace48cff44a8844de64bf75feec3080e0aa5cdbde72961ae51a65"
+checksum = "02aae0f83f69aafc94776e879363e9771d7ecbffe2c7fbb6c14c5e00dfe88439"
 
 [[package]]
 name = "zopfli"
