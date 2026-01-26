@@ -1008,7 +1008,7 @@ dependencies = [
 [[package]]
 name = "edamame_models"
 version = "0.1.1"
-source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#8e340b1a5d5c5155b474f64da7e016d93042aa3a"
+source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#de9ed04a0e1ec34e420cacae0f05eb9bd4787329"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1227,7 +1227,7 @@ dependencies = [
 [[package]]
 name = "flodbadd"
 version = "1.0.0"
-source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#9f9e72494f215887de009f1687dfbe667694d0c1"
+source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#4f615cc5886c04e334854e69d55eb442676497a1"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -2189,9 +2189,9 @@ dependencies = [
 
 [[package]]
 name = "moka"
-version = "0.12.12"
+version = "0.12.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a3dec6bd31b08944e08b58fd99373893a6c17054d6f3ea5006cc894f4f4eee2a"
+checksum = "b4ac832c50ced444ef6be0767a008b02c106a909ba79d1d830501e94b96f6b7e"
 dependencies = [
  "crossbeam-channel",
  "crossbeam-epoch",
@@ -4135,7 +4135,7 @@ checksum = "562d481066bde0658276a35467c4af00bdc6ee726305698a55b86e61d7ad82bb"
 [[package]]
 name = "undeadlock"
 version = "1.0.0"
-source = "git+https://github.com/edamametechnologies/undeadlock?branch=main#16581dd7e71eb1348b49f4a45279e163531bc600"
+source = "git+https://github.com/edamametechnologies/undeadlock?branch=main#f862dffbbcf40a4e8500b8bc1f8ff13145f2f4fc"
 dependencies = [
  "dashmap",
  "futures",
@@ -4959,18 +4959,18 @@ dependencies = [
 
 [[package]]
 name = "zerocopy"
-version = "0.8.33"
+version = "0.8.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "668f5168d10b9ee831de31933dc111a459c97ec93225beb307aed970d1372dfd"
+checksum = "71ddd76bcebeed25db614f82bf31a9f4222d3fbba300e6fb6c00afa26cbd4d9d"
 dependencies = [
  "zerocopy-derive",
 ]
 
 [[package]]
 name = "zerocopy-derive"
-version = "0.8.33"
+version = "0.8.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2c7962b26b0a8685668b671ee4b54d007a67d4eaf05fda79ac0ecf41e32270f1"
+checksum = "d8187381b52e32220d50b255276aa16a084ec0a9017a0ca2152a1f55c539758d"
 dependencies = [
  "proc-macro2",
  "quote",
