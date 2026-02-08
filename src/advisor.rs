@@ -64,6 +64,7 @@ pub enum AdvicePriority {
     Low,
     Medium,
     High,
+    Critical,
 }
 
 // A single todo entry in the advisor queue
@@ -97,9 +98,9 @@ impl AdvisorTodo {
         // Remove todos that are done
         todos.retain(|t| !t.done);
 
-        // Only keep the high and medium priority todos
+        // Only keep the critical, high and medium priority todos
         todos
-            .retain(|t| t.priority == AdvicePriority::High || t.priority == AdvicePriority::Medium);
+            .retain(|t| t.priority == AdvicePriority::Critical || t.priority == AdvicePriority::High || t.priority == AdvicePriority::Medium);
 
         // Use the shared category mapping from advice_type_str to avoid drift
 
@@ -519,6 +520,7 @@ pub fn map_priority_to_backend(priority: &AdvicePriority) -> AdvicePriorityBacke
         AdvicePriority::Low => AdvicePriorityBackend::Low,
         AdvicePriority::Medium => AdvicePriorityBackend::Medium,
         AdvicePriority::High => AdvicePriorityBackend::High,
+        AdvicePriority::Critical => AdvicePriorityBackend::Critical,
     }
 }
 

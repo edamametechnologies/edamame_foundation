@@ -60,7 +60,21 @@ impl fmt::Display for BackendErrorCode {
 
 impl BackendErrorCode {
     pub fn from_anyhow_error(error: Error) -> Option<Self> {
-        error.downcast::<Self>().ok()
+        // Try direct downcast first (works when error is not wrapped in context)
+        match error.downcast::<Self>() {
+            Ok(code) => Some(code),
+            Err(error) => {
+                // If direct downcast failed, walk the error chain to find
+                // BackendErrorCode. This handles context-wrapped errors
+                // (e.g., anyhow!(code).context(reason)).
+                for cause in error.chain() {
+                    if let Some(code) = cause.downcast_ref::<Self>() {
+                        return Some(code.clone());
+                    }
+                }
+                None
+            }
+        }
     }
 }
 
