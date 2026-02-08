@@ -99,8 +99,11 @@ impl AdvisorTodo {
         todos.retain(|t| !t.done);
 
         // Only keep the critical, high and medium priority todos
-        todos
-            .retain(|t| t.priority == AdvicePriority::Critical || t.priority == AdvicePriority::High || t.priority == AdvicePriority::Medium);
+        todos.retain(|t| {
+            t.priority == AdvicePriority::Critical
+                || t.priority == AdvicePriority::High
+                || t.priority == AdvicePriority::Medium
+        });
 
         // Use the shared category mapping from advice_type_str to avoid drift
 
