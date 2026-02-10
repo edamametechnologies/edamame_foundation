@@ -9,3 +9,5 @@
 /Cargo.toml.dynamic
 /npcap-sdk-*
 .DS_Store
+
+.cursor
