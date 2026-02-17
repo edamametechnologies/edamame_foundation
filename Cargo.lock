@@ -1008,7 +1008,7 @@ dependencies = [
 [[package]]
 name = "edamame_models"
 version = "0.1.1"
-source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#274b2a0f7742cf3f59e6a6b3031f341cb2803a2d"
+source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#67d90e602102e8eee942d14753abda06d6a5f707"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1227,7 +1227,7 @@ dependencies = [
 [[package]]
 name = "flodbadd"
 version = "1.0.5"
-source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#18d945aafd4c7a5e2f1b7d640cce9e354b7fee82"
+source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#c62ec2efcc92b2036e53d6ed68bf24b7a6d4a323"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -4165,7 +4165,7 @@ checksum = "562d481066bde0658276a35467c4af00bdc6ee726305698a55b86e61d7ad82bb"
 [[package]]
 name = "undeadlock"
 version = "1.0.2"
-source = "git+https://github.com/edamametechnologies/undeadlock?branch=main#b1111e6251e6c5cd76124db4bd5c52d2f8a9de29"
+source = "git+https://github.com/edamametechnologies/undeadlock?branch=main#f614db1b8ab03d7aca0305aa5eb77e4069b57910"
 dependencies = [
  "dashmap",
  "futures",

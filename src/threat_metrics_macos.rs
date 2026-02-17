@@ -1,6 +1,6 @@
 // Built in default threat model
 pub static THREAT_METRICS_MACOS: &str = r#"{
-  "date": "February 10th 2026",
+  "date": "February 17th 2026",
   "extends": "none",
   "metrics": [
     {
@@ -1895,7 +1895,7 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
           {
             "class": "link",
             "locale": "FR",
-            "target": "https://www.techadvisor.com/article/1490855/comment-installer-ancienne-version-macos.html"
+            "target": "https://www.agnosys.com/reinstaller-une-ancienne-version-de-macos"
           }
         ],
         "elevation": "",
@@ -2121,5 +2121,5 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
     }
   ],
   "name": "threat model macOS",
-  "signature": "de945de7e6eff9216db2129664a2f07350935a152bdab4347446278f1e906491"
+  "signature": "559d64053415f3c656263f94fc440b6a97baa60b2b8b73a27dacd67bda1fa8ae"
 }"#;
