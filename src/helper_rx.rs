@@ -1255,7 +1255,7 @@ mod tests {
         );
 
         // Decode base64 to verify it's valid
-        let decoded = general_purpose::STANDARD
+        let _ = general_purpose::STANDARD
             .decode(&output)
             .expect("Response should be valid base64");
 

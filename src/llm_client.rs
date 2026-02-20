@@ -102,7 +102,7 @@ pub fn sanitize_session_for_llm(
     process_cpu_usage: Option<u32>,
     process_accumulated_cpu_time: Option<u64>,
     process_disk_usage: Option<&(u64, u64, u64, u64)>, // (total_written_bytes, written_bytes, total_read_bytes, read_bytes)
-    process_open_files: Option<u64>,
+    process_open_files: &[String],
     src_asn: Option<(u32, String, String)>, // (as_number, country, owner)
     dst_asn: Option<(u32, String, String)>,
     criticality: &str,
