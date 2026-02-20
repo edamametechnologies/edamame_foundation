@@ -103,6 +103,10 @@ pub fn sanitize_session_for_llm(
     process_accumulated_cpu_time: Option<u64>,
     process_disk_usage: Option<&(u64, u64, u64, u64)>, // (total_written_bytes, written_bytes, total_read_bytes, read_bytes)
     process_open_files: &[String],
+    parent_pid: Option<u32>,
+    parent_process_name: Option<&str>,
+    parent_process_path: Option<&str>,
+    parent_cmd: Option<&[String]>,
     src_asn: Option<(u32, String, String)>, // (as_number, country, owner)
     dst_asn: Option<(u32, String, String)>,
     criticality: &str,
@@ -152,6 +156,10 @@ pub fn sanitize_session_for_llm(
             "read_bytes": r,
         })),
         "process_open_files": process_open_files,
+        "parent_pid": parent_pid,
+        "parent_process_name": parent_process_name,
+        "parent_process_path": parent_process_path,
+        "parent_cmd": parent_cmd,
         "source_asn": src_asn.map(|(num, country, owner)| json!({
             "as_number": num,
             "country": country,
@@ -258,6 +266,10 @@ mod tests {
                 "/usr/lib/libSystem.B.dylib".to_string(),
                 "/var/log/syslog".to_string(),
             ],
+            Some(1),
+            Some("launchd"),
+            Some("/sbin/launchd"),
+            Some(&["launchd".to_string()]),
             None,
             Some((13335, "US".to_string(), "Cloudflare".to_string())),
             "anomaly:suspicious",

@@ -168,7 +168,7 @@ Stars = overall * 5 / 100  // 0-5 scale
 ## Dependencies
 
 - `edamame_backend` - Backend data structures
-- `edamame_models` - Threat model definitions
+- `threatmodels-rs` - Threat model definitions
 - `flodbadd` - Network capture (optional)
 - `undeadlock` - Deadlock detection
 - `tonic` + `prost` - gRPC

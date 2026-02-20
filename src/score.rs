@@ -4,10 +4,10 @@ use crate::threat::*;
 use crate::threat_factory::*;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use edamame_models::*;
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use std::collections::{HashMap, HashSet};
+use threatmodels_rs::*;
 use tracing::trace;
 
 // Score

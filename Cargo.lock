@@ -954,7 +954,6 @@ dependencies = [
  "csv",
  "dashmap",
  "edamame_backend",
- "edamame_models",
  "encoding_rs",
  "envcrypt",
  "flodbadd",
@@ -990,6 +989,7 @@ dependencies = [
  "strum_macros",
  "tempfile",
  "thiserror 2.0.18",
+ "threatmodels_rs",
  "tokio",
  "tonic",
  "tonic-prost",
@@ -1003,20 +1003,6 @@ dependencies = [
  "uuid",
  "wez-mdns",
  "windows 0.62.2",
-]
-
-[[package]]
-name = "edamame_models"
-version = "0.1.1"
-source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#0562a967bfa7b308c5292689a64b21fd51734e9b"
-dependencies = [
- "anyhow",
- "chrono",
- "reqwest",
- "serial_test",
- "tokio",
- "tracing",
- "undeadlock",
 ]
 
 [[package]]
@@ -1227,7 +1213,7 @@ dependencies = [
 [[package]]
 name = "flodbadd"
 version = "1.0.7"
-source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#6cee7547c834bc988a4b0af442fa8d4c1c224306"
+source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#8fecbf3f60c91f58a394f4ea7044eefc6da4e2ac"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -1238,7 +1224,6 @@ dependencies = [
  "dashmap",
  "dns-parser",
  "edamame_backend",
- "edamame_models",
  "encoding_rs",
  "eui48",
  "extended-isolation-forest",
@@ -1270,6 +1255,7 @@ dependencies = [
  "strum_macros",
  "sysinfo",
  "thiserror 2.0.18",
+ "threatmodels_rs",
  "tokio",
  "tracing",
  "undeadlock",
@@ -3818,6 +3804,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "threatmodels_rs"
+version = "0.1.1"
+source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#78ed29bf66f95881047412c24529d1d4ed08dafa"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "reqwest",
+ "serial_test",
+ "tokio",
+ "tracing",
+ "undeadlock",
+]
+
+[[package]]
 name = "time"
 version = "0.3.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4165,7 +4165,7 @@ checksum = "562d481066bde0658276a35467c4af00bdc6ee726305698a55b86e61d7ad82bb"
 [[package]]
 name = "undeadlock"
 version = "1.0.2"
-source = "git+https://github.com/edamametechnologies/undeadlock?branch=main#ea07d8e0de735f8a61cd187d3aa2d19bb90a36b7"
+source = "git+https://github.com/edamametechnologies/undeadlock?branch=main#72c492cd376158807ecd70adeb8b75c380312442"
 dependencies = [
  "dashmap",
  "futures",

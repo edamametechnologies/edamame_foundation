@@ -5,8 +5,8 @@ use crate::threat_metrics_linux::*;
 use crate::threat_metrics_macos::*;
 use crate::threat_metrics_windows::*;
 use anyhow::{anyhow, Context, Result};
-use edamame_models::*;
 use lazy_static::lazy_static;
+use threatmodels_rs::*;
 use tracing::{info, warn};
 
 // Constants for model names and built-in data

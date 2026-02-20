@@ -1,6 +1,6 @@
 use edamame_backend::threat_backend::*;
-use edamame_models::CloudDate;
 use serde::{Deserialize, Serialize};
+use threatmodels_rs::CloudDate;
 
 // Only Strings in order to easily read the JSON array
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, PartialOrd)]

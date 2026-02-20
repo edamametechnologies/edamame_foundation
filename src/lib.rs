@@ -1,3 +1,4 @@
+#![recursion_limit = "256"]
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub mod admin;
 pub mod advisor;
