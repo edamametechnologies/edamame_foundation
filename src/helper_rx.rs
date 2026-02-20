@@ -838,7 +838,7 @@ mod tests {
                     total_read_bytes: (id * 20000) as u64,
                     read_bytes: (id * 2000) as u64,
                 },
-                open_files: Some((id % 100) as u64),
+                open_files: vec![format!("/tmp/test_file_{}.dat", id)],
             }),
             src_asn: None,
             dst_asn: None,
@@ -1255,7 +1255,8 @@ mod tests {
         );
 
         // Decode base64 to verify it's valid
-        let _ = general_purpose::STANDARD
+        #[allow(unused_variables)]
+        let decoded = general_purpose::STANDARD
             .decode(&output)
             .expect("Response should be valid base64");
 

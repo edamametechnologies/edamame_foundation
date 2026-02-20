@@ -254,7 +254,10 @@ mod tests {
             Some(5),
             Some(1000000),
             Some(&disk_usage),
-            Some(42),
+            &[
+                "/usr/lib/libSystem.B.dylib".to_string(),
+                "/var/log/syslog".to_string(),
+            ],
             None,
             Some((13335, "US".to_string(), "Cloudflare".to_string())),
             "anomaly:suspicious",
