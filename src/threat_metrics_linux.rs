@@ -1,6 +1,6 @@
 // Built in default threat model
 pub static THREAT_METRICS_LINUX: &str = r#"{
-  "date": "February 10th 2026",
+  "date": "February 21th 2026",
   "extends": "none",
   "metrics": [
     {
@@ -379,6 +379,77 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
             "class": "html",
             "locale": "FR",
             "target": "<p>Scannez votre réseau pour identifier tous les appareils connectés et évaluer les menaces potentielles en suivant ces étapes:</p><ul><li>Allez dans l'onglet 'Réseau'.</li><li>Les appareils de grande importance sont marqués en jaune pour une criticité moyenne et en rouge pour une criticité élevée.</li><li>Sélectionnez un appareil critique.</li><li>Évaluez la criticité de chaque port en lisant les CVE associés et en analysant les problèmes potentiels avec l'IA.</li><li>Si un port est déterminé comme sûr, marquez-le comme vérifié.</li></ul><p>Une fois que tous les appareils sont considérés comme sûrs, cette menace sera marquée comme inactive.</p>"
+          }
+        ],
+        "elevation": "",
+        "maxversion": 0,
+        "minversion": 3,
+        "system": "Linux",
+        "target": "network_manager"
+      },
+      "scope": "generic",
+      "severity": 1,
+      "tags": [
+        "Personal Posture"
+      ]
+    },
+    {
+      "description": [
+        {
+          "locale": "EN",
+          "summary": "Your device is exposing services to the local network that may be unsafe or unverified. Go to the network tab, select your own device, and review the open ports and associated vulnerabilities.",
+          "title": "Unverified or unsafe services exposed to the LAN"
+        },
+        {
+          "locale": "FR",
+          "summary": "Votre appareil expose des services sur le réseau local qui peuvent être non sécurisés ou non vérifiés. Allez dans l'onglet réseau, sélectionnez votre propre appareil et examinez les ports ouverts et les vulnérabilités associées.",
+          "title": "Services non vérifiés ou non sécurisés exposés sur le réseau local"
+        }
+      ],
+      "dimension": "network",
+      "implementation": {
+        "class": "internal",
+        "education": [],
+        "elevation": "user",
+        "maxversion": 0,
+        "minversion": 3,
+        "system": "Linux",
+        "target": "lanscan_host"
+      },
+      "metrictype": "bool",
+      "name": "lanscan_host",
+      "remediation": {
+        "class": "internal",
+        "education": [
+          {
+            "class": "html",
+            "locale": "EN",
+            "target": "<p>Review the services exposed by your device on the local network:</p><ul><li>Navigate to the 'Network' tab.</li><li>Select your own device entry.</li><li>Review each open port and its associated CVEs.</li><li>Close unnecessary services or mark verified ports as safe.</li></ul><p>Once all exposed services are deemed safe, this threat will be marked as inactive.</p>"
+          },
+          {
+            "class": "html",
+            "locale": "FR",
+            "target": "<p>Examinez les services exposés par votre appareil sur le réseau local :</p><ul><li>Allez dans l'onglet 'Réseau'.</li><li>Sélectionnez votre propre appareil.</li><li>Examinez chaque port ouvert et les CVE associés.</li><li>Fermez les services inutiles ou marquez les ports vérifiés comme sûrs.</li></ul><p>Une fois que tous les services exposés sont considérés comme sûrs, cette menace sera marquée comme inactive.</p>"
+          }
+        ],
+        "elevation": "",
+        "maxversion": 0,
+        "minversion": 3,
+        "system": "Linux",
+        "target": "network_manager"
+      },
+      "rollback": {
+        "class": "internal",
+        "education": [
+          {
+            "class": "html",
+            "locale": "EN",
+            "target": "<p>Review the services exposed by your device on the local network:</p><ul><li>Navigate to the 'Network' tab.</li><li>Select your own device entry.</li><li>Review each open port and its associated CVEs.</li><li>Close unnecessary services or mark verified ports as safe.</li></ul><p>Once all exposed services are deemed safe, this threat will be marked as inactive.</p>"
+          },
+          {
+            "class": "html",
+            "locale": "FR",
+            "target": "<p>Examinez les services exposés par votre appareil sur le réseau local :</p><ul><li>Allez dans l'onglet 'Réseau'.</li><li>Sélectionnez votre propre appareil.</li><li>Examinez chaque port ouvert et les CVE associés.</li><li>Fermez les services inutiles ou marquez les ports vérifiés comme sûrs.</li></ul><p>Une fois que tous les services exposés sont considérés comme sûrs, cette menace sera marquée comme inactive.</p>"
           }
         ],
         "elevation": "",
@@ -1339,5 +1410,5 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
     }
   ],
   "name": "threat model Linux",
-  "signature": "2f94302de6b640110f01a68ea808c935b49291c517cd01b7c7a67ccbf6b3eab2"
+  "signature": "95b42bf90dfd40414bc298ee4f1e3df6c5b6d80d4e9fe0b55f18f194d164e736"
 }"#;

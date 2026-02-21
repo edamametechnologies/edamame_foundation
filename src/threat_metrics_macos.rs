@@ -1,6 +1,6 @@
 // Built in default threat model
 pub static THREAT_METRICS_MACOS: &str = r#"{
-  "date": "February 18th 2026",
+  "date": "February 21th 2026",
   "extends": "none",
   "metrics": [
     {
@@ -1772,6 +1772,77 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
       "description": [
         {
           "locale": "EN",
+          "summary": "Your device is exposing services to the local network that may be unsafe or unverified. Go to the network tab, select your own device, and review the open ports and associated vulnerabilities.",
+          "title": "Unverified or unsafe services exposed to the LAN"
+        },
+        {
+          "locale": "FR",
+          "summary": "Votre appareil expose des services sur le réseau local qui peuvent être non sécurisés ou non vérifiés. Allez dans l'onglet réseau, sélectionnez votre propre appareil et examinez les ports ouverts et les vulnérabilités associées.",
+          "title": "Services non vérifiés ou non sécurisés exposés sur le réseau local"
+        }
+      ],
+      "dimension": "network",
+      "implementation": {
+        "class": "internal",
+        "education": [],
+        "elevation": "user",
+        "maxversion": 0,
+        "minversion": 12,
+        "system": "macOS",
+        "target": "lanscan_host"
+      },
+      "metrictype": "bool",
+      "name": "lanscan_host",
+      "remediation": {
+        "class": "internal",
+        "education": [
+          {
+            "class": "html",
+            "locale": "EN",
+            "target": "<p>Review the services exposed by your device on the local network:</p><ul><li>Navigate to the 'Network' tab.</li><li>Select your own device entry.</li><li>Review each open port and its associated CVEs.</li><li>Close unnecessary services or mark verified ports as safe.</li></ul><p>Once all exposed services are deemed safe, this threat will be marked as inactive.</p>"
+          },
+          {
+            "class": "html",
+            "locale": "FR",
+            "target": "<p>Examinez les services exposés par votre appareil sur le réseau local :</p><ul><li>Allez dans l'onglet 'Réseau'.</li><li>Sélectionnez votre propre appareil.</li><li>Examinez chaque port ouvert et les CVE associés.</li><li>Fermez les services inutiles ou marquez les ports vérifiés comme sûrs.</li></ul><p>Une fois que tous les services exposés sont considérés comme sûrs, cette menace sera marquée comme inactive.</p>"
+          }
+        ],
+        "elevation": "",
+        "maxversion": 0,
+        "minversion": 12,
+        "system": "macOS",
+        "target": "network_manager"
+      },
+      "rollback": {
+        "class": "internal",
+        "education": [
+          {
+            "class": "html",
+            "locale": "EN",
+            "target": "<p>Review the services exposed by your device on the local network:</p><ul><li>Navigate to the 'Network' tab.</li><li>Select your own device entry.</li><li>Review each open port and its associated CVEs.</li><li>Close unnecessary services or mark verified ports as safe.</li></ul><p>Once all exposed services are deemed safe, this threat will be marked as inactive.</p>"
+          },
+          {
+            "class": "html",
+            "locale": "FR",
+            "target": "<p>Examinez les services exposés par votre appareil sur le réseau local :</p><ul><li>Allez dans l'onglet 'Réseau'.</li><li>Sélectionnez votre propre appareil.</li><li>Examinez chaque port ouvert et les CVE associés.</li><li>Fermez les services inutiles ou marquez les ports vérifiés comme sûrs.</li></ul><p>Une fois que tous les services exposés sont considérés comme sûrs, cette menace sera marquée comme inactive.</p>"
+          }
+        ],
+        "elevation": "",
+        "maxversion": 0,
+        "minversion": 12,
+        "system": "macOS",
+        "target": "network_manager"
+      },
+      "scope": "generic",
+      "severity": 1,
+      "tags": [
+        "Personal Posture"
+      ]
+    },
+    {
+      "description": [
+        {
+          "locale": "EN",
           "summary": "The egress network traffic is not verified or contains anomalous traffic.",
           "title": "Unverified or anomalous traffic"
         },
@@ -2121,5 +2192,5 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
     }
   ],
   "name": "threat model macOS",
-  "signature": "e015926e955c166f20774659e4295f4e698f18429d7937b75c6915bcc00f30cb"
+  "signature": "cd215d41e3dc2038d224ac441199007a9c9d0648ff2c938822f1abbf609d130b"
 }"#;
