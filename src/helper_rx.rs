@@ -843,6 +843,8 @@ mod tests {
                 parent_process_name: "init".to_string(),
                 parent_process_path: "/sbin/init".to_string(),
                 parent_cmd: vec!["init".to_string()],
+                parent_script_path: None,
+                spawned_from_tmp: false,
             }),
             src_asn: None,
             dst_asn: None,
