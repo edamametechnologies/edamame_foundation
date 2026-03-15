@@ -47,3 +47,8 @@ pub fn handle() -> &'static Runtime {
         .get()
         .expect("Runtime not initialized. Call runtime::init() first.")
 }
+
+/// Returns true when the shared runtime has already been initialized.
+pub fn is_initialized() -> bool {
+    RUNTIME.get().is_some()
+}
