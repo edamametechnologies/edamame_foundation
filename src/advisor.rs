@@ -6,7 +6,7 @@ use std::collections::HashSet;
 use tracing::debug;
 
 /// Internal service threats that should be filtered out from user-visible threat counts
-pub const INTERNAL_THREATS: [&str; 3] = ["lanscan", "pwned", "egresscan"];
+pub const INTERNAL_THREATS: [&str; 4] = ["lanscan", "lanscan_host", "pwned", "egresscan"];
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Ord, PartialOrd)]
 pub enum Advice {
