@@ -271,7 +271,8 @@ jobs:
           elif [ "${{ matrix.os }}" = "macos" ]; then
             brew install protobuf
           elif [ "${{ matrix.os }}" = "windows" ]; then
-            choco install protoc
+            # Pin to 25.3.0: Chocolatey protoc 34.0.0 breaks PATH discovery for prost-build
+            choco install protoc --version=25.3.0 -y
           else
             # linux or other platforms: fall back to matrix command
             echo "Unsupported platform: ${{ matrix.os }}"
