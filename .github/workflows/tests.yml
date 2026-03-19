@@ -3,11 +3,19 @@ name: Cross-platform Tests
 on:
   pull_request:
     branches: ["*"]
+    paths:
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
   workflow_dispatch:
   push:
     branches:
       - 'dev'
       - 'main'
+    paths:
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
