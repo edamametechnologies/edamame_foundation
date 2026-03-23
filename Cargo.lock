@@ -1039,7 +1039,7 @@ dependencies = [
  "tracing-android",
  "tracing-appender",
  "tracing-subscriber",
- "undeadlock 1.0.2",
+ "undeadlock",
  "users",
  "uuid",
  "wez-mdns",
@@ -1185,6 +1185,7 @@ dependencies = [
 [[package]]
 name = "extended-isolation-forest"
 version = "0.2.3"
+source = "git+https://github.com/edamametechnologies/extended-isolation-forest?branch=main#b373e9dd5681447d5fff50c106a73ec2ee0f4377"
 dependencies = [
  "num-traits",
  "rand 0.8.5",
@@ -1254,6 +1255,7 @@ dependencies = [
 [[package]]
 name = "flodbadd"
 version = "1.1.3"
+source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#4b25a1d8ab2ad389ee41a03dc38d73b6c788ca9e"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -1298,7 +1300,7 @@ dependencies = [
  "threatmodels_rs",
  "tokio",
  "tracing",
- "undeadlock 1.0.2",
+ "undeadlock",
  "users",
  "uuid",
  "wez-mdns",
@@ -3896,6 +3898,7 @@ dependencies = [
 [[package]]
 name = "threatmodels_rs"
 version = "0.1.1"
+source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#2da85075ce7dd751a19b0e4022e6db75ca86d0fa"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3903,7 +3906,7 @@ dependencies = [
  "serial_test",
  "tokio",
  "tracing",
- "undeadlock 1.0.2 (git+https://github.com/edamametechnologies/undeadlock?branch=main)",
+ "undeadlock",
 ]
 
 [[package]]
@@ -4250,17 +4253,6 @@ name = "typenum"
 version = "1.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "562d481066bde0658276a35467c4af00bdc6ee726305698a55b86e61d7ad82bb"
-
-[[package]]
-name = "undeadlock"
-version = "1.0.2"
-dependencies = [
- "dashmap",
- "futures",
- "once_cell",
- "tokio",
- "tracing",
-]
 
 [[package]]
 name = "undeadlock"
