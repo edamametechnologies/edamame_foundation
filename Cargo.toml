@@ -18,8 +18,8 @@ crate-type = [ "staticlib", "cdylib", "lib" ]
 
 [dependencies]
 # Local copy in order to allow rapid development/debug
-edamame_backend = { path = "../edamame_backend" }
-#edamame_backend = { git = "https://github.com/edamametechnologies/edamame_backend", branch = "main" }
+#edamame_backend = { path = "../edamame_backend" }
+edamame_backend = { git = "https://github.com/edamametechnologies/edamame_backend", branch = "main" }
 # Local copy in order to allow rapid development/debug
 undeadlock = { path = "../undeadlock" }
 #undeadlock = { git = "https://github.com/edamametechnologies/undeadlock", branch = "main" }
