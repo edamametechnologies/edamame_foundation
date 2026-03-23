@@ -233,7 +233,7 @@ pub fn resolve_config_dir_with_home(agent_type: &str, home: &Path) -> Option<Pat
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
-        dirs::config_dir().map(|c| c.join(slug))
+        Some(home.join(".config").join(slug))
     }
 }
 
