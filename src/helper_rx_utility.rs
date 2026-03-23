@@ -721,6 +721,64 @@ pub fn start_interface_monitor() {
     });
 }
 
+pub async fn utility_provision_agent_plugin(
+    agent_type: &str,
+    user_home: &str,
+) -> Result<String> {
+    let user_home_path = if user_home.is_empty() {
+        None
+    } else {
+        Some(std::path::PathBuf::from(user_home))
+    };
+    let result = crate::agent_plugin::provision_agent_plugin(
+        agent_type,
+        "",
+        user_home_path.as_deref(),
+    )
+    .await;
+    serde_json::to_string(&result)
+        .map_err(|e| anyhow::anyhow!("Failed to serialize provision result: {}", e))
+}
+
+pub async fn utility_get_agent_plugin_status(
+    agent_type: &str,
+    user_home: &str,
+) -> Result<String> {
+    let status = if user_home.is_empty() {
+        crate::agent_plugin::get_agent_plugin_status(agent_type)
+    } else {
+        let home = std::path::PathBuf::from(user_home);
+        crate::agent_plugin::get_agent_plugin_status_for_home(agent_type, &home)
+    };
+    serde_json::to_string(&status)
+        .map_err(|e| anyhow::anyhow!("Failed to serialize plugin status: {}", e))
+}
+
+pub async fn utility_list_agent_plugins(user_home: &str) -> Result<String> {
+    let plugins = if user_home.is_empty() {
+        crate::agent_plugin::list_agent_plugins()
+    } else {
+        let home = std::path::PathBuf::from(user_home);
+        crate::agent_plugin::list_agent_plugins_for_home(&home)
+    };
+    serde_json::to_string(&plugins)
+        .map_err(|e| anyhow::anyhow!("Failed to serialize plugin list: {}", e))
+}
+
+pub async fn utility_uninstall_agent_plugin(
+    agent_type: &str,
+    user_home: &str,
+) -> Result<String> {
+    let result = if user_home.is_empty() {
+        crate::agent_plugin::uninstall_agent_plugin(agent_type, None)
+    } else {
+        let home = std::path::PathBuf::from(user_home);
+        crate::agent_plugin::uninstall_agent_plugin_for_home(agent_type, &home)
+    };
+    serde_json::to_string(&result)
+        .map_err(|e| anyhow::anyhow!("Failed to serialize uninstall result: {}", e))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

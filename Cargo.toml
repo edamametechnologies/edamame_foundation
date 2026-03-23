@@ -1,6 +1,6 @@
 [package]
 name = "edamame_foundation"
-version = "1.1.2"
+version = "1.1.3"
 edition = "2021"
 
 [lints.rust]
@@ -18,17 +18,17 @@ crate-type = [ "staticlib", "cdylib", "lib" ]
 
 [dependencies]
 # Local copy in order to allow rapid development/debug
-#edamame_backend = { path = "../edamame_backend" }
-edamame_backend = { git = "https://github.com/edamametechnologies/edamame_backend", branch = "main" }
+edamame_backend = { path = "../edamame_backend" }
+#edamame_backend = { git = "https://github.com/edamametechnologies/edamame_backend", branch = "main" }
 # Local copy in order to allow rapid development/debug
-#undeadlock = { path = "../undeadlock" }
-undeadlock = { git = "https://github.com/edamametechnologies/undeadlock", branch = "main" }
+undeadlock = { path = "../undeadlock" }
+#undeadlock = { git = "https://github.com/edamametechnologies/undeadlock", branch = "main" }
 # Local copy in order to allow rapid development/debug
-#flodbadd = { path = "../flodbadd" }
-flodbadd = { git = "https://github.com/edamametechnologies/flodbadd", branch = "main" }
+flodbadd = { path = "../flodbadd" }
+#flodbadd = { git = "https://github.com/edamametechnologies/flodbadd", branch = "main" }
 # Local copy in order to allow rapid development/debug
-#threatmodels_rs = { path = "../threatmodels-rs" }
-threatmodels_rs = { git = "https://github.com/edamametechnologies/threatmodels-rs", branch = "main" }
+threatmodels_rs = { path = "../threatmodels-rs" }
+#threatmodels_rs = { git = "https://github.com/edamametechnologies/threatmodels-rs", branch = "main" }
 
 # Sentry
 # Beware it will use reqwest with native-tls by default, not rustls
@@ -63,6 +63,12 @@ uuid = { version = "1.18.1", features = [
 sha2 = "0.10.9"
 hex = "0.4.3"
 md5 = "0.8.0"
+
+# Zip extraction (agent plugin provisioning)
+zip = { version = "8.3", default-features = false, features = ["deflate"] }
+
+# Cross-platform directory resolution
+dirs = "6"
 
 # Logging
 tracing = "0.1.41"
@@ -159,5 +165,5 @@ tonic-prost-build = "0.14.2"
 [target.'cfg(target_os = "windows")'.build-dependencies]
 # For the winpcap installation support in Windows
 # Local copy in order to allow rapid development/debug
-#flodbadd = { path = "../flodbadd", features = [ "packetcapture", "asyncpacketcapture" ] }
-flodbadd = { git = "https://github.com/edamametechnologies/flodbadd", branch = "main", features = [ "packetcapture", "asyncpacketcapture" ] }
+flodbadd = { path = "../flodbadd", features = [ "packetcapture", "asyncpacketcapture" ] }
+#flodbadd = { git = "https://github.com/edamametechnologies/flodbadd", branch = "main", features = [ "packetcapture", "asyncpacketcapture" ] }
