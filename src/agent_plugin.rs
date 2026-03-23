@@ -4,6 +4,62 @@ use std::path::{Path, PathBuf};
 use std::process::Command as StdCommand;
 use tracing::{info, warn};
 
+/// When running as root (e.g. helper daemon), installed files end up root-owned.
+/// This function re-chowns a directory tree to match the owner of `home`.
+#[cfg(unix)]
+fn chown_to_home_owner(path: &Path, home: &Path) -> anyhow::Result<()> {
+    use std::os::unix::fs::MetadataExt;
+
+    if !path.exists() {
+        return Ok(());
+    }
+
+    let meta = std::fs::metadata(home)?;
+    let uid = meta.uid();
+    let gid = meta.gid();
+
+    if unsafe { libc::getuid() } != 0 {
+        return Ok(());
+    }
+
+    info!(
+        "Chowning {} to uid={} gid={} (matching {})",
+        path.display(),
+        uid,
+        gid,
+        home.display()
+    );
+
+    chown_recursive(path, uid, gid)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn chown_recursive(path: &Path, uid: u32, gid: u32) -> anyhow::Result<()> {
+    use std::ffi::CString;
+
+    let c_path =
+        CString::new(path.to_string_lossy().as_bytes()).map_err(|e| anyhow!("bad path: {}", e))?;
+    let rc = unsafe { libc::chown(c_path.as_ptr(), uid, gid) };
+    if rc != 0 {
+        let err = std::io::Error::last_os_error();
+        warn!("chown failed for {}: {}", path.display(), err);
+    }
+
+    if path.is_dir() {
+        for entry in std::fs::read_dir(path)? {
+            let entry = entry?;
+            chown_recursive(&entry.path(), uid, gid)?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn chown_to_home_owner(_path: &Path, _home: &Path) -> anyhow::Result<()> {
+    Ok(())
+}
+
 const GITHUB_ORG: &str = "edamametechnologies";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -534,6 +590,11 @@ fn install_cursor_or_claude_code(
     }
 
     let version = read_package_version(&install_path).unwrap_or_else(|| "unknown".to_string());
+
+    chown_to_home_owner(&config_dir, home)?;
+    chown_to_home_owner(&install_path, home)?;
+    chown_to_home_owner(&state_dir, home)?;
+
     Ok(version)
 }
 
@@ -544,11 +605,13 @@ fn install_openclaw(source_root: &Path, home: &Path) -> anyhow::Result<String> {
     let skill_ex_dst = openclaw_dir.join("skills/edamame-extrapolator");
     let skill_posture_dst = openclaw_dir.join("skills/edamame-posture");
     let meta_dst = openclaw_dir.join("edamame-openclaw");
+    let state_dst = meta_dst.join("state");
 
     std::fs::create_dir_all(&ext_dst)?;
     std::fs::create_dir_all(&skill_ex_dst)?;
     std::fs::create_dir_all(&skill_posture_dst)?;
     std::fs::create_dir_all(&meta_dst)?;
+    std::fs::create_dir_all(&state_dst)?;
 
     let plugin_src = source_root.join("extensions/edamame");
     for name in &["openclaw.plugin.json", "index.ts"] {
@@ -574,6 +637,9 @@ fn install_openclaw(source_root: &Path, home: &Path) -> anyhow::Result<String> {
     }
 
     let version = read_package_version(&meta_dst).unwrap_or_else(|| "unknown".to_string());
+
+    chown_to_home_owner(&openclaw_dir, home)?;
+
     Ok(version)
 }
 
