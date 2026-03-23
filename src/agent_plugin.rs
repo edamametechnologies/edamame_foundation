@@ -402,8 +402,17 @@ fn install_cursor_or_claude_code(
     std::fs::create_dir_all(&install_path)?;
 
     let dirs_to_copy = [
-        "bridge", "adapters", "prompts", "scheduler", "service", "docs", "tests", "setup",
-        "agents", "assets", "skills",
+        "bridge",
+        "adapters",
+        "prompts",
+        "scheduler",
+        "service",
+        "docs",
+        "tests",
+        "setup",
+        "agents",
+        "assets",
+        "skills",
     ];
     for dir_name in &dirs_to_copy {
         copy_dir_if_exists(source_root, &install_path, dir_name);
@@ -667,10 +676,7 @@ pub async fn provision_agent_plugin(
             let data_dir = data_dir_for_home(&home);
             let install_path =
                 resolve_install_path_with_home(agent_type, &home, &data_dir).unwrap_or_default();
-            info!(
-                "Successfully provisioned {} v{}",
-                def.display_name, version
-            );
+            info!("Successfully provisioned {} v{}", def.display_name, version);
             AgentPluginProvisionResult {
                 success: true,
                 agent_type: agent_type.to_string(),
@@ -821,7 +827,10 @@ pub fn uninstall_agent_plugin(
 }
 
 /// Uninstall using an explicit home directory (for the helper running as root).
-pub fn uninstall_agent_plugin_for_home(agent_type: &str, home: &Path) -> AgentPluginUninstallResult {
+pub fn uninstall_agent_plugin_for_home(
+    agent_type: &str,
+    home: &Path,
+) -> AgentPluginUninstallResult {
     uninstall_agent_plugin(agent_type, Some(home))
 }
 
@@ -875,15 +884,24 @@ mod tests {
     fn test_install_path_resolution() {
         let cursor_path = resolve_install_path("cursor");
         assert!(cursor_path.is_some());
-        assert!(cursor_path.unwrap().to_string_lossy().contains("cursor-edamame"));
+        assert!(cursor_path
+            .unwrap()
+            .to_string_lossy()
+            .contains("cursor-edamame"));
 
         let claude_path = resolve_install_path("claude_code");
         assert!(claude_path.is_some());
-        assert!(claude_path.unwrap().to_string_lossy().contains("claude-code-edamame"));
+        assert!(claude_path
+            .unwrap()
+            .to_string_lossy()
+            .contains("claude-code-edamame"));
 
         let openclaw_path = resolve_install_path("openclaw");
         assert!(openclaw_path.is_some());
-        assert!(openclaw_path.unwrap().to_string_lossy().contains(".openclaw/edamame-openclaw"));
+        assert!(openclaw_path
+            .unwrap()
+            .to_string_lossy()
+            .contains(".openclaw/edamame-openclaw"));
     }
 
     #[test]
@@ -941,11 +959,8 @@ mod tests {
         zip_writer
             .start_file("prefix-abc123/package.json", options)
             .unwrap();
-        std::io::Write::write_all(
-            &mut zip_writer,
-            br#"{"name":"test","version":"1.0.0"}"#,
-        )
-        .unwrap();
+        std::io::Write::write_all(&mut zip_writer, br#"{"name":"test","version":"1.0.0"}"#)
+            .unwrap();
         let cursor = zip_writer.finish().unwrap();
         let zip_bytes = cursor.into_inner();
 

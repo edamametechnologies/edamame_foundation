@@ -536,16 +536,10 @@ pub async fn rpc_run(
                 feature = "packetcapture"
             ))]
             "get_whitelist_name" => utility_get_whitelist_name().await,
-            "provision_agent_plugin" => {
-                utility_provision_agent_plugin(arg1, arg2).await
-            }
-            "get_agent_plugin_status" => {
-                utility_get_agent_plugin_status(arg1, arg2).await
-            }
+            "provision_agent_plugin" => utility_provision_agent_plugin(arg1, arg2).await,
+            "get_agent_plugin_status" => utility_get_agent_plugin_status(arg1, arg2).await,
             "list_agent_plugins" => utility_list_agent_plugins(arg1).await,
-            "uninstall_agent_plugin" => {
-                utility_uninstall_agent_plugin(arg1, arg2).await
-            }
+            "uninstall_agent_plugin" => utility_uninstall_agent_plugin(arg1, arg2).await,
             _ => order_error(
                 &format!("unknown or unimplemented utilityorder {}", subordertype),
                 false,
