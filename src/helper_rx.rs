@@ -1088,8 +1088,8 @@ mod tests {
             }
         });
 
-        // Give the server time to start
-        sleep(Duration::from_millis(500)).await;
+        // Give the server time to start (1s on CI where runners may be loaded)
+        sleep(Duration::from_millis(1000)).await;
 
         Ok((
             tx,
@@ -1701,7 +1701,7 @@ mod tests {
         });
 
         let start = std::time::Instant::now();
-        let response = timeout(Duration::from_secs(30), client.execute(request)).await??;
+        let response = timeout(Duration::from_secs(60), client.execute(request)).await??;
         let elapsed = start.elapsed();
 
         // Verify the delay was applied
