@@ -269,19 +269,11 @@ pub fn resolve_state_dir_with_home(agent_type: &str, home: &Path) -> Option<Path
     }
 }
 
-fn find_executable(name: &str) -> Option<PathBuf> {
-    #[cfg(target_os = "windows")]
-    let output = StdCommand::new("where").arg(name).output().ok()?;
-    #[cfg(not(target_os = "windows"))]
-    let output = StdCommand::new("which").arg(name).output().ok()?;
-
-    if output.status.success() {
-        let path_str = String::from_utf8(output.stdout).ok()?;
-        let first_line = path_str.lines().next()?;
-        Some(PathBuf::from(first_line.trim()))
-    } else {
-        None
-    }
+fn username_from_home(home: &Path) -> String {
+    home.file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string()
 }
 
 pub fn read_package_version(install_path: &Path) -> Option<String> {
@@ -362,238 +354,229 @@ fn extract_zipball(zip_bytes: &[u8], target_dir: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn copy_dir_recursive(src: &Path, dst: &Path) -> anyhow::Result<()> {
-    std::fs::create_dir_all(dst)?;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let src_path = entry.path();
-        let dst_path = dst.join(entry.file_name());
-        if src_path.is_dir() {
-            copy_dir_recursive(&src_path, &dst_path)?;
-        } else {
-            std::fs::copy(&src_path, &dst_path)?;
+fn resolve_install_script(source_root: &Path) -> Option<PathBuf> {
+    #[cfg(target_os = "windows")]
+    {
+        let ps1 = source_root.join("setup").join("install.ps1");
+        if ps1.is_file() {
+            return Some(ps1);
         }
     }
-    Ok(())
-}
-
-fn copy_dir_if_exists(source_root: &Path, install_root: &Path, dir_name: &str) {
-    let src = source_root.join(dir_name);
-    if src.is_dir() {
-        let dst = install_root.join(dir_name);
-        if let Err(e) = copy_dir_recursive(&src, &dst) {
-            warn!("Failed to copy {}: {}", dir_name, e);
+    #[cfg(not(target_os = "windows"))]
+    {
+        let sh = source_root.join("setup").join("install.sh");
+        if sh.is_file() {
+            return Some(sh);
         }
     }
+    None
 }
 
-fn copy_file_if_exists(source_root: &Path, install_root: &Path, file_name: &str) {
-    let src = source_root.join(file_name);
-    if src.is_file() {
-        let dst = install_root.join(file_name);
-        if let Some(parent) = dst.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        if let Err(e) = std::fs::copy(&src, &dst) {
-            warn!("Failed to copy {}: {}", file_name, e);
-        }
+/// Resolve the global MCP configuration file that the host IDE reads.
+///
+/// - Cursor: `~/.cursor/mcp.json`
+/// - Claude Code: `~/.claude.json`
+fn resolve_global_mcp_config(agent_type: &str, home: &Path) -> Option<PathBuf> {
+    match agent_type {
+        "cursor" => Some(home.join(".cursor/mcp.json")),
+        "claude_code" => Some(home.join(".claude.json")),
+        _ => None,
     }
 }
 
-fn render_template(src: &Path, dst: &Path, replacements: &[(&str, &str)]) -> anyhow::Result<()> {
-    let content = std::fs::read_to_string(src)?;
-    let mut rendered = content;
-    for (placeholder, value) in replacements {
-        rendered = rendered.replace(placeholder, value);
+const MCP_SERVER_KEY: &str = "edamame";
+
+/// Back up a file to `<path>.bak` before we modify it.  Best-effort: a
+/// failure here is logged but does not abort the operation.
+fn backup_file(path: &Path) {
+    if !path.exists() {
+        return;
     }
-    if let Some(parent) = dst.parent() {
+    let bak = path.with_extension(format!(
+        "{}.bak",
+        path.extension()
+            .unwrap_or_default()
+            .to_string_lossy()
+    ));
+    if let Err(e) = std::fs::copy(path, &bak) {
+        warn!(
+            "Could not back up {} to {}: {}",
+            path.display(),
+            bak.display(),
+            e
+        );
+    }
+}
+
+/// Inject (upsert) the `"edamame"` MCP server entry into the IDE's global
+/// MCP configuration file.  Preserves every other key in the file -- both
+/// sibling `mcpServers` entries and any unrelated top-level fields.
+///
+/// If the file exists but is not valid JSON the function returns an error
+/// rather than silently replacing user content with a fresh object.
+#[cfg_attr(not(test), allow(dead_code))]
+fn inject_mcp_server_entry(
+    agent_type: &str,
+    home: &Path,
+    server_entry: &serde_json::Value,
+) -> anyhow::Result<()> {
+    let config_path = match resolve_global_mcp_config(agent_type, home) {
+        Some(p) => p,
+        None => return Ok(()),
+    };
+
+    let mut root: serde_json::Value = if config_path.exists() {
+        let raw = std::fs::read_to_string(&config_path)?;
+        serde_json::from_str(&raw).map_err(|e| {
+            anyhow!(
+                "Refusing to modify {}: file is not valid JSON ({}). \
+                 Fix or remove the file and retry.",
+                config_path.display(),
+                e
+            )
+        })?
+    } else {
+        serde_json::json!({})
+    };
+
+    let servers = root
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("MCP config root is not a JSON object"))?
+        .entry("mcpServers")
+        .or_insert_with(|| serde_json::json!({}));
+
+    let servers_map = servers
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("mcpServers is not a JSON object"))?;
+
+    servers_map.insert(MCP_SERVER_KEY.to_string(), server_entry.clone());
+
+    if let Some(parent) = config_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(dst, rendered)?;
+
+    backup_file(&config_path);
+
+    let pretty = serde_json::to_string_pretty(&root)?;
+    std::fs::write(&config_path, pretty)?;
+
+    info!(
+        "Injected '{}' MCP server into {}",
+        MCP_SERVER_KEY,
+        config_path.display()
+    );
     Ok(())
 }
 
-fn portable_path(p: &Path) -> String {
-    p.to_string_lossy().replace('\\', "/")
+/// Remove the `"edamame"` MCP server entry from the IDE's global MCP
+/// configuration file.  Preserves every other key -- both sibling
+/// `mcpServers` entries and any unrelated top-level fields.  If the entry
+/// is already absent, or the file does not exist or is not valid JSON, the
+/// function is a no-op.
+fn remove_mcp_server_entry(agent_type: &str, home: &Path) -> anyhow::Result<()> {
+    let config_path = match resolve_global_mcp_config(agent_type, home) {
+        Some(p) => p,
+        None => return Ok(()),
+    };
+
+    if !config_path.exists() {
+        return Ok(());
+    }
+
+    let raw = std::fs::read_to_string(&config_path)?;
+    let mut root: serde_json::Value = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(_) => return Ok(()),
+    };
+
+    let removed = root
+        .as_object_mut()
+        .and_then(|obj| obj.get_mut("mcpServers"))
+        .and_then(|s| s.as_object_mut())
+        .map(|servers| servers.remove(MCP_SERVER_KEY).is_some())
+        .unwrap_or(false);
+
+    if removed {
+        backup_file(&config_path);
+
+        let pretty = serde_json::to_string_pretty(&root)?;
+        std::fs::write(&config_path, pretty)?;
+        info!(
+            "Removed '{}' MCP server from {}",
+            MCP_SERVER_KEY,
+            config_path.display()
+        );
+    }
+
+    Ok(())
 }
 
-fn compute_agent_instance_id(workspace_root: &str) -> String {
-    let hostname = std::env::var("HOSTNAME")
-        .or_else(|_| std::env::var("COMPUTERNAME"))
-        .unwrap_or_else(|_| {
-            StdCommand::new("hostname")
-                .output()
-                .ok()
-                .and_then(|o| String::from_utf8(o.stdout).ok())
-                .map(|s| s.trim().to_string())
-                .unwrap_or_else(|| "unknown".to_string())
-        });
-    let hash = format!("{:x}", md5::compute(workspace_root.as_bytes()));
-    format!("{}-{}", hostname, &hash[..12.min(hash.len())])
-}
-
-fn install_cursor_or_claude_code(
+async fn install_cursor_or_claude_code(
     agent_type: &str,
     source_root: &Path,
     workspace_root: &str,
     home: &Path,
 ) -> anyhow::Result<String> {
-    let data_dir = data_dir_for_home(home);
-    let install_path = resolve_install_path_with_home(agent_type, home, &data_dir)
-        .ok_or_else(|| anyhow!("Cannot resolve install path for {}", agent_type))?;
-    let config_dir = resolve_config_dir_with_home(agent_type, home)
-        .ok_or_else(|| anyhow!("Cannot resolve config dir for {}", agent_type))?;
-    let state_dir = resolve_state_dir_with_home(agent_type, home)
-        .ok_or_else(|| anyhow!("Cannot resolve state dir for {}", agent_type))?;
+    let script = resolve_install_script(source_root)
+        .ok_or_else(|| anyhow!("No install script found in {}/setup/", source_root.display()))?;
 
-    let rendered_dir = config_dir.join("rendered");
+    let username = username_from_home(home);
 
-    std::fs::create_dir_all(&config_dir)?;
-    std::fs::create_dir_all(&state_dir)?;
-    std::fs::create_dir_all(&rendered_dir)?;
-
-    if install_path.exists() {
-        std::fs::remove_dir_all(&install_path)?;
-    }
-    std::fs::create_dir_all(&install_path)?;
-
-    let dirs_to_copy = [
-        "bridge",
-        "adapters",
-        "prompts",
-        "scheduler",
-        "service",
-        "docs",
-        "tests",
-        "setup",
-        "agents",
-        "assets",
-        "skills",
-    ];
-    for dir_name in &dirs_to_copy {
-        copy_dir_if_exists(source_root, &install_path, dir_name);
-    }
-
-    copy_file_if_exists(source_root, &install_path, "package.json");
-    copy_file_if_exists(source_root, &install_path, "README.md");
-
-    if agent_type == "cursor" {
-        copy_dir_if_exists(source_root, &install_path, ".cursor-plugin");
-        copy_file_if_exists(source_root, &install_path, ".mcp.json");
-        copy_dir_if_exists(source_root, &install_path, "rules");
-        copy_dir_if_exists(source_root, &install_path, "commands");
-    } else {
-        copy_dir_if_exists(source_root, &install_path, ".claude-plugin");
-        copy_file_if_exists(source_root, &install_path, ".mcp.json");
-    }
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        for dir_name in &["bridge", "service", "setup"] {
-            let dir = install_path.join(dir_name);
-            if dir.is_dir() {
-                if let Ok(entries) = std::fs::read_dir(&dir) {
-                    for entry in entries.flatten() {
-                        let path = entry.path();
-                        let name = path.file_name().unwrap_or_default().to_string_lossy();
-                        if name.ends_with(".mjs") || name.ends_with(".sh") {
-                            let _ = std::fs::set_permissions(
-                                &path,
-                                std::fs::Permissions::from_mode(0o755),
-                            );
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    let workspace_path = PathBuf::from(if workspace_root.is_empty() {
+    let workspace_arg = if workspace_root.is_empty() {
         std::env::current_dir()
             .unwrap_or_default()
             .to_string_lossy()
             .to_string()
     } else {
         workspace_root.to_string()
-    });
-
-    let node_bin = find_executable("node")
-        .map(|p| portable_path(&p))
-        .unwrap_or_else(|| "node".to_string());
-
-    let instance_id = compute_agent_instance_id(&workspace_path.to_string_lossy());
-    let workspace_basename = workspace_path
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_string();
-    let psk_path = state_dir.join("edamame-mcp.psk");
-
-    let host_kind = if cfg!(target_os = "linux") {
-        "edamame_posture"
-    } else {
-        "edamame_app"
-    };
-    let posture_cli = if cfg!(target_os = "linux") {
-        "edamame_posture"
-    } else {
-        ""
     };
 
-    let replacements: Vec<(&str, String)> = vec![
-        ("__PACKAGE_ROOT__", portable_path(&install_path)),
-        (
-            "__CONFIG_PATH__",
-            portable_path(&config_dir.join("config.json")),
-        ),
-        ("__WORKSPACE_ROOT__", portable_path(&workspace_path)),
-        ("__WORKSPACE_BASENAME__", workspace_basename),
-        ("__DEFAULT_AGENT_INSTANCE_ID__", instance_id),
-        ("__DEFAULT_HOST_KIND__", host_kind.to_string()),
-        ("__DEFAULT_POSTURE_CLI_COMMAND__", posture_cli.to_string()),
-        ("__STATE_DIR__", portable_path(&state_dir)),
-        ("__EDAMAME_MCP_PSK_FILE__", portable_path(&psk_path)),
-        ("__NODE_BIN__", node_bin),
-    ];
+    #[cfg(target_os = "windows")]
+    let cmd = format!(
+        "& '{}' -WorkspaceRoot '{}'",
+        script.to_string_lossy().replace('\'', "''"),
+        workspace_arg.replace('\'', "''"),
+    );
+    #[cfg(not(target_os = "windows"))]
+    let cmd = format!(
+        "bash '{}' '{}'",
+        script.to_string_lossy().replace('\'', "'\\''"),
+        workspace_arg.replace('\'', "'\\''"),
+    );
 
-    let replacement_refs: Vec<(&str, &str)> =
-        replacements.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    info!(
+        "Delegating {} install to script: {}",
+        agent_type,
+        script.display()
+    );
 
-    let config_path = config_dir.join("config.json");
-    if !config_path.exists() {
-        let template_name = if agent_type == "cursor" {
-            "cursor-edamame-config.template.json"
-        } else {
-            "claude-code-edamame-config.template.json"
-        };
-        let template = install_path.join("setup").join(template_name);
-        if template.exists() {
-            render_template(&template, &config_path, &replacement_refs)?;
-        }
-    }
+    let personate = !username.is_empty();
+    crate::runner_cli::run_cli(&cmd, &username, personate, Some(120)).await?;
 
-    let mcp_template_name = if agent_type == "cursor" {
-        "cursor-mcp.template.json"
-    } else {
-        "claude-code-mcp.template.json"
-    };
-    let mcp_dest_name = if agent_type == "cursor" {
-        "cursor-mcp.json"
-    } else {
-        "claude-code-mcp.json"
-    };
-    let mcp_template = install_path.join("setup").join(mcp_template_name);
-    let mcp_dest = config_dir.join(mcp_dest_name);
-    if mcp_template.exists() {
-        render_template(&mcp_template, &mcp_dest, &replacement_refs)?;
-    }
+    let data_dir = data_dir_for_home(home);
+    let install_path = resolve_install_path_with_home(agent_type, home, &data_dir)
+        .ok_or_else(|| anyhow!("Cannot resolve install path for {}", agent_type))?;
 
     let version = read_package_version(&install_path).unwrap_or_else(|| "unknown".to_string());
 
-    chown_to_home_owner(&config_dir, home)?;
-    chown_to_home_owner(&install_path, home)?;
-    chown_to_home_owner(&state_dir, home)?;
+    // The install script runs as root (helper daemon) with personate only setting
+    // env vars -- the process uid is still 0.  All created directories end up
+    // root-owned.  Chown the entire plugin tree back to the target user.
+    let slug = match agent_type {
+        "cursor" => Some("cursor-edamame"),
+        "claude_code" => Some("claude-code-edamame"),
+        _ => None,
+    };
+    if let Some(slug) = slug {
+        let top_dir = data_dir.join(slug);
+        if top_dir.exists() {
+            chown_to_home_owner(&top_dir, home)?;
+        }
+    }
+
+    if let Some(global_mcp) = resolve_global_mcp_config(agent_type, home) {
+        chown_to_home_owner(&global_mcp, home)?;
+    }
 
     Ok(version)
 }
@@ -638,6 +621,26 @@ fn install_openclaw(source_root: &Path, home: &Path) -> anyhow::Result<String> {
 
     let version = read_package_version(&meta_dst).unwrap_or_else(|| "unknown".to_string());
 
+    match StdCommand::new("openclaw")
+        .args(["plugins", "enable", "edamame"])
+        .output()
+    {
+        Ok(out) if out.status.success() => {
+            info!("Enabled OpenClaw edamame plugin via CLI");
+        }
+        Ok(out) => {
+            warn!(
+                "openclaw plugins enable edamame exited {}: {}",
+                out.status,
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        Err(e) => {
+            info!("openclaw CLI not on PATH, skipping plugin enable: {}", e);
+        }
+    }
+
+    // Chown after `openclaw plugins enable` which may rewrite openclaw.json as root
     chown_to_home_owner(&openclaw_dir, home)?;
 
     Ok(version)
@@ -732,7 +735,9 @@ pub async fn provision_agent_plugin(
 
     let result = match agent_type {
         "openclaw" => install_openclaw(&extract_dir, &home),
-        _ => install_cursor_or_claude_code(agent_type, &extract_dir, workspace_root, &home),
+        _ => {
+            install_cursor_or_claude_code(agent_type, &extract_dir, workspace_root, &home).await
+        }
     };
 
     let _ = std::fs::remove_dir_all(&tmp_base);
@@ -901,12 +906,20 @@ pub fn uninstall_agent_plugin_for_home(
 }
 
 fn uninstall_cursor_or_claude_code(agent_type: &str, home: &Path) -> anyhow::Result<()> {
+    if let Err(e) = remove_mcp_server_entry(agent_type, home) {
+        warn!(
+            "Could not remove MCP server entry from {} global config: {}",
+            agent_type, e
+        );
+    }
+
     let data_dir = data_dir_for_home(home);
     let slug = match agent_type {
         "cursor" => "cursor-edamame",
         "claude_code" => "claude-code-edamame",
         _ => bail!("Unsupported agent type for uninstall: {}", agent_type),
     };
+
     let top_dir = data_dir.join(slug);
     if top_dir.exists() {
         info!("Removing {}", top_dir.display());
@@ -914,11 +927,48 @@ fn uninstall_cursor_or_claude_code(agent_type: &str, home: &Path) -> anyhow::Res
     } else {
         info!("Nothing to remove at {}", top_dir.display());
     }
+
+    if let Some(config_dir) = resolve_config_dir_with_home(agent_type, home) {
+        if config_dir != top_dir && config_dir.exists() {
+            info!("Removing config dir {}", config_dir.display());
+            std::fs::remove_dir_all(&config_dir)?;
+        }
+    }
+    if let Some(state_dir) = resolve_state_dir_with_home(agent_type, home) {
+        if state_dir != top_dir && state_dir.exists() {
+            info!("Removing state dir {}", state_dir.display());
+            std::fs::remove_dir_all(&state_dir)?;
+        }
+    }
+
     Ok(())
 }
 
 fn uninstall_openclaw(home: &Path) -> anyhow::Result<()> {
+    match StdCommand::new("openclaw")
+        .args(["plugins", "disable", "edamame"])
+        .output()
+    {
+        Ok(out) if out.status.success() => {
+            info!("Disabled OpenClaw edamame plugin via CLI");
+        }
+        Ok(out) => {
+            warn!(
+                "openclaw plugins disable edamame exited {}: {}",
+                out.status,
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        Err(e) => {
+            info!("openclaw CLI not on PATH, skipping plugin disable: {}", e);
+        }
+    }
+
     let openclaw_dir = home.join(".openclaw");
+
+    // Chown after `openclaw plugins disable` which may rewrite openclaw.json as root
+    chown_to_home_owner(&openclaw_dir, home)?;
+
     let dirs_to_remove = [
         openclaw_dir.join("extensions/edamame"),
         openclaw_dir.join("skills/edamame-extrapolator"),
@@ -1032,6 +1082,290 @@ mod tests {
 
         extract_zipball(&zip_bytes, &tmp).unwrap();
         assert!(tmp.join("package.json").exists());
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_resolve_global_mcp_config() {
+        let home = PathBuf::from("/home/testuser");
+        assert_eq!(
+            resolve_global_mcp_config("cursor", &home),
+            Some(PathBuf::from("/home/testuser/.cursor/mcp.json"))
+        );
+        assert_eq!(
+            resolve_global_mcp_config("claude_code", &home),
+            Some(PathBuf::from("/home/testuser/.claude.json"))
+        );
+        assert_eq!(resolve_global_mcp_config("openclaw", &home), None);
+    }
+
+    #[test]
+    fn test_inject_mcp_server_creates_file() {
+        let tmp = std::env::temp_dir().join("edamame-test-mcp-inject-create");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join(".cursor")).unwrap();
+
+        let entry = serde_json::json!({
+            "type": "stdio",
+            "command": "/usr/bin/node",
+            "args": ["bridge.mjs"]
+        });
+
+        inject_mcp_server_entry("cursor", &tmp, &entry).unwrap();
+
+        let config_path = tmp.join(".cursor/mcp.json");
+        assert!(config_path.exists());
+
+        let raw = std::fs::read_to_string(&config_path).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(parsed["mcpServers"]["edamame"]["command"], "/usr/bin/node");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_inject_mcp_server_preserves_existing() {
+        let tmp = std::env::temp_dir().join("edamame-test-mcp-inject-preserve");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join(".cursor")).unwrap();
+
+        let existing = serde_json::json!({
+            "mcpServers": {
+                "other-server": {
+                    "command": "other-cmd",
+                    "args": ["--flag"]
+                }
+            }
+        });
+        std::fs::write(
+            tmp.join(".cursor/mcp.json"),
+            serde_json::to_string_pretty(&existing).unwrap(),
+        )
+        .unwrap();
+
+        let entry = serde_json::json!({
+            "type": "stdio",
+            "command": "/usr/bin/node",
+            "args": ["bridge.mjs"]
+        });
+
+        inject_mcp_server_entry("cursor", &tmp, &entry).unwrap();
+
+        let raw = std::fs::read_to_string(tmp.join(".cursor/mcp.json")).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(parsed["mcpServers"]["edamame"]["command"], "/usr/bin/node");
+        assert_eq!(parsed["mcpServers"]["other-server"]["command"], "other-cmd");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_remove_mcp_server_entry() {
+        let tmp = std::env::temp_dir().join("edamame-test-mcp-remove");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join(".cursor")).unwrap();
+
+        let existing = serde_json::json!({
+            "mcpServers": {
+                "edamame": { "command": "node", "args": ["bridge.mjs"] },
+                "other": { "command": "other" }
+            }
+        });
+        std::fs::write(
+            tmp.join(".cursor/mcp.json"),
+            serde_json::to_string_pretty(&existing).unwrap(),
+        )
+        .unwrap();
+
+        remove_mcp_server_entry("cursor", &tmp).unwrap();
+
+        let raw = std::fs::read_to_string(tmp.join(".cursor/mcp.json")).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert!(parsed["mcpServers"].get("edamame").is_none());
+        assert_eq!(parsed["mcpServers"]["other"]["command"], "other");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_remove_mcp_server_missing_file() {
+        let tmp = std::env::temp_dir().join("edamame-test-mcp-remove-missing");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let result = remove_mcp_server_entry("cursor", &tmp);
+        assert!(result.is_ok());
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_inject_refuses_malformed_json() {
+        let tmp = std::env::temp_dir().join("edamame-test-mcp-malformed");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join(".cursor")).unwrap();
+
+        std::fs::write(tmp.join(".cursor/mcp.json"), "not valid json {{{").unwrap();
+
+        let entry = serde_json::json!({ "command": "node" });
+        let result = inject_mcp_server_entry("cursor", &tmp, &entry);
+        assert!(result.is_err(), "Should refuse to overwrite malformed JSON");
+
+        let raw = std::fs::read_to_string(tmp.join(".cursor/mcp.json")).unwrap();
+        assert_eq!(raw, "not valid json {{{", "Original content must be preserved");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_remove_noop_on_malformed_json() {
+        let tmp = std::env::temp_dir().join("edamame-test-mcp-remove-malformed");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join(".cursor")).unwrap();
+
+        std::fs::write(tmp.join(".cursor/mcp.json"), "broken json").unwrap();
+
+        let result = remove_mcp_server_entry("cursor", &tmp);
+        assert!(result.is_ok(), "Should be a silent no-op");
+
+        let raw = std::fs::read_to_string(tmp.join(".cursor/mcp.json")).unwrap();
+        assert_eq!(raw, "broken json", "Original content must be preserved");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_inject_preserves_top_level_keys() {
+        let tmp = std::env::temp_dir().join("edamame-test-mcp-toplevel");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let existing = serde_json::json!({
+            "oauthTokens": { "service": "tok_abc" },
+            "sessionCache": [1, 2, 3],
+            "mcpServers": {
+                "other": { "command": "other-bin" }
+            }
+        });
+        std::fs::write(
+            tmp.join(".claude.json"),
+            serde_json::to_string_pretty(&existing).unwrap(),
+        )
+        .unwrap();
+
+        let entry = serde_json::json!({ "command": "node", "args": ["bridge.mjs"] });
+        inject_mcp_server_entry("claude_code", &tmp, &entry).unwrap();
+
+        let raw = std::fs::read_to_string(tmp.join(".claude.json")).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(parsed["oauthTokens"]["service"], "tok_abc");
+        assert_eq!(parsed["sessionCache"][0], 1);
+        assert_eq!(parsed["mcpServers"]["other"]["command"], "other-bin");
+        assert_eq!(parsed["mcpServers"]["edamame"]["command"], "node");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_remove_preserves_top_level_keys() {
+        let tmp = std::env::temp_dir().join("edamame-test-mcp-remove-toplevel");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let existing = serde_json::json!({
+            "oauthTokens": { "service": "tok_xyz" },
+            "mcpServers": {
+                "edamame": { "command": "node" },
+                "other": { "command": "other-bin" }
+            }
+        });
+        std::fs::write(
+            tmp.join(".claude.json"),
+            serde_json::to_string_pretty(&existing).unwrap(),
+        )
+        .unwrap();
+
+        remove_mcp_server_entry("claude_code", &tmp).unwrap();
+
+        let raw = std::fs::read_to_string(tmp.join(".claude.json")).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(parsed["oauthTokens"]["service"], "tok_xyz");
+        assert!(parsed["mcpServers"].get("edamame").is_none());
+        assert_eq!(parsed["mcpServers"]["other"]["command"], "other-bin");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_inject_creates_backup() {
+        let tmp = std::env::temp_dir().join("edamame-test-mcp-backup-inject");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join(".cursor")).unwrap();
+
+        let original = serde_json::json!({ "mcpServers": {} });
+        std::fs::write(
+            tmp.join(".cursor/mcp.json"),
+            serde_json::to_string_pretty(&original).unwrap(),
+        )
+        .unwrap();
+
+        let entry = serde_json::json!({ "command": "node" });
+        inject_mcp_server_entry("cursor", &tmp, &entry).unwrap();
+
+        assert!(
+            tmp.join(".cursor/mcp.json.bak").exists(),
+            "Backup should be created before modifying existing file"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_remove_creates_backup() {
+        let tmp = std::env::temp_dir().join("edamame-test-mcp-backup-remove");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join(".cursor")).unwrap();
+
+        let existing = serde_json::json!({
+            "mcpServers": { "edamame": { "command": "node" } }
+        });
+        std::fs::write(
+            tmp.join(".cursor/mcp.json"),
+            serde_json::to_string_pretty(&existing).unwrap(),
+        )
+        .unwrap();
+
+        remove_mcp_server_entry("cursor", &tmp).unwrap();
+
+        assert!(
+            tmp.join(".cursor/mcp.json.bak").exists(),
+            "Backup should be created before modifying existing file"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_remove_noop_when_key_absent() {
+        let tmp = std::env::temp_dir().join("edamame-test-mcp-remove-absent");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join(".cursor")).unwrap();
+
+        let existing = serde_json::json!({
+            "mcpServers": { "other": { "command": "other-bin" } }
+        });
+        let original_json = serde_json::to_string_pretty(&existing).unwrap();
+        std::fs::write(tmp.join(".cursor/mcp.json"), &original_json).unwrap();
+
+        remove_mcp_server_entry("cursor", &tmp).unwrap();
+
+        let raw = std::fs::read_to_string(tmp.join(".cursor/mcp.json")).unwrap();
+        assert_eq!(raw, original_json, "File must not be rewritten when key is absent");
+        assert!(
+            !tmp.join(".cursor/mcp.json.bak").exists(),
+            "No backup when nothing changed"
+        );
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
