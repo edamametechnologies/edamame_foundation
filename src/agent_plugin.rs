@@ -394,9 +394,7 @@ fn backup_file(path: &Path) {
     }
     let bak = path.with_extension(format!(
         "{}.bak",
-        path.extension()
-            .unwrap_or_default()
-            .to_string_lossy()
+        path.extension().unwrap_or_default().to_string_lossy()
     ));
     if let Err(e) = std::fs::copy(path, &bak) {
         warn!(
@@ -517,8 +515,12 @@ async fn install_cursor_or_claude_code(
     workspace_root: &str,
     home: &Path,
 ) -> anyhow::Result<String> {
-    let script = resolve_install_script(source_root)
-        .ok_or_else(|| anyhow!("No install script found in {}/setup/", source_root.display()))?;
+    let script = resolve_install_script(source_root).ok_or_else(|| {
+        anyhow!(
+            "No install script found in {}/setup/",
+            source_root.display()
+        )
+    })?;
 
     let username = username_from_home(home);
 
@@ -735,9 +737,7 @@ pub async fn provision_agent_plugin(
 
     let result = match agent_type {
         "openclaw" => install_openclaw(&extract_dir, &home),
-        _ => {
-            install_cursor_or_claude_code(agent_type, &extract_dir, workspace_root, &home).await
-        }
+        _ => install_cursor_or_claude_code(agent_type, &extract_dir, workspace_root, &home).await,
     };
 
     let _ = std::fs::remove_dir_all(&tmp_base);
@@ -1213,7 +1213,10 @@ mod tests {
         assert!(result.is_err(), "Should refuse to overwrite malformed JSON");
 
         let raw = std::fs::read_to_string(tmp.join(".cursor/mcp.json")).unwrap();
-        assert_eq!(raw, "not valid json {{{", "Original content must be preserved");
+        assert_eq!(
+            raw, "not valid json {{{",
+            "Original content must be preserved"
+        );
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -1361,7 +1364,10 @@ mod tests {
         remove_mcp_server_entry("cursor", &tmp).unwrap();
 
         let raw = std::fs::read_to_string(tmp.join(".cursor/mcp.json")).unwrap();
-        assert_eq!(raw, original_json, "File must not be rewritten when key is absent");
+        assert_eq!(
+            raw, original_json,
+            "File must not be rewritten when key is absent"
+        );
         assert!(
             !tmp.join(".cursor/mcp.json.bak").exists(),
             "No backup when nothing changed"
