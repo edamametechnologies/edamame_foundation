@@ -767,6 +767,99 @@ pub async fn utility_uninstall_agent_plugin(agent_type: &str, user_home: &str) -
         .map_err(|e| anyhow::anyhow!("Failed to serialize uninstall result: {}", e))
 }
 
+pub async fn utility_test_agent_plugin(agent_type: &str, user_home: &str) -> Result<String> {
+    use std::process::Command;
+
+    if !matches!(agent_type, "cursor" | "claude_code") {
+        return Ok(serde_json::json!({
+            "ok": true,
+            "checks": [],
+            "message": "No healthcheck available for this plugin type"
+        })
+        .to_string());
+    }
+
+    let home = std::path::PathBuf::from(if user_home.is_empty() {
+        crate::agent_plugin::real_home_dir()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default()
+    } else {
+        user_home.to_string()
+    });
+
+    let data_dir = crate::agent_plugin::data_dir_for_home(&home);
+    let install_path = crate::agent_plugin::resolve_install_path_with_home(agent_type, &home, &data_dir)
+        .ok_or_else(|| anyhow::anyhow!("Cannot resolve install path for {}", agent_type))?;
+
+    let healthcheck_script = install_path.join("service/healthcheck_cli.mjs");
+    if !healthcheck_script.exists() {
+        return Ok(serde_json::json!({
+            "ok": false,
+            "checks": [],
+            "message": format!("Healthcheck script not found at {}", healthcheck_script.display())
+        })
+        .to_string());
+    }
+
+    let config_dir = crate::agent_plugin::resolve_config_dir_with_home(agent_type, &home)
+        .ok_or_else(|| anyhow::anyhow!("Cannot resolve config dir for {}", agent_type))?;
+    let config_path = config_dir.join("config.json");
+
+    let mut cmd = Command::new("node");
+    cmd.arg(&healthcheck_script)
+        .arg("--json")
+        .arg("--strict");
+    if config_path.exists() {
+        cmd.arg("--config").arg(&config_path);
+    }
+    cmd.env("HOME", &home);
+
+    info!(
+        "Running agent plugin healthcheck: node {} --json --strict",
+        healthcheck_script.display()
+    );
+
+    let output = cmd.output().map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            anyhow::anyhow!("node_not_found")
+        } else {
+            anyhow::anyhow!("Failed to run healthcheck: {}", e)
+        }
+    })?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    if !stderr.is_empty() {
+        info!("Healthcheck stderr: {}", stderr);
+    }
+
+    let trimmed = stdout.trim();
+    if trimmed.is_empty() {
+        return Ok(serde_json::json!({
+            "ok": false,
+            "checks": [],
+            "message": format!(
+                "Healthcheck produced no output (exit code: {}). stderr: {}",
+                output.status.code().unwrap_or(-1),
+                stderr.trim()
+            )
+        })
+        .to_string());
+    }
+
+    if serde_json::from_str::<serde_json::Value>(trimmed).is_ok() {
+        Ok(trimmed.to_string())
+    } else {
+        Ok(serde_json::json!({
+            "ok": false,
+            "checks": [],
+            "message": format!("Healthcheck output is not valid JSON: {}", trimmed)
+        })
+        .to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
