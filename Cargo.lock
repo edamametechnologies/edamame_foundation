@@ -1255,7 +1255,7 @@ dependencies = [
 [[package]]
 name = "flodbadd"
 version = "1.1.3"
-source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#36a2150c091873b85fe584afe8c15ff33e8eee83"
+source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#e4bab29b6aaf6ebee0e90a814cb05515be6c1dc6"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -2387,9 +2387,9 @@ dependencies = [
 
 [[package]]
 name = "num-conv"
-version = "0.2.1"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c6673768db2d862beb9b39a78fdcb1a69439615d5794a1be50caa9bc92c81967"
+checksum = "cf97ec579c3c42f953ef76dbf8d55ac91fb219dde70e49aa4a6b7d74e9919050"
 
 [[package]]
 name = "num-derive"
