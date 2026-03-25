@@ -591,12 +591,14 @@ fn install_openclaw(source_root: &Path, home: &Path) -> anyhow::Result<String> {
     let skill_posture_dst = openclaw_dir.join("skills/edamame-posture");
     let meta_dst = openclaw_dir.join("edamame-openclaw");
     let state_dst = meta_dst.join("state");
+    let service_dst = meta_dst.join("service");
 
     std::fs::create_dir_all(&ext_dst)?;
     std::fs::create_dir_all(&skill_ex_dst)?;
     std::fs::create_dir_all(&skill_posture_dst)?;
     std::fs::create_dir_all(&meta_dst)?;
     std::fs::create_dir_all(&state_dst)?;
+    std::fs::create_dir_all(&service_dst)?;
 
     let plugin_src = source_root.join("extensions/edamame");
     for name in &["openclaw.plugin.json", "index.ts"] {
@@ -619,6 +621,13 @@ fn install_openclaw(source_root: &Path, home: &Path) -> anyhow::Result<String> {
     let pkg_src = source_root.join("package.json");
     if pkg_src.is_file() {
         std::fs::copy(&pkg_src, meta_dst.join("package.json"))?;
+    }
+
+    for name in &["healthcheck_cli.mjs", "health.mjs"] {
+        let src = source_root.join("service").join(name);
+        if src.is_file() {
+            std::fs::copy(&src, service_dst.join(name))?;
+        }
     }
 
     let version = read_package_version(&meta_dst).unwrap_or_else(|| "unknown".to_string());
