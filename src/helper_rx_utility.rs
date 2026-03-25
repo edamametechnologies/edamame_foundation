@@ -788,8 +788,9 @@ pub async fn utility_test_agent_plugin(agent_type: &str, user_home: &str) -> Res
     });
 
     let data_dir = crate::agent_plugin::data_dir_for_home(&home);
-    let install_path = crate::agent_plugin::resolve_install_path_with_home(agent_type, &home, &data_dir)
-        .ok_or_else(|| anyhow::anyhow!("Cannot resolve install path for {}", agent_type))?;
+    let install_path =
+        crate::agent_plugin::resolve_install_path_with_home(agent_type, &home, &data_dir)
+            .ok_or_else(|| anyhow::anyhow!("Cannot resolve install path for {}", agent_type))?;
 
     let healthcheck_script = install_path.join("service/healthcheck_cli.mjs");
     if !healthcheck_script.exists() {
@@ -806,9 +807,7 @@ pub async fn utility_test_agent_plugin(agent_type: &str, user_home: &str) -> Res
     let config_path = config_dir.join("config.json");
 
     let mut cmd = Command::new("node");
-    cmd.arg(&healthcheck_script)
-        .arg("--json")
-        .arg("--strict");
+    cmd.arg(&healthcheck_script).arg("--json").arg("--strict");
     if config_path.exists() {
         cmd.arg("--config").arg(&config_path);
     }
