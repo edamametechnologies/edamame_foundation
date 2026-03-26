@@ -32,10 +32,10 @@ impl Display for HelperState {
 pub fn get_helper_flags() -> String {
     #[cfg(target_os = "macos")]
     {
-        use std::fs::File;
-        use std::io::ErrorKind;
         #[cfg(target_os = "macos")]
         use libc::EACCES;
+        use std::fs::File;
+        use std::io::ErrorKind;
 
         let path = "/Library/Application Support/com.apple.TCC/TCC.db";
         let full_disk_access = match File::open(path) {
