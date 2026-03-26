@@ -12,7 +12,6 @@ use anyhow::Result;
     feature = "packetcapture"
 ))]
 use base64::{engine::general_purpose, Engine as _};
-use flodbadd::arp::*;
 use flodbadd::broadcast::scan_hosts_broadcast;
 #[cfg(all(
     any(target_os = "macos", target_os = "linux", target_os = "windows"),
@@ -21,7 +20,7 @@ use flodbadd::broadcast::scan_hosts_broadcast;
 use flodbadd::capture::FlodbaddCapture;
 use flodbadd::interface::*;
 use flodbadd::ip::*;
-use flodbadd::mdns::*;
+use flodbadd::mdns::mdns_flush;
 use flodbadd::neighbors::scan_neighbors;
 #[cfg(all(
     any(target_os = "macos", target_os = "linux", target_os = "windows"),
@@ -29,14 +28,7 @@ use flodbadd::neighbors::scan_neighbors;
 ))]
 use flodbadd::sessions::SessionFilter;
 use lazy_static::lazy_static;
-#[cfg(target_os = "macos")]
-use libc::EACCES;
-use macaddr::MacAddr6;
 use serde_json;
-#[cfg(target_os = "macos")]
-use std::fs::File;
-#[cfg(target_os = "macos")]
-use std::io::ErrorKind;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 #[cfg(all(
@@ -45,7 +37,7 @@ use std::sync::Arc;
 ))]
 use std::time::Instant;
 use tokio::time::{sleep, Duration};
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 use undeadlock::CustomRwLock;
 
 #[cfg(all(
@@ -132,65 +124,24 @@ pub async fn utility_get_neighbors(interface_name: &str) -> Result<String> {
 }
 
 pub async fn utility_arp_resolve(addresses: &str) -> Result<String> {
-    let mut arp_results = Vec::new();
-    for address in serde_json::from_str::<Vec<(String, String)>>(addresses)? {
-        match address.1.parse::<Ipv4Addr>() {
-            Ok(ip_addr) => {
-                match get_mac_address_from_ip(&address.0, &ip_addr).await {
-                    Ok(mac_address) => arp_results.push((address.0, address.1, mac_address)),
-                    // Only warn
-                    Err(e) => warn!(
-                        "Error resolving MAC for IP {} on interface {} : {}",
-                        address.1, address.0, e
-                    ),
-                }
-            }
-            Err(e) => error!("Error parsing IP address {}: {}", address.1, e),
-        }
-    }
-    info!("ARP results: {:?}", arp_results);
-    // Convert MacAddr6 to String to make it serializable
-    let arp_results: Vec<(String, String, String)> = arp_results
+    let pairs: Vec<(String, String)> = serde_json::from_str(addresses)?;
+    let results = flodbadd::arp::arp_resolve_batch(&pairs).await;
+    info!("ARP results: {:?}", results);
+    let serializable: Vec<(String, String, String)> = results
         .into_iter()
         .map(|(iface, ip, mac)| (iface, ip, mac.to_string()))
         .collect();
-    Ok(serde_json::to_string(&arp_results)?)
+    Ok(serde_json::to_string(&serializable)?)
 }
 
 pub async fn utility_mdns_resolve(addresses: &str) -> Result<String> {
-    let mut mdns_results: Vec<(IpAddr, String, MacAddr6, Vec<String>)> = Vec::new();
-    for address in serde_json::from_str::<Vec<IpAddr>>(addresses)? {
-        if let Some(mdns_info) = mdns_get_by_ip(&address).await {
-            // Combine instances & services (extract just the service names)
-            let mut mdns_services_instances = mdns_info.instances.to_vec();
-            mdns_services_instances.extend(mdns_info.services.iter().map(|e| e.service.clone()));
-            mdns_services_instances.sort();
-            mdns_services_instances.dedup();
-
-            // Get the most recent MAC (or first if all same timestamp)
-            let primary_mac = mdns_info
-                .mac_addresses
-                .iter()
-                .max_by_key(|e| e.last_seen)
-                .map(|e| e.address)
-                .unwrap_or(MacAddr6::nil());
-
-            mdns_results.push((
-                address,
-                mdns_info.hostname,
-                primary_mac,
-                mdns_services_instances,
-            ));
-        } else {
-            debug!("No mDNS info found for IP {}", address);
-        }
-    }
-    // Convert MacAddr6 to String to make it serializable consistently
-    let mdns_results_serializable: Vec<(IpAddr, String, String, Vec<String>)> = mdns_results
+    let ips: Vec<IpAddr> = serde_json::from_str(addresses)?;
+    let results = flodbadd::mdns::mdns_resolve_batch(&ips).await;
+    let serializable: Vec<(IpAddr, String, String, Vec<String>)> = results
         .into_iter()
         .map(|(ip, hostname, mac, services)| (ip, hostname, mac.to_string(), services))
         .collect();
-    Ok(serde_json::to_string(&mdns_results_serializable)?)
+    Ok(serde_json::to_string(&serializable)?)
 }
 
 pub async fn utility_getappleid_email(username: &str) -> Result<String> {
@@ -209,26 +160,7 @@ pub async fn utility_helper_check() -> Result<String> {
 }
 
 pub async fn utility_helper_flags() -> Result<String> {
-    // Additional system info - e.g. macOS full disk access check
-    #[cfg(target_os = "macos")]
-    {
-        let path = "/Library/Application Support/com.apple.TCC/TCC.db";
-        let file_result = File::open(path);
-        let full_disk_access = match file_result {
-            Ok(_) => true,
-            Err(ref e) if e.kind() == ErrorKind::PermissionDenied => false,
-            Err(ref e) if e.raw_os_error() == Some(EACCES) => false,
-            Err(e) => {
-                error!("Failed to check full disk access: {}", e);
-                false
-            }
-        };
-        Ok(format!("full_disk_access={}", full_disk_access))
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        Ok("".to_string())
-    }
+    Ok(crate::helper_state::get_helper_flags())
 }
 
 pub async fn utility_get_logs() -> Result<String> {
@@ -768,95 +700,9 @@ pub async fn utility_uninstall_agent_plugin(agent_type: &str, user_home: &str) -
 }
 
 pub async fn utility_test_agent_plugin(agent_type: &str, user_home: &str) -> Result<String> {
-    use std::process::Command;
-
-    if !matches!(agent_type, "cursor" | "claude_code") {
-        return Ok(serde_json::json!({
-            "ok": true,
-            "checks": [],
-            "message": "No healthcheck available for this plugin type"
-        })
-        .to_string());
-    }
-
-    let home = std::path::PathBuf::from(if user_home.is_empty() {
-        crate::agent_plugin::real_home_dir()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_default()
-    } else {
-        user_home.to_string()
-    });
-
-    let data_dir = crate::agent_plugin::data_dir_for_home(&home);
-    let install_path =
-        crate::agent_plugin::resolve_install_path_with_home(agent_type, &home, &data_dir)
-            .ok_or_else(|| anyhow::anyhow!("Cannot resolve install path for {}", agent_type))?;
-
-    let healthcheck_script = install_path.join("service/healthcheck_cli.mjs");
-    if !healthcheck_script.exists() {
-        return Ok(serde_json::json!({
-            "ok": false,
-            "checks": [],
-            "message": format!("Healthcheck script not found at {}", healthcheck_script.display())
-        })
-        .to_string());
-    }
-
-    let config_dir = crate::agent_plugin::resolve_config_dir_with_home(agent_type, &home)
-        .ok_or_else(|| anyhow::anyhow!("Cannot resolve config dir for {}", agent_type))?;
-    let config_path = config_dir.join("config.json");
-
-    let mut cmd = Command::new("node");
-    cmd.arg(&healthcheck_script).arg("--json").arg("--strict");
-    if config_path.exists() {
-        cmd.arg("--config").arg(&config_path);
-    }
-    cmd.env("HOME", &home);
-
-    info!(
-        "Running agent plugin healthcheck: node {} --json --strict",
-        healthcheck_script.display()
-    );
-
-    let output = cmd.output().map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            anyhow::anyhow!("node_not_found")
-        } else {
-            anyhow::anyhow!("Failed to run healthcheck: {}", e)
-        }
-    })?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    if !stderr.is_empty() {
-        info!("Healthcheck stderr: {}", stderr);
-    }
-
-    let trimmed = stdout.trim();
-    if trimmed.is_empty() {
-        return Ok(serde_json::json!({
-            "ok": false,
-            "checks": [],
-            "message": format!(
-                "Healthcheck produced no output (exit code: {}). stderr: {}",
-                output.status.code().unwrap_or(-1),
-                stderr.trim()
-            )
-        })
-        .to_string());
-    }
-
-    if serde_json::from_str::<serde_json::Value>(trimmed).is_ok() {
-        Ok(trimmed.to_string())
-    } else {
-        Ok(serde_json::json!({
-            "ok": false,
-            "checks": [],
-            "message": format!("Healthcheck output is not valid JSON: {}", trimmed)
-        })
-        .to_string())
-    }
+    Ok(crate::agent_plugin::run_agent_plugin_healthcheck(
+        agent_type, user_home,
+    ))
 }
 
 #[cfg(test)]

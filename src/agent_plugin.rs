@@ -990,7 +990,117 @@ fn uninstall_openclaw(home: &Path) -> anyhow::Result<()> {
             std::fs::remove_dir_all(dir)?;
         }
     }
+
+    let agent_id_file = home.join(".edamame_openclaw_agent_instance_id");
+    if agent_id_file.exists() {
+        info!("Removing {}", agent_id_file.display());
+        std::fs::remove_file(&agent_id_file)?;
+    }
+
     Ok(())
+}
+
+/// Run the Node.js healthcheck script for an agent plugin.
+///
+/// Shared implementation used by both standalone core (`#[cfg(feature = "standalone")]`)
+/// and the helper daemon (`helper_rx_utility`). Returns a JSON string with the
+/// healthcheck result (always valid JSON, never an `Err`).
+pub fn run_agent_plugin_healthcheck(agent_type: &str, user_home: &str) -> String {
+    use std::process::Command;
+
+    if !matches!(agent_type, "cursor" | "claude_code" | "openclaw") {
+        return serde_json::json!({
+            "ok": true, "checks": [],
+            "message": "No healthcheck available for this plugin type"
+        })
+        .to_string();
+    }
+
+    let home = PathBuf::from(if user_home.is_empty() {
+        real_home_dir()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default()
+    } else {
+        user_home.to_string()
+    });
+
+    let data_dir = data_dir_for_home(&home);
+    let install_path = match resolve_install_path_with_home(agent_type, &home, &data_dir) {
+        Some(p) => p,
+        None => {
+            return serde_json::json!({
+                "ok": false, "checks": [],
+                "message": format!("Cannot resolve install path for {}", agent_type)
+            })
+            .to_string()
+        }
+    };
+
+    let healthcheck_script = install_path.join("service/healthcheck_cli.mjs");
+    if !healthcheck_script.exists() {
+        return serde_json::json!({
+            "ok": false, "checks": [],
+            "message": format!("Healthcheck script not found at {}", healthcheck_script.display())
+        })
+        .to_string();
+    }
+
+    let mut cmd = Command::new("node");
+    cmd.arg(&healthcheck_script).arg("--json").arg("--strict");
+    if let Some(config_dir) = resolve_config_dir_with_home(agent_type, &home) {
+        let config_path = config_dir.join("config.json");
+        if config_path.exists() {
+            cmd.arg("--config").arg(&config_path);
+        }
+    }
+    cmd.env("HOME", &home);
+
+    info!(
+        "Running agent plugin healthcheck: node {} --json --strict",
+        healthcheck_script.display()
+    );
+
+    let output = match cmd.output() {
+        Ok(o) => o,
+        Err(e) => {
+            let msg = if e.kind() == std::io::ErrorKind::NotFound {
+                "node_not_found".to_string()
+            } else {
+                format!("Failed to run healthcheck: {}", e)
+            };
+            return serde_json::json!({"ok": false, "checks": [], "message": msg}).to_string();
+        }
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    if !stderr.is_empty() {
+        info!("Healthcheck stderr: {}", stderr);
+    }
+
+    let trimmed = stdout.trim();
+    if trimmed.is_empty() {
+        return serde_json::json!({
+            "ok": false, "checks": [],
+            "message": format!(
+                "Healthcheck produced no output (exit code: {}). stderr: {}",
+                output.status.code().unwrap_or(-1),
+                stderr.trim()
+            )
+        })
+        .to_string();
+    }
+
+    if serde_json::from_str::<serde_json::Value>(trimmed).is_ok() {
+        trimmed.to_string()
+    } else {
+        serde_json::json!({
+            "ok": false, "checks": [],
+            "message": format!("Healthcheck output is not valid JSON: {}", trimmed)
+        })
+        .to_string()
+    }
 }
 
 #[cfg(test)]
