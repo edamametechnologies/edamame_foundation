@@ -477,9 +477,10 @@ pub fn init_logger(
     let is_installed = exe_path_str.starts_with("/usr") || exe_path_str.starts_with("/opt/");
 
     // Optional file writer
-    // Duplicate to file on Windows for the app and helper,
-    // Or for posture for all platforms, except if installed in /usr or /opt
-    let (file_writer, file_guard) = if (matches!(executable_type, "cli") && !is_installed)
+    // Duplicate to file for the helper (all platforms), posture CLI (when not
+    // installed in /usr or /opt), and all executables on Windows.
+    let (file_writer, file_guard) = if matches!(executable_type, "helper")
+        || (matches!(executable_type, "cli") && !is_installed)
         || (cfg!(target_os = "windows"))
     {
         let log_dir = if matches!(executable_type, "helper") || matches!(executable_type, "cli") {
@@ -505,18 +506,25 @@ pub fn init_logger(
         // Add the PID to the basename
         let pid = std::process::id();
         let basename = format!("{}_{}", basename, pid);
-        let file_appender = RollingFileAppender::new(Rotation::DAILY, log_dir.clone(), basename);
+        let file_appender = RollingFileAppender::builder()
+            .rotation(Rotation::DAILY)
+            .filename_prefix(basename)
+            .max_log_files(7)
+            .build(log_dir.clone())
+            .expect("Failed to initialize rolling file appender");
         tracing_appender::non_blocking(file_appender)
     } else {
         NonBlocking::new(io::sink())
     };
 
-    // Duplicate to stdout except for posture
-    let (stdout_writer, stdout_guard) = if matches!(executable_type, "cli") {
-        NonBlocking::new(io::sink())
-    } else {
-        NonBlocking::new(io::stdout())
-    };
+    // Duplicate to stdout except for posture and helper (helper uses rolling
+    // file instead of launchd stdout redirect to avoid unbounded /var/log growth)
+    let (stdout_writer, stdout_guard) =
+        if matches!(executable_type, "cli") || matches!(executable_type, "helper") {
+            NonBlocking::new(io::sink())
+        } else {
+            NonBlocking::new(io::stdout())
+        };
 
     let file_make_writer = SanitizingMakeWriter::new(file_writer);
     let stdout_make_writer = SanitizingMakeWriter::new(stdout_writer);
