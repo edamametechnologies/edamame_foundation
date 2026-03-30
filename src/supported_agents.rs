@@ -281,6 +281,23 @@ fn try_load_remote_registry() -> Option<LoadedSupportedAgents> {
     let url = std::env::var("EDAMAME_SUPPORTED_AGENTS_URL")
         .unwrap_or_else(|_| DEFAULT_REGISTRY_URL.to_string());
 
+    // reqwest::blocking spawns its own tokio runtime internally. When called
+    // from within an existing tokio async context (e.g. helper gRPC handler),
+    // the nested runtime panics on drop with "Cannot drop a runtime in a
+    // context where blocking is not allowed". Run the blocking HTTP fetch on a
+    // dedicated OS thread to avoid the conflict.
+    let url_clone = url.clone();
+    let result = std::thread::spawn(move || fetch_remote_registry(&url_clone))
+        .join()
+        .unwrap_or_else(|_| {
+            warn!("Supported-agent registry fetch thread panicked");
+            None
+        });
+
+    result
+}
+
+fn fetch_remote_registry(url: &str) -> Option<LoadedSupportedAgents> {
     let client = match reqwest::blocking::Client::builder()
         .user_agent("edamame-foundation-supported-agents/1.0")
         .build()
@@ -295,7 +312,7 @@ fn try_load_remote_registry() -> Option<LoadedSupportedAgents> {
         }
     };
 
-    let response = match client.get(&url).send() {
+    let response = match client.get(url).send() {
         Ok(response) => response,
         Err(error) => {
             warn!(
@@ -332,7 +349,7 @@ fn try_load_remote_registry() -> Option<LoadedSupportedAgents> {
             Some(LoadedSupportedAgents {
                 index,
                 registry_dir: None,
-                source: url,
+                source: url.to_string(),
             })
         }
         Err(error) => {
