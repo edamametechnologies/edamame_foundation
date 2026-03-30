@@ -1,8 +1,15 @@
 use anyhow::{anyhow, bail};
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Command as StdCommand;
 use tracing::{info, warn};
+
+use crate::agent_plugin_icons::{
+    CLAUDE_CODE_ICON_BASE64, CLAUDE_DESKTOP_ICON_BASE64, CURSOR_ICON_BASE64,
+    OPENCLAW_ICON_BASE64,
+};
+use crate::supported_agents::{self, SupportedAgentDefinition};
 
 /// When running as root (e.g. helper daemon), installed files end up root-owned.
 /// This function re-chowns a directory tree to match the owner of `home`.
@@ -74,10 +81,16 @@ pub struct AgentPluginProvisionResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentPluginStatus {
     pub agent_type: String,
+    pub display_name: String,
+    pub description: String,
     pub installed: bool,
     pub version: String,
     pub install_path: String,
     pub repo_url: String,
+    pub strategy_kind: String,
+    pub sort_order: u32,
+    pub icon_base64: String,
+    pub icon_mime_type: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -87,32 +100,10 @@ pub struct AgentPluginUninstallResult {
     pub message: String,
 }
 
-pub struct AgentPluginDef {
-    pub agent_type: &'static str,
-    pub repo_name: &'static str,
-    pub display_name: &'static str,
-}
+pub type AgentPluginDef = SupportedAgentDefinition;
 
-pub const AGENT_PLUGINS: &[AgentPluginDef] = &[
-    AgentPluginDef {
-        agent_type: "cursor",
-        repo_name: "edamame_cursor",
-        display_name: "EDAMAME for Cursor",
-    },
-    AgentPluginDef {
-        agent_type: "claude_code",
-        repo_name: "edamame_claude_code",
-        display_name: "EDAMAME for Claude Code",
-    },
-    AgentPluginDef {
-        agent_type: "openclaw",
-        repo_name: "edamame_openclaw",
-        display_name: "EDAMAME for OpenClaw",
-    },
-];
-
-pub fn find_plugin_def(agent_type: &str) -> Option<&'static AgentPluginDef> {
-    AGENT_PLUGINS.iter().find(|p| p.agent_type == agent_type)
+pub fn find_plugin_def(agent_type: &str) -> Option<AgentPluginDef> {
+    supported_agents::find_supported_agent(agent_type)
 }
 
 pub fn repo_url(repo_name: &str) -> String {
@@ -201,12 +192,7 @@ pub fn resolve_install_path_with_home(
     home: &Path,
     data_dir: &Path,
 ) -> Option<PathBuf> {
-    match agent_type {
-        "cursor" => Some(data_dir.join("cursor-edamame/current")),
-        "claude_code" => Some(data_dir.join("claude-code-edamame/current")),
-        "openclaw" => Some(home.join(".openclaw/edamame-openclaw")),
-        _ => None,
-    }
+    find_plugin_def(agent_type)?.resolve_install_path_with_home(home, data_dir)
 }
 
 pub fn resolve_config_dir(agent_type: &str) -> Option<PathBuf> {
@@ -214,27 +200,7 @@ pub fn resolve_config_dir(agent_type: &str) -> Option<PathBuf> {
 }
 
 pub fn resolve_config_dir_with_home(agent_type: &str, home: &Path) -> Option<PathBuf> {
-    let slug = match agent_type {
-        "cursor" => "cursor-edamame",
-        "claude_code" => "claude-code-edamame",
-        _ => return None,
-    };
-
-    #[cfg(target_os = "macos")]
-    {
-        Some(home.join("Library/Application Support").join(slug))
-    }
-    #[cfg(target_os = "windows")]
-    {
-        std::env::var("APPDATA")
-            .ok()
-            .map(|a| PathBuf::from(a).join(slug))
-            .or_else(|| dirs::config_dir().map(|c| c.join(slug)))
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        Some(home.join(".config").join(slug))
-    }
+    find_plugin_def(agent_type)?.resolve_config_dir_with_home(home)
 }
 
 pub fn resolve_state_dir(agent_type: &str) -> Option<PathBuf> {
@@ -242,31 +208,7 @@ pub fn resolve_state_dir(agent_type: &str) -> Option<PathBuf> {
 }
 
 pub fn resolve_state_dir_with_home(agent_type: &str, home: &Path) -> Option<PathBuf> {
-    let slug = match agent_type {
-        "cursor" => "cursor-edamame",
-        "claude_code" => "claude-code-edamame",
-        _ => return None,
-    };
-
-    #[cfg(target_os = "macos")]
-    {
-        Some(
-            home.join("Library/Application Support")
-                .join(slug)
-                .join("state"),
-        )
-    }
-    #[cfg(target_os = "windows")]
-    {
-        dirs::data_local_dir().map(|d| d.join(slug).join("state"))
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        std::env::var("XDG_STATE_HOME")
-            .ok()
-            .map(|s| PathBuf::from(s).join(slug))
-            .or_else(|| Some(home.join(".local/state").join(slug)))
-    }
+    find_plugin_def(agent_type)?.resolve_state_dir_with_home(home)
 }
 
 fn username_from_home(home: &Path) -> String {
@@ -354,37 +296,51 @@ fn extract_zipball(zip_bytes: &[u8], target_dir: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn resolve_install_script(source_root: &Path) -> Option<PathBuf> {
+fn resolve_install_script(definition: &AgentPluginDef, source_root: &Path) -> Option<PathBuf> {
+    if let Some(relpath) = definition.install_script_relpath() {
+        let script = source_root.join(relpath);
+        if script.is_file() {
+            return Some(script);
+        }
+    }
+
     #[cfg(target_os = "windows")]
     {
-        let ps1 = source_root.join("setup").join("install.ps1");
-        if ps1.is_file() {
-            return Some(ps1);
+        let fallback = source_root.join("setup").join("install.ps1");
+        if fallback.is_file() {
+            return Some(fallback);
         }
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let sh = source_root.join("setup").join("install.sh");
-        if sh.is_file() {
-            return Some(sh);
+        let fallback = source_root.join("setup").join("install.sh");
+        if fallback.is_file() {
+            return Some(fallback);
         }
     }
+
     None
 }
 
-/// Resolve the global MCP configuration file that the host IDE reads.
+/// Resolve the global MCP configuration files that the host IDE reads.
 ///
 /// - Cursor: `~/.cursor/mcp.json`
 /// - Claude Code: `~/.claude.json`
-fn resolve_global_mcp_config(agent_type: &str, home: &Path) -> Option<PathBuf> {
-    match agent_type {
-        "cursor" => Some(home.join(".cursor/mcp.json")),
-        "claude_code" => Some(home.join(".claude.json")),
-        _ => None,
-    }
+/// - Claude Desktop: `~/.claude.json` + the Electron app config
+///   (macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`,
+///    Windows: `%APPDATA%/Claude/claude_desktop_config.json`,
+///    Linux: `~/.config/Claude/claude_desktop_config.json`)
+fn resolve_global_mcp_configs(agent_type: &str, home: &Path) -> Vec<PathBuf> {
+    find_plugin_def(agent_type)
+        .map(|definition| definition.resolve_global_mcp_configs(home))
+        .unwrap_or_default()
 }
 
-const MCP_SERVER_KEY: &str = "edamame";
+fn mcp_server_key(agent_type: &str) -> String {
+    find_plugin_def(agent_type)
+        .and_then(|definition| definition.mcp_server_key().map(str::to_string))
+        .unwrap_or_else(|| "edamame".to_string())
+}
 
 /// Back up a file to `<path>.bak` before we modify it.  Best-effort: a
 /// failure here is logged but does not abort the operation.
@@ -418,13 +374,23 @@ fn inject_mcp_server_entry(
     home: &Path,
     server_entry: &serde_json::Value,
 ) -> anyhow::Result<()> {
-    let config_path = match resolve_global_mcp_config(agent_type, home) {
-        Some(p) => p,
-        None => return Ok(()),
-    };
+    let config_paths = resolve_global_mcp_configs(agent_type, home);
+    if config_paths.is_empty() {
+        return Ok(());
+    }
+    for config_path in config_paths {
+        inject_mcp_server_entry_into_file(agent_type, &config_path, server_entry)?;
+    }
+    Ok(())
+}
 
+fn inject_mcp_server_entry_into_file(
+    agent_type: &str,
+    config_path: &Path,
+    server_entry: &serde_json::Value,
+) -> anyhow::Result<()> {
     let mut root: serde_json::Value = if config_path.exists() {
-        let raw = std::fs::read_to_string(&config_path)?;
+        let raw = std::fs::read_to_string(config_path)?;
         serde_json::from_str(&raw).map_err(|e| {
             anyhow!(
                 "Refusing to modify {}: file is not valid JSON ({}). \
@@ -447,20 +413,21 @@ fn inject_mcp_server_entry(
         .as_object_mut()
         .ok_or_else(|| anyhow!("mcpServers is not a JSON object"))?;
 
-    servers_map.insert(MCP_SERVER_KEY.to_string(), server_entry.clone());
+    let key = mcp_server_key(agent_type);
+    servers_map.insert(key.clone(), server_entry.clone());
 
     if let Some(parent) = config_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
 
-    backup_file(&config_path);
+    backup_file(config_path);
 
     let pretty = serde_json::to_string_pretty(&root)?;
-    std::fs::write(&config_path, pretty)?;
+    std::fs::write(config_path, pretty)?;
 
     info!(
         "Injected '{}' MCP server into {}",
-        MCP_SERVER_KEY,
+        key,
         config_path.display()
     );
     Ok(())
@@ -472,36 +439,40 @@ fn inject_mcp_server_entry(
 /// is already absent, or the file does not exist or is not valid JSON, the
 /// function is a no-op.
 fn remove_mcp_server_entry(agent_type: &str, home: &Path) -> anyhow::Result<()> {
-    let config_path = match resolve_global_mcp_config(agent_type, home) {
-        Some(p) => p,
-        None => return Ok(()),
-    };
+    let config_paths = resolve_global_mcp_configs(agent_type, home);
+    for config_path in config_paths {
+        remove_mcp_server_entry_from_file(agent_type, &config_path)?;
+    }
+    Ok(())
+}
 
+fn remove_mcp_server_entry_from_file(agent_type: &str, config_path: &Path) -> anyhow::Result<()> {
     if !config_path.exists() {
         return Ok(());
     }
 
-    let raw = std::fs::read_to_string(&config_path)?;
+    let raw = std::fs::read_to_string(config_path)?;
     let mut root: serde_json::Value = match serde_json::from_str(&raw) {
         Ok(v) => v,
         Err(_) => return Ok(()),
     };
 
+    let key = mcp_server_key(agent_type);
     let removed = root
         .as_object_mut()
         .and_then(|obj| obj.get_mut("mcpServers"))
         .and_then(|s| s.as_object_mut())
-        .map(|servers| servers.remove(MCP_SERVER_KEY).is_some())
+        .map(|servers| servers.remove(&key).is_some())
         .unwrap_or(false);
 
     if removed {
-        backup_file(&config_path);
+        backup_file(config_path);
 
         let pretty = serde_json::to_string_pretty(&root)?;
-        std::fs::write(&config_path, pretty)?;
+        std::fs::write(config_path, pretty)?;
         info!(
             "Removed '{}' MCP server from {}",
-            MCP_SERVER_KEY,
+            key,
             config_path.display()
         );
     }
@@ -509,13 +480,87 @@ fn remove_mcp_server_entry(agent_type: &str, home: &Path) -> anyhow::Result<()> 
     Ok(())
 }
 
-async fn install_cursor_or_claude_code(
-    agent_type: &str,
+/// Build the shell command string for running an install script.
+///
+/// On Windows the command prepends `Unblock-File` to strip the Zone.Identifier
+/// ADS that marks downloaded files as untrusted, then invokes the `.ps1` via
+/// PowerShell's call operator (`&`).
+///
+/// On Unix the command delegates to `bash`.
+///
+/// `workspace_root` is only forwarded for cursor / claude_code.
+fn build_install_command(definition: &AgentPluginDef, script: &Path, workspace_root: &str) -> String {
+    let workspace_arg = if definition.requires_workspace_arg {
+        if workspace_root.is_empty() {
+            std::env::current_dir()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string()
+        } else {
+            workspace_root.to_string()
+        }
+    } else {
+        String::new()
+    };
+
+    #[cfg(target_os = "windows")]
+    {
+        build_install_command_windows(script, definition.requires_workspace_arg, &workspace_arg)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        build_install_command_unix(script, definition.requires_workspace_arg, &workspace_arg)
+    }
+}
+
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn build_install_command_windows(
+    script: &Path,
+    needs_workspace_arg: bool,
+    workspace_arg: &str,
+) -> String {
+    let script_escaped = script.to_string_lossy().replace('\'', "''");
+    if needs_workspace_arg {
+        format!(
+            "Unblock-File -Path '{}'; & '{}' -WorkspaceRoot '{}'",
+            script_escaped,
+            script_escaped,
+            workspace_arg.replace('\'', "''"),
+        )
+    } else {
+        format!(
+            "Unblock-File -Path '{}'; & '{}'",
+            script_escaped,
+            script_escaped,
+        )
+    }
+}
+
+#[cfg_attr(target_os = "windows", allow(dead_code))]
+fn build_install_command_unix(
+    script: &Path,
+    needs_workspace_arg: bool,
+    workspace_arg: &str,
+) -> String {
+    let script_escaped = script.to_string_lossy().replace('\'', "'\\''");
+    if needs_workspace_arg {
+        format!(
+            "bash '{}' '{}'",
+            script_escaped,
+            workspace_arg.replace('\'', "'\\''"),
+        )
+    } else {
+        format!("bash '{}'", script_escaped)
+    }
+}
+
+async fn install_via_script(
+    definition: &AgentPluginDef,
     source_root: &Path,
     workspace_root: &str,
     home: &Path,
 ) -> anyhow::Result<String> {
-    let script = resolve_install_script(source_root).ok_or_else(|| {
+    let script = resolve_install_script(definition, source_root).ok_or_else(|| {
         anyhow!(
             "No install script found in {}/setup/",
             source_root.display()
@@ -524,31 +569,11 @@ async fn install_cursor_or_claude_code(
 
     let username = username_from_home(home);
 
-    let workspace_arg = if workspace_root.is_empty() {
-        std::env::current_dir()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string()
-    } else {
-        workspace_root.to_string()
-    };
-
-    #[cfg(target_os = "windows")]
-    let cmd = format!(
-        "& '{}' -WorkspaceRoot '{}'",
-        script.to_string_lossy().replace('\'', "''"),
-        workspace_arg.replace('\'', "''"),
-    );
-    #[cfg(not(target_os = "windows"))]
-    let cmd = format!(
-        "bash '{}' '{}'",
-        script.to_string_lossy().replace('\'', "'\\''"),
-        workspace_arg.replace('\'', "'\\''"),
-    );
+    let cmd = build_install_command(definition, &script, workspace_root);
 
     info!(
         "Delegating {} install to script: {}",
-        agent_type,
+        definition.agent_type,
         script.display()
     );
 
@@ -556,103 +581,42 @@ async fn install_cursor_or_claude_code(
     crate::runner_cli::run_cli(&cmd, &username, personate, Some(120)).await?;
 
     let data_dir = data_dir_for_home(home);
-    let install_path = resolve_install_path_with_home(agent_type, home, &data_dir)
-        .ok_or_else(|| anyhow!("Cannot resolve install path for {}", agent_type))?;
+    let install_path = definition
+        .resolve_install_path_with_home(home, &data_dir)
+        .ok_or_else(|| anyhow!("Cannot resolve install path for {}", definition.agent_type))?;
 
     let version = read_package_version(&install_path).unwrap_or_else(|| "unknown".to_string());
 
-    // The install script runs as root (helper daemon) with personate only setting
-    // env vars -- the process uid is still 0.  All created directories end up
-    // root-owned.  Chown the entire plugin tree back to the target user.
-    let slug = match agent_type {
-        "cursor" => Some("cursor-edamame"),
-        "claude_code" => Some("claude-code-edamame"),
-        _ => None,
-    };
-    if let Some(slug) = slug {
-        let top_dir = data_dir.join(slug);
-        if top_dir.exists() {
-            chown_to_home_owner(&top_dir, home)?;
+    match definition.strategy_kind.as_str() {
+        "workstation_stdio_mcp" | "claude_desktop_dual_mcp" => {
+            if let Some(top_dir) = install_path.parent() {
+                let top_dir = top_dir.to_path_buf();
+                if top_dir.exists() {
+                    chown_to_home_owner(&top_dir, home)?;
+                }
+            }
+            for global_mcp in definition.resolve_global_mcp_configs(home) {
+                chown_to_home_owner(&global_mcp, home)?;
+            }
+            if let Some(config_dir) = definition.resolve_config_dir_with_home(home) {
+                if config_dir.exists() {
+                    chown_to_home_owner(&config_dir, home)?;
+                }
+            }
+            if let Some(state_dir) = definition.resolve_state_dir_with_home(home) {
+                if state_dir.exists() {
+                    chown_to_home_owner(&state_dir, home)?;
+                }
+            }
         }
-    }
-
-    if let Some(global_mcp) = resolve_global_mcp_config(agent_type, home) {
-        chown_to_home_owner(&global_mcp, home)?;
-    }
-
-    Ok(version)
-}
-
-fn install_openclaw(source_root: &Path, home: &Path) -> anyhow::Result<String> {
-    let openclaw_dir = home.join(".openclaw");
-
-    let ext_dst = openclaw_dir.join("extensions/edamame");
-    let skill_ex_dst = openclaw_dir.join("skills/edamame-extrapolator");
-    let skill_posture_dst = openclaw_dir.join("skills/edamame-posture");
-    let meta_dst = openclaw_dir.join("edamame-openclaw");
-    let state_dst = meta_dst.join("state");
-    let service_dst = meta_dst.join("service");
-
-    std::fs::create_dir_all(&ext_dst)?;
-    std::fs::create_dir_all(&skill_ex_dst)?;
-    std::fs::create_dir_all(&skill_posture_dst)?;
-    std::fs::create_dir_all(&meta_dst)?;
-    std::fs::create_dir_all(&state_dst)?;
-    std::fs::create_dir_all(&service_dst)?;
-
-    let plugin_src = source_root.join("extensions/edamame");
-    for name in &["openclaw.plugin.json", "index.ts"] {
-        let src = plugin_src.join(name);
-        if src.is_file() {
-            std::fs::copy(&src, ext_dst.join(name))?;
+        "openclaw_plugin_bundle" => {
+            let openclaw_dir = home.join(".openclaw");
+            if openclaw_dir.exists() {
+                chown_to_home_owner(&openclaw_dir, home)?;
+            }
         }
+        _ => {}
     }
-
-    let ex_skill = source_root.join("skill/edamame-extrapolator/SKILL.md");
-    if ex_skill.is_file() {
-        std::fs::copy(&ex_skill, skill_ex_dst.join("SKILL.md"))?;
-    }
-
-    let posture_skill = source_root.join("skill/edamame-posture/SKILL.md");
-    if posture_skill.is_file() {
-        std::fs::copy(&posture_skill, skill_posture_dst.join("SKILL.md"))?;
-    }
-
-    let pkg_src = source_root.join("package.json");
-    if pkg_src.is_file() {
-        std::fs::copy(&pkg_src, meta_dst.join("package.json"))?;
-    }
-
-    for name in &["healthcheck_cli.mjs", "health.mjs"] {
-        let src = source_root.join("service").join(name);
-        if src.is_file() {
-            std::fs::copy(&src, service_dst.join(name))?;
-        }
-    }
-
-    let version = read_package_version(&meta_dst).unwrap_or_else(|| "unknown".to_string());
-
-    match StdCommand::new("openclaw")
-        .args(["plugins", "enable", "edamame"])
-        .output()
-    {
-        Ok(out) if out.status.success() => {
-            info!("Enabled OpenClaw edamame plugin via CLI");
-        }
-        Ok(out) => {
-            warn!(
-                "openclaw plugins enable edamame exited {}: {}",
-                out.status,
-                String::from_utf8_lossy(&out.stderr).trim()
-            );
-        }
-        Err(e) => {
-            info!("openclaw CLI not on PATH, skipping plugin enable: {}", e);
-        }
-    }
-
-    // Chown after `openclaw plugins enable` which may rewrite openclaw.json as root
-    chown_to_home_owner(&openclaw_dir, home)?;
 
     Ok(version)
 }
@@ -674,8 +638,9 @@ pub async fn provision_agent_plugin(
                 version: String::new(),
                 install_path: String::new(),
                 message: format!(
-                    "Unknown agent type '{}'. Valid types: cursor, claude_code, openclaw",
-                    agent_type
+                    "Unknown agent type '{}'. Valid types: {}",
+                    agent_type,
+                    supported_agents::supported_agent_types_display()
                 ),
             };
         }
@@ -702,7 +667,7 @@ pub async fn provision_agent_plugin(
         def.display_name
     );
 
-    let zip_bytes = match download_zipball(def.repo_name).await {
+    let zip_bytes = match download_zipball(&def.repo_name).await {
         Ok(b) => b,
         Err(e) => {
             return AgentPluginProvisionResult {
@@ -731,7 +696,7 @@ pub async fn provision_agent_plugin(
             message: format!("Failed to create temp directory: {}", e),
         };
     }
-    let extract_dir = tmp_base.join(def.repo_name);
+    let extract_dir = tmp_base.join(&def.repo_name);
 
     if let Err(e) = extract_zipball(&zip_bytes, &extract_dir) {
         let _ = std::fs::remove_dir_all(&tmp_base);
@@ -744,18 +709,16 @@ pub async fn provision_agent_plugin(
         };
     }
 
-    let result = match agent_type {
-        "openclaw" => install_openclaw(&extract_dir, &home),
-        _ => install_cursor_or_claude_code(agent_type, &extract_dir, workspace_root, &home).await,
-    };
+    let result = install_via_script(&def, &extract_dir, workspace_root, &home).await;
 
     let _ = std::fs::remove_dir_all(&tmp_base);
 
     match result {
         Ok(version) => {
             let data_dir = data_dir_for_home(&home);
-            let install_path =
-                resolve_install_path_with_home(agent_type, &home, &data_dir).unwrap_or_default();
+            let install_path = def
+                .resolve_install_path_with_home(&home, &data_dir)
+                .unwrap_or_default();
             info!("Successfully provisioned {} v{}", def.display_name, version);
             AgentPluginProvisionResult {
                 success: true,
@@ -775,78 +738,265 @@ pub async fn provision_agent_plugin(
     }
 }
 
-/// Get the status of a specific agent plugin.
-pub fn get_agent_plugin_status(agent_type: &str) -> AgentPluginStatus {
-    let def = match find_plugin_def(agent_type) {
-        Some(d) => d,
-        None => {
-            return AgentPluginStatus {
-                agent_type: agent_type.to_string(),
-                installed: false,
-                version: String::new(),
-                install_path: String::new(),
-                repo_url: String::new(),
-            };
-        }
-    };
+fn empty_plugin_status(agent_type: &str) -> AgentPluginStatus {
+    AgentPluginStatus {
+        agent_type: agent_type.to_string(),
+        display_name: agent_type.to_string(),
+        description: String::new(),
+        installed: false,
+        version: String::new(),
+        install_path: String::new(),
+        repo_url: String::new(),
+        strategy_kind: String::new(),
+        sort_order: 0,
+        icon_base64: String::new(),
+        icon_mime_type: String::new(),
+    }
+}
 
-    let install_path = resolve_install_path(agent_type).unwrap_or_default();
+fn embedded_icon_payload(agent_type: &str) -> Option<(String, String)> {
+    let base64 = match agent_type {
+        "cursor" => CURSOR_ICON_BASE64,
+        "claude_code" => CLAUDE_CODE_ICON_BASE64,
+        "claude_desktop" => CLAUDE_DESKTOP_ICON_BASE64,
+        "openclaw" => OPENCLAW_ICON_BASE64,
+        _ => return None,
+    };
+    Some((base64.to_string(), "image/png".to_string()))
+}
+
+fn encode_icon_file(path: &Path) -> Option<(String, String)> {
+    match path.extension().and_then(|ext| ext.to_str()) {
+        Some("svg") => {
+            let svg = std::fs::read_to_string(path).ok()?;
+            Some((
+                BASE64_STANDARD.encode(svg.as_bytes()),
+                "image/svg+xml".to_string(),
+            ))
+        }
+        Some("png") => {
+            let bytes = std::fs::read(path).ok()?;
+            Some((BASE64_STANDARD.encode(bytes), "image/png".to_string()))
+        }
+        Some("jpg") | Some("jpeg") => {
+            let bytes = std::fs::read(path).ok()?;
+            Some((BASE64_STANDARD.encode(bytes), "image/jpeg".to_string()))
+        }
+        Some("webp") => {
+            let bytes = std::fs::read(path).ok()?;
+            Some((BASE64_STANDARD.encode(bytes), "image/webp".to_string()))
+        }
+        _ => {
+            let bytes = std::fs::read(path).ok()?;
+            Some((
+                BASE64_STANDARD.encode(bytes),
+                "application/octet-stream".to_string(),
+            ))
+        }
+    }
+}
+
+fn status_from_definition(definition: &AgentPluginDef, home: &Path) -> AgentPluginStatus {
+    let data_dir = data_dir_for_home(home);
+    let install_path = definition
+        .resolve_install_path_with_home(home, &data_dir)
+        .unwrap_or_default();
     let version = read_package_version(&install_path).unwrap_or_default();
     let installed = !version.is_empty();
 
+    let icon_payload = definition
+        .bundle_icon_path(&install_path)
+        .filter(|path| path.is_file())
+        .and_then(|path| encode_icon_file(&path))
+        .or_else(|| embedded_icon_payload(&definition.agent_type))
+        .or_else(|| {
+            supported_agents::registry_dir()
+                .and_then(|registry_dir| definition.registry_icon_path(&registry_dir))
+                .filter(|path| path.is_file())
+                .and_then(|path| encode_icon_file(&path))
+        });
+
+    let (icon_base64, icon_mime_type) = icon_payload.unwrap_or_default();
+
     AgentPluginStatus {
-        agent_type: agent_type.to_string(),
+        agent_type: definition.agent_type.clone(),
+        display_name: definition.display_name.clone(),
+        description: definition.description.clone(),
         installed,
         version,
         install_path: install_path.to_string_lossy().to_string(),
-        repo_url: repo_url(def.repo_name),
+        repo_url: repo_url(&definition.repo_name),
+        strategy_kind: definition.strategy_kind.clone(),
+        sort_order: definition.sort_order,
+        icon_base64,
+        icon_mime_type,
     }
+}
+
+/// Get the status of a specific agent plugin.
+pub fn get_agent_plugin_status(agent_type: &str) -> AgentPluginStatus {
+    let Some(definition) = find_plugin_def(agent_type) else {
+        return empty_plugin_status(agent_type);
+    };
+    let Some(home) = real_home_dir() else {
+        return empty_plugin_status(agent_type);
+    };
+    status_from_definition(&definition, &home)
 }
 
 /// Get status using an explicit home directory (for the helper).
 pub fn get_agent_plugin_status_for_home(agent_type: &str, home: &Path) -> AgentPluginStatus {
-    let def = match find_plugin_def(agent_type) {
-        Some(d) => d,
-        None => {
-            return AgentPluginStatus {
-                agent_type: agent_type.to_string(),
-                installed: false,
-                version: String::new(),
-                install_path: String::new(),
-                repo_url: String::new(),
-            };
-        }
+    let Some(definition) = find_plugin_def(agent_type) else {
+        return empty_plugin_status(agent_type);
     };
-
-    let data_dir = data_dir_for_home(home);
-    let install_path =
-        resolve_install_path_with_home(agent_type, home, &data_dir).unwrap_or_default();
-    let version = read_package_version(&install_path).unwrap_or_default();
-    let installed = !version.is_empty();
-
-    AgentPluginStatus {
-        agent_type: agent_type.to_string(),
-        installed,
-        version,
-        install_path: install_path.to_string_lossy().to_string(),
-        repo_url: repo_url(def.repo_name),
-    }
+    status_from_definition(&definition, home)
 }
 
 /// List all agent plugins.
 pub fn list_agent_plugins() -> Vec<AgentPluginStatus> {
-    AGENT_PLUGINS
+    let Some(home) = real_home_dir() else {
+        return Vec::new();
+    };
+    supported_agents::ordered_supported_agents()
         .iter()
-        .map(|def| get_agent_plugin_status(def.agent_type))
+        .map(|definition| status_from_definition(definition, &home))
         .collect()
 }
 
 /// List all agent plugins using an explicit home directory (for the helper).
 pub fn list_agent_plugins_for_home(home: &Path) -> Vec<AgentPluginStatus> {
-    AGENT_PLUGINS
+    supported_agents::ordered_supported_agents()
         .iter()
-        .map(|def| get_agent_plugin_status_for_home(def.agent_type, home))
+        .map(|definition| status_from_definition(definition, home))
         .collect()
+}
+
+fn resolve_uninstall_script_from_install(
+    definition: &AgentPluginDef,
+    install_path: &Path,
+) -> Option<PathBuf> {
+    if let Some(relpath) = definition.uninstall_script_relpath() {
+        let script = install_path.join(relpath);
+        if script.is_file() {
+            return Some(script);
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let fallback = install_path.join("setup/uninstall.ps1");
+        if fallback.is_file() {
+            return Some(fallback);
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let fallback = install_path.join("setup/uninstall.sh");
+        if fallback.is_file() {
+            return Some(fallback);
+        }
+    }
+
+    None
+}
+
+fn run_uninstall_script(script: &Path, home: &Path) -> anyhow::Result<()> {
+    #[cfg(target_os = "windows")]
+    let output = StdCommand::new("powershell")
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+        .arg(script)
+        .env("HOME", home)
+        .env("USERPROFILE", home)
+        .output()?;
+
+    #[cfg(not(target_os = "windows"))]
+    let output = StdCommand::new("bash")
+        .arg(script)
+        .env("HOME", home)
+        .env("USERPROFILE", home)
+        .output()?;
+
+    if output.status.success() {
+        return Ok(());
+    }
+
+    bail!(
+        "uninstall script {} failed with {}: {}",
+        script.display(),
+        output.status,
+        String::from_utf8_lossy(&output.stderr).trim()
+    )
+}
+
+fn uninstall_via_script(definition: &AgentPluginDef, home: &Path) -> anyhow::Result<()> {
+    let data_dir = data_dir_for_home(home);
+    let install_path = definition
+        .resolve_install_path_with_home(home, &data_dir)
+        .ok_or_else(|| anyhow!("Cannot resolve install path for {}", definition.agent_type))?;
+    let script = resolve_uninstall_script_from_install(definition, &install_path)
+        .ok_or_else(|| anyhow!("No uninstall script found in {}", install_path.display()))?;
+    run_uninstall_script(&script, home)
+}
+
+fn resolve_healthcheck_script_from_install(install_path: &Path) -> Option<PathBuf> {
+    #[cfg(target_os = "windows")]
+    {
+        let wrapper = install_path.join("setup/healthcheck.ps1");
+        if wrapper.is_file() {
+            return Some(wrapper);
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let wrapper = install_path.join("setup/healthcheck.sh");
+        if wrapper.is_file() {
+            return Some(wrapper);
+        }
+    }
+
+    None
+}
+
+fn run_healthcheck_script(
+    script: &Path,
+    config_path: Option<&Path>,
+    home: &Path,
+) -> anyhow::Result<std::process::Output> {
+    #[cfg(target_os = "windows")]
+    let mut cmd = {
+        let mut cmd = StdCommand::new("powershell");
+        cmd.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+            .arg(script);
+        cmd
+    };
+
+    #[cfg(not(target_os = "windows"))]
+    let mut cmd = {
+        let mut cmd = StdCommand::new("bash");
+        cmd.arg(script);
+        cmd
+    };
+
+    cmd.arg("--json").arg("--strict");
+    if let Some(config_path) = config_path {
+        cmd.arg("--config").arg(config_path);
+    }
+    cmd.env("HOME", home).env("USERPROFILE", home);
+    Ok(cmd.output()?)
+}
+
+fn run_healthcheck_node(
+    script: &Path,
+    config_path: Option<&Path>,
+    home: &Path,
+) -> anyhow::Result<std::process::Output> {
+    let mut cmd = StdCommand::new("node");
+    cmd.arg(script).arg("--json").arg("--strict");
+    if let Some(config_path) = config_path {
+        cmd.arg("--config").arg(config_path);
+    }
+    cmd.env("HOME", home).env("USERPROFILE", home);
+    Ok(cmd.output()?)
 }
 
 /// Uninstall an agent plugin by removing all installed files, config, state, and pairing data.
@@ -861,8 +1011,9 @@ pub fn uninstall_agent_plugin(
                 success: false,
                 agent_type: agent_type.to_string(),
                 message: format!(
-                    "Unknown agent type '{}'. Valid types: cursor, claude_code, openclaw",
-                    agent_type
+                    "Unknown agent type '{}'. Valid types: {}",
+                    agent_type,
+                    supported_agents::supported_agent_types_display()
                 ),
             };
         }
@@ -884,10 +1035,19 @@ pub fn uninstall_agent_plugin(
 
     info!("Uninstalling {}", def.display_name);
 
-    let result = match agent_type {
-        "openclaw" => uninstall_openclaw(&home),
-        _ => uninstall_cursor_or_claude_code(agent_type, &home),
-    };
+    let result = uninstall_via_script(&def, &home).or_else(|script_error| {
+        warn!(
+            "Falling back to internal uninstall for {} after script error: {}",
+            def.display_name, script_error
+        );
+        match def.strategy_kind.as_str() {
+            "workstation_stdio_mcp" | "claude_desktop_dual_mcp" => {
+                uninstall_cursor_or_claude_code(agent_type, &home)
+            }
+            "openclaw_plugin_bundle" => uninstall_openclaw(&home),
+            _ => bail!("No uninstall strategy available for {}", agent_type),
+        }
+    });
 
     match result {
         Ok(()) => {
@@ -926,6 +1086,7 @@ fn uninstall_cursor_or_claude_code(agent_type: &str, home: &Path) -> anyhow::Res
     let slug = match agent_type {
         "cursor" => "cursor-edamame",
         "claude_code" => "claude-code-edamame",
+        "claude_desktop" => "claude-desktop-edamame",
         _ => bail!("Unsupported agent type for uninstall: {}", agent_type),
     };
 
@@ -1006,15 +1167,13 @@ fn uninstall_openclaw(home: &Path) -> anyhow::Result<()> {
 /// and the helper daemon (`helper_rx_utility`). Returns a JSON string with the
 /// healthcheck result (always valid JSON, never an `Err`).
 pub fn run_agent_plugin_healthcheck(agent_type: &str, user_home: &str) -> String {
-    use std::process::Command;
-
-    if !matches!(agent_type, "cursor" | "claude_code" | "openclaw") {
+    let Some(definition) = find_plugin_def(agent_type) else {
         return serde_json::json!({
             "ok": true, "checks": [],
             "message": "No healthcheck available for this plugin type"
         })
         .to_string();
-    }
+    };
 
     let home = PathBuf::from(if user_home.is_empty() {
         real_home_dir()
@@ -1036,7 +1195,14 @@ pub fn run_agent_plugin_healthcheck(agent_type: &str, user_home: &str) -> String
         }
     };
 
-    let healthcheck_script = install_path.join("service/healthcheck_cli.mjs");
+    let config_path = resolve_config_dir_with_home(agent_type, &home)
+        .map(|config_dir| config_dir.join("config.json"))
+        .filter(|path| path.exists());
+
+    let healthcheck_wrapper = resolve_healthcheck_script_from_install(&install_path);
+    let healthcheck_script = healthcheck_wrapper
+        .clone()
+        .unwrap_or_else(|| install_path.join(definition.healthcheck_relpath()));
     if !healthcheck_script.exists() {
         return serde_json::json!({
             "ok": false, "checks": [],
@@ -1045,25 +1211,28 @@ pub fn run_agent_plugin_healthcheck(agent_type: &str, user_home: &str) -> String
         .to_string();
     }
 
-    let mut cmd = Command::new("node");
-    cmd.arg(&healthcheck_script).arg("--json").arg("--strict");
-    if let Some(config_dir) = resolve_config_dir_with_home(agent_type, &home) {
-        let config_path = config_dir.join("config.json");
-        if config_path.exists() {
-            cmd.arg("--config").arg(&config_path);
-        }
-    }
-    cmd.env("HOME", &home);
-
-    info!(
-        "Running agent plugin healthcheck: node {} --json --strict",
-        healthcheck_script.display()
-    );
-
-    let output = match cmd.output() {
+    let output = match if healthcheck_wrapper.is_some() {
+        info!(
+            "Running agent plugin healthcheck wrapper: {} --json --strict",
+            healthcheck_script.display()
+        );
+        run_healthcheck_script(&healthcheck_script, config_path.as_deref(), &home)
+    } else {
+        info!(
+            "Running agent plugin healthcheck: node {} --json --strict",
+            healthcheck_script.display()
+        );
+        run_healthcheck_node(&healthcheck_script, config_path.as_deref(), &home)
+    } {
         Ok(o) => o,
         Err(e) => {
-            let msg = if e.kind() == std::io::ErrorKind::NotFound {
+            let io_not_found = e
+                .downcast_ref::<std::io::Error>()
+                .map(|err| err.kind() == std::io::ErrorKind::NotFound)
+                .unwrap_or(false);
+            let msg = if io_not_found && healthcheck_wrapper.is_some() {
+                "healthcheck_runner_not_found".to_string()
+            } else if io_not_found {
                 "node_not_found".to_string()
             } else {
                 format!("Failed to run healthcheck: {}", e)
@@ -1156,10 +1325,16 @@ mod tests {
     fn test_status_serialization() {
         let status = AgentPluginStatus {
             agent_type: "cursor".to_string(),
+            display_name: "EDAMAME for Cursor".to_string(),
+            description: "Cursor test plugin".to_string(),
             installed: true,
             version: "1.0.0".to_string(),
             install_path: "/tmp/test".to_string(),
             repo_url: "https://github.com/test/test".to_string(),
+            strategy_kind: "workstation_stdio_mcp".to_string(),
+            sort_order: 10,
+            icon_base64: String::new(),
+            icon_mime_type: String::new(),
         };
         let json = serde_json::to_string(&status).unwrap();
         let parsed: AgentPluginStatus = serde_json::from_str(&json).unwrap();
@@ -1209,14 +1384,14 @@ mod tests {
     fn test_resolve_global_mcp_config() {
         let home = PathBuf::from("/home/testuser");
         assert_eq!(
-            resolve_global_mcp_config("cursor", &home),
-            Some(PathBuf::from("/home/testuser/.cursor/mcp.json"))
+            resolve_global_mcp_configs("cursor", &home),
+            vec![PathBuf::from("/home/testuser/.cursor/mcp.json")]
         );
         assert_eq!(
-            resolve_global_mcp_config("claude_code", &home),
-            Some(PathBuf::from("/home/testuser/.claude.json"))
+            resolve_global_mcp_configs("claude_code", &home),
+            vec![PathBuf::from("/home/testuser/.claude.json")]
         );
-        assert_eq!(resolve_global_mcp_config("openclaw", &home), None);
+        assert!(resolve_global_mcp_configs("openclaw", &home).is_empty());
     }
 
     #[test]
@@ -1384,7 +1559,7 @@ mod tests {
         assert_eq!(parsed["oauthTokens"]["service"], "tok_abc");
         assert_eq!(parsed["sessionCache"][0], 1);
         assert_eq!(parsed["mcpServers"]["other"]["command"], "other-bin");
-        assert_eq!(parsed["mcpServers"]["edamame"]["command"], "node");
+        assert_eq!(parsed["mcpServers"]["edamame-code"]["command"], "node");
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -1398,7 +1573,7 @@ mod tests {
         let existing = serde_json::json!({
             "oauthTokens": { "service": "tok_xyz" },
             "mcpServers": {
-                "edamame": { "command": "node" },
+                "edamame-code": { "command": "node" },
                 "other": { "command": "other-bin" }
             }
         });
@@ -1413,7 +1588,7 @@ mod tests {
         let raw = std::fs::read_to_string(tmp.join(".claude.json")).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap();
         assert_eq!(parsed["oauthTokens"]["service"], "tok_xyz");
-        assert!(parsed["mcpServers"].get("edamame").is_none());
+        assert!(parsed["mcpServers"].get("edamame-code").is_none());
         assert_eq!(parsed["mcpServers"]["other"]["command"], "other-bin");
 
         let _ = std::fs::remove_dir_all(&tmp);
@@ -1491,6 +1666,155 @@ mod tests {
             !tmp.join(".cursor/mcp.json.bak").exists(),
             "No backup when nothing changed"
         );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_windows_command_includes_unblock_file() {
+        let script = PathBuf::from(r"C:\Users\test\AppData\Local\edamame\setup\install.ps1");
+        let cmd = build_install_command_windows(&script, false, "");
+        assert!(
+            cmd.starts_with("Unblock-File -Path '"),
+            "Windows command must start with Unblock-File: {cmd}"
+        );
+        assert!(
+            cmd.contains("; & '"),
+            "Windows command must chain Unblock-File before script invocation: {cmd}"
+        );
+    }
+
+    #[test]
+    fn test_windows_command_with_workspace_arg() {
+        let script = PathBuf::from(r"C:\tmp\setup\install.ps1");
+        let cmd = build_install_command_windows(&script, true, r"C:\Projects\myapp");
+        assert!(
+            cmd.contains("Unblock-File"),
+            "Must include Unblock-File: {cmd}"
+        );
+        assert!(
+            cmd.contains("-WorkspaceRoot 'C:\\Projects\\myapp'"),
+            "Must pass workspace root to cursor/claude_code scripts: {cmd}"
+        );
+    }
+
+    #[test]
+    fn test_windows_command_without_workspace_arg() {
+        let script = PathBuf::from(r"C:\tmp\setup\install.ps1");
+        let cmd = build_install_command_windows(&script, false, "");
+        assert!(
+            !cmd.contains("-WorkspaceRoot"),
+            "Openclaw must not receive workspace arg: {cmd}"
+        );
+        assert!(
+            cmd.ends_with("& 'C:\\tmp\\setup\\install.ps1'"),
+            "Must end with script invocation: {cmd}"
+        );
+    }
+
+    #[test]
+    fn test_windows_command_escapes_single_quotes() {
+        let script = PathBuf::from(r"C:\User's Dir\setup\install.ps1");
+        let cmd = build_install_command_windows(&script, true, r"C:\O'Brien\project");
+        assert!(
+            cmd.contains("User''s Dir"),
+            "Script path single quotes must be doubled: {cmd}"
+        );
+        assert!(
+            cmd.contains("O''Brien"),
+            "Workspace arg single quotes must be doubled: {cmd}"
+        );
+    }
+
+    #[test]
+    fn test_unix_command_cursor_with_workspace() {
+        let script = PathBuf::from("/tmp/setup/install.sh");
+        let cmd = build_install_command_unix(&script, true, "/home/user/project");
+        assert_eq!(
+            cmd, "bash '/tmp/setup/install.sh' '/home/user/project'",
+            "cursor/claude_code must pass workspace arg"
+        );
+    }
+
+    #[test]
+    fn test_unix_command_openclaw_without_workspace() {
+        let script = PathBuf::from("/tmp/setup/install.sh");
+        let cmd = build_install_command_unix(&script, false, "");
+        assert_eq!(
+            cmd, "bash '/tmp/setup/install.sh'",
+            "openclaw must not pass workspace arg"
+        );
+    }
+
+    #[test]
+    fn test_unix_command_escapes_single_quotes() {
+        let script = PathBuf::from("/tmp/user's dir/setup/install.sh");
+        let cmd = build_install_command_unix(&script, false, "");
+        assert!(
+            cmd.contains("user'\\''s dir"),
+            "Single quotes in path must be shell-escaped: {cmd}"
+        );
+    }
+
+    #[test]
+    fn test_build_install_command_agent_type_routing() {
+        let tmp = std::env::temp_dir().join("edamame-test-cmd-routing");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("setup")).unwrap();
+
+        #[cfg(target_os = "windows")]
+        let script_name = "install.ps1";
+        #[cfg(not(target_os = "windows"))]
+        let script_name = "install.sh";
+
+        let script = tmp.join("setup").join(script_name);
+        std::fs::write(&script, "# stub").unwrap();
+
+        let cursor_def = find_plugin_def("cursor").unwrap();
+        let openclaw_def = find_plugin_def("openclaw").unwrap();
+        let cursor_cmd = build_install_command(&cursor_def, &script, "/workspace");
+        let openclaw_cmd = build_install_command(&openclaw_def, &script, "/workspace");
+
+        #[cfg(target_os = "windows")]
+        {
+            assert!(cursor_cmd.contains("-WorkspaceRoot"));
+            assert!(!openclaw_cmd.contains("-WorkspaceRoot"));
+            assert!(cursor_cmd.contains("Unblock-File"));
+            assert!(openclaw_cmd.contains("Unblock-File"));
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            assert!(cursor_cmd.contains("/workspace"));
+            assert!(!openclaw_cmd.contains("/workspace"));
+        }
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_resolve_install_script_finds_correct_script() {
+        let tmp = std::env::temp_dir().join("edamame-test-resolve-script");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("setup")).unwrap();
+        let cursor_def = find_plugin_def("cursor").unwrap();
+
+        assert!(
+            resolve_install_script(&cursor_def, &tmp).is_none(),
+            "No script should be found yet"
+        );
+
+        #[cfg(target_os = "windows")]
+        {
+            std::fs::write(tmp.join("setup/install.ps1"), "# stub").unwrap();
+            let found = resolve_install_script(&cursor_def, &tmp).unwrap();
+            assert!(found.ends_with("install.ps1"));
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            std::fs::write(tmp.join("setup/install.sh"), "# stub").unwrap();
+            let found = resolve_install_script(&cursor_def, &tmp).unwrap();
+            assert!(found.ends_with("install.sh"));
+        }
 
         let _ = std::fs::remove_dir_all(&tmp);
     }

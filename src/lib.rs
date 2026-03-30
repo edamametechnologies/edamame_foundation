@@ -3,6 +3,7 @@
 pub mod admin;
 pub mod advisor;
 pub mod agent_plugin;
+pub(crate) mod agent_plugin_icons;
 pub mod backend;
 pub mod health;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
@@ -24,6 +25,7 @@ pub mod pwned;
 pub mod runner_cli;
 pub mod runtime;
 pub mod score;
+pub mod supported_agents;
 pub mod threat;
 pub mod threat_factory;
 pub mod threat_metrics_android;
