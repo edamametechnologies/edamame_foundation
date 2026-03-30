@@ -6,8 +6,7 @@ use std::process::Command as StdCommand;
 use tracing::{info, warn};
 
 use crate::agent_plugin_icons::{
-    CLAUDE_CODE_ICON_BASE64, CLAUDE_DESKTOP_ICON_BASE64, CURSOR_ICON_BASE64,
-    OPENCLAW_ICON_BASE64,
+    CLAUDE_CODE_ICON_BASE64, CLAUDE_DESKTOP_ICON_BASE64, CURSOR_ICON_BASE64, OPENCLAW_ICON_BASE64,
 };
 use crate::supported_agents::{self, SupportedAgentDefinition};
 
@@ -489,7 +488,11 @@ fn remove_mcp_server_entry_from_file(agent_type: &str, config_path: &Path) -> an
 /// On Unix the command delegates to `bash`.
 ///
 /// `workspace_root` is only forwarded for cursor / claude_code.
-fn build_install_command(definition: &AgentPluginDef, script: &Path, workspace_root: &str) -> String {
+fn build_install_command(
+    definition: &AgentPluginDef,
+    script: &Path,
+    workspace_root: &str,
+) -> String {
     let workspace_arg = if definition.requires_workspace_arg {
         if workspace_root.is_empty() {
             std::env::current_dir()
@@ -530,8 +533,7 @@ fn build_install_command_windows(
     } else {
         format!(
             "Unblock-File -Path '{}'; & '{}'",
-            script_escaped,
-            script_escaped,
+            script_escaped, script_escaped,
         )
     }
 }

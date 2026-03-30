@@ -152,8 +152,8 @@ impl SupportedAgentDefinition {
                 "claude_desktop_app_config" => {
                     #[cfg(target_os = "macos")]
                     {
-                        let desktop =
-                            home.join("Library/Application Support/Claude/claude_desktop_config.json");
+                        let desktop = home
+                            .join("Library/Application Support/Claude/claude_desktop_config.json");
                         if desktop.parent().map_or(false, |p| p.exists()) {
                             paths.push(desktop);
                         }
@@ -287,7 +287,10 @@ fn try_load_remote_registry() -> Option<LoadedSupportedAgents> {
     {
         Ok(client) => client,
         Err(error) => {
-            warn!("Failed to build supported-agent registry HTTP client: {}", error);
+            warn!(
+                "Failed to build supported-agent registry HTTP client: {}",
+                error
+            );
             return None;
         }
     };
@@ -295,7 +298,10 @@ fn try_load_remote_registry() -> Option<LoadedSupportedAgents> {
     let response = match client.get(&url).send() {
         Ok(response) => response,
         Err(error) => {
-            warn!("Failed to fetch supported-agent registry from {}: {}", url, error);
+            warn!(
+                "Failed to fetch supported-agent registry from {}: {}",
+                url, error
+            );
             return None;
         }
     };
@@ -558,7 +564,9 @@ fn platform_config_dir_for_slug(home: &Path, slug: &str) -> PathBuf {
 fn platform_state_dir_for_slug(home: &Path, slug: &str) -> PathBuf {
     #[cfg(target_os = "macos")]
     {
-        home.join("Library/Application Support").join(slug).join("state")
+        home.join("Library/Application Support")
+            .join(slug)
+            .join("state")
     }
     #[cfg(target_os = "windows")]
     {

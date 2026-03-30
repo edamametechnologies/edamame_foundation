@@ -1,6 +1,6 @@
 [package]
 name = "edamame_foundation"
-version = "1.1.3"
+version = "1.1.4"
 edition = "2021"
 
 [lints.rust]
@@ -118,7 +118,7 @@ encoding_rs = "0.8.35"
 thiserror = "2.0.16"
 serial_test = "3.2.0"
 # Use rustls with ring via reqwest 0.12
-reqwest = { version = "0.12.28", default-features = false, features = ["gzip", "rustls-tls-webpki-roots"] }
+reqwest = { version = "0.12.28", default-features = false, features = ["blocking", "gzip", "rustls-tls-webpki-roots"] }
 
 # Encrypted env (weak)
 envcrypt = "0.5.0"
