@@ -1255,7 +1255,7 @@ dependencies = [
 [[package]]
 name = "flodbadd"
 version = "1.1.5"
-source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#90660fbe5f82ced8acfe68c9425eaa586f29813e"
+source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#6e6e82b4763cab48d472c427a138b1ce9ae18309"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -3895,7 +3895,7 @@ dependencies = [
 [[package]]
 name = "threatmodels_rs"
 version = "0.1.1"
-source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#257fc5aa9833a32ed5fe1dbba727beff6c06ef83"
+source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#b31acd62003becf26f5796667936646a6e06e5dd"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4254,7 +4254,7 @@ checksum = "562d481066bde0658276a35467c4af00bdc6ee726305698a55b86e61d7ad82bb"
 [[package]]
 name = "undeadlock"
 version = "1.0.2"
-source = "git+https://github.com/edamametechnologies/undeadlock?branch=main#14a0b7d1f9c170690a629f63d816b5f58c2557c4"
+source = "git+https://github.com/edamametechnologies/undeadlock?branch=main#873c261d71c42eef56b23ad50ba26b8355245205"
 dependencies = [
  "dashmap",
  "futures",
@@ -5171,9 +5171,9 @@ dependencies = [
 
 [[package]]
 name = "writeable"
-version = "0.6.2"
+version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9edde0db4769d2dc68579893f2306b26c6ecfbe0ef499b013d731b7b9247e0b9"
+checksum = "1ffae5123b2d3fc086436f8834ae3ab053a283cfac8fe0a0b8eaae044768a4c4"
 
 [[package]]
 name = "yoke"
