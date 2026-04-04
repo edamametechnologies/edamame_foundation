@@ -241,13 +241,12 @@ pub async fn rpc_run(
     let version_semver = Version::new(version_semver.major, version_semver.minor, 0);
     let cargo_semver = Version::new(cargo_semver.major, cargo_semver.minor, 0);
     if version_semver > cargo_semver {
-        return order_error(
-            &format!(
-                "order received with foundation major/minor version mismatch - received {} > {}",
-                version, CARGO_PKG_VERSION
-            ),
-            true,
+        let msg = format!(
+            "Order received with foundation major/minor version mismatch - received {} > {} (expected during upgrades)",
+            version, CARGO_PKG_VERSION
         );
+        warn!("{}", msg);
+        return Err(Error::msg(msg));
     }
 
     // Display the order and the arguments, ignore empty arguments

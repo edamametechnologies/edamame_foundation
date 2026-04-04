@@ -3,13 +3,14 @@ use lazy_static::lazy_static;
 use regex::Regex;
 use sentry_tracing::EventFilter;
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     env::{current_exe, var},
     fs::{create_dir_all, File},
     io::{self, Write},
     mem::forget,
     path::PathBuf,
     sync::{Arc, Mutex, Once},
+    time::Instant,
 };
 use tracing::Level;
 #[cfg(target_os = "android")]
@@ -366,6 +367,32 @@ fn create_panic_artifact(
     });
 }
 
+const SENTRY_DEDUP_WINDOW_SECS: u64 = 60;
+const SENTRY_DEDUP_MAX_ENTRIES: usize = 500;
+
+lazy_static! {
+    static ref SENTRY_DEDUP: Mutex<HashMap<u64, Instant>> = Mutex::new(HashMap::new());
+}
+
+fn sentry_event_fingerprint(event: &sentry::protocol::Event) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for exc in &event.exception.values {
+        exc.ty.hash(&mut hasher);
+        if let Some(ref v) = exc.value {
+            v.hash(&mut hasher);
+        }
+    }
+    if let Some(ref msg) = event.message {
+        msg.hash(&mut hasher);
+    }
+    if let Some(ref logentry) = event.logentry {
+        logentry.message.hash(&mut hasher);
+    }
+    event.level.hash(&mut hasher);
+    hasher.finish()
+}
+
 fn init_sentry(url: &str, release: &str) {
     let release = release.to_string();
     let sentry_guard = sentry::init((
@@ -376,7 +403,26 @@ fn init_sentry(url: &str, release: &str) {
             } else {
                 Some(release.into())
             },
-            traces_sample_rate: 1.0,
+            traces_sample_rate: 0.2,
+            before_send: Some(Arc::new(|event| {
+                let fp = sentry_event_fingerprint(&event);
+                let now = Instant::now();
+                let mut dedup = match SENTRY_DEDUP.lock() {
+                    Ok(g) => g,
+                    Err(_) => return Some(event),
+                };
+                if let Some(last) = dedup.get(&fp) {
+                    if now.duration_since(*last).as_secs() < SENTRY_DEDUP_WINDOW_SECS {
+                        return None;
+                    }
+                }
+                dedup.insert(fp, now);
+                if dedup.len() > SENTRY_DEDUP_MAX_ENTRIES {
+                    let cutoff = now - std::time::Duration::from_secs(SENTRY_DEDUP_WINDOW_SECS);
+                    dedup.retain(|_, ts| *ts > cutoff);
+                }
+                Some(event)
+            })),
             ..Default::default()
         },
     ));

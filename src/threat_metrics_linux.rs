@@ -539,6 +539,219 @@ pub static THREAT_METRICS_LINUX: &str = r#"{
       "description": [
         {
           "locale": "EN",
+          "summary": "The AI security agent has detected active vulnerability findings that require review.",
+          "title": "Unreviewed vulnerability findings"
+        },
+        {
+          "locale": "FR",
+          "summary": "L'agent de securite IA a detecte des vulnerabilites actives necessitant un examen.",
+          "title": "Vulnerabilites non examinees"
+        }
+      ],
+      "dimension": "system integrity",
+      "implementation": {
+        "class": "internal",
+        "education": [],
+        "elevation": "user",
+        "maxversion": 0,
+        "minversion": 3,
+        "system": "Linux",
+        "target": "vulnerabilities"
+      },
+      "metrictype": "bool",
+      "name": "vulnerabilities",
+      "remediation": {
+        "class": "internal",
+        "education": [
+          {
+            "class": "html",
+            "locale": "EN",
+            "target": "<p>Review the vulnerability findings detected by the AI security agent:</p><ul><li>Navigate to the 'AI' tab, 'Security Agent' subtab.</li><li>Review each finding and take appropriate action.</li><li>Dismiss findings that have been investigated and are not a concern.</li></ul>"
+          },
+          {
+            "class": "html",
+            "locale": "FR",
+            "target": "<p>Examinez les vulnerabilites detectees par l'agent de securite IA:</p><ul><li>Allez dans l'onglet 'AI', sous-onglet 'Security Agent'.</li><li>Examinez chaque resultat et prenez les mesures appropriees.</li><li>Ignorez les resultats qui ont ete examines et ne sont pas preoccupants.</li></ul>"
+          }
+        ],
+        "elevation": "",
+        "maxversion": 0,
+        "minversion": 3,
+        "system": "Linux",
+        "target": "security_agent"
+      },
+      "rollback": {
+        "class": "internal",
+        "education": [
+          {
+            "class": "html",
+            "locale": "EN",
+            "target": "<p>Review the vulnerability findings detected by the AI security agent:</p><ul><li>Navigate to the 'AI' tab, 'Security Agent' subtab.</li><li>Review each finding and take appropriate action.</li><li>Dismiss findings that have been investigated and are not a concern.</li></ul>"
+          },
+          {
+            "class": "html",
+            "locale": "FR",
+            "target": "<p>Examinez les vulnerabilites detectees par l'agent de securite IA:</p><ul><li>Allez dans l'onglet 'AI', sous-onglet 'Security Agent'.</li><li>Examinez chaque resultat et prenez les mesures appropriees.</li><li>Ignorez les resultats qui ont ete examines et ne sont pas preoccupants.</li></ul>"
+          }
+        ],
+        "elevation": "",
+        "maxversion": 0,
+        "minversion": 3,
+        "system": "Linux",
+        "target": "security_agent"
+      },
+      "scope": "generic",
+      "severity": 1,
+      "tags": [
+        "Personal Posture"
+      ]
+    },
+    {
+      "description": [
+        {
+          "locale": "EN",
+          "summary": "A behavioral divergence has been detected between declared agent intent and observed system activity.",
+          "title": "Behavioral divergence detected"
+        },
+        {
+          "locale": "FR",
+          "summary": "Une divergence comportementale a ete detectee entre l'intention declaree de l'agent et l'activite systeme observee.",
+          "title": "Divergence comportementale detectee"
+        }
+      ],
+      "dimension": "system integrity",
+      "implementation": {
+        "class": "internal",
+        "education": [],
+        "elevation": "user",
+        "maxversion": 0,
+        "minversion": 3,
+        "system": "Linux",
+        "target": "divergence"
+      },
+      "metrictype": "bool",
+      "name": "divergence",
+      "remediation": {
+        "class": "internal",
+        "education": [
+          {
+            "class": "html",
+            "locale": "EN",
+            "target": "<p>Investigate the behavioral divergence detected by the two-plane monitoring engine:</p><ul><li>Navigate to the 'AI' tab, 'Divergence' subtab.</li><li>Review the divergence verdict and contributing evidence.</li><li>Take corrective action if the divergence indicates unauthorized behavior.</li></ul>"
+          },
+          {
+            "class": "html",
+            "locale": "FR",
+            "target": "<p>Examinez la divergence comportementale detectee par le moteur de surveillance bi-plan:</p><ul><li>Allez dans l'onglet 'AI', sous-onglet 'Divergence'.</li><li>Examinez le verdict de divergence et les preuves.</li><li>Prenez des mesures correctives si la divergence indique un comportement non autorise.</li></ul>"
+          }
+        ],
+        "elevation": "",
+        "maxversion": 0,
+        "minversion": 3,
+        "system": "Linux",
+        "target": "divergence_manager"
+      },
+      "rollback": {
+        "class": "internal",
+        "education": [
+          {
+            "class": "html",
+            "locale": "EN",
+            "target": "<p>Investigate the behavioral divergence detected by the two-plane monitoring engine:</p><ul><li>Navigate to the 'AI' tab, 'Divergence' subtab.</li><li>Review the divergence verdict and contributing evidence.</li><li>Take corrective action if the divergence indicates unauthorized behavior.</li></ul>"
+          },
+          {
+            "class": "html",
+            "locale": "FR",
+            "target": "<p>Examinez la divergence comportementale detectee par le moteur de surveillance bi-plan:</p><ul><li>Allez dans l'onglet 'AI', sous-onglet 'Divergence'.</li><li>Examinez le verdict de divergence et les preuves.</li><li>Prenez des mesures correctives si la divergence indique un comportement non autorise.</li></ul>"
+          }
+        ],
+        "elevation": "",
+        "maxversion": 0,
+        "minversion": 3,
+        "system": "Linux",
+        "target": "divergence_manager"
+      },
+      "scope": "generic",
+      "severity": 1,
+      "tags": [
+        "Personal Posture"
+      ]
+    },
+    {
+      "description": [
+        {
+          "locale": "EN",
+          "summary": "The AI security agent has escalated actions that require manual review before they can proceed.",
+          "title": "Escalated actions pending review"
+        },
+        {
+          "locale": "FR",
+          "summary": "L'agent de securite IA a escalade des actions necessitant un examen manuel avant de pouvoir continuer.",
+          "title": "Actions escaladees en attente d'examen"
+        }
+      ],
+      "dimension": "system integrity",
+      "implementation": {
+        "class": "internal",
+        "education": [],
+        "elevation": "user",
+        "maxversion": 0,
+        "minversion": 3,
+        "system": "Linux",
+        "target": "escalated"
+      },
+      "metrictype": "bool",
+      "name": "escalated",
+      "remediation": {
+        "class": "internal",
+        "education": [
+          {
+            "class": "html",
+            "locale": "EN",
+            "target": "<p>Review the escalated actions from the AI security agent:</p><ul><li>Navigate to the 'AI' tab, 'Security Agent' subtab.</li><li>Review each escalated action and its risk assessment.</li><li>Approve, reject, or modify the proposed actions.</li></ul>"
+          },
+          {
+            "class": "html",
+            "locale": "FR",
+            "target": "<p>Examinez les actions escaladees de l'agent de securite IA:</p><ul><li>Allez dans l'onglet 'AI', sous-onglet 'Security Agent'.</li><li>Examinez chaque action escaladee et son evaluation des risques.</li><li>Approuvez, rejetez ou modifiez les actions proposees.</li></ul>"
+          }
+        ],
+        "elevation": "",
+        "maxversion": 0,
+        "minversion": 3,
+        "system": "Linux",
+        "target": "security_agent"
+      },
+      "rollback": {
+        "class": "internal",
+        "education": [
+          {
+            "class": "html",
+            "locale": "EN",
+            "target": "<p>Review the escalated actions from the AI security agent:</p><ul><li>Navigate to the 'AI' tab, 'Security Agent' subtab.</li><li>Review each escalated action and its risk assessment.</li><li>Approve, reject, or modify the proposed actions.</li></ul>"
+          },
+          {
+            "class": "html",
+            "locale": "FR",
+            "target": "<p>Examinez les actions escaladees de l'agent de securite IA:</p><ul><li>Allez dans l'onglet 'AI', sous-onglet 'Security Agent'.</li><li>Examinez chaque action escaladee et son evaluation des risques.</li><li>Approuvez, rejetez ou modifiez les actions proposees.</li></ul>"
+          }
+        ],
+        "elevation": "",
+        "maxversion": 0,
+        "minversion": 3,
+        "system": "Linux",
+        "target": "security_agent"
+      },
+      "scope": "generic",
+      "severity": 1,
+      "tags": [
+        "Personal Posture"
+      ]
+    },
+    {
+      "description": [
+        {
+          "locale": "EN",
           "summary": "The /etc/passwd file in Unix and Linux systems contains user account information. The recommended permissions for this file are 644. This means:\nThe owner (usually root) has read and write permissions (6).\nThe group and other users have read-only permissions (4).\nThis setup ensures that only the superuser can modify the file, preserving system security. Meanwhile, other users and processes can still read the information they need from the file. This balance of functionality and security is why 644 permissions are considered good practice for the /etc/passwd file.",
           "title": "File permissions /etc/passwd"
         },
