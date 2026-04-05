@@ -535,6 +535,31 @@ pub async fn rpc_run(
                 feature = "packetcapture"
             ))]
             "get_whitelist_name" => utility_get_whitelist_name().await,
+            #[cfg(all(
+                any(target_os = "macos", target_os = "linux", target_os = "windows"),
+                feature = "fim"
+            ))]
+            "start_file_monitor" => utility_start_file_monitor(arg1, arg2).await,
+            #[cfg(all(
+                any(target_os = "macos", target_os = "linux", target_os = "windows"),
+                feature = "fim"
+            ))]
+            "stop_file_monitor" => utility_stop_file_monitor().await,
+            #[cfg(all(
+                any(target_os = "macos", target_os = "linux", target_os = "windows"),
+                feature = "fim"
+            ))]
+            "get_file_events" => utility_get_file_events().await,
+            #[cfg(all(
+                any(target_os = "macos", target_os = "linux", target_os = "windows"),
+                feature = "fim"
+            ))]
+            "get_file_monitor_status" => utility_get_file_monitor_status().await,
+            #[cfg(all(
+                any(target_os = "macos", target_os = "linux", target_os = "windows"),
+                feature = "fim"
+            ))]
+            "clear_file_events" => utility_clear_file_events().await,
             "provision_agent_plugin" => utility_provision_agent_plugin(arg1, arg2).await,
             "get_agent_plugin_status" => utility_get_agent_plugin_status(arg1, arg2).await,
             "list_agent_plugins" => utility_list_agent_plugins(arg1).await,

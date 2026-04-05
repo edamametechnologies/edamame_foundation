@@ -10,6 +10,7 @@ async_fn_in_trait = "allow"
 default = []
 tokio-console = []
 packetcapture = [ "flodbadd/packetcapture" ]
+fim = [ "flodbadd/fim" ]
 
 [lib]
 # Dynamic lib version is not used on apple platforms as it's painful, but we must use it on Windows, Linux and Android

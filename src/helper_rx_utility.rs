@@ -18,6 +18,11 @@ use flodbadd::broadcast::scan_hosts_broadcast;
     feature = "packetcapture"
 ))]
 use flodbadd::capture::FlodbaddCapture;
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux", target_os = "windows"),
+    feature = "fim"
+))]
+use flodbadd::fim::{FimConfig, FimMode, FimWatcher};
 use flodbadd::interface::*;
 use flodbadd::ip::*;
 use flodbadd::mdns::mdns_flush;
@@ -54,6 +59,15 @@ lazy_static! {
     pub static ref INTERFACES: Arc<CustomRwLock<FlodbaddInterfaces>> =
         Arc::new(CustomRwLock::new(FlodbaddInterfaces::new()));
     pub static ref INTERFACES_SIGNATURE: Arc<CustomRwLock<String>> = Arc::new(CustomRwLock::new(String::new()));
+}
+
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux", target_os = "windows"),
+    feature = "fim"
+))]
+lazy_static! {
+    pub static ref FIM_WATCHER: Arc<CustomRwLock<Option<FimWatcher>>> =
+        Arc::new(CustomRwLock::new(None));
 }
 
 // Detect and check interface changes
@@ -703,6 +717,175 @@ pub async fn utility_test_agent_plugin(agent_type: &str, user_home: &str) -> Res
     Ok(crate::agent_plugin::run_agent_plugin_healthcheck(
         agent_type, user_home,
     ))
+}
+
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux", target_os = "windows"),
+    feature = "fim"
+))]
+pub async fn utility_start_file_monitor(paths_json: &str, user_home: &str) -> Result<String> {
+    use std::path::PathBuf;
+
+    {
+        let mut guard = FIM_WATCHER.write().await;
+        if let Some(watcher) = guard.take() {
+            watcher.stop();
+        }
+    }
+
+    let watch_paths: Vec<PathBuf> = if paths_json.is_empty() || paths_json == "[]" {
+        if user_home.is_empty() {
+            flodbadd::fim::default_watch_paths(FimMode::Desktop)
+        } else {
+            let home = PathBuf::from(user_home);
+            let common_dirs = [
+                ".ssh", ".gnupg", ".aws", ".kube", ".docker", ".cursor", ".claude",
+            ];
+            let mut paths = Vec::new();
+            for dir in &common_dirs {
+                let p = home.join(dir);
+                if p.exists() {
+                    paths.push(p);
+                }
+            }
+            #[cfg(target_os = "macos")]
+            {
+                let p = home.join("Library/Keychains");
+                if p.exists() {
+                    paths.push(p);
+                }
+            }
+            #[cfg(target_os = "linux")]
+            {
+                for dir in &[".config", ".local/share"] {
+                    let p = home.join(dir);
+                    if p.exists() {
+                        paths.push(p);
+                    }
+                }
+            }
+            paths
+        }
+    } else {
+        let raw: Vec<String> = serde_json::from_str(paths_json).unwrap_or_default();
+        raw.into_iter().map(PathBuf::from).collect()
+    };
+
+    let config = FimConfig::default();
+    match FimWatcher::start(watch_paths, config) {
+        Ok(watcher) => {
+            let mut guard = FIM_WATCHER.write().await;
+            *guard = Some(watcher);
+            info!("File monitor started via helper");
+            Ok("".to_string())
+        }
+        Err(e) => {
+            error!("Failed to start file monitor: {}", e);
+            order_error(&format!("start_file_monitor failed: {}", e), false)
+        }
+    }
+}
+
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux", target_os = "windows"),
+    feature = "fim"
+))]
+pub async fn utility_stop_file_monitor() -> Result<String> {
+    let mut guard = FIM_WATCHER.write().await;
+    if let Some(watcher) = guard.take() {
+        watcher.stop();
+        info!("File monitor stopped via helper");
+    }
+    Ok("".to_string())
+}
+
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux", target_os = "windows"),
+    feature = "fim"
+))]
+pub async fn utility_get_file_events() -> Result<String> {
+    let guard = FIM_WATCHER.read().await;
+    match guard.as_ref() {
+        Some(watcher) => {
+            let all_events = watcher.store().get_all_events();
+            let sensitive = watcher.store().get_sensitive_events();
+            let event_count = watcher.store().event_count() as u64;
+            let last_event_time = all_events.first().map(|e| e.timestamp.to_rfc3339());
+            let has_suspicious = watcher.store().has_suspicious_events();
+            let watch_paths: Vec<String> = watcher
+                .watch_paths()
+                .iter()
+                .map(|p| p.to_string_lossy().to_string())
+                .collect();
+
+            let snapshot = serde_json::json!({
+                "events": all_events,
+                "sensitive_events": sensitive,
+                "is_monitoring": true,
+                "watch_paths": watch_paths,
+                "event_count": event_count,
+                "last_event_time": last_event_time,
+                "has_suspicious_events": has_suspicious,
+            });
+            serde_json::to_string(&snapshot)
+                .map_err(|e| anyhow::anyhow!("Failed to serialize FIM snapshot: {}", e))
+        }
+        None => {
+            let snapshot = serde_json::json!({
+                "events": [],
+                "sensitive_events": [],
+                "is_monitoring": false,
+                "watch_paths": [],
+                "event_count": 0,
+                "last_event_time": null,
+                "has_suspicious_events": false,
+            });
+            Ok(serde_json::to_string(&snapshot).unwrap())
+        }
+    }
+}
+
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux", target_os = "windows"),
+    feature = "fim"
+))]
+pub async fn utility_get_file_monitor_status() -> Result<String> {
+    let guard = FIM_WATCHER.read().await;
+    match guard.as_ref() {
+        Some(watcher) => {
+            let all_events = watcher.store().get_all_events();
+            let status = serde_json::json!({
+                "is_monitoring": watcher.is_running(),
+                "watch_paths": watcher.watch_paths().iter().map(|p| p.to_string_lossy().to_string()).collect::<Vec<_>>(),
+                "event_count": watcher.store().event_count() as u64,
+                "last_event_time": all_events.first().map(|e| e.timestamp.to_rfc3339()),
+            });
+            serde_json::to_string(&status)
+                .map_err(|e| anyhow::anyhow!("Failed to serialize FIM status: {}", e))
+        }
+        None => {
+            let status = serde_json::json!({
+                "is_monitoring": false,
+                "watch_paths": [],
+                "event_count": 0,
+                "last_event_time": null,
+            });
+            Ok(serde_json::to_string(&status).unwrap())
+        }
+    }
+}
+
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux", target_os = "windows"),
+    feature = "fim"
+))]
+pub async fn utility_clear_file_events() -> Result<String> {
+    let guard = FIM_WATCHER.read().await;
+    if let Some(watcher) = guard.as_ref() {
+        watcher.store().clear();
+        info!("File events cleared via helper");
+    }
+    Ok("".to_string())
 }
 
 #[cfg(test)]
