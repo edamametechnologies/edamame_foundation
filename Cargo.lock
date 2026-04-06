@@ -969,7 +969,7 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 [[package]]
 name = "edamame_backend"
 version = "0.3.5"
-source = "git+https://github.com/edamametechnologies/edamame_backend?branch=main#cb5878382091ea654c205d3da58b9b3442b159b8"
+source = "git+https://github.com/edamametechnologies/edamame_backend?branch=main#8b276c59b61be626fc8e4b2049ab07a375e27cac"
 dependencies = [
  "anyhow",
  "blake3",
@@ -1255,7 +1255,7 @@ dependencies = [
 [[package]]
 name = "flodbadd"
 version = "1.1.5"
-source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#cd11084da170c5a1360a7d61abaa1b4522dbeb43"
+source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#0d1845d264410f38cee54af94f473b250a779250"
 dependencies = [
  "anyhow",
  "arc-swap",
