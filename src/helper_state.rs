@@ -1,6 +1,7 @@
 use edamame_backend::helper_state_backend::HelperStateBackend;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
+#[cfg(target_os = "macos")]
 use tracing::error;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]

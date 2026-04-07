@@ -22,7 +22,7 @@ use flodbadd::capture::FlodbaddCapture;
     any(target_os = "macos", target_os = "linux", target_os = "windows"),
     feature = "fim"
 ))]
-use flodbadd::fim::{FimConfig, FimMode, FimWatcher};
+use flodbadd::fim::{FimMode, FimWatcher};
 use flodbadd::interface::*;
 use flodbadd::ip::*;
 use flodbadd::mdns::mdns_flush;
@@ -855,8 +855,23 @@ pub async fn utility_test_agent_plugin(agent_type: &str, user_home: &str) -> Res
     any(target_os = "macos", target_os = "linux", target_os = "windows"),
     feature = "fim"
 ))]
-pub async fn utility_start_file_monitor(paths_json: &str, user_home: &str) -> Result<String> {
-    use std::path::PathBuf;
+pub async fn utility_start_file_monitor(paths_json: &str, start_args_json: &str) -> Result<String> {
+    #[derive(Default, serde::Deserialize)]
+    struct StartFileMonitorArgs {
+        #[serde(default)]
+        user_home: String,
+    }
+
+    let start_args = if start_args_json.trim().is_empty() {
+        StartFileMonitorArgs::default()
+    } else {
+        serde_json::from_str::<StartFileMonitorArgs>(start_args_json).unwrap_or_else(|_| {
+            StartFileMonitorArgs {
+                user_home: start_args_json.to_string(),
+            }
+        })
+    };
+    let user_home = start_args.user_home;
 
     {
         let mut guard = FIM_WATCHER.write().await;
@@ -865,45 +880,12 @@ pub async fn utility_start_file_monitor(paths_json: &str, user_home: &str) -> Re
         }
     }
 
-    let watch_paths: Vec<PathBuf> = if paths_json.is_empty() || paths_json == "[]" {
-        if user_home.is_empty() {
-            flodbadd::fim::default_watch_paths(FimMode::Desktop)
-        } else {
-            let home = PathBuf::from(user_home);
-            let common_dirs = [
-                ".ssh", ".gnupg", ".aws", ".kube", ".docker", ".cursor", ".claude",
-            ];
-            let mut paths = Vec::new();
-            for dir in &common_dirs {
-                let p = home.join(dir);
-                if p.exists() {
-                    paths.push(p);
-                }
-            }
-            #[cfg(target_os = "macos")]
-            {
-                let p = home.join("Library/Keychains");
-                if p.exists() {
-                    paths.push(p);
-                }
-            }
-            #[cfg(target_os = "linux")]
-            {
-                for dir in &[".config", ".local/share"] {
-                    let p = home.join(dir);
-                    if p.exists() {
-                        paths.push(p);
-                    }
-                }
-            }
-            paths
-        }
-    } else {
-        let raw: Vec<String> = serde_json::from_str(paths_json).unwrap_or_default();
-        raw.into_iter().map(PathBuf::from).collect()
-    };
+    let raw_paths: Vec<String> = serde_json::from_str(paths_json).unwrap_or_default();
+    let user_home_path = (!user_home.is_empty()).then(|| std::path::Path::new(&user_home));
+    let watch_paths =
+        crate::fim_support::resolve_fim_watch_paths(&raw_paths, user_home_path, FimMode::Desktop);
 
-    let config = FimConfig::default();
+    let config = crate::fim_support::current_fim_config();
     match FimWatcher::start(watch_paths, config) {
         Ok(watcher) => {
             let mut guard = FIM_WATCHER.write().await;

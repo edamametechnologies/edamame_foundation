@@ -5,6 +5,12 @@ pub mod advisor;
 pub mod agent_plugin;
 pub(crate) mod agent_plugin_icons;
 pub mod backend;
+pub mod cve_detection_params_db;
+#[cfg(all(
+    any(target_os = "macos", target_os = "windows", target_os = "linux"),
+    feature = "fim"
+))]
+pub mod fim_support;
 pub mod health;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub mod helper_proto;
@@ -34,3 +40,4 @@ pub mod threat_metrics_linux;
 pub mod threat_metrics_macos;
 pub mod threat_metrics_windows;
 pub mod version;
+pub mod vuln_detector_params;
