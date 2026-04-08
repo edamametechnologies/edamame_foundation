@@ -13,6 +13,51 @@ use tracing::{debug, trace};
 
 pub static HELPER_FATAL_ERROR: AtomicBool = AtomicBool::new(false);
 
+pub const UTILITY_ORDER_NAMES: &[&str] = &[
+    "arp_resolve",
+    "augment_custom_whitelists",
+    "broadcast_ping",
+    "clear_file_events",
+    "compare_custom_whitelists",
+    "create_custom_whitelists",
+    "get_agent_plugin_status",
+    "get_blacklisted_sessions",
+    "get_blacklisted_status",
+    "get_blacklists",
+    "get_current_sessions",
+    "get_file_events",
+    "get_file_monitor_status",
+    "get_filter",
+    "get_logs",
+    "get_neighbors",
+    "get_packet_stats",
+    "get_peer_ids",
+    "get_sessions",
+    "get_whitelist_conformance",
+    "get_whitelist_exceptions",
+    "get_whitelist_name",
+    "get_whitelists",
+    "getappleid_email",
+    "helper_check",
+    "helper_flags",
+    "is_capturing",
+    "list_agent_plugins",
+    "mdns_resolve",
+    "merge_custom_whitelists",
+    "provision_agent_plugin",
+    "restart_capture",
+    "set_custom_blacklists",
+    "set_custom_whitelists",
+    "set_filter",
+    "set_whitelist",
+    "start_capture",
+    "start_file_monitor",
+    "stop_capture",
+    "stop_file_monitor",
+    "test_agent_plugin",
+    "uninstall_agent_plugin",
+];
+
 // Version
 pub static CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
 
