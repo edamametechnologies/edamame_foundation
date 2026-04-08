@@ -35,10 +35,6 @@ use flodbadd::sessions::SessionFilter;
 use lazy_static::lazy_static;
 use serde_json;
 use std::net::{IpAddr, Ipv4Addr};
-#[cfg(all(any(target_os = "macos", target_os = "linux"), feature = "fim"))]
-use std::path::Path;
-#[cfg(all(any(target_os = "macos", target_os = "linux"), feature = "fim"))]
-use std::process::Command;
 use std::sync::Arc;
 #[cfg(all(
     any(target_os = "macos", target_os = "linux", target_os = "windows"),
@@ -79,128 +75,6 @@ lazy_static! {
     feature = "fim"
 ))]
 const FIM_PROCESS_ATTRIBUTION_BACKFILL_LIMIT: usize = 128;
-
-#[cfg(all(any(target_os = "macos", target_os = "linux"), feature = "fim"))]
-fn fim_event_missing_process(event: &flodbadd::fim_events::FimEvent) -> bool {
-    event
-        .process_name
-        .as_deref()
-        .map(|value| value.trim().is_empty())
-        .unwrap_or(true)
-        && event
-            .process_path
-            .as_deref()
-            .map(|value| value.trim().is_empty())
-            .unwrap_or(true)
-}
-
-#[cfg(all(any(target_os = "macos", target_os = "linux"), feature = "fim"))]
-fn parse_lsof_pid_and_command(output: &str) -> Option<(u32, Option<String>)> {
-    let mut pid = None;
-    let mut command = None;
-
-    for line in output.lines() {
-        if pid.is_none() {
-            if let Some(rest) = line.strip_prefix('p') {
-                pid = rest.parse::<u32>().ok();
-            }
-            continue;
-        }
-
-        if command.is_none() {
-            if let Some(rest) = line.strip_prefix('c') {
-                if !rest.is_empty() {
-                    command = Some(rest.to_string());
-                }
-                break;
-            }
-        }
-    }
-
-    pid.map(|pid| (pid, command))
-}
-
-#[cfg(all(any(target_os = "macos", target_os = "linux"), feature = "fim"))]
-fn lookup_pid_for_path(path: &Path) -> Option<(u32, Option<String>)> {
-    let output = Command::new("lsof")
-        .arg("-n")
-        .arg("-w")
-        .arg("-Fpc")
-        .arg("--")
-        .arg(path)
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    parse_lsof_pid_and_command(&String::from_utf8_lossy(&output.stdout))
-}
-
-#[cfg(all(any(target_os = "macos", target_os = "linux"), feature = "fim"))]
-fn lookup_process_path_for_pid(pid: u32) -> Option<String> {
-    let output = Command::new("lsof")
-        .arg("-n")
-        .arg("-w")
-        .arg("-p")
-        .arg(pid.to_string())
-        .arg("-a")
-        .arg("-d")
-        .arg("txt")
-        .arg("-Fn")
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    for line in String::from_utf8_lossy(&output.stdout).lines() {
-        if let Some(rest) = line.strip_prefix('n') {
-            if !rest.is_empty() {
-                return Some(rest.to_string());
-            }
-        }
-    }
-
-    None
-}
-
-#[cfg(all(any(target_os = "macos", target_os = "linux"), feature = "fim"))]
-fn enrich_fim_events_process_attribution(
-    events: &mut [flodbadd::fim_events::FimEvent],
-    max_events: usize,
-) {
-    for event in events.iter_mut().take(max_events) {
-        if event.event_type == flodbadd::fim_events::FimEventType::Delete
-            || !fim_event_missing_process(event)
-        {
-            continue;
-        }
-
-        let path = Path::new(&event.path);
-        let (pid, fallback_name) = match lookup_pid_for_path(path) {
-            Some(details) => details,
-            None => continue,
-        };
-        let process_path = lookup_process_path_for_pid(pid);
-        let process_name = fallback_name.or_else(|| {
-            process_path.as_ref().and_then(|path| {
-                Path::new(path)
-                    .file_name()
-                    .map(|name| name.to_string_lossy().to_string())
-            })
-        });
-
-        if process_name.is_some() {
-            event.process_name = process_name;
-        }
-        if process_path.is_some() {
-            event.process_path = process_path;
-        }
-    }
-}
 
 // Detect and check interface changes
 pub async fn check_interfaces_changes() -> bool {
@@ -921,11 +795,11 @@ pub async fn utility_get_file_events() -> Result<String> {
     let guard = FIM_WATCHER.read().await;
     match guard.as_ref() {
         Some(watcher) => {
-            let mut all_events = watcher.store().get_all_events();
-            enrich_fim_events_process_attribution(
-                &mut all_events,
+            flodbadd::fim::backfill_missing_process_attribution(
+                watcher.store(),
                 FIM_PROCESS_ATTRIBUTION_BACKFILL_LIMIT,
             );
+            let all_events = watcher.store().get_all_events();
             let sensitive: Vec<_> = all_events
                 .iter()
                 .filter(|event| event.is_sensitive)
