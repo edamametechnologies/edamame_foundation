@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use tracing::warn;
 
 const CACHE_TTL: Duration = Duration::from_secs(60);
+const EXPECTED_SCHEMA_VERSION: u32 = 1;
 const DEFAULT_REGISTRY_URL: &str =
     "https://raw.githubusercontent.com/edamametechnologies/agent_security/main/supported_agents/index.json";
 
@@ -345,6 +346,12 @@ fn fetch_remote_registry(url: &str) -> Option<LoadedSupportedAgents> {
 
     match serde_json::from_str::<SupportedAgentsIndex>(&body) {
         Ok(mut index) => {
+            if index.schema_version != EXPECTED_SCHEMA_VERSION {
+                warn!(
+                    "Supported-agent registry from {} has schema_version {} (expected {}); fields may be misinterpreted",
+                    url, index.schema_version, EXPECTED_SCHEMA_VERSION
+                );
+            }
             index.agents.sort_by_key(|agent| agent.sort_order);
             Some(LoadedSupportedAgents {
                 index,
@@ -365,6 +372,12 @@ fn fetch_remote_registry(url: &str) -> Option<LoadedSupportedAgents> {
 fn read_registry_from_path(path: &Path) -> anyhow::Result<LoadedSupportedAgents> {
     let content = std::fs::read_to_string(path)?;
     let mut index: SupportedAgentsIndex = serde_json::from_str(&content)?;
+    if index.schema_version != EXPECTED_SCHEMA_VERSION {
+        warn!(
+            "Supported-agent registry from {} has schema_version {} (expected {}); fields may be misinterpreted",
+            path.display(), index.schema_version, EXPECTED_SCHEMA_VERSION
+        );
+    }
     index.agents.sort_by_key(|agent| agent.sort_order);
     Ok(LoadedSupportedAgents {
         index,

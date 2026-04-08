@@ -49,7 +49,7 @@ fn chown_recursive(path: &Path, uid: u32, gid: u32) -> anyhow::Result<()> {
     let rc = unsafe { libc::chown(c_path.as_ptr(), uid, gid) };
     if rc != 0 {
         let err = std::io::Error::last_os_error();
-        warn!("chown failed for {}: {}", path.display(), err);
+        return Err(anyhow!("chown failed for {}: {}", path.display(), err));
     }
 
     if path.is_dir() {
@@ -169,7 +169,7 @@ pub fn data_dir_for_home(home: &Path) -> PathBuf {
     }
     #[cfg(target_os = "windows")]
     {
-        dirs::data_local_dir().unwrap_or_else(|| home.join("AppData/Local"))
+        home.join("AppData/Local")
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
@@ -274,6 +274,21 @@ fn extract_zipball(zip_bytes: &[u8], target_dir: &Path) -> anyhow::Result<()> {
         }
 
         let out_path = target_dir.join(relative);
+        let canonical_target = target_dir.canonicalize().unwrap_or_else(|_| target_dir.to_path_buf());
+        let canonical_out = out_path.canonicalize().unwrap_or_else(|_| {
+            if let Some(parent) = out_path.parent() {
+                let parent_canon = parent.canonicalize().unwrap_or_else(|_| parent.to_path_buf());
+                parent_canon.join(out_path.file_name().unwrap_or_default())
+            } else {
+                out_path.clone()
+            }
+        });
+        if !canonical_out.starts_with(&canonical_target) {
+            return Err(anyhow!(
+                "Zip entry {:?} would escape target directory (path traversal)",
+                relative
+            ));
+        }
 
         if file.is_dir() {
             std::fs::create_dir_all(&out_path)?;
@@ -363,13 +378,7 @@ fn backup_file(path: &Path) {
     }
 }
 
-/// Inject (upsert) the `"edamame"` MCP server entry into the IDE's global
-/// MCP configuration file.  Preserves every other key in the file -- both
-/// sibling `mcpServers` entries and any unrelated top-level fields.
-///
-/// If the file exists but is not valid JSON the function returns an error
-/// rather than silently replacing user content with a fresh object.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 fn inject_mcp_server_entry(
     agent_type: &str,
     home: &Path,
@@ -385,6 +394,7 @@ fn inject_mcp_server_entry(
     Ok(())
 }
 
+#[cfg(test)]
 fn inject_mcp_server_entry_into_file(
     agent_type: &str,
     config_path: &Path,
@@ -1173,8 +1183,8 @@ fn uninstall_openclaw(home: &Path) -> anyhow::Result<()> {
 pub fn run_agent_plugin_healthcheck(agent_type: &str, user_home: &str) -> String {
     let Some(definition) = find_plugin_def(agent_type) else {
         return serde_json::json!({
-            "ok": true, "checks": [],
-            "message": "No healthcheck available for this plugin type"
+            "ok": false, "checks": [],
+            "message": format!("Unknown or unsupported agent type: {}", agent_type)
         })
         .to_string();
     };
