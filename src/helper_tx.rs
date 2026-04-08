@@ -4,18 +4,14 @@ use anyhow::{anyhow, Result};
 use base64::{engine::general_purpose, Engine as _};
 use edamame_proto::edamame_helper_client::EdamameHelperClient;
 use edamame_proto::HelperRequest;
-use lazy_static::lazy_static;
 use std::str;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::time::timeout;
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Identity};
 use tracing::{debug, trace};
 
-// Implement a flag to detect if the helper is in fatal state
-lazy_static! {
-    pub static ref HELPER_FATAL_ERROR: Mutex<bool> = Mutex::new(false);
-}
+pub static HELPER_FATAL_ERROR: AtomicBool = AtomicBool::new(false);
 
 // Version
 pub static CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -44,18 +40,14 @@ pub async fn helper_run_utility(
     .await
     {
         Ok(result) => {
-            // Set the fatal error flag
             trace!("Unsetting the HELPER_FATAL_ERROR flag");
-            let mut fatal_error = HELPER_FATAL_ERROR.lock().unwrap();
-            *fatal_error = false;
+            HELPER_FATAL_ERROR.store(false, Ordering::Relaxed);
             Ok(result)
         }
         Err(e) => {
             if e.to_string().contains("Fatal") {
-                // Set the fatal error flag
                 trace!("Setting the HELPER_FATAL_ERROR flag");
-                let mut fatal_error = HELPER_FATAL_ERROR.lock().unwrap();
-                *fatal_error = true;
+                HELPER_FATAL_ERROR.store(true, Ordering::Relaxed);
             }
             Err(e)
         }
@@ -87,18 +79,14 @@ pub async fn helper_run_metric(
     .await
     {
         Ok(result) => {
-            // Set the fatal error flag
             trace!("Unsetting the HELPER_FATAL_ERROR flag");
-            let mut fatal_error = HELPER_FATAL_ERROR.lock().unwrap();
-            *fatal_error = false;
+            HELPER_FATAL_ERROR.store(false, Ordering::Relaxed);
             Ok(result)
         }
         Err(e) => {
             if e.to_string().contains("Fatal") {
-                // Set the fatal error flag
                 trace!("Setting the HELPER_FATAL_ERROR flag");
-                let mut fatal_error = HELPER_FATAL_ERROR.lock().unwrap();
-                *fatal_error = true;
+                HELPER_FATAL_ERROR.store(true, Ordering::Relaxed);
             }
             Err(e)
         }

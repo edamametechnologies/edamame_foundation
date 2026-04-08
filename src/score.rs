@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use std::collections::{HashMap, HashSet};
 use threatmodels_rs::*;
-use tracing::trace;
+use tracing::{trace, warn};
 
 // Score
 #[serde_as]
@@ -70,9 +70,14 @@ impl Score {
                 m.metric.dimension,
                 m.status
             );
-            // Compute totals
             let dimension: &str = &m.metric.dimension;
-            let (mut current, mut max) = dim[dimension];
+            let (mut current, mut max) = match dim.get(dimension) {
+                Some(&v) => v,
+                None => {
+                    warn!("Unknown score dimension {:?}, skipping metric {:?}", dimension, m.metric.name);
+                    continue;
+                }
+            };
             max += m.metric.severity;
             // Increment if not threat or not unknown
             if matches!(m.status, ThreatStatus::Inactive) {

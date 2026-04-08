@@ -37,7 +37,7 @@ impl EdamameHelper for Helper {
     ) -> Result<Response<HelperResponse>, Status> {
         let certs = request
             .peer_certs()
-            .expect("Client did not send its certs!");
+            .ok_or_else(|| Status::unauthenticated("Client did not send its certificates"))?;
 
         trace!("Got {} peer certs!", certs.len());
 
@@ -111,27 +111,27 @@ impl ServerControl {
         let cert_base64 = server_pem.to_string();
         let key_base64 = server_key.to_string();
 
-        // Decode Base64 to original PEM format
         let cert_decoded = general_purpose::STANDARD
             .decode(&cert_base64)
-            .expect("Failed to decode Base64");
-        let cert = str::from_utf8(&cert_decoded).expect("Failed to convert to string");
+            .map_err(|e| anyhow::anyhow!("Failed to decode server certificate Base64: {}", e))?;
+        let cert = str::from_utf8(&cert_decoded)
+            .map_err(|e| anyhow::anyhow!("Server certificate is not valid UTF-8: {}", e))?;
 
         let key_decoded = general_purpose::STANDARD
             .decode(&key_base64)
-            .expect("Failed to decode Base64");
-        let key = str::from_utf8(&key_decoded).expect("Failed to convert to string");
+            .map_err(|e| anyhow::anyhow!("Failed to decode server key Base64: {}", e))?;
+        let key = str::from_utf8(&key_decoded)
+            .map_err(|e| anyhow::anyhow!("Server key is not valid UTF-8: {}", e))?;
 
         let server_identity = Identity::from_pem(cert, key);
 
         let client_ca_cert_base64 = client_ca_cert.to_string();
 
-        // Decode Base64 to original PEM format
         let client_ca_cert_decoded = general_purpose::STANDARD
             .decode(&client_ca_cert_base64)
-            .expect("Failed to decode Base64");
-        let client_ca_cert =
-            str::from_utf8(&client_ca_cert_decoded).expect("Failed to convert to string");
+            .map_err(|e| anyhow::anyhow!("Failed to decode client CA certificate Base64: {}", e))?;
+        let client_ca_cert = str::from_utf8(&client_ca_cert_decoded)
+            .map_err(|e| anyhow::anyhow!("Client CA certificate is not valid UTF-8: {}", e))?;
         let client_ca_cert = Certificate::from_pem(client_ca_cert);
 
         let edamame_server = Helper::default();
@@ -141,7 +141,9 @@ impl ServerControl {
             .client_ca_root(client_ca_cert);
 
         let addr: &str = server;
-        let sock: SocketAddr = addr.parse().expect("Unable to parse socket address");
+        let sock: SocketAddr = addr
+            .parse()
+            .map_err(|e| anyhow::anyhow!("Unable to parse socket address {:?}: {}", addr, e))?;
 
         info!(
             "EDAMAME Helper listening on {:?} - foundation version is {:?}",
