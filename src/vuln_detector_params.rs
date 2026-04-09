@@ -278,6 +278,7 @@ mod tests {
 
     #[tokio::test]
     #[serial]
+    #[ignore] // requires network access to GitHub
     async fn test_update_runs() {
         let status = update("main", false).await.expect("Update failed");
         assert!(matches!(

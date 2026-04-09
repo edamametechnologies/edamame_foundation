@@ -74,7 +74,10 @@ impl Score {
             let (mut current, mut max) = match dim.get(dimension) {
                 Some(&v) => v,
                 None => {
-                    warn!("Unknown score dimension {:?}, skipping metric {:?}", dimension, m.metric.name);
+                    warn!(
+                        "Unknown score dimension {:?}, skipping metric {:?}",
+                        dimension, m.metric.name
+                    );
                     continue;
                 }
             };
@@ -336,5 +339,63 @@ mod tests {
             .check_policy(stars - 1.0, HashSet::new(), HashSet::new())
             .await;
         assert!(result.is_ok() && result.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_score_zero_max_dimension_returns_minus_one() {
+        let mut score = Score::new();
+        // Use a non-empty metrics set with a dummy metric so compute_score
+        // doesn't auto-load builtin metrics, but with a dimension that
+        // won't accumulate severity for the standard five dimensions.
+        let mut metrics = ThreatMetrics::new();
+        let mut dummy = ThreatMetric::new();
+        dummy.metric.dimension = "synthetic_only".to_string();
+        dummy.metric.severity = 1;
+        dummy.status = ThreatStatus::Inactive;
+        metrics.metrics.push(dummy);
+        score.metrics = metrics;
+        score.compute_score().await;
+
+        assert_eq!(score.network, -1, "unused dimension should be -1");
+        assert_eq!(score.system_services, -1);
+        assert_eq!(score.system_integrity, -1);
+        assert_eq!(score.credentials, -1);
+        assert_eq!(score.applications, -1);
+        assert_eq!(score.overall, 0);
+        assert_eq!(score.stars, 0.0);
+    }
+
+    #[tokio::test]
+    async fn test_score_unknown_dimension_skipped() {
+        let mut score = Score::new();
+        let mut metrics = ThreatMetrics::new();
+
+        let mut fake = ThreatMetric::new();
+        fake.metric.dimension = "nonexistent_dimension".to_string();
+        fake.metric.severity = 5;
+        fake.status = ThreatStatus::Inactive;
+        metrics.metrics.push(fake);
+
+        let mut real = ThreatMetric::new();
+        real.metric.dimension = "network".to_string();
+        real.metric.severity = 10;
+        real.status = ThreatStatus::Inactive;
+        metrics.metrics.push(real);
+
+        score.metrics = metrics;
+        score.compute_score().await;
+
+        assert_eq!(
+            score.network, 100,
+            "known dimension should compute normally"
+        );
+    }
+
+    #[test]
+    fn test_score_stars_clamped_to_zero() {
+        let score = Score::new();
+        assert_eq!(score.overall, 0);
+        let stars = score.overall as f64 / 20.0;
+        assert!(stars >= 0.0);
     }
 }

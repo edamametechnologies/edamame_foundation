@@ -208,6 +208,7 @@ mod tests {
 
     #[tokio::test]
     #[serial]
+    #[ignore] // requires network access to GitHub
     async fn test_update_threat_metrics() {
         setup();
         let branch = "main";
@@ -221,6 +222,7 @@ mod tests {
     // Forced update
     #[tokio::test]
     #[serial]
+    #[ignore] // requires network access to GitHub
     async fn test_forced_update_threat_metrics() {
         setup();
         let branch = "main";
@@ -238,6 +240,7 @@ mod tests {
     // which is correct behavior due to date validation.
     #[tokio::test]
     #[serial]
+    #[ignore] // requires network access to GitHub
     async fn test_signature_update_after_modification() {
         setup();
         let branch = "main";
@@ -280,6 +283,7 @@ mod tests {
     // Additional test: Ensure that an invalid update does not change the signature
     #[tokio::test]
     #[serial]
+    #[ignore] // requires network access to GitHub
     async fn test_invalid_update_does_not_change_signature() {
         setup();
         let branch = "nonexistent-branch";
