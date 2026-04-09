@@ -13,14 +13,13 @@ use std::net::SocketAddr;
 use std::str;
 use std::sync::Arc;
 use tokio::sync::oneshot;
-use tokio::sync::Mutex;
 use tonic::transport::{Certificate, Identity, Server, ServerTlsConfig};
 use tonic::{Code, Request, Response, Status};
 use tracing::{error, info, trace, warn};
+use undeadlock::CustomMutex;
 
 lazy_static! {
-    // Branch name
-    pub static ref BRANCH: Arc<Mutex<String>> = Arc::new(Mutex::new("".to_string()));
+    pub static ref BRANCH: Arc<CustomMutex<String>> = Arc::new(CustomMutex::new("".to_string()));
 }
 
 // Version
