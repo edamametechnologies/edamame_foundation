@@ -89,8 +89,8 @@ impl Score {
             // Insert back
             dim.insert(&m.metric.dimension, (current, max));
 
-            // TODO: implement complex logic (amplifiers, exceptions) into a configurable scheme
-            // TODO: support metrics those type is beyond bool
+            // v1 scope limitation: scoring treats all metrics as bool (active/inactive)
+            // and does not implement amplifiers, exceptions, or non-bool metric types.
         }
         let mut overall = 0;
         let mut overall_max = 0;

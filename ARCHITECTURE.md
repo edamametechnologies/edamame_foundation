@@ -10,45 +10,54 @@ EDAMAME Foundation serves as the foundation for both the main application and it
 
 ```
 src/
-├── lib.rs                    # Library entry point
+├── lib.rs                         # Library entry point
 │
 │ # Core System
-├── admin.rs                  # Platform-specific admin detection
-├── version.rs                # Version management
-├── runtime.rs                # Async runtime management
-├── logger.rs                 # Structured logging with memory buffer
-├── rwlock.rs                 # RwLock with deadlock detection
+├── admin.rs                       # Platform-specific admin detection (desktop only)
+├── version.rs                     # Version management
+├── runtime.rs                     # Async runtime management
+├── logger.rs                      # Structured logging with memory buffer
 │
-│ # Helper Protocol (gRPC IPC)
-├── helper_proto.rs           # Protocol Buffer definitions
-├── helper_rx.rs              # Server-side (helper) implementation
-├── helper_tx.rs              # Client-side interface
-├── helper_rx_utility.rs      # Helper utility functions
-├── helper_state.rs           # Activation state management
+│ # Helper Protocol (gRPC IPC, desktop only)
+├── helper_proto.rs                # Protocol Buffer definitions
+├── helper_rx.rs                   # Server-side (helper) implementation
+├── helper_tx.rs                   # Client-side interface
+├── helper_rx_utility.rs           # Helper utility order implementations
+├── helper_state.rs                # Activation state management
 │
 │ # Threat Assessment
-├── threat.rs                 # Core threat model structures
-├── threat_factory.rs         # Threat model instantiation
-├── threat_metrics_macos.rs   # macOS security checks
-├── threat_metrics_windows.rs # Windows security checks
-├── threat_metrics_linux.rs   # Linux security checks
-├── threat_metrics_ios.rs     # iOS security checks
-├── threat_metrics_android.rs # Android security checks
+├── threat.rs                      # Core threat model structures
+├── threat_factory.rs              # Threat model instantiation
+├── threat_metrics_macos.rs        # macOS security checks
+├── threat_metrics_windows.rs      # Windows security checks
+├── threat_metrics_linux.rs        # Linux security checks
+├── threat_metrics_ios.rs          # iOS security checks
+├── threat_metrics_android.rs      # Android security checks
 │
 │ # Scoring & Policy
-├── score.rs                  # Security score calculation
-├── order.rs                  # Remediation order structures
-├── order_type.rs             # Order type definitions
-├── history.rs                # Order execution tracking
-├── pwned.rs                  # Password breach detection
+├── score.rs                       # Security score calculation
+├── order.rs                       # Remediation order structures
+├── order_type.rs                  # Order type definitions
+├── history.rs                     # Order execution tracking
+├── pwned.rs                       # Password breach detection
 │
-│ # Network (Flodbadd Integration)
-├── flodbadd_*.rs             # Re-exports from flodbadd crate
+│ # Agentic / CVE / FIM Tunables
+├── vuln_detector_params.rs        # CloudModel<CveDetectionParams> state and accessors
+├── cve_detection_params_db.rs     # Embedded fallback JSON for CVE/FIM tunables
+├── fim_support.rs                 # Shared FIM watch-path/config helpers (desktop+fim only)
+├── llm_client.rs                  # LLM provider client
+│
+│ # Agent Plugin Provisioning
+├── agent_plugin.rs                # Download, extract, install agent plugins
+├── agent_plugin_icons.rs          # Embedded plugin icon assets (crate-internal)
+├── supported_agents.rs            # Dynamic agent registry (index.json from GitHub)
+├── peer_ids.rs                    # Peer identity management
 │
 │ # Cloud Integration
-├── backend.rs                # Backend service interface
-├── health.rs                 # Health metrics
-└── runner_cli.rs             # CLI command execution
+├── advisor.rs                     # Advisor module
+├── backend.rs                     # Backend service interface
+├── health.rs                      # Health metrics
+└── runner_cli.rs                  # CLI command execution
 ```
 
 ## Helper Protocol
@@ -147,6 +156,20 @@ Per-dimension score = (current / max) * 100
 Overall = weighted average of all dimensions
 Stars = overall * 5 / 100  // 0-5 scale
 ```
+
+## Threat Model Refresh Cadence
+
+Threat models are fetched from the `threatmodels` GitHub repository at runtime
+via the `CloudModel<ThreatMetrics>` mechanism. Each platform has its own JSON
+file (e.g. `threatmodel-macOS.json`, `threatmodel-Windows.json`). The runtime
+polls for signature changes and pulls updated models when available.
+
+Each platform file also has a compiled-in fallback embedded at build time.
+Fallback freshness varies by platform because the embedded snapshots are
+updated at different points in the release cycle. When the device is offline or
+the remote fetch fails, the engine uses the embedded fallback. This means
+newly published threat checks may not appear until the device successfully
+refreshes from the remote repository.
 
 ## Communication Flow
 
