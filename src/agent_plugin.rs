@@ -274,10 +274,14 @@ fn extract_zipball(zip_bytes: &[u8], target_dir: &Path) -> anyhow::Result<()> {
         }
 
         let out_path = target_dir.join(relative);
-        let canonical_target = target_dir.canonicalize().unwrap_or_else(|_| target_dir.to_path_buf());
+        let canonical_target = target_dir
+            .canonicalize()
+            .unwrap_or_else(|_| target_dir.to_path_buf());
         let canonical_out = out_path.canonicalize().unwrap_or_else(|_| {
             if let Some(parent) = out_path.parent() {
-                let parent_canon = parent.canonicalize().unwrap_or_else(|_| parent.to_path_buf());
+                let parent_canon = parent
+                    .canonicalize()
+                    .unwrap_or_else(|_| parent.to_path_buf());
                 parent_canon.join(out_path.file_name().unwrap_or_default())
             } else {
                 out_path.clone()

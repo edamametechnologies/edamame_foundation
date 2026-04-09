@@ -969,7 +969,7 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 [[package]]
 name = "edamame_backend"
 version = "0.3.5"
-source = "git+https://github.com/edamametechnologies/edamame_backend?branch=main#8b276c59b61be626fc8e4b2049ab07a375e27cac"
+source = "git+https://github.com/edamametechnologies/edamame_backend?branch=main#769c1cc4f2a7fabf80f9737d01a3c0eb51a72d98"
 dependencies = [
  "anyhow",
  "blake3",
@@ -1256,7 +1256,7 @@ dependencies = [
 [[package]]
 name = "flodbadd"
 version = "1.1.5"
-source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#ecdc6c53e2f5a38bd5724d57b1c5e7ea34b180ad"
+source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#8ed231ba64339ccf33edd3c91fb935764cfb0fc2"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -1293,7 +1293,6 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
- "serial_test",
  "sha2",
  "socket2 0.6.3",
  "sorted-vec",
@@ -4054,9 +4053,9 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "tokio"
-version = "1.51.0"
+version = "1.51.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2bd1c4c0fc4a7ab90fc15ef6daaa3ec3b893f004f915f2392557ed23237820cd"
+checksum = "f66bf9585cda4b724d3e78ab34b73fb2bbaba9011b9bfdf69dc836382ea13b8c"
 dependencies = [
  "bytes",
  "libc",
