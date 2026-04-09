@@ -673,15 +673,35 @@ pub fn start_interface_monitor() {
     });
 }
 
-pub async fn utility_provision_agent_plugin(agent_type: &str, user_home: &str) -> Result<String> {
+pub async fn utility_provision_agent_plugin(agent_type: &str, arg2: &str) -> Result<String> {
+    let (user_home, workspace_root) =
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(arg2) {
+            (
+                parsed
+                    .get("user_home")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                parsed
+                    .get("workspace_root")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+            )
+        } else {
+            (arg2.to_string(), String::new())
+        };
     let user_home_path = if user_home.is_empty() {
         None
     } else {
-        Some(std::path::PathBuf::from(user_home))
+        Some(std::path::PathBuf::from(&user_home))
     };
-    let result =
-        crate::agent_plugin::provision_agent_plugin(agent_type, "", user_home_path.as_deref())
-            .await;
+    let result = crate::agent_plugin::provision_agent_plugin(
+        agent_type,
+        &workspace_root,
+        user_home_path.as_deref(),
+    )
+    .await;
     serde_json::to_string(&result)
         .map_err(|e| anyhow::anyhow!("Failed to serialize provision result: {}", e))
 }
