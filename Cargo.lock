@@ -1014,7 +1014,7 @@ dependencies = [
  "parking_lot",
  "powershell_script",
  "prost",
- "rand 0.9.2",
+ "rand 0.9.3",
  "regex",
  "reqwest",
  "run_script",
@@ -1256,7 +1256,7 @@ dependencies = [
 [[package]]
 name = "flodbadd"
 version = "1.2.0"
-source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#52df6ca12c9572f069e5fe8e41ef37e3c2903cee"
+source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#dd0f863f32692e7ed4defb5316f3101c7e074375"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -1287,7 +1287,7 @@ dependencies = [
  "pcap",
  "pnet_packet 0.35.0",
  "powershell_script",
- "rand 0.9.2",
+ "rand 0.9.3",
  "rayon",
  "regex",
  "reqwest",
@@ -1347,7 +1347,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f4944f16eb6a05b4b2b79986b4786867bb275f52882adea798f17cc2588f25b2"
 dependencies = [
  "dunce",
- "rand 0.9.2",
+ "rand 0.9.3",
 ]
 
 [[package]]
@@ -1628,7 +1628,7 @@ dependencies = [
  "idna",
  "ipnet",
  "once_cell",
- "rand 0.9.2",
+ "rand 0.9.3",
  "ring",
  "thiserror 2.0.18",
  "tinyvec",
@@ -1650,7 +1650,7 @@ dependencies = [
  "moka",
  "once_cell",
  "parking_lot",
- "rand 0.9.2",
+ "rand 0.9.3",
  "resolv-conf",
  "smallvec",
  "thiserror 2.0.18",
@@ -3058,7 +3058,7 @@ dependencies = [
  "bytes",
  "getrandom 0.3.4",
  "lru-slab",
- "rand 0.9.2",
+ "rand 0.9.3",
  "ring",
  "rustc-hash",
  "rustls",
@@ -3118,9 +3118,9 @@ dependencies = [
 
 [[package]]
 name = "rand"
-version = "0.9.2"
+version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6db2770f06117d490610c7488547d543617b21bfa07796d7a12f6f1bd53850d1"
+checksum = "7ec095654a25171c2124e9e3393a930bddbffdc939556c914957a4c3e0a87166"
 dependencies = [
  "rand_chacha 0.9.0",
  "rand_core 0.9.5",
@@ -3128,9 +3128,9 @@ dependencies = [
 
 [[package]]
 name = "rand"
-version = "0.10.0"
+version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc266eb313df6c5c09c1c7b1fbe2510961e5bcd3add930c1e31f7ed9da0feff8"
+checksum = "d2e8e8bcc7961af1fdac401278c6a831614941f6164ee3bf4ce61b7edb162207"
 dependencies = [
  "chacha20 0.10.0",
  "getrandom 0.4.2",
@@ -3536,7 +3536,7 @@ version = "0.46.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b0b1e7ca40f965db239da279bf278d87b7407469b98835f27f0c8e59ed189b06"
 dependencies = [
- "rand 0.9.2",
+ "rand 0.9.3",
  "sentry-types",
  "serde",
  "serde_json",
@@ -3563,7 +3563,7 @@ checksum = "567711f01f86a842057e1fc17779eba33a336004227e1a1e7e6cc2599e22e259"
 dependencies = [
  "debugid",
  "hex",
- "rand 0.9.2",
+ "rand 0.9.3",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -3983,7 +3983,7 @@ dependencies = [
 [[package]]
 name = "threatmodels_rs"
 version = "0.1.1"
-source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#ce0fa3b53c3a5a4451712c4daeac3c9f50b34788"
+source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#8c19e85a1cb68dccba8cb0b4968f04b5a2e3e2f8"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4460,7 +4460,7 @@ checksum = "5ac8b6f42ead25368cf5b098aeb3dc8a1a2c05a3eee8a9a1a68c640edbfc79d9"
 dependencies = [
  "getrandom 0.4.2",
  "js-sys",
- "rand 0.10.0",
+ "rand 0.10.1",
  "serde_core",
  "sha1_smol",
  "wasm-bindgen",
