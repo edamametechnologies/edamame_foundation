@@ -193,6 +193,10 @@ pub async fn utility_get_logs() -> Result<String> {
     feature = "packetcapture"
 ))]
 pub async fn utility_start_capture() -> Result<String> {
+    if CAPTURE.read().await.is_capturing().await {
+        info!("Capture already running, skipping start");
+        return Ok("".to_string());
+    }
     let interfaces = INTERFACES.read().await.clone();
     let capture_start_result = CAPTURE.write().await.start(&interfaces).await;
     if let Err(e) = capture_start_result {
@@ -207,6 +211,10 @@ pub async fn utility_start_capture() -> Result<String> {
     feature = "packetcapture"
 ))]
 pub async fn utility_stop_capture() -> Result<String> {
+    if !CAPTURE.read().await.is_capturing().await {
+        info!("Capture not running, skipping stop");
+        return Ok("".to_string());
+    }
     CAPTURE.write().await.stop().await;
     Ok("".to_string())
 }
@@ -217,10 +225,19 @@ pub async fn utility_stop_capture() -> Result<String> {
 ))]
 pub async fn utility_restart_capture() -> Result<String> {
     let interfaces = INTERFACES.read().await.clone();
-    let capture_restart_result = CAPTURE.write().await.restart(&interfaces).await;
-    if let Err(e) = capture_restart_result {
-        error!("Capture restart failed: {}", e);
-        return order_error(&format!("capture restart failed: {}", e), false);
+    if !CAPTURE.read().await.is_capturing().await {
+        info!("Capture not running, starting instead of restarting");
+        let result = CAPTURE.write().await.start(&interfaces).await;
+        if let Err(e) = result {
+            error!("Capture start failed: {}", e);
+            return order_error(&format!("capture start failed: {}", e), false);
+        }
+    } else {
+        let result = CAPTURE.write().await.restart(&interfaces).await;
+        if let Err(e) = result {
+            error!("Capture restart failed: {}", e);
+            return order_error(&format!("capture restart failed: {}", e), false);
+        }
     }
     Ok("".to_string())
 }
