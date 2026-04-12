@@ -18,6 +18,36 @@ pub struct CheckMetadata {
     pub reference: String,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct PlatformStringLists {
+    pub macos: Vec<String>,
+    pub linux: Vec<String>,
+    pub windows: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct HelperMatcherConfig {
+    pub exact_paths: Vec<String>,
+    pub path_contains: Vec<String>,
+    pub path_starts_with: Vec<String>,
+    pub path_ends_with: Vec<String>,
+    pub compact_names: Vec<String>,
+    pub compact_leaf_names: Vec<String>,
+    pub leaf_trusted_dir_prefixes: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct PlatformHelperMatcherConfigs {
+    #[serde(default = "default_generic_git_credential_helper")]
+    pub generic_git: HelperMatcherConfig,
+    #[serde(default = "default_macos_credential_helper")]
+    pub macos: HelperMatcherConfig,
+    #[serde(default = "default_linux_credential_helper")]
+    pub linux: HelperMatcherConfig,
+    #[serde(default = "default_windows_credential_helper")]
+    pub windows: HelperMatcherConfig,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct CveDetectionParamsJSON {
     pub date: String,
@@ -29,14 +59,259 @@ pub struct CveDetectionParamsJSON {
     pub generic_application_tokens: Vec<String>,
     pub init_process_names: Vec<String>,
     pub suspicious_parent_path_patterns: Vec<String>,
+    #[serde(default = "default_benign_temp_artifact_suffixes")]
+    pub benign_temp_artifact_suffixes: Vec<String>,
+    #[serde(default = "default_application_storage_patterns")]
+    pub application_storage_patterns: Vec<String>,
+    #[serde(default = "default_credential_store_patterns")]
+    pub credential_store_patterns: PlatformStringLists,
+    #[serde(default = "default_trusted_credential_helpers")]
+    pub trusted_credential_helpers: PlatformHelperMatcherConfigs,
+    #[serde(default = "default_packaged_application_contains_patterns")]
+    pub packaged_application_contains_patterns: Vec<String>,
+    #[serde(default = "default_packaged_application_starts_with_patterns")]
+    pub packaged_application_starts_with_patterns: Vec<String>,
+    #[serde(default = "default_packaged_application_ends_with_patterns")]
+    pub packaged_application_ends_with_patterns: Vec<String>,
     #[serde(default = "default_fim_hash_size_threshold")]
     pub fim_hash_size_threshold: u64,
-    #[serde(default)]
     pub fim_temp_executable_patterns: Vec<String>,
+}
+
+fn strings(values: &[&str]) -> Vec<String> {
+    values.iter().map(|value| (*value).to_string()).collect()
+}
+
+fn platform_string_lists(
+    macos: &[&str],
+    linux: &[&str],
+    windows: &[&str],
+) -> PlatformStringLists {
+    PlatformStringLists {
+        macos: strings(macos),
+        linux: strings(linux),
+        windows: strings(windows),
+    }
+}
+
+fn helper_matcher_config(
+    exact_paths: &[&str],
+    path_contains: &[&str],
+    path_starts_with: &[&str],
+    path_ends_with: &[&str],
+    compact_names: &[&str],
+    compact_leaf_names: &[&str],
+    leaf_trusted_dir_prefixes: &[&str],
+) -> HelperMatcherConfig {
+    HelperMatcherConfig {
+        exact_paths: strings(exact_paths),
+        path_contains: strings(path_contains),
+        path_starts_with: strings(path_starts_with),
+        path_ends_with: strings(path_ends_with),
+        compact_names: strings(compact_names),
+        compact_leaf_names: strings(compact_leaf_names),
+        leaf_trusted_dir_prefixes: strings(leaf_trusted_dir_prefixes),
+    }
 }
 
 fn default_credential_harvest_min_labels() -> usize {
     3
+}
+
+fn default_benign_temp_artifact_suffixes() -> Vec<String> {
+    strings(&[
+        ".tmp",
+        ".temp",
+        ".swp",
+        ".swo",
+        ".part",
+        ".partial",
+        ".download",
+        ".crdownload",
+        ".lock",
+        ".log",
+        ".txt",
+        ".json",
+        ".cache",
+        ".sqlite",
+        ".db",
+        ".plist",
+        ".yaml",
+        ".yml",
+        ".toml",
+        ".ini",
+    ])
+}
+
+fn default_application_storage_patterns() -> Vec<String> {
+    strings(&[
+        "/library/application support/",
+        "/library/containers/",
+        "/library/group containers/",
+        "/library/keychains/",
+        "/library/preferences/",
+        "/library/caches/",
+        "/library/webkit/",
+        "/appdata/roaming/",
+        "/appdata/local/",
+        "/programdata/",
+        "/.config/",
+        "/.cache/",
+        "/.local/share/",
+        "/.local/state/",
+    ])
+}
+
+fn default_credential_store_patterns() -> PlatformStringLists {
+    platform_string_lists(
+        &["/library/keychains/"],
+        &[
+            "/.local/share/keyrings/",
+            "/.gnome2/keyrings/",
+            "/.local/share/kwalletd/",
+            "/.kde/share/apps/kwallet/",
+        ],
+        &[
+            "/appdata/local/microsoft/credentials/",
+            "/appdata/roaming/microsoft/credentials/",
+            "/appdata/local/microsoft/vault/",
+            "/appdata/roaming/microsoft/vault/",
+            "/programdata/microsoft/vault/",
+        ],
+    )
+}
+
+fn default_generic_git_credential_helper() -> HelperMatcherConfig {
+    helper_matcher_config(
+        &[],
+        &["/git-credential-manager", "/git-credential-manager-core"],
+        &[],
+        &[],
+        &[
+            "gitcredentialmanager",
+            "gitcredentialmanagercore",
+            "gitcredentialmanagerexe",
+            "gitcredentialmanagercoreexe",
+        ],
+        &[
+            "gitcredentialmanager",
+            "gitcredentialmanagercore",
+            "gitcredentialmanagerexe",
+            "gitcredentialmanagercoreexe",
+        ],
+        &[],
+    )
+}
+
+fn default_macos_credential_helper() -> HelperMatcherConfig {
+    helper_matcher_config(
+        &["/usr/bin/security"],
+        &["/git-core/git-credential-osxkeychain", "/keychain access.app/"],
+        &[],
+        &["/git-credential-osxkeychain"],
+        &[
+            "security",
+            "gitcredentialosxkeychain",
+            "keychainaccess",
+            "secd",
+            "securityd",
+        ],
+        &[
+            "secd",
+            "securityd",
+            "assistantd",
+            "commcenter",
+            "networkserviceproxy",
+        ],
+        &["/system/library/", "/usr/libexec/"],
+    )
+}
+
+fn default_linux_credential_helper() -> HelperMatcherConfig {
+    helper_matcher_config(
+        &[],
+        &["/git-core/git-credential-libsecret", "/gnome-keyring/gnome-keyring-daemon"],
+        &[],
+        &[
+            "/git-credential-libsecret",
+            "/secret-tool",
+            "/gnome-keyring-daemon",
+        ],
+        &[
+            "gitcredentiallibsecret",
+            "secrettool",
+            "gnomekeyringdaemon",
+            "kwalletd",
+            "kwalletd5",
+            "kwalletd6",
+            "ksecretsservice",
+            "kwalletmanager",
+            "kwalletmanager5",
+            "kwalletmanager6",
+        ],
+        &[
+            "kwalletd",
+            "kwalletd5",
+            "kwalletd6",
+            "ksecretsservice",
+            "kwalletmanager",
+            "kwalletmanager5",
+            "kwalletmanager6",
+        ],
+        &["/usr/bin/", "/usr/lib/", "/usr/libexec/"],
+    )
+}
+
+fn default_windows_credential_helper() -> HelperMatcherConfig {
+    helper_matcher_config(
+        &[],
+        &[],
+        &[],
+        &[],
+        &[
+            "cmdkey",
+            "cmdkeyexe",
+            "vaultcmd",
+            "vaultcmdexe",
+            "credentialuibroker",
+            "credentialuibrokerexe",
+            "lsass",
+            "lsassexe",
+        ],
+        &[
+            "cmdkeyexe",
+            "vaultcmdexe",
+            "credentialuibrokerexe",
+            "lsassexe",
+        ],
+        &["/windows/system32/", "/windows/syswow64/"],
+    )
+}
+
+fn default_trusted_credential_helpers() -> PlatformHelperMatcherConfigs {
+    PlatformHelperMatcherConfigs {
+        generic_git: default_generic_git_credential_helper(),
+        macos: default_macos_credential_helper(),
+        linux: default_linux_credential_helper(),
+        windows: default_windows_credential_helper(),
+    }
+}
+
+fn default_packaged_application_contains_patterns() -> Vec<String> {
+    strings(&[
+        ".app/",
+        "/applications/",
+        "/program files/",
+        "/appdata/local/programs/",
+    ])
+}
+
+fn default_packaged_application_starts_with_patterns() -> Vec<String> {
+    strings(&["/opt/", "/usr/lib/", "/snap/", "/usr/share/"])
+}
+
+fn default_packaged_application_ends_with_patterns() -> Vec<String> {
+    strings(&[".app"])
 }
 
 fn default_fim_hash_size_threshold() -> u64 {
@@ -53,6 +328,13 @@ pub struct CveDetectionParams {
     pub generic_application_tokens: HashSet<String>,
     pub init_process_names: HashSet<String>,
     pub suspicious_parent_path_patterns: Vec<String>,
+    pub benign_temp_artifact_suffixes: Vec<String>,
+    pub application_storage_patterns: Vec<String>,
+    pub credential_store_patterns: PlatformStringLists,
+    pub trusted_credential_helpers: PlatformHelperMatcherConfigs,
+    pub packaged_application_contains_patterns: Vec<String>,
+    pub packaged_application_starts_with_patterns: Vec<String>,
+    pub packaged_application_ends_with_patterns: Vec<String>,
     pub fim_hash_size_threshold: u64,
     pub fim_temp_executable_patterns: Vec<String>,
 }
@@ -84,6 +366,19 @@ impl CveDetectionParams {
             generic_application_tokens: json.generic_application_tokens.iter().cloned().collect(),
             init_process_names: json.init_process_names.iter().cloned().collect(),
             suspicious_parent_path_patterns: json.suspicious_parent_path_patterns.clone(),
+            benign_temp_artifact_suffixes: json.benign_temp_artifact_suffixes.clone(),
+            application_storage_patterns: json.application_storage_patterns.clone(),
+            credential_store_patterns: json.credential_store_patterns.clone(),
+            trusted_credential_helpers: json.trusted_credential_helpers.clone(),
+            packaged_application_contains_patterns: json
+                .packaged_application_contains_patterns
+                .clone(),
+            packaged_application_starts_with_patterns: json
+                .packaged_application_starts_with_patterns
+                .clone(),
+            packaged_application_ends_with_patterns: json
+                .packaged_application_ends_with_patterns
+                .clone(),
             fim_hash_size_threshold: json.fim_hash_size_threshold,
             fim_temp_executable_patterns: json.fim_temp_executable_patterns.clone(),
         }
@@ -274,6 +569,28 @@ mod tests {
                 "\\AppData\\Local\\Temp\\".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn test_detector_heuristic_defaults() {
+        let p = params();
+        assert!(p
+            .benign_temp_artifact_suffixes
+            .contains(&".json".to_string()));
+        assert!(p
+            .application_storage_patterns
+            .contains(&"/library/keychains/".to_string()));
+        assert!(!p
+            .suspicious_parent_path_patterns
+            .contains(&"/../".to_string()));
+        assert!(p
+            .trusted_credential_helpers
+            .macos
+            .compact_leaf_names
+            .contains(&"assistantd".to_string()));
+        assert!(p
+            .packaged_application_contains_patterns
+            .contains(&"/applications/".to_string()));
     }
 
     #[tokio::test]

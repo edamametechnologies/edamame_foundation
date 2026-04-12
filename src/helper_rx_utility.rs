@@ -769,7 +769,6 @@ pub async fn utility_test_agent_plugin(agent_type: &str, user_home: &str) -> Res
 pub async fn utility_start_file_monitor(paths_json: &str, start_args_json: &str) -> Result<String> {
     #[derive(Default, serde::Deserialize)]
     struct StartFileMonitorArgs {
-        #[serde(default)]
         user_home: String,
     }
 
