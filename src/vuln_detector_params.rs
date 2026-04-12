@@ -82,11 +82,7 @@ fn strings(values: &[&str]) -> Vec<String> {
     values.iter().map(|value| (*value).to_string()).collect()
 }
 
-fn platform_string_lists(
-    macos: &[&str],
-    linux: &[&str],
-    windows: &[&str],
-) -> PlatformStringLists {
+fn platform_string_lists(macos: &[&str], linux: &[&str], windows: &[&str]) -> PlatformStringLists {
     PlatformStringLists {
         macos: strings(macos),
         linux: strings(linux),
@@ -206,7 +202,10 @@ fn default_generic_git_credential_helper() -> HelperMatcherConfig {
 fn default_macos_credential_helper() -> HelperMatcherConfig {
     helper_matcher_config(
         &["/usr/bin/security"],
-        &["/git-core/git-credential-osxkeychain", "/keychain access.app/"],
+        &[
+            "/git-core/git-credential-osxkeychain",
+            "/keychain access.app/",
+        ],
         &[],
         &["/git-credential-osxkeychain"],
         &[
@@ -230,7 +229,10 @@ fn default_macos_credential_helper() -> HelperMatcherConfig {
 fn default_linux_credential_helper() -> HelperMatcherConfig {
     helper_matcher_config(
         &[],
-        &["/git-core/git-credential-libsecret", "/gnome-keyring/gnome-keyring-daemon"],
+        &[
+            "/git-core/git-credential-libsecret",
+            "/gnome-keyring/gnome-keyring-daemon",
+        ],
         &[],
         &[
             "/git-credential-libsecret",
