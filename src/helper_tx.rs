@@ -104,10 +104,7 @@ fn decode_and_build_tls(
         .identity(identity))
 }
 
-async fn connect_channel(
-    tls: ClientTlsConfig,
-    target: &'static str,
-) -> Result<Channel> {
+async fn connect_channel(tls: ClientTlsConfig, target: &'static str) -> Result<Channel> {
     let endpoint = Channel::from_static(target)
         .tls_config(tls)?
         .http2_keep_alive_interval(Duration::from_secs(30))
@@ -243,9 +240,17 @@ async fn helper_run(
     trace!("helper_run {} / {}", ordertype, subordertype);
 
     let result = helper_run_with_channel(
-        ordertype, subordertype, arg1, arg2, signature,
-        ca_pem, client_pem, client_key, target,
-    ).await;
+        ordertype,
+        subordertype,
+        arg1,
+        arg2,
+        signature,
+        ca_pem,
+        client_pem,
+        client_key,
+        target,
+    )
+    .await;
 
     match result {
         Ok(output) => Ok(output),
@@ -256,9 +261,17 @@ async fn helper_run(
             );
             invalidate_channel_cache();
             helper_run_with_channel(
-                ordertype, subordertype, arg1, arg2, signature,
-                ca_pem, client_pem, client_key, target,
-            ).await
+                ordertype,
+                subordertype,
+                arg1,
+                arg2,
+                signature,
+                ca_pem,
+                client_pem,
+                client_key,
+                target,
+            )
+            .await
         }
     }
 }
