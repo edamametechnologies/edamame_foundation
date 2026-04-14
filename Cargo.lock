@@ -1256,7 +1256,7 @@ dependencies = [
 [[package]]
 name = "flodbadd"
 version = "1.2.0"
-source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#33e09a997ae95275fea3ec84a5ba86de0bf146e7"
+source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#bff5534002bf5afd32f20d52ef5250c55f1cc76f"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -3192,9 +3192,9 @@ dependencies = [
 
 [[package]]
 name = "rayon"
-version = "1.11.0"
+version = "1.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "368f01d005bf8fd9b1206fb6fa653e6c4a81ceb1466406b81792d87c5677a58f"
+checksum = "fb39b166781f92d482534ef4b4b1b2568f42613b53e5b6c160e24cfbfa30926d"
 dependencies = [
  "either",
  "rayon-core",
@@ -3982,7 +3982,7 @@ dependencies = [
 [[package]]
 name = "threatmodels_rs"
 version = "0.1.1"
-source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#5ea1b1f78d8105a481b8cc2195807e67e19e0878"
+source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#5bfcafecc27273d2aea2cc12f360416893b360fb"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4341,7 +4341,7 @@ checksum = "562d481066bde0658276a35467c4af00bdc6ee726305698a55b86e61d7ad82bb"
 [[package]]
 name = "undeadlock"
 version = "1.2.0"
-source = "git+https://github.com/edamametechnologies/undeadlock?branch=main#6977d7aba1d83b08446a5a665a14f8efee349d91"
+source = "git+https://github.com/edamametechnologies/undeadlock?branch=main#7e545681cfa50aaf6997b41d326fbfc91f99e01b"
 dependencies = [
  "dashmap",
  "tokio",
