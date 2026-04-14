@@ -7,9 +7,10 @@ use edamame_proto::HelperRequest;
 use std::str;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+use tokio::sync::Mutex;
 use tokio::time::timeout;
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Identity};
-use tracing::{debug, trace};
+use tracing::{debug, trace, warn};
 
 pub static HELPER_FATAL_ERROR: AtomicBool = AtomicBool::new(false);
 
@@ -60,6 +61,96 @@ pub const UTILITY_ORDER_NAMES: &[&str] = &[
 
 // Version
 pub static CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Cached gRPC channel and its credential fingerprint.
+/// The fingerprint (hash of ca_pem + client_pem + client_key) lets us
+/// detect credential rotation and rebuild the channel.
+static CHANNEL_CACHE: Mutex<Option<CachedChannel>> = Mutex::const_new(None);
+
+struct CachedChannel {
+    channel: Channel,
+    cred_fingerprint: u64,
+}
+
+fn credential_fingerprint(ca_pem: &str, client_pem: &str, client_key: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    ca_pem.hash(&mut hasher);
+    client_pem.hash(&mut hasher);
+    client_key.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn decode_and_build_tls(
+    ca_pem: &str,
+    client_pem: &str,
+    client_key: &str,
+) -> Result<ClientTlsConfig> {
+    let ca_decoded = general_purpose::STANDARD.decode(ca_pem)?;
+    let ca_str = str::from_utf8(&ca_decoded)?;
+    let ca_cert = Certificate::from_pem(ca_str);
+
+    let cert_decoded = general_purpose::STANDARD.decode(client_pem)?;
+    let cert_str = str::from_utf8(&cert_decoded)?;
+
+    let key_decoded = general_purpose::STANDARD.decode(client_key)?;
+    let key_str = str::from_utf8(&key_decoded)?;
+
+    let identity = Identity::from_pem(cert_str, key_str);
+
+    Ok(ClientTlsConfig::new()
+        .domain_name("localhost")
+        .ca_certificate(ca_cert)
+        .identity(identity))
+}
+
+async fn connect_channel(
+    tls: ClientTlsConfig,
+    target: &'static str,
+) -> Result<Channel> {
+    let endpoint = Channel::from_static(target)
+        .tls_config(tls)?
+        .http2_keep_alive_interval(Duration::from_secs(30))
+        .keep_alive_timeout(Duration::from_secs(120))
+        .keep_alive_while_idle(true);
+
+    let channel = timeout(Duration::from_secs(120), endpoint.connect()).await??;
+    Ok(channel)
+}
+
+async fn get_or_create_channel(
+    ca_pem: &str,
+    client_pem: &str,
+    client_key: &str,
+    target: &'static str,
+) -> Result<Channel> {
+    let fp = credential_fingerprint(ca_pem, client_pem, client_key);
+    let mut cache = CHANNEL_CACHE.lock().await;
+
+    if let Some(cached) = cache.as_ref() {
+        if cached.cred_fingerprint == fp {
+            return Ok(cached.channel.clone());
+        }
+        debug!("Credential fingerprint changed, rebuilding gRPC channel");
+    }
+
+    let tls = decode_and_build_tls(ca_pem, client_pem, client_key)?;
+    let channel = connect_channel(tls, target).await?;
+
+    *cache = Some(CachedChannel {
+        channel: channel.clone(),
+        cred_fingerprint: fp,
+    });
+
+    Ok(channel)
+}
+
+/// Invalidate the cached channel so the next call creates a fresh connection.
+fn invalidate_channel_cache() {
+    if let Ok(mut cache) = CHANNEL_CACHE.try_lock() {
+        *cache = None;
+    }
+}
 
 pub async fn helper_run_utility(
     subordertype: &str,
@@ -149,57 +240,46 @@ async fn helper_run(
     client_key: &str,
     target: &'static str,
 ) -> Result<String> {
-    // Connect to server
-    trace!("Connecting to helper server");
-    let server_root_ca_cert_base64 = ca_pem.to_string();
-    let server_root_ca_cert_decoded = general_purpose::STANDARD
-        .decode(&server_root_ca_cert_base64)
-        .expect("Failed to decode server root CA certificate");
-    let server_root_ca_cert = str::from_utf8(&server_root_ca_cert_decoded)
-        .expect("Failed to convert server root CA certificate to string");
-    let server_root_ca_cert = Certificate::from_pem(server_root_ca_cert);
+    trace!("helper_run {} / {}", ordertype, subordertype);
 
-    // Decode the Base64-encoded client certificate and key
-    let client_cert_base64 = client_pem.to_string();
-    let client_cert_decoded = general_purpose::STANDARD
-        .decode(&client_cert_base64)
-        .expect("Failed to decode client certificate");
-    let client_cert = str::from_utf8(&client_cert_decoded)
-        .expect("Failed to convert client certificate to string");
+    let result = helper_run_with_channel(
+        ordertype, subordertype, arg1, arg2, signature,
+        ca_pem, client_pem, client_key, target,
+    ).await;
 
-    let client_key_base64 = client_key.to_string();
-    let client_key_decoded = general_purpose::STANDARD
-        .decode(&client_key_base64)
-        .expect("Failed to decode client key");
-    let client_key =
-        str::from_utf8(&client_key_decoded).expect("Failed to convert client key to string");
+    match result {
+        Ok(output) => Ok(output),
+        Err(first_err) => {
+            warn!(
+                "gRPC call {} / {} failed on cached channel, retrying with fresh connection: {}",
+                ordertype, subordertype, first_err
+            );
+            invalidate_channel_cache();
+            helper_run_with_channel(
+                ordertype, subordertype, arg1, arg2, signature,
+                ca_pem, client_pem, client_key, target,
+            ).await
+        }
+    }
+}
 
-    let client_identity = Identity::from_pem(client_cert, client_key);
+async fn helper_run_with_channel(
+    ordertype: &str,
+    subordertype: &str,
+    arg1: &str,
+    arg2: &str,
+    signature: &str,
+    ca_pem: &str,
+    client_pem: &str,
+    client_key: &str,
+    target: &'static str,
+) -> Result<String> {
+    let channel = get_or_create_channel(ca_pem, client_pem, client_key, target).await?;
 
-    let tls = ClientTlsConfig::new()
-        // Matching the CN of the server certificate
-        .domain_name("localhost")
-        .ca_certificate(server_root_ca_cert)
-        .identity(client_identity);
-
-    debug!("Connecting to helper server: {}", target);
-    // Configure HTTP/2 keep-alive to prevent connection drops during long operations
-    // like get_sessions which can take 100+ seconds with large session counts.
-    let channel = Channel::from_static(target)
-        .tls_config(tls)?
-        .http2_keep_alive_interval(Duration::from_secs(30))
-        .keep_alive_timeout(Duration::from_secs(120))
-        .keep_alive_while_idle(true);
-
-    // Timeout the connection after 120 seconds, this needs to be high enough as we are querying the helper in parallel
-    let connection = timeout(Duration::from_secs(120), channel.connect()).await??;
-
-    let mut client = EdamameHelperClient::new(connection)
-        // For session data, the messages can be large
+    let mut client = EdamameHelperClient::new(channel)
         .max_decoding_message_size(1000 * 1024 * 1024)
         .max_encoding_message_size(1000 * 1024 * 1024);
 
-    trace!("Sending request to helper server");
     let request = tonic::Request::new(HelperRequest {
         ordertype: ordertype.to_owned(),
         subordertype: subordertype.to_owned(),
@@ -209,8 +289,6 @@ async fn helper_run(
         version: CARGO_PKG_VERSION.to_string(),
     });
 
-    // Timeout the request after 180 seconds - this needs to be high enough for get_sessions
-    // which can take 100+ seconds with large session counts (50k+ sessions).
     let response = match timeout(Duration::from_secs(180), client.execute(request)).await {
         Ok(Ok(response)) => response,
         Ok(Err(e)) => {
