@@ -302,10 +302,14 @@ fn create_panic_artifact(
 
         // Daemon types write panic artifacts to /var/log/edamame/ on Unix
         // (matches rolling log location) instead of beside the executable.
+        // Falls back to beside the executable if the directory can't be created.
         let artifact_dir = if cfg!(unix) && matches!(executable_type, "helper" | "posture") {
             let dir = PathBuf::from("/var/log/edamame");
-            let _ = create_dir_all(&dir);
-            dir
+            if create_dir_all(&dir).is_ok() {
+                dir
+            } else {
+                exe_dir.to_path_buf()
+            }
         } else {
             exe_dir.to_path_buf()
         };
@@ -541,9 +545,16 @@ pub fn init_logger(
     {
         let log_dir = if matches!(executable_type, "helper" | "posture") {
             if cfg!(unix) {
-                let dir = PathBuf::from("/var/log/edamame");
-                create_dir_all(&dir).expect("Failed to create /var/log/edamame");
-                dir
+                let preferred = PathBuf::from("/var/log/edamame");
+                if create_dir_all(&preferred).is_ok() {
+                    preferred
+                } else {
+                    let exe_path: PathBuf = current_exe().expect("Failed to get current exe");
+                    exe_path
+                        .parent()
+                        .expect("Failed to get parent of current exe")
+                        .to_path_buf()
+                }
             } else {
                 let exe_path: PathBuf = current_exe().expect("Failed to get current exe");
                 exe_path
@@ -576,13 +587,22 @@ pub fn init_logger(
         // Add the PID to the basename
         let pid = std::process::id();
         let basename = format!("{}_{}", basename, pid);
-        let file_appender = RollingFileAppender::builder()
+        match RollingFileAppender::builder()
             .rotation(Rotation::DAILY)
             .filename_prefix(basename)
             .max_log_files(7)
             .build(log_dir.clone())
-            .expect("Failed to initialize rolling file appender");
-        tracing_appender::non_blocking(file_appender)
+        {
+            Ok(file_appender) => tracing_appender::non_blocking(file_appender),
+            Err(e) => {
+                eprintln!(
+                    "Warning: Failed to initialize rolling file appender in {}: {}. File logging disabled.",
+                    log_dir.display(),
+                    e
+                );
+                NonBlocking::new(io::sink())
+            }
+        }
     } else {
         NonBlocking::new(io::sink())
     };
