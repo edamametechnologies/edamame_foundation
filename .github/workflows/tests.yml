@@ -305,6 +305,10 @@ jobs:
           fi
           echo "--- Dumping Native Logs (${{ matrix.os }}-${{ matrix.platform }}) --- "
           find . -name "edamame_*.2*-*-*" -exec echo "--- {} ---" \; -exec $SUDO cat {} \; || echo "No logs found in default directory"
+          if [ -d /var/log/edamame ]; then
+            echo "--- Dumping /var/log/edamame/ ---"
+            find /var/log/edamame -name "edamame_*.2*-*-*" -exec echo "--- {} ---" \; -exec $SUDO cat {} \; || echo "No logs found in /var/log/edamame"
+          fi
           echo "--- Native Log Dump Complete ---"
 
       - name: Slack alerts
@@ -479,6 +483,10 @@ jobs:
         run: |
           echo "--- Dumping Container Logs (${{ matrix.container_name }}) --- "
           find . -name "edamame_*.2*-*-*" -exec echo "--- {} ---" \; -exec sudo cat {} \; || echo "No logs found in default directory"
+          if [ -d /var/log/edamame ]; then
+            echo "--- Dumping /var/log/edamame/ ---"
+            find /var/log/edamame -name "edamame_*.2*-*-*" -exec echo "--- {} ---" \; -exec sudo cat {} \; || echo "No logs found in /var/log/edamame"
+          fi
           echo "--- Container Log Dump Complete ---"
 
       - name: Slack alerts

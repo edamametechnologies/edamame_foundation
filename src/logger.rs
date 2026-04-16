@@ -300,6 +300,17 @@ fn create_panic_artifact(
             .parent()
             .unwrap_or_else(|| std::path::Path::new("."));
 
+        // Daemon types write panic artifacts to /var/log/edamame/ on Unix
+        // (matches rolling log location) instead of beside the executable.
+        let artifact_dir =
+            if cfg!(unix) && matches!(executable_type, "helper" | "posture") {
+                let dir = PathBuf::from("/var/log/edamame");
+                let _ = create_dir_all(&dir);
+                dir
+            } else {
+                exe_dir.to_path_buf()
+            };
+
         // Create timestamp for filename
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -308,7 +319,7 @@ fn create_panic_artifact(
 
         // Format: {executable_type}_panic_{timestamp}
         let panic_filename = format!("{}_panic_{}.txt", executable_type, now);
-        let panic_file_path = exe_dir.join(panic_filename);
+        let panic_file_path = artifact_dir.join(panic_filename);
 
         // Create panic content
         let panic_content = format!(
@@ -523,13 +534,25 @@ pub fn init_logger(
     let is_installed = exe_path_str.starts_with("/usr") || exe_path_str.starts_with("/opt/");
 
     // Optional file writer
-    // Duplicate to file for the helper (all platforms), posture CLI (when not
-    // installed in /usr or /opt), and all executables on Windows.
-    let (file_writer, file_guard) = if matches!(executable_type, "helper")
+    // Duplicate to file for daemons (helper + posture) on all platforms,
+    // edamame_cli (when not installed in /usr or /opt), and all executables on Windows.
+    let (file_writer, file_guard) = if matches!(executable_type, "helper" | "posture")
         || (matches!(executable_type, "cli") && !is_installed)
         || (cfg!(target_os = "windows"))
     {
-        let log_dir = if matches!(executable_type, "helper") || matches!(executable_type, "cli") {
+        let log_dir = if matches!(executable_type, "helper" | "posture") {
+            if cfg!(unix) {
+                let dir = PathBuf::from("/var/log/edamame");
+                create_dir_all(&dir).expect("Failed to create /var/log/edamame");
+                dir
+            } else {
+                let exe_path: PathBuf = current_exe().expect("Failed to get current exe");
+                exe_path
+                    .parent()
+                    .expect("Failed to get parent of current exe")
+                    .to_path_buf()
+            }
+        } else if matches!(executable_type, "cli") {
             let exe_path: PathBuf = current_exe().expect("Failed to get current exe");
             exe_path
                 .parent()
@@ -544,6 +567,8 @@ pub fn init_logger(
         };
         let basename = if matches!(executable_type, "helper") {
             "edamame_helper"
+        } else if matches!(executable_type, "posture") {
+            "edamame_posture"
         } else if matches!(executable_type, "cli") {
             "edamame_cli"
         } else {
@@ -563,10 +588,11 @@ pub fn init_logger(
         NonBlocking::new(io::sink())
     };
 
-    // Duplicate to stdout except for posture and helper (helper uses rolling
-    // file instead of launchd stdout redirect to avoid unbounded /var/log growth)
+    // Suppress stdout for non-verbose daemons and CLI (they use rolling files or are silent).
+    // Verbose types (posture_verbose, cli_verbose, app) emit to stdout for
+    // service managers (systemd/OpenRC journal) or interactive use.
     let (stdout_writer, stdout_guard) =
-        if matches!(executable_type, "cli") || matches!(executable_type, "helper") {
+        if matches!(executable_type, "cli" | "helper" | "posture") {
             NonBlocking::new(io::sink())
         } else {
             NonBlocking::new(io::stdout())
