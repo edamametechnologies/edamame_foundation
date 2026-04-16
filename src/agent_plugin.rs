@@ -362,6 +362,25 @@ fn mcp_server_key(agent_type: &str) -> String {
         .unwrap_or_else(|| "edamame".to_string())
 }
 
+/// Retry a file operation on Windows when ERROR_SHARING_VIOLATION (os error 32)
+/// occurs.  Windows Defender and the search indexer briefly lock files they scan,
+/// which causes spurious failures on CI runners.  On non-Windows this is a
+/// straight passthrough.
+fn retry_on_sharing_violation<T, F: Fn() -> std::io::Result<T>>(op: F) -> std::io::Result<T> {
+    let mut last_err = None;
+    for i in 0..5 {
+        match op() {
+            Ok(v) => return Ok(v),
+            Err(e) if cfg!(target_os = "windows") && e.raw_os_error() == Some(32) => {
+                last_err = Some(e);
+                std::thread::sleep(std::time::Duration::from_millis(100 * (1 << i)));
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last_err.unwrap())
+}
+
 /// Back up a file to `<path>.bak` before we modify it.  Best-effort: a
 /// failure here is logged but does not abort the operation.
 fn backup_file(path: &Path) {
@@ -405,7 +424,7 @@ fn inject_mcp_server_entry_into_file(
     server_entry: &serde_json::Value,
 ) -> anyhow::Result<()> {
     let mut root: serde_json::Value = if config_path.exists() {
-        let raw = std::fs::read_to_string(config_path)?;
+        let raw = retry_on_sharing_violation(|| std::fs::read_to_string(config_path))?;
         serde_json::from_str(&raw).map_err(|e| {
             anyhow!(
                 "Refusing to modify {}: file is not valid JSON ({}). \
@@ -438,7 +457,7 @@ fn inject_mcp_server_entry_into_file(
     backup_file(config_path);
 
     let pretty = serde_json::to_string_pretty(&root)?;
-    std::fs::write(config_path, pretty)?;
+    retry_on_sharing_violation(|| std::fs::write(config_path, &pretty))?;
 
     info!(
         "Injected '{}' MCP server into {}",
@@ -466,7 +485,7 @@ fn remove_mcp_server_entry_from_file(agent_type: &str, config_path: &Path) -> an
         return Ok(());
     }
 
-    let raw = std::fs::read_to_string(config_path)?;
+    let raw = retry_on_sharing_violation(|| std::fs::read_to_string(config_path))?;
     let mut root: serde_json::Value = match serde_json::from_str(&raw) {
         Ok(v) => v,
         Err(_) => return Ok(()),
@@ -484,7 +503,7 @@ fn remove_mcp_server_entry_from_file(agent_type: &str, config_path: &Path) -> an
         backup_file(config_path);
 
         let pretty = serde_json::to_string_pretty(&root)?;
-        std::fs::write(config_path, pretty)?;
+        retry_on_sharing_violation(|| std::fs::write(config_path, &pretty))?;
         info!(
             "Removed '{}' MCP server from {}",
             key,
