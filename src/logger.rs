@@ -302,14 +302,13 @@ fn create_panic_artifact(
 
         // Daemon types write panic artifacts to /var/log/edamame/ on Unix
         // (matches rolling log location) instead of beside the executable.
-        let artifact_dir =
-            if cfg!(unix) && matches!(executable_type, "helper" | "posture") {
-                let dir = PathBuf::from("/var/log/edamame");
-                let _ = create_dir_all(&dir);
-                dir
-            } else {
-                exe_dir.to_path_buf()
-            };
+        let artifact_dir = if cfg!(unix) && matches!(executable_type, "helper" | "posture") {
+            let dir = PathBuf::from("/var/log/edamame");
+            let _ = create_dir_all(&dir);
+            dir
+        } else {
+            exe_dir.to_path_buf()
+        };
 
         // Create timestamp for filename
         let now = std::time::SystemTime::now()
@@ -591,12 +590,11 @@ pub fn init_logger(
     // Suppress stdout for non-verbose daemons and CLI (they use rolling files or are silent).
     // Verbose types (posture_verbose, cli_verbose, app) emit to stdout for
     // service managers (systemd/OpenRC journal) or interactive use.
-    let (stdout_writer, stdout_guard) =
-        if matches!(executable_type, "cli" | "helper" | "posture") {
-            NonBlocking::new(io::sink())
-        } else {
-            NonBlocking::new(io::stdout())
-        };
+    let (stdout_writer, stdout_guard) = if matches!(executable_type, "cli" | "helper" | "posture") {
+        NonBlocking::new(io::sink())
+    } else {
+        NonBlocking::new(io::stdout())
+    };
 
     let file_make_writer = SanitizingMakeWriter::new(file_writer);
     let stdout_make_writer = SanitizingMakeWriter::new(stdout_writer);
