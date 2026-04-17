@@ -368,9 +368,8 @@ jobs:
     runs-on: ${{ matrix.runs-on }}
     container:
       image: ${{ matrix.container_image }}
-      # Needed for integration tests (pcap); --network host bypasses Docker bridge networking
-      # issues that cause apt-get timeouts inside containers on GH Actions runners
-      options: --cap-add=NET_ADMIN --cap-add=NET_RAW --network host
+      # Needed for integration tests (pcap)
+      options: --cap-add=NET_ADMIN --cap-add=NET_RAW
     env:
       CARGO_TERM_COLOR: always
       EDAMAME_TARGET: ${{ secrets.EDAMAME_TARGET }}
@@ -400,6 +399,7 @@ jobs:
         shell: bash
         run: |
           export DEBIAN_FRONTEND=noninteractive
+          echo 'Acquire::ForceIPv4 "true";' > /etc/apt/apt.conf.d/99force-ipv4
           apt_retry() {
             local max=5 attempt=1
             while [ $attempt -le $max ]; do
