@@ -407,13 +407,26 @@ jobs:
         shell: bash
         run: |
           export DEBIAN_FRONTEND=noninteractive
-          # Old Ubuntu Docker images (18.04, 20.04) may have expired GPG keys.
-          # Try normal update first, then fall back to allowing unauthenticated repos.
-          if ! apt-get update -y 2>/dev/null; then
-            echo "apt-get update failed, trying with insecure repos (expired GPG keys in Docker image)..."
-            apt-get -o Acquire::AllowInsecureRepositories=true update -y 2>/dev/null || true
+          apt_retry() {
+            local max=5 attempt=1
+            while [ $attempt -le $max ]; do
+              echo "apt-get $* (attempt $attempt/$max)"
+              if apt-get "$@"; then return 0; fi
+              echo "Failed, retrying in $((attempt * 10))s..."
+              sleep $((attempt * 10))
+              attempt=$((attempt + 1))
+            done
+            return 1
+          }
+          # Use HTTPS mirror to avoid HTTP connection issues in Docker containers
+          if [ -f /etc/apt/sources.list ]; then
+            sed -i 's|http://archive.ubuntu.com|https://azure.archive.ubuntu.com|g' /etc/apt/sources.list
+            sed -i 's|http://security.ubuntu.com|https://azure.archive.ubuntu.com|g' /etc/apt/sources.list
           fi
-          apt-get install -y git curl 2>/dev/null || apt-get install -y --allow-unauthenticated git curl
+          apt_retry update -y || apt_retry -o Acquire::AllowInsecureRepositories=true update -y
+          # Pre-install all packages the posture action needs so it skips its own apt installs
+          apt_retry install -y git curl sudo wget jq bc ca-certificates gnupg || \
+            apt_retry install -y --allow-unauthenticated git curl sudo wget jq bc ca-certificates gnupg
           git config --global --add safe.directory '*'
 
       - name: Setup EDAMAME Posture
