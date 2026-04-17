@@ -162,6 +162,14 @@ jobs:
             echo "EOF" >> $GITHUB_OUTPUT
           fi
 
+      - name: Fix MSVC C1069 (TMP path with spaces)
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "C:\Temp" | Out-Null
+          echo "TMP=C:\Temp" >> $env:GITHUB_ENV
+          echo "TEMP=C:\Temp" >> $env:GITHUB_ENV
+
       - name: Install Rust toolchain (nightly for ebpf)
         uses: dtolnay/rust-toolchain@nightly
         with:
@@ -399,6 +407,11 @@ jobs:
         shell: bash
         run: |
           export DEBIAN_FRONTEND=noninteractive
+          # EOL Ubuntu releases (18.04, 20.04) have repos moved to old-releases.ubuntu.com
+          if grep -qE '(18\.04|20\.04)' /etc/os-release 2>/dev/null; then
+            sed -i 's|http://archive.ubuntu.com|http://old-releases.ubuntu.com|g' /etc/apt/sources.list
+            sed -i 's|http://security.ubuntu.com|http://old-releases.ubuntu.com|g' /etc/apt/sources.list
+          fi
           apt-get update -y
           apt-get install -y git curl
           git config --global --add safe.directory '*'
