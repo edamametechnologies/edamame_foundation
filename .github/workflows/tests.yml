@@ -23,7 +23,6 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  CC_PREFER_CLANG_CL_OVER_MSVC: "1"
   EDAMAME_TARGET: ${{ secrets.EDAMAME_TARGET }}
   EDAMAME_SERVER: ${{ secrets.EDAMAME_SERVER }}
   EDAMAME_SERVER_PEM: ${{ secrets.EDAMAME_SERVER_PEM }}
@@ -287,6 +286,22 @@ jobs:
             echo "Unsupported platform: ${{ matrix.os }}"
             exit 1
           fi
+
+      - name: Configure Windows clang-cl toolchain
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: |
+          $clang = 'C:\Program Files\LLVM\bin\clang-cl.exe'
+          $llvmLib = 'C:\Program Files\LLVM\bin\llvm-lib.exe'
+          if (!(Test-Path $clang) -or !(Test-Path $llvmLib)) {
+            choco install llvm -y
+          }
+          if (!(Test-Path $clang) -or !(Test-Path $llvmLib)) {
+            throw "LLVM Windows toolchain not found"
+          }
+          "CC_x86_64_pc_windows_msvc=$clang" >> $env:GITHUB_ENV
+          "CXX_x86_64_pc_windows_msvc=$clang" >> $env:GITHUB_ENV
+          "AR_x86_64_pc_windows_msvc=$llvmLib" >> $env:GITHUB_ENV
 
       - name: Run tests
         id: tests
