@@ -167,6 +167,13 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Select MSVC 14.43 toolset
+        if: matrix.os == 'windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+          toolset: 14.43
+
       - name: Set Rust toolchain
         shell: bash
         run: |
