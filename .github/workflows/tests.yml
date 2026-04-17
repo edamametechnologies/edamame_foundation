@@ -53,7 +53,7 @@ jobs:
             arch: aarch64
             target: aarch64-apple-darwin
           - os: windows
-            runs-on: windows-latest
+            runs-on: windows-2022
             platform: windows
             arch: x86_64
             target: x86_64-pc-windows-msvc
@@ -161,14 +161,6 @@ jobs:
             echo ".github/workflows/*ios*.yml" >> $GITHUB_OUTPUT
             echo "EOF" >> $GITHUB_OUTPUT
           fi
-
-      - name: Fix MSVC C1069 (TMP path with spaces)
-        if: matrix.os == 'windows'
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path "C:\Temp" | Out-Null
-          echo "TMP=C:\Temp" >> $env:GITHUB_ENV
-          echo "TEMP=C:\Temp" >> $env:GITHUB_ENV
 
       - name: Install Rust toolchain (nightly for ebpf)
         uses: dtolnay/rust-toolchain@nightly
@@ -376,8 +368,9 @@ jobs:
     runs-on: ${{ matrix.runs-on }}
     container:
       image: ${{ matrix.container_image }}
-      # Needed for integration tests (pcap)
-      options: --cap-add=NET_ADMIN --cap-add=NET_RAW
+      # Needed for integration tests (pcap); --network host bypasses Docker bridge networking
+      # issues that cause apt-get timeouts inside containers on GH Actions runners
+      options: --cap-add=NET_ADMIN --cap-add=NET_RAW --network host
     env:
       CARGO_TERM_COLOR: always
       EDAMAME_TARGET: ${{ secrets.EDAMAME_TARGET }}
@@ -418,15 +411,8 @@ jobs:
             done
             return 1
           }
-          # Use HTTPS mirror to avoid HTTP connection issues in Docker containers
-          if [ -f /etc/apt/sources.list ]; then
-            sed -i 's|http://archive.ubuntu.com|https://azure.archive.ubuntu.com|g' /etc/apt/sources.list
-            sed -i 's|http://security.ubuntu.com|https://azure.archive.ubuntu.com|g' /etc/apt/sources.list
-          fi
-          apt_retry update -y || apt_retry -o Acquire::AllowInsecureRepositories=true update -y
-          # Pre-install all packages the posture action needs so it skips its own apt installs
-          apt_retry install -y git curl sudo wget jq bc ca-certificates gnupg || \
-            apt_retry install -y --allow-unauthenticated git curl sudo wget jq bc ca-certificates gnupg
+          apt_retry update -y
+          apt_retry install -y git curl sudo wget jq bc ca-certificates gnupg
           git config --global --add safe.directory '*'
 
       - name: Setup EDAMAME Posture
