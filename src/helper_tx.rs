@@ -47,6 +47,7 @@ pub const UTILITY_ORDER_NAMES: &[&str] = &[
     "merge_custom_whitelists",
     "provision_agent_plugin",
     "restart_capture",
+    "scan_secret_content",
     "set_custom_blacklists",
     "set_custom_whitelists",
     "set_filter",
