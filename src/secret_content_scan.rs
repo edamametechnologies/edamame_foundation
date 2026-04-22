@@ -138,9 +138,8 @@ pub fn scan_secret_like_files(paths: &[String]) -> Vec<SecretContentFileMatch> {
         let Some(signal) = inspect_secret_like_file(trimmed) else {
             continue;
         };
-        let has_indicator = signal.secret_hits >= min_hits
-            || signal.script_like
-            || signal.network_command_like;
+        let has_indicator =
+            signal.secret_hits >= min_hits || signal.script_like || signal.network_command_like;
         if !has_indicator {
             continue;
         }
