@@ -1207,7 +1207,7 @@ dependencies = [
 [[package]]
 name = "flodbadd"
 version = "1.2.2"
-source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#184a07174b7f254af0e50b98e9d5f015a3b3951a"
+source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#3f235b3adbc0dfaaf8f0d66454620435d7483577"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -3317,9 +3317,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.38"
+version = "0.23.39"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "69f9466fb2c14ea04357e91413efb882e2a6d4a406e625449bc0a5d360d53a21"
+checksum = "7c2c118cb077cca2822033836dfb1b975355dfb784b5e8da48f7b6c5db74e60e"
 dependencies = [
  "log",
  "once_cell",
@@ -3886,7 +3886,7 @@ dependencies = [
 [[package]]
 name = "threatmodels_rs"
 version = "0.1.1"
-source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#a3453e26c3014353b47a38da52fed6db82541ece"
+source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#7e33421f42c830b8c37718cfdcca446cfc0476c4"
 dependencies = [
  "anyhow",
  "chrono",
