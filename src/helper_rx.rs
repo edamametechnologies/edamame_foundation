@@ -561,6 +561,7 @@ pub async fn rpc_run(
                 feature = "fim"
             ))]
             "clear_file_events" => utility_clear_file_events().await,
+            "scan_secret_content" => utility_scan_secret_content(arg1).await,
             "provision_agent_plugin" => utility_provision_agent_plugin(arg1, arg2).await,
             "get_agent_plugin_status" => utility_get_agent_plugin_status(arg1, arg2).await,
             "list_agent_plugins" => utility_list_agent_plugins(arg1).await,

@@ -762,6 +762,14 @@ pub async fn utility_test_agent_plugin(agent_type: &str, user_home: &str) -> Res
     ))
 }
 
+pub async fn utility_scan_secret_content(paths_json: &str) -> Result<String> {
+    let paths: Vec<String> = serde_json::from_str(paths_json)
+        .map_err(|e| anyhow::anyhow!("Failed to parse secret-content scan paths: {}", e))?;
+    let matches = crate::secret_content_scan::scan_secret_like_files(&paths);
+    serde_json::to_string(&matches)
+        .map_err(|e| anyhow::anyhow!("Failed to serialize secret-content matches: {}", e))
+}
+
 #[cfg(all(
     any(target_os = "macos", target_os = "linux", target_os = "windows"),
     feature = "fim"

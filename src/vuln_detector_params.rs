@@ -55,6 +55,9 @@ pub struct CveDetectionParamsJSON {
     pub checks: HashMap<String, CheckMetadata>,
     #[serde(default = "default_credential_harvest_min_labels")]
     pub credential_harvest_min_labels: usize,
+    pub secret_content_scan_max_bytes: u64,
+    pub secret_content_min_hits: usize,
+    pub recent_sensitive_open_file_ttl_secs: u64,
     pub generic_reuse_tokens: Vec<String>,
     pub generic_application_tokens: Vec<String>,
     pub init_process_names: Vec<String>,
@@ -326,6 +329,9 @@ pub struct CveDetectionParams {
     pub signature: String,
     pub checks: HashMap<String, CheckMetadata>,
     pub credential_harvest_min_labels: usize,
+    pub secret_content_scan_max_bytes: u64,
+    pub secret_content_min_hits: usize,
+    pub recent_sensitive_open_file_ttl_secs: u64,
     pub generic_reuse_tokens: HashSet<String>,
     pub generic_application_tokens: HashSet<String>,
     pub init_process_names: HashSet<String>,
@@ -364,6 +370,9 @@ impl CveDetectionParams {
             signature: json.signature.clone(),
             checks: json.checks.clone(),
             credential_harvest_min_labels: json.credential_harvest_min_labels,
+            secret_content_scan_max_bytes: json.secret_content_scan_max_bytes,
+            secret_content_min_hits: json.secret_content_min_hits,
+            recent_sensitive_open_file_ttl_secs: json.recent_sensitive_open_file_ttl_secs,
             generic_reuse_tokens: json.generic_reuse_tokens.iter().cloned().collect(),
             generic_application_tokens: json.generic_application_tokens.iter().cloned().collect(),
             init_process_names: json.init_process_names.iter().cloned().collect(),
@@ -520,6 +529,18 @@ pub fn credential_harvest_min_labels() -> usize {
     PARAMS_SNAPSHOT.load().credential_harvest_min_labels
 }
 
+pub fn secret_content_scan_max_bytes() -> u64 {
+    PARAMS_SNAPSHOT.load().secret_content_scan_max_bytes
+}
+
+pub fn secret_content_min_hits() -> usize {
+    PARAMS_SNAPSHOT.load().secret_content_min_hits
+}
+
+pub fn recent_sensitive_open_file_ttl_secs() -> u64 {
+    PARAMS_SNAPSHOT.load().recent_sensitive_open_file_ttl_secs
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -593,6 +614,9 @@ mod tests {
         assert!(p
             .packaged_application_contains_patterns
             .contains(&"/applications/".to_string()));
+        assert!(p.secret_content_scan_max_bytes >= 16 * 1024);
+        assert!(p.secret_content_min_hits >= 1);
+        assert!(p.recent_sensitive_open_file_ttl_secs >= 30);
     }
 
     #[tokio::test]
