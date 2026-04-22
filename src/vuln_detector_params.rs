@@ -61,6 +61,8 @@ pub struct CveDetectionParamsJSON {
     pub generic_reuse_tokens: Vec<String>,
     pub generic_application_tokens: Vec<String>,
     pub init_process_names: Vec<String>,
+    #[serde(default = "default_ci_runner_process_name_prefixes")]
+    pub ci_runner_process_name_prefixes: Vec<String>,
     pub suspicious_parent_path_patterns: Vec<String>,
     #[serde(default = "default_benign_temp_artifact_suffixes")]
     pub benign_temp_artifact_suffixes: Vec<String>,
@@ -115,6 +117,21 @@ fn helper_matcher_config(
 
 fn default_credential_harvest_min_labels() -> usize {
     3
+}
+
+/// CI runner provisioning daemons that legitimately live in /tmp or
+/// %TEMP% on ephemeral build hosts. The sandbox_exploitation detector
+/// would otherwise flag these as "suspicious parent-process path" with
+/// HIGH severity every time a GitHub-hosted runner executes, which is a
+/// pure false positive that poisons the pre-release baseline on Linux
+/// and Windows.
+///
+/// These names are documented, public GitHub Actions infrastructure:
+///   - `provjobd` (Linux+Windows): the provisioning job daemon that
+///     spawns under the hosted-compute-agent / sudo on first run,
+///     lives at `/tmp/provjobdNNN` / `%TEMP%\provjobd.exeNNN`.
+fn default_ci_runner_process_name_prefixes() -> Vec<String> {
+    strings(&["provjobd"])
 }
 
 fn default_benign_temp_artifact_suffixes() -> Vec<String> {
@@ -335,6 +352,7 @@ pub struct CveDetectionParams {
     pub generic_reuse_tokens: HashSet<String>,
     pub generic_application_tokens: HashSet<String>,
     pub init_process_names: HashSet<String>,
+    pub ci_runner_process_name_prefixes: Vec<String>,
     pub suspicious_parent_path_patterns: Vec<String>,
     pub benign_temp_artifact_suffixes: Vec<String>,
     pub application_storage_patterns: Vec<String>,
@@ -376,6 +394,11 @@ impl CveDetectionParams {
             generic_reuse_tokens: json.generic_reuse_tokens.iter().cloned().collect(),
             generic_application_tokens: json.generic_application_tokens.iter().cloned().collect(),
             init_process_names: json.init_process_names.iter().cloned().collect(),
+            ci_runner_process_name_prefixes: json
+                .ci_runner_process_name_prefixes
+                .iter()
+                .map(|prefix| prefix.to_ascii_lowercase())
+                .collect(),
             suspicious_parent_path_patterns: json.suspicious_parent_path_patterns.clone(),
             benign_temp_artifact_suffixes: json.benign_temp_artifact_suffixes.clone(),
             application_storage_patterns: json.application_storage_patterns.clone(),
@@ -486,6 +509,22 @@ pub fn is_init_process(name: &str) -> bool {
     PARAMS_SNAPSHOT.load().init_process_names.contains(name)
 }
 
+/// Returns true if `name` is a known CI runner provisioning daemon
+/// (e.g. GitHub Actions' `provjobd`). The match is a case-insensitive
+/// prefix check because these names carry per-run integer suffixes
+/// (e.g. `provjobd2003115`, `provjobd.exe1134032012`).
+pub fn is_ci_runner_internal_process(name: &str) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+    let lower = name.to_ascii_lowercase();
+    PARAMS_SNAPSHOT
+        .load()
+        .ci_runner_process_name_prefixes
+        .iter()
+        .any(|prefix| !prefix.is_empty() && lower.starts_with(prefix))
+}
+
 pub fn suspicious_parent_path_patterns() -> Vec<String> {
     PARAMS_SNAPSHOT
         .load()
@@ -574,6 +613,20 @@ mod tests {
         assert!(is_init_process("launchd"));
         assert!(is_init_process("systemd"));
         assert!(!is_init_process("python3"));
+    }
+
+    #[test]
+    fn test_ci_runner_internal_process_lookup() {
+        // GitHub Actions provjobd is named with a per-run numeric suffix,
+        // so our allow-list must match on a case-insensitive prefix.
+        assert!(is_ci_runner_internal_process("provjobd"));
+        assert!(is_ci_runner_internal_process("provjobd2003115"));
+        assert!(is_ci_runner_internal_process("provjobd.exe1134032012"));
+        assert!(is_ci_runner_internal_process("PROVJOBD.EXE999"));
+        // Empty and unrelated names must not be matched.
+        assert!(!is_ci_runner_internal_process(""));
+        assert!(!is_ci_runner_internal_process("python3"));
+        assert!(!is_ci_runner_internal_process("provjo"));
     }
 
     #[test]
