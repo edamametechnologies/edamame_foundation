@@ -49,11 +49,6 @@ pub static CVE_DETECTION_PARAMS_DB: &str = r#"{
       "reference": "CVE-2025-30066",
       "severity": "CRITICAL"
     },
-    "sensitive_material_egress": {
-      "description": "Sensitive material accessed alongside outbound egress detected",
-      "reference": "Generic sensitive-material correlation",
-      "severity": "HIGH"
-    },
     "sandbox_exploitation": {
       "description": "Suspicious parent process path: {path}",
       "reference": "CVE-2026-24763",
@@ -71,9 +66,6 @@ pub static CVE_DETECTION_PARAMS_DB: &str = r#"{
     }
   },
   "credential_harvest_min_labels": 3,
-  "secret_content_scan_max_bytes": 65536,
-  "secret_content_min_hits": 2,
-  "recent_sensitive_open_file_ttl_secs": 180,
   "credential_store_patterns": {
     "linux": [
       "/.local/share/keyrings/",
@@ -173,9 +165,6 @@ pub static CVE_DETECTION_PARAMS_DB: &str = r#"{
     "systemd",
     "init",
     "svchost.exe"
-  ],
-  "ci_runner_process_name_prefixes": [
-    "provjobd"
   ],
   "packaged_application_contains_patterns": [
     ".app/",
