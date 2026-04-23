@@ -54,6 +54,11 @@ pub static CVE_DETECTION_PARAMS_DB: &str = r#"{
       "reference": "CVE-2026-24763",
       "severity": "HIGH"
     },
+    "sensitive_material_egress": {
+      "description": "Sensitive material accessed alongside outbound egress detected",
+      "reference": "Generic sensitive-material correlation",
+      "severity": "HIGH"
+    },
     "skill_supply_chain": {
       "description": "C2 traffic with credential file access detected",
       "reference": "VirusTotal Code Insight",
@@ -66,6 +71,12 @@ pub static CVE_DETECTION_PARAMS_DB: &str = r#"{
     }
   },
   "credential_harvest_min_labels": 3,
+  "secret_content_scan_max_bytes": 65536,
+  "secret_content_min_hits": 2,
+  "recent_sensitive_open_file_ttl_secs": 180,
+  "ci_runner_process_name_prefixes": [
+    "provjobd"
+  ],
   "credential_store_patterns": {
     "linux": [
       "/.local/share/keyrings/",
