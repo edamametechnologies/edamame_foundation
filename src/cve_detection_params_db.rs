@@ -70,13 +70,10 @@ pub static CVE_DETECTION_PARAMS_DB: &str = r#"{
       "severity": "HIGH"
     }
   },
-  "credential_harvest_min_labels": 3,
-  "secret_content_scan_max_bytes": 65536,
-  "secret_content_min_hits": 2,
-  "recent_sensitive_open_file_ttl_secs": 180,
   "ci_runner_process_name_prefixes": [
     "provjobd"
   ],
+  "credential_harvest_min_labels": 3,
   "credential_store_patterns": {
     "linux": [
       "/.local/share/keyrings/",
@@ -192,6 +189,9 @@ pub static CVE_DETECTION_PARAMS_DB: &str = r#"{
     "/snap/",
     "/usr/share/"
   ],
+  "recent_sensitive_open_file_ttl_secs": 180,
+  "secret_content_min_hits": 2,
+  "secret_content_scan_max_bytes": 65536,
   "signature": "9584f3c17b71edc25cce10776b151058e2332359b252892788c51a4d5cceb63b",
   "suspicious_parent_path_patterns": [
     "/tmp/",
