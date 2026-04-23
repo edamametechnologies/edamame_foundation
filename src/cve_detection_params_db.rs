@@ -95,7 +95,7 @@ pub static CVE_DETECTION_PARAMS_DB: &str = r#"{
       "/programdata/microsoft/vault/"
     ]
   },
-  "date": "April 12th 2026",
+  "date": "April 23th 2026",
   "fim_hash_size_threshold": 10485760,
   "fim_temp_executable_patterns": [
     "/tmp/",
@@ -192,7 +192,7 @@ pub static CVE_DETECTION_PARAMS_DB: &str = r#"{
     "/snap/",
     "/usr/share/"
   ],
-  "signature": "e27cb603271c47fff9dc62ead7e5892e66bbee04e05dbfa449281cb6d1200901",
+  "signature": "9584f3c17b71edc25cce10776b151058e2332359b252892788c51a4d5cceb63b",
   "suspicious_parent_path_patterns": [
     "/tmp/",
     "/var/tmp/",
