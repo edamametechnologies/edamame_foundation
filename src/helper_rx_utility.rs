@@ -793,14 +793,14 @@ pub async fn utility_collect_agent_transcripts(
             options: None,
         }
     } else {
-        serde_json::from_str(args_json).map_err(|e| {
-            anyhow::anyhow!("Failed to parse collect_agent_transcripts args: {}", e)
-        })?
+        serde_json::from_str(args_json)
+            .map_err(|e| anyhow::anyhow!("Failed to parse collect_agent_transcripts args: {}", e))?
     };
 
     let home_path = if args.home.is_empty() {
-        crate::agent_plugin::real_home_dir()
-            .ok_or_else(|| anyhow::anyhow!("Unable to resolve real_home_dir for agent transcripts"))?
+        crate::agent_plugin::real_home_dir().ok_or_else(|| {
+            anyhow::anyhow!("Unable to resolve real_home_dir for agent transcripts")
+        })?
     } else {
         std::path::PathBuf::from(args.home)
     };

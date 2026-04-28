@@ -92,8 +92,10 @@ pub fn collect(home: &Path, options: &CollectOptions) -> anyhow::Result<CollectR
         } else {
             parse_txt_transcript(&raw_text)
         };
-        let combined =
-            format!("{}\n\n{}\n\n{}", parsed.user_text, parsed.assistant_text, parsed.raw_text);
+        let combined = format!(
+            "{}\n\n{}\n\n{}",
+            parsed.user_text, parsed.assistant_text, parsed.raw_text
+        );
         let extracted_paths = extract_paths(&combined, &workspace_root);
         let tool_names = extract_tool_names(&parsed.raw_text, &parsed.assistant_text);
         let commands = extract_commands(&parsed.raw_text, &parsed.assistant_text);
@@ -139,16 +141,8 @@ pub fn collect(home: &Path, options: &CollectOptions) -> anyhow::Result<CollectR
     let (window_start, window_end) = if sessions.is_empty() {
         (now, now)
     } else {
-        let start = sessions
-            .iter()
-            .map(|s| s.started_at)
-            .min()
-            .unwrap_or(now);
-        let end = sessions
-            .iter()
-            .map(|s| s.modified_at)
-            .max()
-            .unwrap_or(now);
+        let start = sessions.iter().map(|s| s.started_at).min().unwrap_or(now);
+        let end = sessions.iter().map(|s| s.modified_at).max().unwrap_or(now);
         (start, end)
     };
 

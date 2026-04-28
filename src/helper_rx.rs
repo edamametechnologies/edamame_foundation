@@ -1880,8 +1880,8 @@ mod tests {
         // call without ever invoking rpc_run.
         let arg1 = format!("dedup_rpc_run_safe_{}", uuid::Uuid::new_v4());
         let key = order_key("utilityorder", "helper_check", &arg1, "");
-        let _holder = PendingGuard::try_register(key.clone())
-            .expect("first registration should succeed");
+        let _holder =
+            PendingGuard::try_register(key.clone()).expect("first registration should succeed");
 
         let err = rpc_run_safe(
             "utilityorder",

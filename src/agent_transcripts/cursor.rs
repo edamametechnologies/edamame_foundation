@@ -109,8 +109,10 @@ pub fn collect(home: &Path, options: &CollectOptions) -> anyhow::Result<CollectR
             parse_txt_transcript(&raw_text)
         };
 
-        let combined =
-            format!("{}\n\n{}\n\n{}", parsed.user_text, parsed.assistant_text, parsed.raw_text);
+        let combined = format!(
+            "{}\n\n{}\n\n{}",
+            parsed.user_text, parsed.assistant_text, parsed.raw_text
+        );
         let extracted_paths = extract_paths(&combined, &workspace_root);
         let tool_names = extract_tool_names(&parsed.raw_text, &parsed.assistant_text);
         let commands = extract_commands(&parsed.raw_text, &parsed.assistant_text);

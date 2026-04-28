@@ -2402,6 +2402,306 @@ pub static THREAT_METRICS_MACOS: &str = r#"{
       "tags": [
         "Personal Posture"
       ]
+    },
+    {
+      "description": [
+        {
+          "locale": "EN",
+          "summary": "Cursor is installed but the EDAMAME transcript observer is paused. Reasoning-plane intent is no longer correlated with system telemetry, weakening agent posture.",
+          "title": "Cursor agent unsecured (observer paused)"
+        },
+        {
+          "locale": "FR",
+          "summary": "Cursor est installé mais l'observateur de transcripts EDAMAME est en pause. L'intention de l'agent n'est plus corrélée avec la télémétrie système et l'agent est moins protégé.",
+          "title": "Agent Cursor non sécurisé (observateur en pause)"
+        }
+      ],
+      "dimension": "applications",
+      "implementation": {
+        "class": "internal",
+        "education": [],
+        "elevation": "user",
+        "maxversion": 0,
+        "minversion": 12,
+        "system": "macOS",
+        "target": "unsecured_cursor"
+      },
+      "metrictype": "bool",
+      "name": "unsecured_cursor",
+      "remediation": {
+        "class": "internal",
+        "education": [
+          {
+            "class": "html",
+            "locale": "EN",
+            "target": "<p>Re-enable the EDAMAME transcript observer for this agent in the AI / Config tab, or uninstall the agent if it is no longer in use.</p>"
+          },
+          {
+            "class": "html",
+            "locale": "FR",
+            "target": "<p>Réactivez l'observateur EDAMAME pour cet agent dans l'onglet IA / Config, ou désinstallez l'agent si vous ne l'utilisez plus.</p>"
+          }
+        ],
+        "elevation": "",
+        "maxversion": 0,
+        "minversion": 12,
+        "system": "macOS",
+        "target": "agentic_ai_settings"
+      },
+      "rollback": {
+        "class": "",
+        "education": [],
+        "elevation": "",
+        "maxversion": 0,
+        "minversion": 12,
+        "system": "macOS",
+        "target": ""
+      },
+      "scope": "generic",
+      "severity": 2,
+      "tags": [
+        "AI Agent Posture"
+      ]
+    },
+    {
+      "description": [
+        {
+          "locale": "EN",
+          "summary": "Claude Code is installed but the EDAMAME transcript observer is paused. Reasoning-plane intent is no longer correlated with system telemetry, weakening agent posture.",
+          "title": "Claude Code agent unsecured (observer paused)"
+        },
+        {
+          "locale": "FR",
+          "summary": "Claude Code est installé mais l'observateur de transcripts EDAMAME est en pause. L'intention de l'agent n'est plus corrélée avec la télémétrie système et l'agent est moins protégé.",
+          "title": "Agent Claude Code non sécurisé (observateur en pause)"
+        }
+      ],
+      "dimension": "applications",
+      "implementation": {
+        "class": "internal",
+        "education": [],
+        "elevation": "user",
+        "maxversion": 0,
+        "minversion": 12,
+        "system": "macOS",
+        "target": "unsecured_claude_code"
+      },
+      "metrictype": "bool",
+      "name": "unsecured_claude_code",
+      "remediation": {
+        "class": "internal",
+        "education": [
+          {
+            "class": "html",
+            "locale": "EN",
+            "target": "<p>Re-enable the EDAMAME transcript observer for this agent in the AI / Config tab, or uninstall the agent if it is no longer in use.</p>"
+          },
+          {
+            "class": "html",
+            "locale": "FR",
+            "target": "<p>Réactivez l'observateur EDAMAME pour cet agent dans l'onglet IA / Config, ou désinstallez l'agent si vous ne l'utilisez plus.</p>"
+          }
+        ],
+        "elevation": "",
+        "maxversion": 0,
+        "minversion": 12,
+        "system": "macOS",
+        "target": "agentic_ai_settings"
+      },
+      "rollback": {
+        "class": "",
+        "education": [],
+        "elevation": "",
+        "maxversion": 0,
+        "minversion": 12,
+        "system": "macOS",
+        "target": ""
+      },
+      "scope": "generic",
+      "severity": 2,
+      "tags": [
+        "AI Agent Posture"
+      ]
+    },
+    {
+      "description": [
+        {
+          "locale": "EN",
+          "summary": "Claude Desktop is installed but the EDAMAME transcript observer is paused. Reasoning-plane intent is no longer correlated with system telemetry, weakening agent posture.",
+          "title": "Claude Desktop agent unsecured (observer paused)"
+        },
+        {
+          "locale": "FR",
+          "summary": "Claude Desktop est installé mais l'observateur de transcripts EDAMAME est en pause. L'intention de l'agent n'est plus corrélée avec la télémétrie système et l'agent est moins protégé.",
+          "title": "Agent Claude Desktop non sécurisé (observateur en pause)"
+        }
+      ],
+      "dimension": "applications",
+      "implementation": {
+        "class": "internal",
+        "education": [],
+        "elevation": "user",
+        "maxversion": 0,
+        "minversion": 12,
+        "system": "macOS",
+        "target": "unsecured_claude_desktop"
+      },
+      "metrictype": "bool",
+      "name": "unsecured_claude_desktop",
+      "remediation": {
+        "class": "internal",
+        "education": [
+          {
+            "class": "html",
+            "locale": "EN",
+            "target": "<p>Re-enable the EDAMAME transcript observer for this agent in the AI / Config tab, or uninstall the agent if it is no longer in use.</p>"
+          },
+          {
+            "class": "html",
+            "locale": "FR",
+            "target": "<p>Réactivez l'observateur EDAMAME pour cet agent dans l'onglet IA / Config, ou désinstallez l'agent si vous ne l'utilisez plus.</p>"
+          }
+        ],
+        "elevation": "",
+        "maxversion": 0,
+        "minversion": 12,
+        "system": "macOS",
+        "target": "agentic_ai_settings"
+      },
+      "rollback": {
+        "class": "",
+        "education": [],
+        "elevation": "",
+        "maxversion": 0,
+        "minversion": 12,
+        "system": "macOS",
+        "target": ""
+      },
+      "scope": "generic",
+      "severity": 2,
+      "tags": [
+        "AI Agent Posture"
+      ]
+    },
+    {
+      "description": [
+        {
+          "locale": "EN",
+          "summary": "OpenClaw is installed but the EDAMAME transcript observer is paused. Reasoning-plane intent is no longer correlated with system telemetry, weakening agent posture.",
+          "title": "OpenClaw agent unsecured (observer paused)"
+        },
+        {
+          "locale": "FR",
+          "summary": "OpenClaw est installé mais l'observateur de transcripts EDAMAME est en pause. L'intention de l'agent n'est plus corrélée avec la télémétrie système et l'agent est moins protégé.",
+          "title": "Agent OpenClaw non sécurisé (observateur en pause)"
+        }
+      ],
+      "dimension": "applications",
+      "implementation": {
+        "class": "internal",
+        "education": [],
+        "elevation": "user",
+        "maxversion": 0,
+        "minversion": 12,
+        "system": "macOS",
+        "target": "unsecured_openclaw"
+      },
+      "metrictype": "bool",
+      "name": "unsecured_openclaw",
+      "remediation": {
+        "class": "internal",
+        "education": [
+          {
+            "class": "html",
+            "locale": "EN",
+            "target": "<p>Re-enable the EDAMAME transcript observer for this agent in the AI / Config tab, or uninstall the agent if it is no longer in use.</p>"
+          },
+          {
+            "class": "html",
+            "locale": "FR",
+            "target": "<p>Réactivez l'observateur EDAMAME pour cet agent dans l'onglet IA / Config, ou désinstallez l'agent si vous ne l'utilisez plus.</p>"
+          }
+        ],
+        "elevation": "",
+        "maxversion": 0,
+        "minversion": 12,
+        "system": "macOS",
+        "target": "agentic_ai_settings"
+      },
+      "rollback": {
+        "class": "",
+        "education": [],
+        "elevation": "",
+        "maxversion": 0,
+        "minversion": 12,
+        "system": "macOS",
+        "target": ""
+      },
+      "scope": "generic",
+      "severity": 2,
+      "tags": [
+        "AI Agent Posture"
+      ]
+    },
+    {
+      "description": [
+        {
+          "locale": "EN",
+          "summary": "Codex CLI is installed but the EDAMAME transcript observer is paused. Reasoning-plane intent is no longer correlated with system telemetry, weakening agent posture.",
+          "title": "Codex CLI agent unsecured (observer paused)"
+        },
+        {
+          "locale": "FR",
+          "summary": "Codex CLI est installé mais l'observateur de transcripts EDAMAME est en pause. L'intention de l'agent n'est plus corrélée avec la télémétrie système et l'agent est moins protégé.",
+          "title": "Agent Codex CLI non sécurisé (observateur en pause)"
+        }
+      ],
+      "dimension": "applications",
+      "implementation": {
+        "class": "internal",
+        "education": [],
+        "elevation": "user",
+        "maxversion": 0,
+        "minversion": 12,
+        "system": "macOS",
+        "target": "unsecured_codex"
+      },
+      "metrictype": "bool",
+      "name": "unsecured_codex",
+      "remediation": {
+        "class": "internal",
+        "education": [
+          {
+            "class": "html",
+            "locale": "EN",
+            "target": "<p>Re-enable the EDAMAME transcript observer for this agent in the AI / Config tab, or uninstall the agent if it is no longer in use.</p>"
+          },
+          {
+            "class": "html",
+            "locale": "FR",
+            "target": "<p>Réactivez l'observateur EDAMAME pour cet agent dans l'onglet IA / Config, ou désinstallez l'agent si vous ne l'utilisez plus.</p>"
+          }
+        ],
+        "elevation": "",
+        "maxversion": 0,
+        "minversion": 12,
+        "system": "macOS",
+        "target": "agentic_ai_settings"
+      },
+      "rollback": {
+        "class": "",
+        "education": [],
+        "elevation": "",
+        "maxversion": 0,
+        "minversion": 12,
+        "system": "macOS",
+        "target": ""
+      },
+      "scope": "generic",
+      "severity": 2,
+      "tags": [
+        "AI Agent Posture"
+      ]
     }
   ],
   "name": "threat model macOS",

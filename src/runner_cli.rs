@@ -221,9 +221,10 @@ async fn run_command_with_timeout(
                 ));
             }
         },
-        None => child.wait().await.map_err(|e| {
-            anyhow!("Failed to wait for command {:?}: {}", cmd_for_log, e)
-        })?,
+        None => child
+            .wait()
+            .await
+            .map_err(|e| anyhow!("Failed to wait for command {:?}: {}", cmd_for_log, e))?,
     };
 
     let stdout_bytes = stdout_task.await.unwrap_or_default();

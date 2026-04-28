@@ -36,8 +36,7 @@ fn options() -> CollectOptions {
 fn cursor_collects_txt_and_jsonl() {
     let temp = tempfile::tempdir().expect("tempdir");
     let home = temp.path();
-    let txn_dir = home
-        .join(".cursor/projects/some-project/agent-transcripts");
+    let txn_dir = home.join(".cursor/projects/some-project/agent-transcripts");
     write(
         &txn_dir.join("session-a.txt"),
         "user:\nplease run cargo build\n\nassistant:\nRunning `cargo build` now.\n",
@@ -82,7 +81,10 @@ fn claude_code_collects_jsonl() {
     let session = &result.payload.sessions[0];
     assert!(session.user_text.contains("deploy to staging"));
     assert!(session.assistant_text.contains("kubectl apply"));
-    assert!(session.commands.iter().any(|c| c.starts_with("kubectl apply")));
+    assert!(session
+        .commands
+        .iter()
+        .any(|c| c.starts_with("kubectl apply")));
 }
 
 #[test]
@@ -167,7 +169,9 @@ fn openclaw_collects_from_session_root_when_present() {
     let result = collect("openclaw", home, &options()).expect("openclaw collect");
     assert!(result.diagnostics.transcripts_root_accessible);
     assert_eq!(result.payload.sessions.len(), 1);
-    assert!(result.payload.sessions[0].user_text.contains("openclaw scan"));
+    assert!(result.payload.sessions[0]
+        .user_text
+        .contains("openclaw scan"));
 }
 
 #[test]
@@ -183,8 +187,7 @@ fn unknown_agent_type_returns_empty_payload() {
 fn collect_to_json_round_trips() {
     let temp = tempfile::tempdir().expect("tempdir");
     let home = temp.path();
-    let txn_dir = home
-        .join(".cursor/projects/proj/agent-transcripts");
+    let txn_dir = home.join(".cursor/projects/proj/agent-transcripts");
     write(
         &txn_dir.join("session.txt"),
         "user:\nrun curl https://example.com/health\nassistant:\nokay\n",

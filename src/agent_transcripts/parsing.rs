@@ -41,10 +41,12 @@ static PORT_REGEX: Lazy<Regex> = Lazy::new(|| {
 
 static TOOL_CALL_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r#"(?m)^\[Tool call\]\s*(.+)$"#).expect("tool call regex"));
-static TOOL_NAME_ARG_REGEX: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"(?m)^\s*toolName:\s*([A-Za-z0-9_.\-]+)\s*$"#).expect("tool name regex"));
-static RECIPIENT_REGEX: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"(?m)^\s*recipient_name:\s*([A-Za-z0-9_.\-]+)\s*$"#).expect("recipient regex"));
+static TOOL_NAME_ARG_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"(?m)^\s*toolName:\s*([A-Za-z0-9_.\-]+)\s*$"#).expect("tool name regex")
+});
+static RECIPIENT_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"(?m)^\s*recipient_name:\s*([A-Za-z0-9_.\-]+)\s*$"#).expect("recipient regex")
+});
 static COMMAND_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r#"(?m)^\s*command:\s*(.+)$"#).expect("command regex"));
 
@@ -243,7 +245,8 @@ pub fn extract_paths(text: &str, workspace_root: &str) -> Vec<String> {
 }
 
 fn clean_trailing_path_junk(s: &str) -> String {
-    let mut t = s.trim_end_matches(|c: char| matches!(c, ' ' | ',' | '.' | ':' | ';' | '!' | '?' | '\\'));
+    let mut t =
+        s.trim_end_matches(|c: char| matches!(c, ' ' | ',' | '.' | ':' | ';' | '!' | '?' | '\\'));
     while t.ends_with(')') {
         let opens = t.chars().filter(|c| *c == '(').count();
         let closes = t.chars().filter(|c| *c == ')').count();
@@ -258,9 +261,7 @@ fn clean_trailing_path_junk(s: &str) -> String {
 
 fn decode_file_path_token(token: &str, workspace_root: &str) -> Option<String> {
     let mut candidate = token.trim().to_string();
-    if candidate.is_empty()
-        || candidate.starts_with("http://")
-        || candidate.starts_with("https://")
+    if candidate.is_empty() || candidate.starts_with("http://") || candidate.starts_with("https://")
     {
         return None;
     }
@@ -322,7 +323,11 @@ fn parse_host_port(url: &str) -> Option<(String, String)> {
 pub fn extract_urls(text: &str) -> Vec<String> {
     URL_REGEX
         .find_iter(text)
-        .map(|m| m.as_str().trim_end_matches(|c: char| matches!(c, '.' | ',' | ';' | ':' | '!' | '?' | ')')).to_string())
+        .map(|m| {
+            m.as_str()
+                .trim_end_matches(|c: char| matches!(c, '.' | ',' | ';' | ':' | '!' | '?' | ')'))
+                .to_string()
+        })
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect()
@@ -392,7 +397,8 @@ pub fn extract_traffic(text: &str, commands: &[String], llm_hosts: &[&str]) -> V
             hosts.push("pypi.org:443".into());
             hosts.push("files.pythonhosted.org:443".into());
         }
-        if lower.contains("git clone") || lower.contains("git fetch") || lower.contains("git pull") {
+        if lower.contains("git clone") || lower.contains("git fetch") || lower.contains("git pull")
+        {
             hosts.push("github.com:443".into());
         }
         if lower.contains("docker pull") || lower.contains("docker build") {
@@ -476,10 +482,7 @@ pub fn extract_tool_names(raw_text: &str, assistant_text: &str) -> Vec<String> {
     let mut out = Vec::new();
 
     let mut add = |name: &str| {
-        let trimmed = name
-            .trim()
-            .trim_start_matches("functions.")
-            .to_string();
+        let trimmed = name.trim().trim_start_matches("functions.").to_string();
         if !trimmed.is_empty() && seen.insert(trimmed.clone()) {
             out.push(trimmed);
         }
