@@ -14,6 +14,8 @@
 
 use std::path::Path;
 
+use serial_test::serial;
+
 use super::{collect, CollectOptions};
 
 fn write(path: &Path, contents: &str) {
@@ -88,7 +90,15 @@ fn claude_code_collects_jsonl() {
 }
 
 #[test]
+#[serial]
 fn claude_desktop_collects_from_two_roots() {
+    // Save originals so concurrent or subsequent tests in the same binary
+    // (notably runner_cli's APPDATA-reading tests) see the runner-provided
+    // values after this test exits. `#[serial]` keeps env-var-touching tests
+    // mutually exclusive.
+    let saved_xdg = std::env::var("XDG_DATA_HOME").ok();
+    let saved_appdata = std::env::var("APPDATA").ok();
+
     let temp = tempfile::tempdir().expect("tempdir");
     let home = temp.path();
     let code_root = home.join(".claude/projects/proj");
@@ -120,6 +130,18 @@ fn claude_desktop_collects_from_two_roots() {
     }
 
     let result = collect("claude_desktop", home, &options()).expect("claude_desktop collect");
+
+    // Restore env-var state before assertions so a panic still leaves the
+    // process in a clean state for subsequent serial tests.
+    match saved_xdg {
+        Some(value) => std::env::set_var("XDG_DATA_HOME", value),
+        None => std::env::remove_var("XDG_DATA_HOME"),
+    }
+    match saved_appdata {
+        Some(value) => std::env::set_var("APPDATA", value),
+        None => std::env::remove_var("APPDATA"),
+    }
+
     assert_eq!(result.payload.agent_type, "claude_desktop");
     assert!(result.diagnostics.transcripts_root_accessible);
     assert_eq!(result.payload.sessions.len(), 2);
@@ -134,10 +156,12 @@ fn claude_desktop_collects_from_two_roots() {
 }
 
 #[test]
+#[serial]
 fn codex_collects_rollout_jsonl() {
     // Codex respects CODEX_HOME if set; clear it so the default home-relative
     // path is picked up. On CI runners this is normally unset, but we clear
     // defensively so the test stays deterministic.
+    let saved_codex_home = std::env::var("CODEX_HOME").ok();
     std::env::remove_var("CODEX_HOME");
 
     let temp = tempfile::tempdir().expect("tempdir");
@@ -151,6 +175,14 @@ fn codex_collects_rollout_jsonl() {
         &format!("{}\n{}\n", line_user, line_assistant),
     );
     let result = collect("codex", home, &options()).expect("codex collect");
+
+    // Restore CODEX_HOME so other tests (and the runner-provided value) are
+    // unaffected.
+    match saved_codex_home {
+        Some(value) => std::env::set_var("CODEX_HOME", value),
+        None => std::env::remove_var("CODEX_HOME"),
+    }
+
     assert_eq!(result.payload.agent_type, "codex");
     assert!(result.diagnostics.transcripts_root_accessible);
     assert_eq!(result.payload.sessions.len(), 1);

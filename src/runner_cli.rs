@@ -574,6 +574,7 @@ async fn resolve_home_unix(username: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     #[tokio::test]
     async fn test_run_cli_echo() {
@@ -736,7 +737,10 @@ mod tests {
         }
     }
 
+    // Reads APPDATA on Windows; serialize against agent_transcripts tests that
+    // override APPDATA so we don't see a stale tempdir value here.
     #[tokio::test]
+    #[serial]
     async fn test_personation_context_inference() {
         let user = if cfg!(target_os = "windows") {
             std::env::var("USERNAME").unwrap_or_default()
@@ -809,7 +813,9 @@ mod tests {
         }
     }
 
+    // Modifies SystemDrive env var; serialize against any other env-var test.
     #[test]
+    #[serial]
     fn test_build_default_windows_context_uses_system_drive() {
         let original = std::env::var("SystemDrive").ok();
         std::env::set_var("SystemDrive", "Z:");
@@ -829,7 +835,10 @@ mod tests {
         }
     }
 
+    // Reads APPDATA on Windows; serialize against agent_transcripts tests that
+    // override APPDATA so we don't see a stale tempdir value here.
     #[test]
+    #[serial]
     fn test_windows_resolution_matches_env() {
         if !cfg!(target_os = "windows") {
             return;
