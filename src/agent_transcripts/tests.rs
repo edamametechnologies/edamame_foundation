@@ -107,10 +107,17 @@ fn claude_desktop_collects_from_two_roots() {
         "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"hello from cowork\"}]}}\n",
     );
 
-    // The cowork lookup respects XDG_DATA_HOME on Linux; clear it so the
-    // default home-relative path is picked up.
+    // The cowork lookup respects XDG_DATA_HOME on Linux and APPDATA on Windows;
+    // override or clear them so the test's home-relative path is picked up. On
+    // CI runners these env vars point at the runner user's actual profile, not
+    // the test's tempdir.
     #[cfg(target_os = "linux")]
     std::env::remove_var("XDG_DATA_HOME");
+    #[cfg(target_os = "windows")]
+    {
+        let appdata = home.join("AppData").join("Roaming");
+        std::env::set_var("APPDATA", &appdata);
+    }
 
     let result = collect("claude_desktop", home, &options()).expect("claude_desktop collect");
     assert_eq!(result.payload.agent_type, "claude_desktop");
@@ -128,6 +135,11 @@ fn claude_desktop_collects_from_two_roots() {
 
 #[test]
 fn codex_collects_rollout_jsonl() {
+    // Codex respects CODEX_HOME if set; clear it so the default home-relative
+    // path is picked up. On CI runners this is normally unset, but we clear
+    // defensively so the test stays deterministic.
+    std::env::remove_var("CODEX_HOME");
+
     let temp = tempfile::tempdir().expect("tempdir");
     let home = temp.path();
     let sessions = home.join(".codex/sessions/2026/04/28");
