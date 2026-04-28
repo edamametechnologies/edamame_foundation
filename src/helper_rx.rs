@@ -9,9 +9,10 @@ use base64::Engine;
 use edamame_proto::edamame_helper_server::{EdamameHelper, EdamameHelperServer};
 use edamame_proto::{HelperRequest, HelperResponse};
 use lazy_static::lazy_static;
+use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::str;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::oneshot;
 use tonic::transport::{Certificate, Identity, Server, ServerTlsConfig};
 use tonic::{Code, Request, Response, Status};
@@ -20,10 +21,24 @@ use undeadlock::CustomMutex;
 
 lazy_static! {
     pub static ref BRANCH: Arc<CustomMutex<String>> = Arc::new(CustomMutex::new("".to_string()));
+    // Set of orders currently being executed by the helper, keyed by the full incoming
+    // RPC tuple (see `order_key`). A duplicate that arrives while a matching order is
+    // still in-flight is rejected with `Code::AlreadyExists`. A plain `std::sync::Mutex`
+    // is used here because operations are pure HashSet insert/remove and we never hold
+    // the lock across an `.await`.
+    static ref PENDING_ORDERS: Arc<StdMutex<HashSet<String>>> =
+        Arc::new(StdMutex::new(HashSet::new()));
 }
 
 // Version
 pub static CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+// Default upper bound for `metricorder/cli` executions inside the helper. Without this
+// guard, a hung child process would keep its stdout/stderr pipe FDs open forever, which
+// is exactly how the helper's PIPE FD count crept up to ~228 in production. Combined
+// with the kill-on-timeout logic in `runner_cli::run_cli`, this caps the pipe lifetime
+// to at most this many seconds.
+pub const DEFAULT_CLI_ORDER_TIMEOUT_SECS: u64 = 60;
 
 #[derive(Default)]
 pub struct Helper {}
@@ -60,6 +75,42 @@ impl EdamameHelper for Helper {
     }
 }
 
+// Build the dedup key from the semantically-significant parts of an incoming order.
+// `signature` and `version` are intentionally excluded: they don't change what we are
+// being asked to do, only which model/protocol we should validate against.
+fn order_key(ordertype: &str, subordertype: &str, arg1: &str, arg2: &str) -> String {
+    format!("{}|{}|{}|{}", ordertype, subordertype, arg1, arg2)
+}
+
+// RAII guard that registers an order as pending on creation and removes it on drop.
+// Drop fires on every exit path (Ok, Err, panic, future cancellation), so the registry
+// can never strand a key.
+struct PendingGuard {
+    key: String,
+}
+
+impl PendingGuard {
+    /// Returns `Some(_)` if registered, `None` if a duplicate is already pending.
+    fn try_register(key: String) -> Option<Self> {
+        let mut set = PENDING_ORDERS
+            .lock()
+            .expect("PENDING_ORDERS mutex poisoned");
+        if set.contains(&key) {
+            return None;
+        }
+        set.insert(key.clone());
+        Some(PendingGuard { key })
+    }
+}
+
+impl Drop for PendingGuard {
+    fn drop(&mut self) {
+        if let Ok(mut set) = PENDING_ORDERS.lock() {
+            set.remove(&self.key);
+        }
+    }
+}
+
 pub async fn rpc_run_safe(
     ordertype: &str,
     subordertype: &str,
@@ -68,6 +119,20 @@ pub async fn rpc_run_safe(
     signature: &str,
     version: &str,
 ) -> Result<Response<HelperResponse>, Status> {
+    // Single-flight dedup: reject only orders that are byte-for-byte identical to one
+    // already being executed. Different orders run concurrently as before.
+    let key = order_key(ordertype, subordertype, arg1, arg2);
+    let _guard = match PendingGuard::try_register(key.clone()) {
+        Some(g) => g,
+        None => {
+            warn!("Rejecting duplicate order already pending: {}", key);
+            return Err(Status::new(
+                Code::AlreadyExists,
+                format!("duplicate order already pending: {}", key),
+            ));
+        }
+    };
+
     rpc_run(ordertype, subordertype, arg1, arg2, signature, version)
         .await
         .map(|output| {
@@ -337,7 +402,15 @@ pub async fn rpc_run(
                             order_error(&format!("personate required but no username provided for metricorder {}", threat), false)
                         } else {
                             match class {
-                                "cli" => run_cli(target, username, personate, None).await,
+                                "cli" => {
+                                    run_cli(
+                                        target,
+                                        username,
+                                        personate,
+                                        Some(DEFAULT_CLI_ORDER_TIMEOUT_SECS),
+                                    )
+                                    .await
+                                }
                                 "internal" => {
                                     // We don't have any internal implementation within the helper for now
                                     order_error(&format!("internal implementation type not implemented for metricorder {}", threat), false)
@@ -567,6 +640,7 @@ pub async fn rpc_run(
             "list_agent_plugins" => utility_list_agent_plugins(arg1).await,
             "uninstall_agent_plugin" => utility_uninstall_agent_plugin(arg1, arg2).await,
             "test_agent_plugin" => utility_test_agent_plugin(arg1, arg2).await,
+            "collect_agent_transcripts" => utility_collect_agent_transcripts(arg1, arg2).await,
             _ => order_error(
                 &format!("unknown or unimplemented utilityorder {}", subordertype),
                 false,
@@ -1755,5 +1829,130 @@ mod tests {
 
         shutdown_tx.send(()).ok();
         Ok(())
+    }
+
+    // ---- Single-flight dedup tests ----
+
+    #[test]
+    fn test_order_key_format() {
+        assert_eq!(
+            order_key("metricorder", "capture", "threat-1", "user1"),
+            "metricorder|capture|threat-1|user1"
+        );
+        // Empty arg fields are still part of the key (so an empty arg2 is distinct from
+        // a non-empty one).
+        assert_eq!(
+            order_key("utilityorder", "helper_check", "", ""),
+            "utilityorder|helper_check||"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_pending_guard_rejects_duplicates() {
+        // Use a unique key per test to avoid colliding with other tests that may run
+        // concurrently and share the static PENDING_ORDERS set.
+        let key = format!("test_pending_guard|sub|{}|", uuid::Uuid::new_v4());
+
+        let g1 = PendingGuard::try_register(key.clone());
+        assert!(g1.is_some(), "first registration should succeed");
+
+        // Second registration of the *same* key is rejected.
+        let g2 = PendingGuard::try_register(key.clone());
+        assert!(g2.is_none(), "duplicate registration should be rejected");
+
+        // A different key registers fine even while the first is held.
+        let other = format!("test_pending_guard|sub|{}|", uuid::Uuid::new_v4());
+        let g3 = PendingGuard::try_register(other);
+        assert!(g3.is_some(), "distinct key should register");
+
+        // Drop the first guard and verify the slot is freed.
+        drop(g1);
+        let g4 = PendingGuard::try_register(key);
+        assert!(
+            g4.is_some(),
+            "key should be re-registerable after the guard is dropped"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_rpc_run_safe_rejects_exact_duplicate() {
+        // Pin the dedup slot ourselves so we can assert rpc_run_safe rejects the second
+        // call without ever invoking rpc_run.
+        let arg1 = format!("dedup_rpc_run_safe_{}", uuid::Uuid::new_v4());
+        let key = order_key("utilityorder", "helper_check", &arg1, "");
+        let _holder = PendingGuard::try_register(key.clone())
+            .expect("first registration should succeed");
+
+        let err = rpc_run_safe(
+            "utilityorder",
+            "helper_check",
+            &arg1,
+            "",
+            "",
+            env!("CARGO_PKG_VERSION"),
+        )
+        .await
+        .expect_err("rpc_run_safe should reject the duplicate");
+
+        assert_eq!(err.code(), Code::AlreadyExists);
+        assert!(
+            err.message().contains("duplicate order already pending"),
+            "unexpected message: {}",
+            err.message()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_rpc_run_safe_releases_slot_on_completion() {
+        // After rpc_run_safe finishes (whether ok or err), the slot must be free so a
+        // fresh request with the same key can run again. We use an unimplemented
+        // utilityorder so rpc_run returns an error quickly without external side effects.
+        let arg1 = format!("dedup_release_{}", uuid::Uuid::new_v4());
+
+        // First call: not a duplicate, runs to (error) completion, slot released on drop.
+        let _ = rpc_run_safe(
+            "utilityorder",
+            "this_subordertype_does_not_exist",
+            &arg1,
+            "",
+            "",
+            env!("CARGO_PKG_VERSION"),
+        )
+        .await;
+
+        // Slot should be free now: re-registering succeeds.
+        let key = order_key(
+            "utilityorder",
+            "this_subordertype_does_not_exist",
+            &arg1,
+            "",
+        );
+        let g = PendingGuard::try_register(key);
+        assert!(
+            g.is_some(),
+            "PENDING_ORDERS slot should be released after rpc_run_safe returns"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_rpc_run_safe_distinct_orders_run_concurrently() {
+        // Two different keys should both be registerable simultaneously.
+        let key_a = order_key(
+            "utilityorder",
+            "helper_check",
+            &format!("a_{}", uuid::Uuid::new_v4()),
+            "",
+        );
+        let key_b = order_key(
+            "utilityorder",
+            "helper_check",
+            &format!("b_{}", uuid::Uuid::new_v4()),
+            "",
+        );
+
+        let ga = PendingGuard::try_register(key_a);
+        let gb = PendingGuard::try_register(key_b);
+        assert!(ga.is_some());
+        assert!(gb.is_some());
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "edamame_foundation"
-version = "1.2.2"
+version = "1.2.3"
 edition = "2021"
 
 [lints.rust]
@@ -87,8 +87,10 @@ tonic-prost = "0.14.2"
 base64 = "0.22.1"
 
 # CLI support
-run_script = "0.11.0"
-powershell_script = "1.1.0"
+# Note: run_script and powershell_script are intentionally NOT used here. Their child
+# processes are not cancellable from async code, which leaked stdout/stderr pipe FDs in
+# the helper. `runner_cli::run_cli` now uses `tokio::process::Command` directly so child
+# processes (and their entire process group on Unix) can be killed on timeout.
 tempfile = "3.13.0"
 
 # Async

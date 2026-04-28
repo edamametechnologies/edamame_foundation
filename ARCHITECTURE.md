@@ -51,6 +51,22 @@ src/
 ├── agent_plugin.rs                # Download, extract, install agent plugins
 ├── agent_plugin_icons.rs          # Embedded plugin icon assets (crate-internal)
 ├── supported_agents.rs            # Dynamic agent registry (index.json from GitHub)
+├── agent_transcripts/             # Per-agent transcript adapters used by the
+│   │                              # external observer in edamame_core. Compiles
+│   │                              # on every target; mobile callers get empty
+│   │                              # payloads since the agent plugins only
+│   │                              # install on desktop.
+│   ├── mod.rs                     # CollectOptions / CollectResult types,
+│   │                              # `collect`, `collect_to_json` dispatcher,
+│   │                              # and shared filesystem helpers.
+│   ├── parsing.rs                 # Path / URL / port / tool / command
+│   │                              # extractors mirroring the Node-side
+│   │                              # session_prediction_adapter.mjs.
+│   ├── cursor.rs                  # ~/.cursor/projects walker.
+│   ├── claude_code.rs             # ~/.claude/projects walker.
+│   ├── claude_desktop.rs          # ~/.claude/projects + Cowork sessions root.
+│   ├── codex.rs                   # ~/.codex/sessions rollout JSONL walker.
+│   └── openclaw.rs                # Best-effort host-resident OpenClaw probe.
 ├── peer_ids.rs                    # Peer identity management
 │
 │ # Cloud Integration
@@ -93,6 +109,15 @@ service EDAMAMEHelper {
 - `set_whitelist` / `set_blacklist` - Network filtering
 - `broadcast_ping` - Network discovery
 - `arp_resolve` / `mdns_resolve` - Address resolution
+- `provision_agent_plugin` / `get_agent_plugin_status` / `list_agent_plugins`
+  / `uninstall_agent_plugin` / `test_agent_plugin` - Agent plugin
+  install/uninstall/healthcheck operations.
+- `collect_agent_transcripts` - Read per-agent transcripts on the helper
+  side and return a `RawReasoningSessionPayload`-shaped JSON to the core's
+  external transcript observer (so the macOS-sandboxed app can ingest
+  transcripts from the user's real home).
+- `scan_secret_content` - Helper-side content scanner for sensitive paths
+  surfaced by the vulnerability detector.
 
 ### Serialization
 

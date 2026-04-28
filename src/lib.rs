@@ -4,6 +4,7 @@ pub mod admin;
 pub mod advisor;
 pub mod agent_plugin;
 pub(crate) mod agent_plugin_icons;
+pub mod agent_transcripts;
 pub mod backend;
 pub mod cve_detection_params_db;
 #[cfg(all(

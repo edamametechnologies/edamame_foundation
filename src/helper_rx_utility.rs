@@ -770,6 +770,44 @@ pub async fn utility_scan_secret_content(paths_json: &str) -> Result<String> {
         .map_err(|e| anyhow::anyhow!("Failed to serialize secret-content matches: {}", e))
 }
 
+/// Helper-side transcript collection. `arg1` is the agent type, `arg2` is a
+/// JSON object with `home` (required, helper-resolved real home of the user)
+/// and `options` (CollectOptions JSON, optional). The helper crosses the
+/// macOS sandbox boundary on behalf of the (sandboxed) app to read transcript
+/// files under the user's actual home directory.
+pub async fn utility_collect_agent_transcripts(
+    agent_type: &str,
+    args_json: &str,
+) -> Result<String> {
+    #[derive(serde::Deserialize)]
+    struct Args {
+        #[serde(default)]
+        home: String,
+        #[serde(default)]
+        options: Option<crate::agent_transcripts::CollectOptions>,
+    }
+
+    let args: Args = if args_json.trim().is_empty() {
+        Args {
+            home: String::new(),
+            options: None,
+        }
+    } else {
+        serde_json::from_str(args_json).map_err(|e| {
+            anyhow::anyhow!("Failed to parse collect_agent_transcripts args: {}", e)
+        })?
+    };
+
+    let home_path = if args.home.is_empty() {
+        crate::agent_plugin::real_home_dir()
+            .ok_or_else(|| anyhow::anyhow!("Unable to resolve real_home_dir for agent transcripts"))?
+    } else {
+        std::path::PathBuf::from(args.home)
+    };
+    let options = args.options.unwrap_or_default();
+    crate::agent_transcripts::collect_to_json(agent_type, &home_path, &options)
+}
+
 #[cfg(all(
     any(target_os = "macos", target_os = "linux", target_os = "windows"),
     feature = "fim"
@@ -836,29 +874,43 @@ pub async fn utility_stop_file_monitor() -> Result<String> {
     feature = "fim"
 ))]
 pub async fn utility_get_file_events() -> Result<String> {
-    let guard = FIM_WATCHER.read().await;
-    match guard.as_ref() {
-        Some(watcher) => {
+    // Snapshot only what we need under the FIM_WATCHER read lock, then drop
+    // the guard. The Tier-3 fallback in backfill_missing_process_attribution
+    // probes live processes via lsof / sysinfo, which can stall on macOS
+    // sandbox / SIP boundaries. Holding FIM_WATCHER.read() across that work
+    // starves utility_start_file_monitor / utility_stop_file_monitor writers
+    // (Sentry: EDAMAME-HELPER-1HP).
+    let snapshot_inputs = {
+        let guard = FIM_WATCHER.read().await;
+        guard.as_ref().map(|watcher| {
+            (
+                watcher.store_arc(),
+                watcher
+                    .watch_paths()
+                    .iter()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .collect::<Vec<_>>(),
+            )
+        })
+    };
+
+    let snapshot = match snapshot_inputs {
+        Some((store, watch_paths)) => {
             flodbadd::fim::backfill_missing_process_attribution(
-                watcher.store(),
+                &store,
                 FIM_PROCESS_ATTRIBUTION_BACKFILL_LIMIT,
             );
-            let all_events = watcher.store().get_all_events();
+            let all_events = store.get_all_events();
             let sensitive: Vec<_> = all_events
                 .iter()
                 .filter(|event| event.is_sensitive)
                 .cloned()
                 .collect();
-            let event_count = watcher.store().event_count() as u64;
+            let event_count = store.event_count() as u64;
             let last_event_time = all_events.first().map(|e| e.timestamp.to_rfc3339());
-            let has_suspicious = watcher.store().has_suspicious_events();
-            let watch_paths: Vec<String> = watcher
-                .watch_paths()
-                .iter()
-                .map(|p| p.to_string_lossy().to_string())
-                .collect();
+            let has_suspicious = store.has_suspicious_events();
 
-            let snapshot = serde_json::json!({
+            serde_json::json!({
                 "events": all_events,
                 "sensitive_events": sensitive,
                 "is_monitoring": true,
@@ -866,23 +918,21 @@ pub async fn utility_get_file_events() -> Result<String> {
                 "event_count": event_count,
                 "last_event_time": last_event_time,
                 "has_suspicious_events": has_suspicious,
-            });
-            serde_json::to_string(&snapshot)
-                .map_err(|e| anyhow::anyhow!("Failed to serialize FIM snapshot: {}", e))
+            })
         }
-        None => {
-            let snapshot = serde_json::json!({
-                "events": [],
-                "sensitive_events": [],
-                "is_monitoring": false,
-                "watch_paths": [],
-                "event_count": 0,
-                "last_event_time": null,
-                "has_suspicious_events": false,
-            });
-            Ok(serde_json::to_string(&snapshot).unwrap())
-        }
-    }
+        None => serde_json::json!({
+            "events": [],
+            "sensitive_events": [],
+            "is_monitoring": false,
+            "watch_paths": [],
+            "event_count": 0,
+            "last_event_time": null,
+            "has_suspicious_events": false,
+        }),
+    };
+
+    serde_json::to_string(&snapshot)
+        .map_err(|e| anyhow::anyhow!("Failed to serialize FIM snapshot: {}", e))
 }
 
 #[cfg(all(
@@ -890,29 +940,45 @@ pub async fn utility_get_file_events() -> Result<String> {
     feature = "fim"
 ))]
 pub async fn utility_get_file_monitor_status() -> Result<String> {
-    let guard = FIM_WATCHER.read().await;
-    match guard.as_ref() {
-        Some(watcher) => {
-            let all_events = watcher.store().get_all_events();
-            let status = serde_json::json!({
-                "is_monitoring": watcher.is_running(),
-                "watch_paths": watcher.watch_paths().iter().map(|p| p.to_string_lossy().to_string()).collect::<Vec<_>>(),
-                "event_count": watcher.store().event_count() as u64,
+    // Same pattern as utility_get_file_events: snapshot under the lock,
+    // drop the guard, then serialize. This call is invoked very frequently
+    // (~4 Hz) by the core's fim_event_sync_task; keeping it lock-cheap
+    // prevents it from competing with start/stop_file_monitor writers.
+    let snapshot_inputs = {
+        let guard = FIM_WATCHER.read().await;
+        guard.as_ref().map(|watcher| {
+            (
+                watcher.store_arc(),
+                watcher.is_running(),
+                watcher
+                    .watch_paths()
+                    .iter()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .collect::<Vec<_>>(),
+            )
+        })
+    };
+
+    let status = match snapshot_inputs {
+        Some((store, is_running, watch_paths)) => {
+            let all_events = store.get_all_events();
+            serde_json::json!({
+                "is_monitoring": is_running,
+                "watch_paths": watch_paths,
+                "event_count": store.event_count() as u64,
                 "last_event_time": all_events.first().map(|e| e.timestamp.to_rfc3339()),
-            });
-            serde_json::to_string(&status)
-                .map_err(|e| anyhow::anyhow!("Failed to serialize FIM status: {}", e))
+            })
         }
-        None => {
-            let status = serde_json::json!({
-                "is_monitoring": false,
-                "watch_paths": [],
-                "event_count": 0,
-                "last_event_time": null,
-            });
-            Ok(serde_json::to_string(&status).unwrap())
-        }
-    }
+        None => serde_json::json!({
+            "is_monitoring": false,
+            "watch_paths": [],
+            "event_count": 0,
+            "last_event_time": null,
+        }),
+    };
+
+    serde_json::to_string(&status)
+        .map_err(|e| anyhow::anyhow!("Failed to serialize FIM status: {}", e))
 }
 
 #[cfg(all(
@@ -920,9 +986,15 @@ pub async fn utility_get_file_monitor_status() -> Result<String> {
     feature = "fim"
 ))]
 pub async fn utility_clear_file_events() -> Result<String> {
-    let guard = FIM_WATCHER.read().await;
-    if let Some(watcher) = guard.as_ref() {
-        watcher.store().clear();
+    // Snapshot the store handle, drop the guard, then clear. Keeps writers
+    // (start/stop_file_monitor) unblocked even if the underlying clear ends
+    // up doing more work than expected.
+    let store_arc = {
+        let guard = FIM_WATCHER.read().await;
+        guard.as_ref().map(|w| w.store_arc())
+    };
+    if let Some(store) = store_arc {
+        store.clear();
         info!("File events cleared via helper");
     }
     Ok("".to_string())

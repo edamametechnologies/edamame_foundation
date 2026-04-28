@@ -1,17 +1,19 @@
-use anyhow::{anyhow, Error, Result};
-use powershell_script::PsScriptBuilder;
-use run_script::ScriptOptions;
+use anyhow::{anyhow, Result};
+use std::process::Stdio;
 use std::{env, path::PathBuf};
+use tokio::io::AsyncReadExt;
+use tokio::process::Command;
 use tokio::time::{timeout, Duration};
 use tracing::{debug, error, info};
 
 #[cfg(target_os = "windows")]
-use tracing::warn;
-
-#[cfg(target_os = "windows")]
 use std::ffi::{c_void, OsStr, OsString};
 #[cfg(target_os = "windows")]
+use std::io::Write;
+#[cfg(target_os = "windows")]
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
+#[cfg(target_os = "windows")]
+use tracing::warn;
 #[cfg(target_os = "windows")]
 use windows::{
     core::{PCWSTR, PWSTR},
@@ -36,69 +38,10 @@ pub async fn run_cli(
     // Verify platform support
     check_platform_support()?;
 
-    let cmd_clone = cmd.to_string();
-    let username_clone = username.to_string();
-
-    // Spawn a thread to execute the command as neither ps nor run_script are async
-    let handle = tokio::task::spawn_blocking(move || -> (i32, String, String) {
-        let (mut code, mut stdout, mut stderr) = (0, String::new(), String::new());
-
-        if cfg!(target_os = "windows") {
-            match execute_windows_ps(
-                &cmd_clone,
-                &username_clone,
-                personate,
-                &mut code,
-                &mut stdout,
-                &mut stderr,
-            ) {
-                Ok(_) => (),
-                Err(e) => {
-                    error!("Error executing {:?} : {:?}", &cmd_clone, e);
-                    code = 1;
-                    stderr = e.to_string();
-                }
-            }
-        } else {
-            match execute_unix_command(
-                &cmd_clone,
-                &username_clone,
-                personate,
-                &mut code,
-                &mut stdout,
-                &mut stderr,
-            ) {
-                Ok(_) => (),
-                Err(e) => {
-                    error!("Error executing {:?} : {:?}", &cmd_clone, e);
-                    code = 1;
-                    stderr = e.to_string();
-                }
-            }
-        };
-
-        (code, stdout, stderr)
-    });
-
-    // Wait for the blocking task to finish but enforce a timeout
-    let (code, stdout, stderr) = if let Some(timeout_secs) = timeout_opt {
-        let (code, stdout, stderr) = match timeout(Duration::from_secs(timeout_secs), handle).await
-        {
-            Ok(join_res) => join_res.map_err(|e| Error::new(e))?,
-            Err(_) => {
-                error!(
-                    "Execution of command {:?} timed out after {} seconds",
-                    cmd, timeout_secs
-                );
-                return Err(anyhow!(
-                    "Execution of command timed out after {} seconds",
-                    timeout_secs
-                ));
-            }
-        };
-        (code, stdout, stderr)
+    let (code, stdout, stderr) = if cfg!(target_os = "windows") {
+        run_windows_ps(cmd, username, personate, timeout_opt).await?
     } else {
-        handle.await?
+        run_unix_command(cmd, username, personate, timeout_opt).await?
     };
 
     // Remove newlines from stdout
@@ -108,6 +51,191 @@ pub async fn run_cli(
     } else {
         Ok(stdout)
     }
+}
+
+async fn run_unix_command(
+    cmd: &str,
+    username: &str,
+    personate: bool,
+    timeout_opt: Option<u64>,
+) -> Result<(i32, String, String)> {
+    let mut command = Command::new("/bin/bash");
+    command.arg("-c").arg(cmd);
+
+    if personate && !username.is_empty() {
+        let home_dir = resolve_home_unix(username).await?;
+        info!(
+            "Setting up execution for user: {} with home: {}",
+            username, home_dir
+        );
+        command
+            .env("HOME", &home_dir)
+            .env("USER", username)
+            .env("LOGNAME", username)
+            .env("SHELL", "/bin/bash");
+    }
+
+    debug!("Executing shell command: {}", cmd);
+    run_command_with_timeout(command, cmd, timeout_opt).await
+}
+
+async fn run_windows_ps(
+    cmd: &str,
+    username: &str,
+    personate: bool,
+    timeout_opt: Option<u64>,
+) -> Result<(i32, String, String)> {
+    #[cfg(target_os = "windows")]
+    {
+        let mut script = String::new();
+        if personate && !username.is_empty() {
+            let context = resolve_windows_context(username)?;
+            info!(
+                "Setting up execution for user: {} with home: {}, AppData: {}, LocalAppData: {}",
+                username,
+                context.home_dir.display(),
+                context.app_data.display(),
+                context.local_app_data.display()
+            );
+
+            if let Some(env_block) = build_windows_env_block(username, &context) {
+                script.push_str(&env_block);
+                script.push('\n');
+            }
+        }
+        script.push_str(cmd);
+
+        // Write the script to a temporary file. Passing complex multi-line scripts via
+        // -Command leads to subtle quoting/escaping issues; -File is the robust path.
+        let mut tmp = tempfile::Builder::new()
+            .suffix(".ps1")
+            .tempfile()
+            .map_err(|e| anyhow!("Failed to create temp PS script: {}", e))?;
+        tmp.write_all(script.as_bytes())
+            .map_err(|e| anyhow!("Failed to write PS script: {}", e))?;
+        // Keep the temp file alive until the command completes by holding the path here.
+        let tmp_path = tmp.into_temp_path();
+
+        let mut command = Command::new("powershell.exe");
+        command
+            .arg("-NoProfile")
+            .arg("-NonInteractive")
+            .arg("-ExecutionPolicy")
+            .arg("Bypass")
+            .arg("-File")
+            .arg(&*tmp_path);
+
+        debug!("Executing powershell command: {}", script);
+        let result = run_command_with_timeout(command, cmd, timeout_opt).await;
+        // tmp_path drop closes/removes the temp file after the command has been waited on
+        drop(tmp_path);
+        result
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (cmd, username, personate, timeout_opt);
+        Err(anyhow!(
+            "run_windows_ps invoked on non-Windows platform: {}",
+            std::env::consts::OS
+        ))
+    }
+}
+
+// Spawn a child via the provided builder, drain stdout/stderr concurrently with waiting,
+// and on timeout kill the *entire* process group so any descendants of the spawned shell
+// release the inherited stdout/stderr pipes. This is the core mechanism that prevents the
+// PIPE FD leak observed in the helper.
+async fn run_command_with_timeout(
+    mut command: Command,
+    cmd_for_log: &str,
+    timeout_opt: Option<u64>,
+) -> Result<(i32, String, String)> {
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+
+    // On Unix, run the child as the leader of a new process group so we can SIGKILL the
+    // entire tree on timeout (otherwise grandchildren keep the pipes open and leak FDs).
+    #[cfg(unix)]
+    {
+        command.process_group(0);
+    }
+
+    let mut child = command
+        .spawn()
+        .map_err(|e| anyhow!("Failed to spawn command {:?}: {}", cmd_for_log, e))?;
+
+    let pid = child.id();
+
+    let stdout_pipe = child.stdout.take();
+    let stderr_pipe = child.stderr.take();
+    let stdout_task = tokio::spawn(async move {
+        let mut buf = Vec::new();
+        if let Some(mut s) = stdout_pipe {
+            let _ = s.read_to_end(&mut buf).await;
+        }
+        buf
+    });
+    let stderr_task = tokio::spawn(async move {
+        let mut buf = Vec::new();
+        if let Some(mut s) = stderr_pipe {
+            let _ = s.read_to_end(&mut buf).await;
+        }
+        buf
+    });
+
+    let status = match timeout_opt {
+        Some(secs) => match timeout(Duration::from_secs(secs), child.wait()).await {
+            Ok(Ok(status)) => status,
+            Ok(Err(e)) => {
+                return Err(anyhow!(
+                    "Failed to wait for command {:?}: {}",
+                    cmd_for_log,
+                    e
+                ));
+            }
+            Err(_) => {
+                error!(
+                    "Execution of command {:?} timed out after {} seconds, killing process tree",
+                    cmd_for_log, secs
+                );
+                #[cfg(unix)]
+                {
+                    if let Some(pid) = pid {
+                        unsafe {
+                            // Negative argument => kill the whole process group, ensuring
+                            // any subshells / descendants release the inherited pipe FDs.
+                            libc::killpg(pid as libc::pid_t, libc::SIGKILL);
+                        }
+                    }
+                }
+                let _ = child.start_kill();
+                let _ = child.wait().await;
+                let _ = stdout_task.await;
+                let _ = stderr_task.await;
+                return Err(anyhow!(
+                    "Execution of command timed out after {} seconds",
+                    secs
+                ));
+            }
+        },
+        None => child.wait().await.map_err(|e| {
+            anyhow!("Failed to wait for command {:?}: {}", cmd_for_log, e)
+        })?,
+    };
+
+    let stdout_bytes = stdout_task.await.unwrap_or_default();
+    let stderr_bytes = stderr_task.await.unwrap_or_default();
+    let code = status.code().unwrap_or(1);
+    let stdout = String::from_utf8_lossy(&stdout_bytes).to_string();
+    let stderr = String::from_utf8_lossy(&stderr_bytes).to_string();
+    debug!(
+        "Execution results for command {:?} : code : {:?} - stdout : {:?} - stderr : {:?}",
+        cmd_for_log, code, stdout, stderr
+    );
+    Ok((code, stdout, stderr))
 }
 
 // This is our convention for detecting a failed execution
@@ -128,6 +256,10 @@ fn check_platform_support() -> Result<()> {
     Ok(())
 }
 
+// Helper types/functions below are exclusively consumed inside the Windows path of
+// `run_windows_ps`, but we keep them compiling on every platform so the unit tests can
+// exercise the path-construction logic on the developers' macOS/Linux machines.
+#[allow(dead_code)]
 #[derive(Debug)]
 struct WindowsUserContext {
     home_dir: PathBuf,
@@ -135,6 +267,7 @@ struct WindowsUserContext {
     local_app_data: PathBuf,
 }
 
+#[allow(dead_code)]
 #[cfg(target_os = "windows")]
 fn resolve_windows_context(username: &str) -> Result<WindowsUserContext> {
     let user_segment = username
@@ -172,6 +305,7 @@ fn resolve_windows_context(username: &str) -> Result<WindowsUserContext> {
     })
 }
 
+#[allow(dead_code)]
 #[cfg(not(target_os = "windows"))]
 fn resolve_windows_context(username: &str) -> Result<WindowsUserContext> {
     let user_segment = username
@@ -318,63 +452,12 @@ fn widestring(value: &str) -> Vec<u16> {
         .collect()
 }
 
-fn execute_windows_ps(
-    cmd: &str,
-    username: &str,
-    personate: bool,
-    code: &mut i32,
-    stdout: &mut String,
-    stderr: &mut String,
-) -> Result<()> {
-    let mut script = String::new();
-    if personate && !username.is_empty() {
-        let context = resolve_windows_context(username)?;
-        info!(
-            "Setting up execution for user: {} with home: {}, AppData: {}, LocalAppData: {}",
-            username,
-            context.home_dir.display(),
-            context.app_data.display(),
-            context.local_app_data.display()
-        );
-
-        if let Some(env_block) = build_windows_env_block(username, &context) {
-            script.push_str(&env_block);
-            script.push('\n');
-        }
-    }
-    script.push_str(cmd);
-
-    let ps = PsScriptBuilder::new()
-        .no_profile(true)
-        .non_interactive(true)
-        .print_commands(false)
-        .build();
-    debug!("Executing powershell command: {}", script);
-    match ps.run(&script) {
-        Ok(output) => {
-            *stdout = output.stdout().as_deref().unwrap_or("").to_string();
-            *stderr = output.stderr().as_deref().unwrap_or("").to_string();
-            *code = if output.success() { 0 } else { 1 };
-            debug!(
-                "Execution results for command {:?} : code : {:?} - stdout : {:?} - stderr : {:?}",
-                cmd, code, stdout, stderr
-            );
-            Ok(())
-        }
-        Err(e) => {
-            error!(
-                "Powershell execution error with calling {:?} : {:?}",
-                cmd, e
-            );
-            Err(anyhow!("Powershell execution error: {}", e))
-        }
-    }
-}
-
+#[cfg(target_os = "windows")]
 fn escape_pwsh_single_quoted(value: &str) -> String {
     value.replace('\'', "''")
 }
 
+#[cfg(target_os = "windows")]
 fn build_windows_env_block(username: &str, context: &WindowsUserContext) -> Option<String> {
     let escaped_username = escape_pwsh_single_quoted(username);
     let home_dir = context.home_dir.to_string_lossy().into_owned();
@@ -429,6 +512,7 @@ fn build_windows_env_block(username: &str, context: &WindowsUserContext) -> Opti
     ))
 }
 
+#[allow(dead_code)]
 fn build_default_windows_context(user_segment: &str) -> WindowsUserContext {
     let system_drive = env::var("SystemDrive").unwrap_or_else(|_| "C:".to_string());
     let home_dir = PathBuf::from(format!(r"{}\Users\{}", system_drive, user_segment));
@@ -442,7 +526,11 @@ fn build_default_windows_context(user_segment: &str) -> WindowsUserContext {
     }
 }
 
-fn resolve_home_unix(username: &str) -> Result<String> {
+async fn resolve_home_unix(username: &str) -> Result<String> {
+    // Look up the user via NSS (getpwnam_r), which respects nsswitch.conf so LDAP/SSSD
+    // entries on Linux are resolved correctly. Falls back to dscl on macOS systems where
+    // the binary is the canonical source of truth and finally to a default location if
+    // the user is genuinely missing from the database.
     let cmd = format!(
         concat!(
             "HOME=$(getent passwd {} 2>/dev/null | cut -d: -f6) || ",
@@ -453,19 +541,25 @@ fn resolve_home_unix(username: &str) -> Result<String> {
         username, username, username, username
     );
 
-    let options = ScriptOptions::new();
-    let (code, stdout, stderr) = run_script::run(&cmd, &vec![], &options)
+    let output = Command::new("/bin/bash")
+        .arg("-c")
+        .arg(&cmd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .output()
+        .await
         .map_err(|e| anyhow!("Failed to run home resolution script: {}", e))?;
 
-    if code != 0 {
+    if !output.status.success() {
         return Err(anyhow!(
-            "Failed to resolve unix home. Exit code: {}. Stderr: {}",
-            code,
-            stderr
+            "Failed to resolve unix home. Exit code: {:?}. Stderr: {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr)
         ));
     }
-    let home = stdout.trim().to_string();
-    // If it's empty, fallback to just using /Users/{username} on mac or /home/{username} on linux as a best guess
+    let home = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if home.is_empty() {
         if cfg!(target_os = "macos") {
             return Ok(format!("/Users/{}", username));
@@ -474,46 +568,6 @@ fn resolve_home_unix(username: &str) -> Result<String> {
         }
     }
     Ok(home)
-}
-
-fn execute_unix_command(
-    cmd: &str,
-    username: &str,
-    personate: bool,
-    code: &mut i32,
-    stdout: &mut String,
-    stderr: &mut String,
-) -> Result<()> {
-    let options = ScriptOptions::new();
-    let args = vec![];
-
-    let extcmd = if personate && !username.is_empty() {
-        // Determine HOME dynamically using helper
-        let home_dir = resolve_home_unix(username)?;
-        info!(
-            "Setting up execution for user: {} with home: {}",
-            username, home_dir
-        );
-
-        // On Unix, explicitly setting SHELL can help some scripts
-        // We assume /bin/bash or /bin/sh usually, but let's stick to minimal env
-        format!(
-            "HOME='{}'; USER='{}'; LOGNAME='{}'; SHELL='/bin/bash'; export HOME USER LOGNAME SHELL; {}",
-            home_dir, username, username, cmd
-        )
-    } else {
-        cmd.to_string()
-    };
-    debug!("Executing shell command: {}", extcmd);
-    let output = run_script::run(&extcmd, &args, &options)?;
-    *code = output.0;
-    *stdout = output.1;
-    *stderr = output.2;
-    debug!(
-        "Execution results for command {:?} : code : {:?} - stdout : {:?} - stderr : {:?}",
-        cmd, code, stdout, stderr
-    );
-    Ok(())
 }
 
 #[cfg(test)]
@@ -566,6 +620,83 @@ mod tests {
         let result = run_cli(cmd, "", false, Some(1)).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("timed out"));
+    }
+
+    #[tokio::test]
+    async fn test_run_cli_timeout_returns_quickly() {
+        // The timeout should fire well before the long sleep would naturally complete.
+        // This validates that we are not waiting on a leaked spawn_blocking thread.
+        let cmd = if cfg!(target_os = "windows") {
+            "Start-Sleep -Seconds 30"
+        } else {
+            "sleep 30"
+        };
+
+        let start = std::time::Instant::now();
+        let result = run_cli(cmd, "", false, Some(1)).await;
+        let elapsed = start.elapsed();
+
+        assert!(result.is_err());
+        // We allow up to 5s of slack for slow CI; on a healthy machine this is sub-second.
+        assert!(
+            elapsed.as_secs() < 5,
+            "run_cli with 1s timeout took too long: {:?}",
+            elapsed
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_run_cli_timeout_no_pipe_leak() {
+        // Spawn many commands that all hit the timeout and ensure the process's open FD
+        // count returns to baseline. Before the fix, each timeout left two PIPE FDs and
+        // one zombie shell behind.
+        fn count_open_fds() -> usize {
+            std::fs::read_dir("/dev/fd").map(|d| d.count()).unwrap_or(0)
+        }
+
+        // Warm up: run one command first so any tokio runtime / lazy globals are
+        // initialised and don't pollute the baseline.
+        let _ = run_cli("true", "", false, Some(1)).await;
+        let baseline = count_open_fds();
+
+        for _ in 0..10 {
+            let result = run_cli("sleep 30", "", false, Some(1)).await;
+            assert!(result.is_err());
+        }
+
+        // Allow tokio's reaper a moment to release any pipe FDs.
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        let after = count_open_fds();
+
+        // A small drift is fine (e.g. tracing log file rotations, runtime queues),
+        // but anything close to 2 * 10 = 20 leaked PIPE FDs would indicate regression.
+        assert!(
+            after <= baseline + 5,
+            "FD leak detected: baseline={}, after={}",
+            baseline,
+            after
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_run_cli_timeout_kills_process_group() {
+        // Verify that when a timed-out shell has a long-running grandchild, the kill
+        // propagates to the process group so the grandchild is reaped too.
+        // We start a bash that exec's a sleep, then check the sleep is not running.
+        let cmd = "(sleep 30) & wait";
+
+        let start = std::time::Instant::now();
+        let result = run_cli(cmd, "", false, Some(1)).await;
+        let elapsed = start.elapsed();
+
+        assert!(result.is_err());
+        assert!(
+            elapsed.as_secs() < 5,
+            "process group kill took too long: {:?}",
+            elapsed
+        );
     }
 
     #[tokio::test]

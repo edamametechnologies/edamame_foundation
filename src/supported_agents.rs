@@ -150,6 +150,12 @@ impl SupportedAgentDefinition {
             match target.as_str() {
                 "cursor_user_mcp" => paths.push(home.join(".cursor/mcp.json")),
                 "claude_cli_config" => paths.push(home.join(".claude.json")),
+                "codex_cli_config" => {
+                    let codex_home = std::env::var("CODEX_HOME")
+                        .map(PathBuf::from)
+                        .unwrap_or_else(|_| home.join(".codex"));
+                    paths.push(codex_home.join("config.toml"));
+                }
                 "claude_desktop_app_config" => {
                     #[cfg(target_os = "macos")]
                     {
@@ -529,6 +535,41 @@ fn builtin_supported_agents() -> LoadedSupportedAgents {
                     intent_timeout_seconds: Some(900),
                 }),
                 registry_icon_relpath: Some("claude_desktop/icon.svg".to_string()),
+            },
+            SupportedAgentDefinition {
+                agent_type: "codex".to_string(),
+                display_name: "EDAMAME for Codex CLI".to_string(),
+                description: "OpenAI Codex CLI workstation integration with transcript ingest, pairing, verdicts, and health checks.".to_string(),
+                repo_name: "edamame_codex".to_string(),
+                strategy_kind: "workstation_stdio_mcp".to_string(),
+                sort_order: 35,
+                requires_workspace_arg: true,
+                repo_scripts: AgentRepoScripts {
+                    install_unix: Some("setup/install.sh".to_string()),
+                    install_windows: Some("setup/install.ps1".to_string()),
+                    uninstall_unix: Some("setup/uninstall.sh".to_string()),
+                    uninstall_windows: Some("setup/uninstall.ps1".to_string()),
+                    healthcheck_relpath: "service/healthcheck_cli.mjs".to_string(),
+                },
+                install_layout: AgentInstallLayout {
+                    install_base: "data_dir".to_string(),
+                    install_relative_path: "codex-edamame/current".to_string(),
+                    config_kind: "platform_config_slug".to_string(),
+                    config_slug: Some("codex-edamame".to_string()),
+                    state_kind: "platform_state_slug".to_string(),
+                    state_slug: Some("codex-edamame".to_string()),
+                    bundle_icon_relpath: Some("assets/plugin_codex.png".to_string()),
+                },
+                mcp: Some(AgentMcpConfig {
+                    server_key: "edamame-codex".to_string(),
+                    config_targets: vec!["codex_cli_config".to_string()],
+                }),
+                e2e: Some(AgentE2eConfig {
+                    repo_env_var: Some("CODEX_REPO".to_string()),
+                    intent_script: Some("tests/e2e_inject_intent.sh".to_string()),
+                    intent_timeout_seconds: Some(900),
+                }),
+                registry_icon_relpath: Some("codex/icon.svg".to_string()),
             },
             SupportedAgentDefinition {
                 agent_type: "openclaw".to_string(),

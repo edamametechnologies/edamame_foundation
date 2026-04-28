@@ -24,6 +24,7 @@ pub static CVE_DETECTION_PARAMS_DB: &str = r#"{
     ".part",
     ".partial",
     ".download",
+    ".aamdownload",
     ".crdownload",
     ".lock",
     ".log",

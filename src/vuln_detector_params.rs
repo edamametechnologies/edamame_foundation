@@ -143,6 +143,7 @@ fn default_benign_temp_artifact_suffixes() -> Vec<String> {
         ".part",
         ".partial",
         ".download",
+        ".aamdownload",
         ".crdownload",
         ".lock",
         ".log",
