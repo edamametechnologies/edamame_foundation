@@ -73,7 +73,19 @@ pub static CVE_DETECTION_PARAMS_DB: &str = r#"{
     }
   },
   "ci_runner_process_name_prefixes": [
-    "provjobd"
+    "provjobd",
+    "runner.worker",
+    "runner.listener"
+  ],
+  "ci_workspace_path_patterns": [
+    "/actions-runner/_work/",
+    "/runner/_work/",
+    "/actions-runner/_diag/",
+    "/runner/_diag/",
+    "\\actions-runner\\_work\\",
+    "\\runner\\_work\\",
+    "\\actions-runner\\_diag\\",
+    "\\runner\\_diag\\"
   ],
   "credential_harvest_min_labels": 3,
   "credential_store_patterns": {
@@ -176,6 +188,11 @@ pub static CVE_DETECTION_PARAMS_DB: &str = r#"{
     "init",
     "svchost.exe"
   ],
+  "keychain_transactional_filename_patterns": [
+    ".keychain-db.sb-",
+    ".keychain-db-shm.sb-",
+    "/.fl"
+  ],
   "packaged_application_contains_patterns": [
     ".app/",
     "/applications/",
@@ -194,7 +211,7 @@ pub static CVE_DETECTION_PARAMS_DB: &str = r#"{
   "recent_sensitive_open_file_ttl_secs": 180,
   "secret_content_min_hits": 2,
   "secret_content_scan_max_bytes": 65536,
-  "signature": "8ba237d978d9556c511fad402dae047f2697afc26e846c63aca98d2ca82cbe9e",
+  "signature": "eec99bd0c05066bd65d67e2665744a7e41dd58bc73103356282a8c234c331c76",
   "suspicious_parent_path_patterns": [
     "/tmp/",
     "/var/tmp/",

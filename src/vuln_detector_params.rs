@@ -63,6 +63,10 @@ pub struct CveDetectionParamsJSON {
     pub init_process_names: Vec<String>,
     #[serde(default = "default_ci_runner_process_name_prefixes")]
     pub ci_runner_process_name_prefixes: Vec<String>,
+    #[serde(default = "default_ci_workspace_path_patterns")]
+    pub ci_workspace_path_patterns: Vec<String>,
+    #[serde(default = "default_keychain_transactional_filename_patterns")]
+    pub keychain_transactional_filename_patterns: Vec<String>,
     pub suspicious_parent_path_patterns: Vec<String>,
     #[serde(default = "default_benign_temp_artifact_suffixes")]
     pub benign_temp_artifact_suffixes: Vec<String>,
@@ -119,19 +123,81 @@ fn default_credential_harvest_min_labels() -> usize {
     3
 }
 
-/// CI runner provisioning daemons that legitimately live in /tmp or
-/// %TEMP% on ephemeral build hosts. The sandbox_exploitation detector
-/// would otherwise flag these as "suspicious parent-process path" with
-/// HIGH severity every time a GitHub-hosted runner executes, which is a
-/// pure false positive that poisons the pre-release baseline on Linux
-/// and Windows.
+/// CI runner provisioning daemons and runner agent processes that
+/// legitimately live in unusual locations on ephemeral build hosts.
+/// Without this allowlist:
+///   - the `sandbox_exploitation` detector flags `provjobd` as
+///     "suspicious parent-process path" because it lives in `/tmp`;
+///   - the `sensitive_material_egress` detector flags
+///     `Runner.Worker.exe` as a credential-exfil candidate because it
+///     simultaneously reads its own `_diag/*.log` files (which the
+///     sensitive-file FIM classifier considers sensitive) and sustains
+///     long-lived outbound connections to GitHub Actions backends.
+/// Both are pure false positives intrinsic to running CI on
+/// github-hosted runners, not indicative of compromised software.
 ///
 /// These names are documented, public GitHub Actions infrastructure:
 ///   - `provjobd` (Linux+Windows): the provisioning job daemon that
 ///     spawns under the hosted-compute-agent / sudo on first run,
 ///     lives at `/tmp/provjobdNNN` / `%TEMP%\provjobd.exeNNN`.
+///   - `Runner.Worker[.exe]`: the runner agent worker process that
+///     executes a single workflow job. Spawns under `node20/bin/` on
+///     Windows and under the runner directory on Linux/macOS. Suffixed
+///     with the run id (e.g. `Runner.Worker.exe1134032012`).
+///   - `Runner.Listener[.exe]`: the long-lived runner agent listener
+///     that polls GitHub for workflow jobs.
 fn default_ci_runner_process_name_prefixes() -> Vec<String> {
-    strings(&["provjobd"])
+    strings(&["provjobd", "runner.worker", "runner.listener"])
+}
+
+/// Path substrings that identify directories owned by the GitHub
+/// Actions runner agent. Files in these locations are part of the CI
+/// runtime itself (workspace checkouts, runner diagnostic logs, action
+/// caches). The `file_system_tampering` detector would otherwise flag
+/// every fresh repo checkout as a sensitive-file Create event (e.g.
+/// `actions-runner/_work/<repo>/<repo>/.env`) and every runner log
+/// rotation as suspicious.
+///
+/// Patterns include both forward-slash and backslash variants so a
+/// single normalized substring check covers Linux/macOS and Windows
+/// runners. Patterns are matched against the raw event path
+/// (case-insensitive) so callers do not need a separate normalization
+/// step. `_work/` (workflow workspace) and `_diag/` (runner logs) are
+/// the two directory namespaces that the runner manages.
+fn default_ci_workspace_path_patterns() -> Vec<String> {
+    strings(&[
+        "/actions-runner/_work/",
+        "/runner/_work/",
+        "/actions-runner/_diag/",
+        "/runner/_diag/",
+        "\\actions-runner\\_work\\",
+        "\\runner\\_work\\",
+        "\\actions-runner\\_diag\\",
+        "\\runner\\_diag\\",
+    ])
+}
+
+/// Filename substrings that identify macOS Keychain transactional
+/// artifacts (short-lived sandbox/transactional copies of the Keychain
+/// DB created by the Security framework on every Keychain read). Any
+/// process that touches the Keychain via the standard CFKeychain APIs
+/// causes these files to appear and disappear within seconds; the
+/// FIM/file_system_tampering classifier would otherwise flag them as
+/// sensitive-file Create events on the writer process (which can be
+/// anything from `iCloudNotificationAgent` to a packaged user app
+/// using OneDrive/iCloud sync).
+///
+/// Patterns are case-insensitive substring checks evaluated against
+/// the normalized path. Limited to filenames found *inside*
+/// `credential_store_patterns.macos` paths (`/library/keychains/`)
+/// so they are scoped to the actual Keychain directory, never to a
+/// user file that happens to share a similar name.
+fn default_keychain_transactional_filename_patterns() -> Vec<String> {
+    strings(&[
+        ".keychain-db.sb-",
+        ".keychain-db-shm.sb-",
+        "/.fl",
+    ])
 }
 
 fn default_benign_temp_artifact_suffixes() -> Vec<String> {
@@ -354,6 +420,8 @@ pub struct CveDetectionParams {
     pub generic_application_tokens: HashSet<String>,
     pub init_process_names: HashSet<String>,
     pub ci_runner_process_name_prefixes: Vec<String>,
+    pub ci_workspace_path_patterns: Vec<String>,
+    pub keychain_transactional_filename_patterns: Vec<String>,
     pub suspicious_parent_path_patterns: Vec<String>,
     pub benign_temp_artifact_suffixes: Vec<String>,
     pub application_storage_patterns: Vec<String>,
@@ -399,6 +467,16 @@ impl CveDetectionParams {
                 .ci_runner_process_name_prefixes
                 .iter()
                 .map(|prefix| prefix.to_ascii_lowercase())
+                .collect(),
+            ci_workspace_path_patterns: json
+                .ci_workspace_path_patterns
+                .iter()
+                .map(|pattern| pattern.to_ascii_lowercase())
+                .collect(),
+            keychain_transactional_filename_patterns: json
+                .keychain_transactional_filename_patterns
+                .iter()
+                .map(|pattern| pattern.to_ascii_lowercase())
                 .collect(),
             suspicious_parent_path_patterns: json.suspicious_parent_path_patterns.clone(),
             benign_temp_artifact_suffixes: json.benign_temp_artifact_suffixes.clone(),
@@ -510,10 +588,11 @@ pub fn is_init_process(name: &str) -> bool {
     PARAMS_SNAPSHOT.load().init_process_names.contains(name)
 }
 
-/// Returns true if `name` is a known CI runner provisioning daemon
-/// (e.g. GitHub Actions' `provjobd`). The match is a case-insensitive
-/// prefix check because these names carry per-run integer suffixes
-/// (e.g. `provjobd2003115`, `provjobd.exe1134032012`).
+/// Returns true if `name` is a known CI runner agent or provisioning
+/// daemon (e.g. GitHub Actions' `provjobd`, `Runner.Worker[.exe]`,
+/// `Runner.Listener[.exe]`). The match is a case-insensitive prefix
+/// check because these names carry per-run integer suffixes (e.g.
+/// `provjobd2003115`, `Runner.Worker.exe1134032012`).
 pub fn is_ci_runner_internal_process(name: &str) -> bool {
     if name.is_empty() {
         return false;
@@ -524,6 +603,40 @@ pub fn is_ci_runner_internal_process(name: &str) -> bool {
         .ci_runner_process_name_prefixes
         .iter()
         .any(|prefix| !prefix.is_empty() && lower.starts_with(prefix))
+}
+
+/// Returns true if `path` lies inside a directory owned by the GitHub
+/// Actions runner agent (workspace, action cache, runner diagnostic
+/// logs). Used to suppress `file_system_tampering` events on CI scratch
+/// trees -- e.g. the repo `.env` written by `actions/checkout` or
+/// runner log rotations -- which are not actionable security signals.
+pub fn is_ci_workspace_path(path: &str) -> bool {
+    if path.is_empty() {
+        return false;
+    }
+    let lower = path.to_ascii_lowercase();
+    PARAMS_SNAPSHOT
+        .load()
+        .ci_workspace_path_patterns
+        .iter()
+        .any(|pattern| !pattern.is_empty() && lower.contains(pattern))
+}
+
+/// Returns true if `path` is a macOS Keychain transactional artifact
+/// (the short-lived sandbox/transactional copies the Security framework
+/// creates on every Keychain read). Caller must already have confirmed
+/// the path is under the macOS Keychain directory; this helper only
+/// matches the filename suffix portion.
+pub fn is_keychain_transactional_path(path: &str) -> bool {
+    if path.is_empty() {
+        return false;
+    }
+    let lower = path.to_ascii_lowercase();
+    PARAMS_SNAPSHOT
+        .load()
+        .keychain_transactional_filename_patterns
+        .iter()
+        .any(|pattern| !pattern.is_empty() && lower.contains(pattern))
 }
 
 pub fn suspicious_parent_path_patterns() -> Vec<String> {
@@ -624,10 +737,72 @@ mod tests {
         assert!(is_ci_runner_internal_process("provjobd2003115"));
         assert!(is_ci_runner_internal_process("provjobd.exe1134032012"));
         assert!(is_ci_runner_internal_process("PROVJOBD.EXE999"));
+        // GitHub Actions runner agent processes have per-run integer
+        // suffixes (Runner.Worker.exe1134032012, Runner.Listener.exe1234)
+        // and live under `actions-runner/` on Linux/macOS or under a
+        // `node20/bin/` subpath on Windows.
+        assert!(is_ci_runner_internal_process("Runner.Worker"));
+        assert!(is_ci_runner_internal_process("Runner.Worker.exe"));
+        assert!(is_ci_runner_internal_process("Runner.Worker.exe1134032012"));
+        assert!(is_ci_runner_internal_process("RUNNER.WORKER.EXE999"));
+        assert!(is_ci_runner_internal_process("Runner.Listener"));
+        assert!(is_ci_runner_internal_process("Runner.Listener.exe"));
+        assert!(is_ci_runner_internal_process("Runner.Listener.exe9999"));
         // Empty and unrelated names must not be matched.
         assert!(!is_ci_runner_internal_process(""));
         assert!(!is_ci_runner_internal_process("python3"));
         assert!(!is_ci_runner_internal_process("provjo"));
+        assert!(!is_ci_runner_internal_process("runner"));
+        assert!(!is_ci_runner_internal_process("runner.exe"));
+    }
+
+    #[test]
+    fn test_ci_workspace_path_lookup() {
+        // GitHub Actions workspace and diagnostic dirs on Linux/macOS:
+        assert!(is_ci_workspace_path(
+            "/home/runner/actions-runner/_work/repo/repo/.env"
+        ));
+        assert!(is_ci_workspace_path(
+            "/home/runner/runner/_work/repo/repo/Cargo.toml"
+        ));
+        assert!(is_ci_workspace_path(
+            "/Users/runner/actions-runner/_diag/Worker_2026.log"
+        ));
+        // Windows variant with backslashes (case-insensitive).
+        assert!(is_ci_workspace_path(
+            "C:\\Users\\runneradmin\\actions-runner\\_work\\repo\\repo\\.env"
+        ));
+        assert!(is_ci_workspace_path(
+            "C:\\Users\\runneradmin\\Actions-Runner\\_Diag\\Worker_2026.log"
+        ));
+        // Unrelated paths must not match.
+        assert!(!is_ci_workspace_path(""));
+        assert!(!is_ci_workspace_path("/home/user/.ssh/id_rsa"));
+        assert!(!is_ci_workspace_path("/Library/Keychains/login.keychain-db"));
+        assert!(!is_ci_workspace_path(
+            "/home/user/repo-checkout/.env"
+        ));
+    }
+
+    #[test]
+    fn test_keychain_transactional_path_lookup() {
+        // macOS Keychain transactional artifacts created on every read.
+        assert!(is_keychain_transactional_path(
+            "/Users/me/Library/Keychains/login.keychain-db.sb-a883c359-jYUWtI"
+        ));
+        assert!(is_keychain_transactional_path(
+            "/Users/me/Library/Keychains/login.keychain-db-shm.sb-deadbeef-XYZ"
+        ));
+        assert!(is_keychain_transactional_path(
+            "/Users/me/Library/Keychains/.fl34AC2A0A"
+        ));
+        // Real keychain DB writes (not transactional) must NOT match;
+        // a tampering event there is a real signal.
+        assert!(!is_keychain_transactional_path(
+            "/Users/me/Library/Keychains/login.keychain-db"
+        ));
+        assert!(!is_keychain_transactional_path(""));
+        assert!(!is_keychain_transactional_path("/etc/passwd"));
     }
 
     #[test]
