@@ -336,14 +336,17 @@ jobs:
           fi
           echo "--- Native Log Dump Complete ---"
 
-      # Runtime runner protection: dump findings + fail on any
-      # non-dismissed HIGH/CRITICAL.
+      # Runtime runner protection: dump findings (visibility-only on
+      # github-hosted ephemeral runners). exit_on_vulnerability_findings
+      # is false here because fresh ephemeral runners produce baseline
+      # CI-runner FPs with no persistent dismissal store. See
+      # workspace.mdc "Self-Hosted Runner Protection".
       - name: EDAMAME Posture vulnerability gate
         if: always()
         uses: edamametechnologies/edamame_posture_action@v1
         with:
           dump_vulnerability_findings: true
-          exit_on_vulnerability_findings: true
+          exit_on_vulnerability_findings: false
 
       - name: Slack alerts
         if: steps.tests.outcome != 'success'
@@ -555,14 +558,17 @@ jobs:
           fi
           echo "--- Container Log Dump Complete ---"
 
-      # Runtime runner protection: dump findings + fail on any
-      # non-dismissed HIGH/CRITICAL.
+      # Runtime runner protection: dump findings (visibility-only on
+      # github-hosted ephemeral runners). exit_on_vulnerability_findings
+      # is false here because fresh ephemeral runners produce baseline
+      # CI-runner FPs with no persistent dismissal store. See
+      # workspace.mdc "Self-Hosted Runner Protection".
       - name: EDAMAME Posture vulnerability gate
         if: always()
         uses: edamametechnologies/edamame_posture_action@v1
         with:
           dump_vulnerability_findings: true
-          exit_on_vulnerability_findings: true
+          exit_on_vulnerability_findings: false
 
       - name: Slack alerts
         # Won't work on 18.04 because of glibc version
