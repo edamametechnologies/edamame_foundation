@@ -927,7 +927,7 @@ dependencies = [
 
 [[package]]
 name = "edamame_foundation"
-version = "1.2.3"
+version = "1.3.0"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -4218,7 +4218,7 @@ checksum = "40ce102ab67701b8526c123c1bab5cbe42d7040ccfd0f64af1a385808d2f43de"
 [[package]]
 name = "undeadlock"
 version = "1.2.0"
-source = "git+https://github.com/edamametechnologies/undeadlock?branch=main#e243a6d586aedd1bf7a4c8dc561560b7c0b67dcf"
+source = "git+https://github.com/edamametechnologies/undeadlock?branch=main#b913637e74368cf2f347df6cca32c6f38a3c587d"
 dependencies = [
  "dashmap",
  "tokio",

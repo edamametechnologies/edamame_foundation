@@ -1,11 +1,13 @@
-//! OpenClaw transcript adapter. Best-effort host-resident: OpenClaw runs in
-//! Lima or remote, so on most developer workstations there will be nothing
-//! to collect. We probe a small set of plausible directories under
-//! `~/.openclaw/` and return an empty payload when nothing is found.
+//! OpenClaw transcript adapter. OpenClaw stores per-agent session transcripts
+//! under `~/.openclaw/agents/<agent_name>/sessions/*.jsonl`. The CLI creates
+//! the `agents/<name>` subtree on first run for any agent the operator
+//! defines (default: `main`), so the observer enumerates every
+//! `agents/<name>/sessions/` directory rather than relying on a fixed slug.
 //!
-//! When OpenClaw is not host-resident, the OpenClaw plugin's existing MCP
-//! path keeps working unchanged; the host observer simply reports
-//! `transcripts_root_accessible=false` in diagnostics.
+//! When OpenClaw is not host-resident (running in Lima or remote), nothing
+//! is collected and `transcripts_root_accessible=false` is reported. The
+//! OpenClaw plugin's existing MCP push path is unaffected -- this adapter
+//! only powers the external transcript observer's "discovered" signal.
 
 use std::path::{Path, PathBuf};
 
@@ -44,11 +46,15 @@ const OPENCLAW_SCOPE_PARENT_PATHS: &[&str] = &[
 ];
 
 pub fn collect(home: &Path, options: &CollectOptions) -> anyhow::Result<CollectResult> {
-    let candidate_roots = openclaw_session_roots(home);
-    let accessible_root = candidate_roots.iter().find(|p| p.is_dir()).cloned();
-    let mut diagnostics = CollectDiagnostics {
-        transcripts_root_accessible: accessible_root.is_some(),
-        transcripts_roots: candidate_roots
+    let probed_roots = openclaw_session_roots(home);
+    let accessible_roots: Vec<PathBuf> = probed_roots
+        .iter()
+        .filter(|p| is_sessions_dir(p))
+        .cloned()
+        .collect();
+    let diagnostics = CollectDiagnostics {
+        transcripts_root_accessible: !accessible_roots.is_empty(),
+        transcripts_roots: probed_roots
             .iter()
             .map(|p| p.to_string_lossy().to_string())
             .collect(),
@@ -58,11 +64,13 @@ pub fn collect(home: &Path, options: &CollectOptions) -> anyhow::Result<CollectR
     let agent_instance_id = observer_agent_instance_id("openclaw", home);
     let now = Utc::now();
 
-    let candidates: Vec<GenericTranscriptCandidate> = if let Some(root) = accessible_root.as_ref() {
-        gather_jsonl_transcripts(root, options)
-    } else {
-        Vec::new()
-    };
+    let mut candidates: Vec<GenericTranscriptCandidate> = Vec::new();
+    for root in &accessible_roots {
+        candidates.extend(gather_jsonl_transcripts(root, options));
+    }
+    // Re-sort across multi-agent collation so the most recent transcripts
+    // win regardless of which agent subdir they came from.
+    candidates.sort_by(|left, right| right.mtime_secs.cmp(&left.mtime_secs));
 
     if candidates.is_empty() {
         return Ok(CollectResult {
@@ -146,8 +154,6 @@ pub fn collect(home: &Path, options: &CollectOptions) -> anyhow::Result<CollectR
         (start, end)
     };
 
-    diagnostics.transcripts_root_accessible = accessible_root.is_some();
-
     Ok(CollectResult {
         payload: CollectedPayload {
             window_start,
@@ -161,12 +167,48 @@ pub fn collect(home: &Path, options: &CollectOptions) -> anyhow::Result<CollectR
     })
 }
 
+/// Enumerate every `~/.openclaw/agents/<name>/sessions/` directory.
+///
+/// OpenClaw's CLI creates one subtree per agent the operator defines, with
+/// the default agent named `main`. We scan all subdirectories under
+/// `agents/` rather than hardcoding a slug because:
+///
+/// - Operators routinely run multiple named agents in parallel
+///   (`main`, `sales_marketing_machine`, etc. on this workstation).
+/// - The session UUID-based filenames make cross-agent collisions
+///   essentially impossible, so combining transcripts is safe.
+///
+/// When `~/.openclaw/agents/` does not exist (OpenClaw never run on this
+/// host), we still surface that path in the diagnostics so the operator
+/// can see where we look. The caller filters with [`is_sessions_dir`] to
+/// decide whether anything is actually accessible.
 fn openclaw_session_roots(home: &Path) -> Vec<PathBuf> {
-    vec![
-        home.join(".openclaw/sessions"),
-        home.join(".openclaw/edamame-openclaw/sessions"),
-        home.join(".openclaw/state/sessions"),
-    ]
+    let agents_dir = home.join(".openclaw").join("agents");
+    let mut roots = Vec::new();
+
+    if let Ok(entries) = std::fs::read_dir(&agents_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                roots.push(path.join("sessions"));
+            }
+        }
+    }
+    // Stable diagnostic ordering across runs.
+    roots.sort();
+
+    if roots.is_empty() {
+        // Surface the parent so operators can see where the observer is
+        // probing even when no agents have been provisioned yet.
+        roots.push(agents_dir);
+    }
+
+    roots
+}
+
+fn is_sessions_dir(path: &Path) -> bool {
+    path.is_dir()
+        && path.file_name().and_then(|n| n.to_str()) == Some("sessions")
 }
 
 fn transcript_session_id(path: &Path) -> String {

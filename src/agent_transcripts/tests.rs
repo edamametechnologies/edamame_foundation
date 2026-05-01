@@ -12,7 +12,9 @@
     any(target_os = "macos", target_os = "windows", target_os = "linux")
 ))]
 
+use std::fs::File;
 use std::path::Path;
+use std::time::{Duration, SystemTime};
 
 use serial_test::serial;
 
@@ -25,10 +27,27 @@ fn write(path: &Path, contents: &str) {
     std::fs::write(path, contents).expect("write file");
 }
 
+/// Stamp `path`'s mtime to `seconds_ago` seconds in the past. Used to
+/// simulate stale transcripts that should fall outside the active-window
+/// filter. Uses the stable `File::set_modified` API (Rust 1.75+) to avoid
+/// pulling in a dev-dep just for this.
+fn make_stale(path: &Path, seconds_ago: u64) {
+    let target = SystemTime::now()
+        .checked_sub(Duration::from_secs(seconds_ago))
+        .expect("time math");
+    let f = File::options()
+        .write(true)
+        .open(path)
+        .expect("open for set_modified");
+    f.set_modified(target).expect("set_modified");
+}
+
 fn options() -> CollectOptions {
+    // Use a very generous active window for unit tests so freshly-written
+    // fixture files (mtime = now) always qualify regardless of any small
+    // clock skew or delays during the test run.
     CollectOptions {
         limit: 4,
-        recency_hours: 24 * 365 * 5,
         active_window_minutes: 60,
         project_hints: Vec::new(),
     }
@@ -62,6 +81,79 @@ fn cursor_collects_txt_and_jsonl() {
         .derived_expected_traffic
         .iter()
         .any(|h| h == "crates.io:443"));
+}
+
+#[test]
+fn active_window_excludes_stale_sessions_across_agents() {
+    // The collectors must apply `active_window_minutes` as a strict
+    // filter: a session whose mtime is older than the active window has
+    // already had its intent ingested by an earlier tick and should not
+    // come back in. This test exercises every per-agent adapter to
+    // guarantee none of them regress to a recency-only filter.
+    //
+    // Strategy:
+    //   1. Drop a "fresh" transcript and a "stale" transcript per agent.
+    //   2. Backdate the stale transcript well past the active window.
+    //   3. Collect with active_window_minutes = 1 minute.
+    //   4. Assert: only the fresh transcript appears in the payload.
+    let temp = tempfile::tempdir().expect("tempdir");
+    let home = temp.path();
+    let stale_age_secs = 60 * 60; // 1 hour ago, comfortably past 1-minute window
+
+    let line = "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"FRESH\"}]}}\n";
+    let line_stale =
+        "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"STALE\"}]}}\n";
+
+    // Cursor: fresh and stale agent-transcripts under .cursor/projects.
+    let cursor_fresh = home
+        .join(".cursor/projects/proj/agent-transcripts/fresh/fresh.jsonl");
+    let cursor_stale = home
+        .join(".cursor/projects/proj/agent-transcripts/stale/stale.jsonl");
+    write(&cursor_fresh, line);
+    write(&cursor_stale, line_stale);
+    make_stale(&cursor_stale, stale_age_secs);
+
+    // Claude Code: fresh and stale projects.
+    let cc_fresh = home.join(".claude/projects/fresh/fresh.jsonl");
+    let cc_stale = home.join(".claude/projects/stale/stale.jsonl");
+    write(&cc_fresh, line);
+    write(&cc_stale, line_stale);
+    make_stale(&cc_stale, stale_age_secs);
+
+    // OpenClaw: fresh and stale agents.
+    let oc_fresh = home.join(".openclaw/agents/main/sessions/fresh.jsonl");
+    let oc_stale = home.join(".openclaw/agents/main/sessions/stale.jsonl");
+    write(&oc_fresh, line);
+    write(&oc_stale, line_stale);
+    make_stale(&oc_stale, stale_age_secs);
+
+    let opts = CollectOptions {
+        limit: 10,
+        active_window_minutes: 1,
+        project_hints: Vec::new(),
+    };
+
+    for agent in &["cursor", "claude_code", "openclaw"] {
+        let result = collect(agent, home, &opts).expect("collect");
+        let texts: Vec<String> = result
+            .payload
+            .sessions
+            .iter()
+            .map(|s| s.user_text.clone())
+            .collect();
+        assert!(
+            texts.iter().any(|t| t.contains("FRESH")),
+            "{}: expected FRESH session in payload, got {:?}",
+            agent,
+            texts
+        );
+        assert!(
+            !texts.iter().any(|t| t.contains("STALE")),
+            "{}: stale session should be filtered out, got {:?}",
+            agent,
+            texts
+        );
+    }
 }
 
 #[test]
@@ -202,20 +294,83 @@ fn openclaw_returns_empty_when_no_sessions() {
 }
 
 #[test]
-fn openclaw_collects_from_session_root_when_present() {
+fn openclaw_collects_from_default_main_agent() {
+    // OpenClaw stores per-agent sessions under
+    // `~/.openclaw/agents/<name>/sessions/`. The default agent created by
+    // `openclaw init` is `main`; the observer must follow that layout.
     let temp = tempfile::tempdir().expect("tempdir");
     let home = temp.path();
-    let root = home.join(".openclaw/sessions/x");
+    let sessions = home.join(".openclaw/agents/main/sessions");
     write(
-        &root.join("oc.jsonl"),
+        &sessions.join("session-1.jsonl"),
         "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"openclaw scan\"}]}}\n",
     );
     let result = collect("openclaw", home, &options()).expect("openclaw collect");
     assert!(result.diagnostics.transcripts_root_accessible);
+    assert!(
+        result
+            .diagnostics
+            .transcripts_roots
+            .iter()
+            .any(|r| r.ends_with("agents/main/sessions")),
+        "diagnostics should expose the per-agent sessions dir, got {:?}",
+        result.diagnostics.transcripts_roots
+    );
     assert_eq!(result.payload.sessions.len(), 1);
     assert!(result.payload.sessions[0]
         .user_text
         .contains("openclaw scan"));
+}
+
+#[test]
+fn openclaw_collates_transcripts_across_multiple_agents() {
+    // Operators routinely run several named OpenClaw agents in parallel
+    // (e.g. `main` plus a dedicated `sales` agent); discovery must walk
+    // every `agents/<name>/sessions/` rather than hardcoding a single
+    // slug.
+    let temp = tempfile::tempdir().expect("tempdir");
+    let home = temp.path();
+    let agents_dir = home.join(".openclaw/agents");
+    write(
+        &agents_dir.join("main/sessions/main-1.jsonl"),
+        "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"main agent intent\"}]}}\n",
+    );
+    write(
+        &agents_dir.join("sales/sessions/sales-1.jsonl"),
+        "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"sales agent intent\"}]}}\n",
+    );
+    let result = collect("openclaw", home, &options()).expect("openclaw collect");
+    assert!(result.diagnostics.transcripts_root_accessible);
+    assert_eq!(result.payload.sessions.len(), 2);
+    let texts: Vec<String> = result
+        .payload
+        .sessions
+        .iter()
+        .map(|s| s.user_text.clone())
+        .collect();
+    assert!(texts.iter().any(|t| t.contains("main agent intent")));
+    assert!(texts.iter().any(|t| t.contains("sales agent intent")));
+}
+
+#[test]
+fn openclaw_legacy_root_layout_is_no_longer_probed() {
+    // The earlier (pre-fix) heuristic probed `~/.openclaw/sessions/` and
+    // `~/.openclaw/state/sessions/`. OpenClaw never actually wrote there;
+    // confirm transcripts in those locations stay invisible to discovery
+    // so we don't regress to the broken layout.
+    let temp = tempfile::tempdir().expect("tempdir");
+    let home = temp.path();
+    write(
+        &home.join(".openclaw/sessions/legacy.jsonl"),
+        "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"legacy\"}]}}\n",
+    );
+    write(
+        &home.join(".openclaw/state/sessions/legacy.jsonl"),
+        "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"legacy\"}]}}\n",
+    );
+    let result = collect("openclaw", home, &options()).expect("openclaw collect");
+    assert!(!result.diagnostics.transcripts_root_accessible);
+    assert!(result.payload.sessions.is_empty());
 }
 
 #[test]

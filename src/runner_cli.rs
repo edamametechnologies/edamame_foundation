@@ -3,7 +3,7 @@ use std::process::Stdio;
 use std::{env, path::PathBuf};
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
-use tokio::time::{timeout, Duration};
+use tokio::time::{timeout, Duration, Instant};
 use tracing::{debug, error, info};
 
 #[cfg(target_os = "windows")]
@@ -145,6 +145,52 @@ async fn run_windows_ps(
 // and on timeout kill the *entire* process group so any descendants of the spawned shell
 // release the inherited stdout/stderr pipes. This is the core mechanism that prevents the
 // PIPE FD leak observed in the helper.
+#[cfg(unix)]
+fn kill_process_group(pid: Option<u32>) {
+    if let Some(pid) = pid {
+        unsafe {
+            // Negative argument => kill the whole process group, ensuring
+            // any subshells / descendants release the inherited pipe FDs.
+            libc::killpg(pid as libc::pid_t, libc::SIGKILL);
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn kill_process_group(_pid: Option<u32>) {}
+
+async fn kill_child_and_abort_io(
+    child: &mut tokio::process::Child,
+    pid: Option<u32>,
+    stdout_task: &tokio::task::JoinHandle<Vec<u8>>,
+    stderr_task: &tokio::task::JoinHandle<Vec<u8>>,
+) {
+    kill_process_group(pid);
+    let _ = child.start_kill();
+    let _ = timeout(Duration::from_secs(2), child.wait()).await;
+    stdout_task.abort();
+    stderr_task.abort();
+}
+
+async fn join_pipe_with_deadline(
+    task: &mut tokio::task::JoinHandle<Vec<u8>>,
+    deadline: Option<Instant>,
+) -> Option<Vec<u8>> {
+    match deadline {
+        Some(deadline) => {
+            let now = Instant::now();
+            if now >= deadline {
+                return None;
+            }
+            timeout(deadline - now, task)
+                .await
+                .ok()
+                .and_then(Result::ok)
+        }
+        None => task.await.ok(),
+    }
+}
+
 async fn run_command_with_timeout(
     mut command: Command,
     cmd_for_log: &str,
@@ -168,17 +214,18 @@ async fn run_command_with_timeout(
         .map_err(|e| anyhow!("Failed to spawn command {:?}: {}", cmd_for_log, e))?;
 
     let pid = child.id();
+    let deadline = timeout_opt.map(|secs| Instant::now() + Duration::from_secs(secs));
 
     let stdout_pipe = child.stdout.take();
     let stderr_pipe = child.stderr.take();
-    let stdout_task = tokio::spawn(async move {
+    let mut stdout_task = tokio::spawn(async move {
         let mut buf = Vec::new();
         if let Some(mut s) = stdout_pipe {
             let _ = s.read_to_end(&mut buf).await;
         }
         buf
     });
-    let stderr_task = tokio::spawn(async move {
+    let mut stderr_task = tokio::spawn(async move {
         let mut buf = Vec::new();
         if let Some(mut s) = stderr_pipe {
             let _ = s.read_to_end(&mut buf).await;
@@ -201,20 +248,7 @@ async fn run_command_with_timeout(
                     "Execution of command {:?} timed out after {} seconds, killing process tree",
                     cmd_for_log, secs
                 );
-                #[cfg(unix)]
-                {
-                    if let Some(pid) = pid {
-                        unsafe {
-                            // Negative argument => kill the whole process group, ensuring
-                            // any subshells / descendants release the inherited pipe FDs.
-                            libc::killpg(pid as libc::pid_t, libc::SIGKILL);
-                        }
-                    }
-                }
-                let _ = child.start_kill();
-                let _ = child.wait().await;
-                let _ = stdout_task.await;
-                let _ = stderr_task.await;
+                kill_child_and_abort_io(&mut child, pid, &stdout_task, &stderr_task).await;
                 return Err(anyhow!(
                     "Execution of command timed out after {} seconds",
                     secs
@@ -227,8 +261,34 @@ async fn run_command_with_timeout(
             .map_err(|e| anyhow!("Failed to wait for command {:?}: {}", cmd_for_log, e))?,
     };
 
-    let stdout_bytes = stdout_task.await.unwrap_or_default();
-    let stderr_bytes = stderr_task.await.unwrap_or_default();
+    let Some(stdout_bytes) = join_pipe_with_deadline(&mut stdout_task, deadline).await else {
+        if let Some(secs) = timeout_opt {
+            error!(
+                "Execution of command {:?} timed out after {} seconds while draining stdout, killing process tree",
+                cmd_for_log, secs
+            );
+            kill_child_and_abort_io(&mut child, pid, &stdout_task, &stderr_task).await;
+            return Err(anyhow!(
+                "Execution of command timed out after {} seconds",
+                secs
+            ));
+        }
+        return Err(anyhow!("Failed to drain stdout for command {:?}", cmd_for_log));
+    };
+    let Some(stderr_bytes) = join_pipe_with_deadline(&mut stderr_task, deadline).await else {
+        if let Some(secs) = timeout_opt {
+            error!(
+                "Execution of command {:?} timed out after {} seconds while draining stderr, killing process tree",
+                cmd_for_log, secs
+            );
+            kill_child_and_abort_io(&mut child, pid, &stdout_task, &stderr_task).await;
+            return Err(anyhow!(
+                "Execution of command timed out after {} seconds",
+                secs
+            ));
+        }
+        return Err(anyhow!("Failed to drain stderr for command {:?}", cmd_for_log));
+    };
     let code = status.code().unwrap_or(1);
     let stdout = String::from_utf8_lossy(&stdout_bytes).to_string();
     let stderr = String::from_utf8_lossy(&stderr_bytes).to_string();
@@ -697,6 +757,27 @@ mod tests {
         assert!(
             elapsed.as_secs() < 5,
             "process group kill took too long: {:?}",
+            elapsed
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_run_cli_timeout_kills_background_child_holding_pipe() {
+        // Regression for the second runner_cli leak mode: the shell exits quickly,
+        // but a background child inherits stdout/stderr. `child.wait()` completes
+        // immediately, then pipe draining blocks forever unless the timeout covers
+        // the whole command lifecycle and kills the process group.
+        let cmd = "(sleep 30) & echo done";
+
+        let start = std::time::Instant::now();
+        let result = run_cli(cmd, "", false, Some(1)).await;
+        let elapsed = start.elapsed();
+
+        assert!(result.is_err());
+        assert!(
+            elapsed.as_secs() < 5,
+            "background child pipe cleanup took too long: {:?}",
             elapsed
         );
     }

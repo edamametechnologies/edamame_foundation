@@ -33,18 +33,25 @@ pub mod parsing;
 #[cfg(test)]
 mod tests;
 
-/// Tunables for a single transcript collection pass. Mirrors the JS
-/// `transcript*` config keys (`transcriptLimit`, `transcriptRecencyHours`,
-/// `transcriptActiveWindowMinutes`, `transcriptProjectHints`).
+/// Tunables for a single transcript collection pass.
+///
+/// `active_window_minutes` is the only age filter. A session is included
+/// only if its mtime is within that many minutes from now. Older sessions
+/// are concluded work whose intent has already been ingested in earlier
+/// ticks; re-including them just bloats the LLM prompt with stale paths
+/// and commands without adding signal.
+///
+/// When no sessions are active, the collector returns an empty payload.
+/// The existing merged behavioral model in the registry stays valid (it
+/// is the snapshot from the last active period), and the observer
+/// hash-skips on the empty result so we don't pay for an LLM round-trip.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CollectOptions {
     /// Maximum number of sessions to include per call.
     #[serde(default = "default_limit")]
     pub limit: usize,
-    /// Skip transcripts older than this many hours.
-    #[serde(default = "default_recency_hours")]
-    pub recency_hours: u64,
-    /// "Active" cutoff used to decide whether a session is still warm.
+    /// Only sessions whose mtime is within this many minutes of "now"
+    /// qualify for ingestion. Older transcripts are ignored.
     #[serde(default = "default_active_window_minutes")]
     pub active_window_minutes: u64,
     /// Optional substrings used to filter transcript file paths to a workspace
@@ -56,18 +63,19 @@ pub struct CollectOptions {
 fn default_limit() -> usize {
     6
 }
-fn default_recency_hours() -> u64 {
-    48
-}
 fn default_active_window_minutes() -> u64 {
-    5
+    // 30 minutes is generous enough to cover a typical multi-step agent
+    // turn (Cursor in particular only flushes the agent-transcript jsonl
+    // when a turn completes, so a single long investigation can leave the
+    // file's mtime stale for many minutes during execution), while still
+    // excluding sessions that are hours old.
+    30
 }
 
 impl Default for CollectOptions {
     fn default() -> Self {
         Self {
             limit: default_limit(),
-            recency_hours: default_recency_hours(),
             active_window_minutes: default_active_window_minutes(),
             project_hints: Vec::new(),
         }

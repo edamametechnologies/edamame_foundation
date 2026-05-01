@@ -5,13 +5,35 @@ use tokio::runtime::Runtime;
 // Global runtime instance
 static RUNTIME: OnceCell<Runtime> = OnceCell::new();
 
+/// Cap the tokio blocking-pool below the default 512.
+///
+/// macOS exposes a low `kern.num_taskthreads = 8192` system-wide thread
+/// budget. With heavy desktop usage (Chrome, Cursor, Slack, Google Drive,
+/// etc.) a single process burning 500+ blocking threads is enough to push
+/// the host into `fork: Resource temporarily unavailable` (EAGAIN) and
+/// break unrelated tools (`make`, `flutter`, `git`).
+///
+/// Many EDAMAME hot paths use `tokio::task::spawn_blocking` (flodbadd L7
+/// process attribution, port scanner, FIM, vulnerability detector,
+/// runner_cli command execution) plus implicit blocking via
+/// `tokio::process::Command` / `tokio::fs`. With the default 512 cap the
+/// blocking pool ratchets toward 512 long-lived threads over the app's
+/// lifetime and never shrinks. 128 is well above the steady-state
+/// concurrent need (LAN scan ≈ 32 concurrent connects, FD scans bounded,
+/// FIM rare) and gives enough headroom to absorb bursts without
+/// dominating the host budget.
+const MAX_BLOCKING_THREADS: usize = 128;
+
 /// Initialize the Tokio runtime with edamame-specific settings.
 ///
 /// Call this once at application startup before any async operations.
 pub fn init() {
     let _ = RUNTIME.get_or_init(|| {
         let mut builder = tokio::runtime::Builder::new_multi_thread();
-        builder.enable_all().thread_name("edamame");
+        builder
+            .enable_all()
+            .thread_name("edamame")
+            .max_blocking_threads(MAX_BLOCKING_THREADS);
 
         // Set worker threads based on available parallelism
         if let Ok(parallelism) = std::thread::available_parallelism() {

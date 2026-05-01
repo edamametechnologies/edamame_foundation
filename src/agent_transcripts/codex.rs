@@ -209,13 +209,14 @@ pub(crate) fn gather_jsonl_transcripts(
     files.retain(|path| matches_hint(path, &options.project_hints));
 
     let now = Utc::now().timestamp() as u64;
-    let cutoff = now.saturating_sub(options.recency_hours.saturating_mul(3600));
+    // Strict active-window filter (see CollectOptions doc).
+    let active_cutoff = now.saturating_sub(options.active_window_minutes.saturating_mul(60));
 
     let mut candidates: Vec<GenericTranscriptCandidate> = files
         .into_iter()
         .filter_map(|path| {
             let mtime = mtime_secs(&path);
-            if mtime < cutoff {
+            if mtime < active_cutoff {
                 return None;
             }
             let is_jsonl = path

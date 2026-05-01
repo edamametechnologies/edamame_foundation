@@ -187,13 +187,17 @@ fn gather_cursor_transcripts(root: &Path, options: &CollectOptions) -> Vec<Trans
     });
 
     let now_secs = Utc::now().timestamp() as u64;
-    let recency_cutoff = now_secs.saturating_sub(options.recency_hours.saturating_mul(3600));
+    // Strict active-window filter: only include sessions modified within
+    // `active_window_minutes` of now. A 38-hour-old chat is concluded work
+    // whose intent was already ingested earlier; re-including it just
+    // bloats the prompt with stale derived paths/commands.
+    let active_cutoff = now_secs.saturating_sub(options.active_window_minutes.saturating_mul(60));
 
     let mut by_session: std::collections::HashMap<String, TranscriptGroup> =
         std::collections::HashMap::new();
     for path in files {
         let mtime = mtime_secs(&path);
-        if mtime < recency_cutoff {
+        if mtime < active_cutoff {
             continue;
         }
         let session_id = transcript_session_id(&path);

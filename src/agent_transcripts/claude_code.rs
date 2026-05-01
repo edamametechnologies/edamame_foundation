@@ -206,13 +206,17 @@ pub(crate) fn gather_jsonl_transcripts(
     files.retain(|path| matches_hint(path, &options.project_hints));
 
     let now = Utc::now().timestamp() as u64;
-    let cutoff = now.saturating_sub(options.recency_hours.saturating_mul(3600));
+    // Strict active-window filter (see CollectOptions doc): a transcript
+    // qualifies only if it was modified within `active_window_minutes` of
+    // now. Older sessions have already had their intent ingested; pulling
+    // them back in just contributes stale derived hints to the prompt.
+    let active_cutoff = now.saturating_sub(options.active_window_minutes.saturating_mul(60));
 
     let mut candidates: Vec<GenericTranscriptCandidate> = files
         .into_iter()
         .filter_map(|path| {
             let mtime = mtime_secs(&path);
-            if mtime < cutoff {
+            if mtime < active_cutoff {
                 return None;
             }
             let is_jsonl = path
