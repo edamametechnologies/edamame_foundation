@@ -310,12 +310,9 @@ fn openclaw_collects_from_default_main_agent() {
     // works on Windows runners where transcripts_roots come back with
     // backslash separators.
     assert!(
-        result
-            .diagnostics
-            .transcripts_roots
-            .iter()
-            .any(|r| std::path::Path::new(r)
-                .ends_with(std::path::Path::new("agents/main/sessions"))),
+        result.diagnostics.transcripts_roots.iter().any(
+            |r| std::path::Path::new(r).ends_with(std::path::Path::new("agents/main/sessions"))
+        ),
         "diagnostics should expose the per-agent sessions dir, got {:?}",
         result.diagnostics.transcripts_roots
     );
