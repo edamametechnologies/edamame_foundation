@@ -84,6 +84,15 @@ jobs:
           edamame_pin: ${{ secrets.EDAMAME_POSTURE_PIN }}
           edamame_id: ${{ github.run_id }}
           checkout: true
+          # Runtime runner protection. See workspace.mdc.
+          packet_capture: true
+          vulnerability_detection: true
+          vulnerability_detection_interval: "60"
+          agentic_mode: analyze
+          agentic_provider: edamame
+          agentic_interval: 600
+        env:
+          EDAMAME_LLM_API_KEY: ${{ secrets.EDAMAME_LLM_API_KEY }}
 
       - name: Set ignored paths
         id: set-ignored-paths
@@ -327,6 +336,15 @@ jobs:
           fi
           echo "--- Native Log Dump Complete ---"
 
+      # Runtime runner protection: dump findings + fail on any
+      # non-dismissed HIGH/CRITICAL.
+      - name: EDAMAME Posture vulnerability gate
+        if: always()
+        uses: edamametechnologies/edamame_posture_action@v1
+        with:
+          dump_vulnerability_findings: true
+          exit_on_vulnerability_findings: true
+
       - name: Slack alerts
         if: steps.tests.outcome != 'success'
         uses: slackapi/slack-github-action@v1.26.0
@@ -440,6 +458,17 @@ jobs:
           edamame_id: ${{ github.run_id }}-container-${{ matrix.container_name }}
           # Don't checkout the repo, as we will do that in the next step
           checkout: false
+          # Runtime runner protection. Inside Docker containers
+          # packet_capture has limited host visibility but FIM and
+          # process introspection still detect tampering / exfil.
+          packet_capture: true
+          vulnerability_detection: true
+          vulnerability_detection_interval: "60"
+          agentic_mode: analyze
+          agentic_provider: edamame
+          agentic_interval: 600
+        env:
+          EDAMAME_LLM_API_KEY: ${{ secrets.EDAMAME_LLM_API_KEY }}
 
       # Manual checkout for containers (actions/checkout@v4 requires node20 which is not supported on older Ubuntu containers)
       - name: Manual checkout for containers
@@ -525,6 +554,15 @@ jobs:
             find /var/log/edamame -name "edamame_*.2*-*-*" -exec echo "--- {} ---" \; -exec sudo cat {} \; || echo "No logs found in /var/log/edamame"
           fi
           echo "--- Container Log Dump Complete ---"
+
+      # Runtime runner protection: dump findings + fail on any
+      # non-dismissed HIGH/CRITICAL.
+      - name: EDAMAME Posture vulnerability gate
+        if: always()
+        uses: edamametechnologies/edamame_posture_action@v1
+        with:
+          dump_vulnerability_findings: true
+          exit_on_vulnerability_findings: true
 
       - name: Slack alerts
         # Won't work on 18.04 because of glibc version
