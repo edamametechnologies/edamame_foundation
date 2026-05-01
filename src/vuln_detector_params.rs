@@ -193,11 +193,7 @@ fn default_ci_workspace_path_patterns() -> Vec<String> {
 /// so they are scoped to the actual Keychain directory, never to a
 /// user file that happens to share a similar name.
 fn default_keychain_transactional_filename_patterns() -> Vec<String> {
-    strings(&[
-        ".keychain-db.sb-",
-        ".keychain-db-shm.sb-",
-        "/.fl",
-    ])
+    strings(&[".keychain-db.sb-", ".keychain-db-shm.sb-", "/.fl"])
 }
 
 fn default_benign_temp_artifact_suffixes() -> Vec<String> {
@@ -778,10 +774,10 @@ mod tests {
         // Unrelated paths must not match.
         assert!(!is_ci_workspace_path(""));
         assert!(!is_ci_workspace_path("/home/user/.ssh/id_rsa"));
-        assert!(!is_ci_workspace_path("/Library/Keychains/login.keychain-db"));
         assert!(!is_ci_workspace_path(
-            "/home/user/repo-checkout/.env"
+            "/Library/Keychains/login.keychain-db"
         ));
+        assert!(!is_ci_workspace_path("/home/user/repo-checkout/.env"));
     }
 
     #[test]
