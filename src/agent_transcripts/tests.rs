@@ -306,12 +306,16 @@ fn openclaw_collects_from_default_main_agent() {
     );
     let result = collect("openclaw", home, &options()).expect("openclaw collect");
     assert!(result.diagnostics.transcripts_root_accessible);
+    // Use Path::ends_with so the assertion is path-component-aware and
+    // works on Windows runners where transcripts_roots come back with
+    // backslash separators.
     assert!(
         result
             .diagnostics
             .transcripts_roots
             .iter()
-            .any(|r| r.ends_with("agents/main/sessions")),
+            .any(|r| std::path::Path::new(r)
+                .ends_with(std::path::Path::new("agents/main/sessions"))),
         "diagnostics should expose the per-agent sessions dir, got {:?}",
         result.diagnostics.transcripts_roots
     );
