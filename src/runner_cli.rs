@@ -273,7 +273,10 @@ async fn run_command_with_timeout(
                 secs
             ));
         }
-        return Err(anyhow!("Failed to drain stdout for command {:?}", cmd_for_log));
+        return Err(anyhow!(
+            "Failed to drain stdout for command {:?}",
+            cmd_for_log
+        ));
     };
     let Some(stderr_bytes) = join_pipe_with_deadline(&mut stderr_task, deadline).await else {
         if let Some(secs) = timeout_opt {
@@ -287,7 +290,10 @@ async fn run_command_with_timeout(
                 secs
             ));
         }
-        return Err(anyhow!("Failed to drain stderr for command {:?}", cmd_for_log));
+        return Err(anyhow!(
+            "Failed to drain stderr for command {:?}",
+            cmd_for_log
+        ));
     };
     let code = status.code().unwrap_or(1);
     let stdout = String::from_utf8_lossy(&stdout_bytes).to_string();

@@ -207,8 +207,7 @@ fn openclaw_session_roots(home: &Path) -> Vec<PathBuf> {
 }
 
 fn is_sessions_dir(path: &Path) -> bool {
-    path.is_dir()
-        && path.file_name().and_then(|n| n.to_str()) == Some("sessions")
+    path.is_dir() && path.file_name().and_then(|n| n.to_str()) == Some("sessions")
 }
 
 fn transcript_session_id(path: &Path) -> String {

@@ -100,15 +100,14 @@ fn active_window_excludes_stale_sessions_across_agents() {
     let home = temp.path();
     let stale_age_secs = 60 * 60; // 1 hour ago, comfortably past 1-minute window
 
-    let line = "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"FRESH\"}]}}\n";
+    let line =
+        "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"FRESH\"}]}}\n";
     let line_stale =
         "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"STALE\"}]}}\n";
 
     // Cursor: fresh and stale agent-transcripts under .cursor/projects.
-    let cursor_fresh = home
-        .join(".cursor/projects/proj/agent-transcripts/fresh/fresh.jsonl");
-    let cursor_stale = home
-        .join(".cursor/projects/proj/agent-transcripts/stale/stale.jsonl");
+    let cursor_fresh = home.join(".cursor/projects/proj/agent-transcripts/fresh/fresh.jsonl");
+    let cursor_stale = home.join(".cursor/projects/proj/agent-transcripts/stale/stale.jsonl");
     write(&cursor_fresh, line);
     write(&cursor_stale, line_stale);
     make_stale(&cursor_stale, stale_age_secs);
