@@ -462,12 +462,21 @@ jobs:
           apt-get install -y protobuf-compiler libpcap-dev software-properties-common
           
           # Install GCC 10+ on Ubuntu 20.04 to fix aws-lc-sys memcmp bug (GCC bug #95189)
-          # Ubuntu 20.04 ships with GCC 9 which has a known memcmp optimization bug
+          # Ubuntu 20.04 ships with GCC 9 which has a known memcmp optimization bug.
+          #
+          # First try the universe repo (gcc-10 is there as 10.3.0). Only fall
+          # back to the ubuntu-toolchain-r PPA if universe doesn't ship it.
+          # Launchpad has had repeated outages on that PPA which fail the job
+          # with transient infrastructure errors unrelated to the compilation
+          # fix we actually need.
           if grep -q "20.04" /etc/os-release 2>/dev/null; then
             echo "Detected Ubuntu 20.04 - installing GCC 10 to fix aws-lc-sys compilation"
-            add-apt-repository -y ppa:ubuntu-toolchain-r/test
-            apt-get update
-            apt-get install -y gcc-10 g++-10
+            apt-get install -y gcc-10 g++-10 || {
+              echo "gcc-10 not available in default repos, falling back to ubuntu-toolchain-r PPA"
+              add-apt-repository -y ppa:ubuntu-toolchain-r/test
+              apt-get update
+              apt-get install -y gcc-10 g++-10
+            }
             # Set GCC 10 as the default compiler
             update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-10 100
             update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-10 100
