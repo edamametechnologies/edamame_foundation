@@ -37,7 +37,8 @@ pub static CVE_DETECTION_PARAMS_DB: &str = r#"{
     ".yaml",
     ".yml",
     ".toml",
-    ".ini"
+    ".ini",
+    ".psm1"
   ],
   "checks": {
     "credential_harvest": {
@@ -93,7 +94,7 @@ pub static CVE_DETECTION_PARAMS_DB: &str = r#"{
       "/programdata/microsoft/vault/"
     ]
   },
-  "date": "April 23th 2026",
+  "date": "May 01th 2026",
   "fim_hash_size_threshold": 10485760,
   "fim_temp_executable_patterns": [
     "/tmp/",
@@ -193,7 +194,7 @@ pub static CVE_DETECTION_PARAMS_DB: &str = r#"{
   "recent_sensitive_open_file_ttl_secs": 180,
   "secret_content_min_hits": 2,
   "secret_content_scan_max_bytes": 65536,
-  "signature": "9584f3c17b71edc25cce10776b151058e2332359b252892788c51a4d5cceb63b",
+  "signature": "8ba237d978d9556c511fad402dae047f2697afc26e846c63aca98d2ca82cbe9e",
   "suspicious_parent_path_patterns": [
     "/tmp/",
     "/var/tmp/",
