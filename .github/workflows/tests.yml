@@ -349,7 +349,7 @@ jobs:
         if: always()
         uses: edamametechnologies/edamame_posture_action@v1
         with:
-          dump_vulnerability_findings: true
+          dump_vulnerability_findings: false
           exit_on_vulnerability_findings: false
 
       - name: Slack alerts
@@ -575,7 +575,7 @@ jobs:
         if: always()
         uses: edamametechnologies/edamame_posture_action@v1
         with:
-          dump_vulnerability_findings: true
+          dump_vulnerability_findings: false
           exit_on_vulnerability_findings: false
 
       - name: Slack alerts
