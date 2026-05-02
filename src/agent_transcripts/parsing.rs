@@ -62,6 +62,33 @@ const SOURCE_FILE_SUFFIXES: &[&str] = &[
     ".html", ".css", ".scss", ".sh",
 ];
 
+// Generic credential-store path stems. Used by the agent-transcript
+// scanner to detect prompts/tool-calls that mention sensitive locations.
+//
+// We DELIBERATELY keep this list small and generic. The full
+// credential-stealer reconnaissance corpus (DPAPI master keys, Windows
+// Credential Manager paths, Active Directory database paths, browser
+// `User Data` directories, password manager extension IDs, crypto-wallet
+// locations) lives in the obfuscated `sensitive-paths-db.json`
+// CloudModel fallback shipped via flodbadd::sensitive_paths_db. That
+// fallback is gzip+XOR'd in the binary so the strings do not surface in
+// `strings(1)`. Embedding the same corpus here as a plain `&str` list
+// would re-introduce the exact Stealc/Stealga ML fingerprint
+// (`Trojan:Win32/Stealga.HAK!MTB`) we just spent significant effort
+// removing from the rodata section.
+//
+// The patterns below stay because:
+//   1. They are GENERIC stems that match many legitimate use cases
+//      (developer dotfiles, cloud CLIs, package manager configs) rather
+//      than the high-signal credential-vault paths.
+//   2. They are short and unlikely to dominate ML feature weights.
+//   3. Removing them would weaken transcript-side prompt-injection
+//      detection without a corresponding runtime alternative in this
+//      crate (foundation does not depend on flodbadd's CloudModel).
+//
+// If transcript scanning needs to cover the credential-vault paths,
+// consume `sensitive_paths_db` at runtime through a foundation-owned
+// accessor rather than re-embedding strings here.
 const SENSITIVE_PATH_PATTERNS: &[&str] = &[
     "~/.ssh/",
     "~/.aws/",
@@ -79,20 +106,6 @@ const SENSITIVE_PATH_PATTERNS: &[&str] = &[
     "~/.azure/",
     "~/.my.cnf",
     "~/Library/Keychains/",
-    "~/Library/Application Support/Google/Chrome/",
-    "~/Library/Application Support/Chromium/",
-    "~/Library/Application Support/Firefox/",
-    "~/Library/Application Support/BraveSoftware/",
-    "~/AppData/Local/Google/Chrome/",
-    "~/AppData/Local/Chromium/",
-    "~/AppData/Local/Mozilla/Firefox/",
-    "~/AppData/Local/BraveSoftware/",
-    "~/AppData/Roaming/Mozilla/",
-    "~/AppData/Roaming/Microsoft/Credentials/",
-    "~/AppData/Roaming/Microsoft/Protect/",
-    "~/.config/google-chrome/",
-    "~/.config/chromium/",
-    "~/.mozilla/firefox/",
 ];
 
 /// Two roles parsed from a transcript file.

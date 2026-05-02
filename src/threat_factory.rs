@@ -54,13 +54,18 @@ lazy_static! {
 }
 
 // Helper functions to get built-in versions and model names
+//
+// Note: the THREAT_METRICS_* statics are now obfuscated CloudModel
+// fallbacks (Lazy<String>, decoded once on first access). Deref through
+// the Lazy and reborrow as `&str` -- the lifetime is tied to the static
+// itself, which is `'static`.
 pub fn get_builtin_version(platform: &str) -> Result<&'static str> {
     match platform.to_lowercase().as_str() {
-        "macos" => Ok(THREAT_METRICS_MACOS),
-        "windows" => Ok(THREAT_METRICS_WINDOWS),
-        "ios" => Ok(THREAT_METRICS_IOS),
-        "android" => Ok(THREAT_METRICS_ANDROID),
-        "linux" => Ok(THREAT_METRICS_LINUX),
+        "macos" => Ok(&THREAT_METRICS_MACOS),
+        "windows" => Ok(&THREAT_METRICS_WINDOWS),
+        "ios" => Ok(&THREAT_METRICS_IOS),
+        "android" => Ok(&THREAT_METRICS_ANDROID),
+        "linux" => Ok(&THREAT_METRICS_LINUX),
         _ => Err(anyhow!("Unsupported platform: {}", platform)),
     }
 }

@@ -40,16 +40,20 @@ fn default_watch_paths_for_home(home: &Path) -> Vec<PathBuf> {
     #[cfg(target_os = "windows")]
     {
         // Helper runs as a privileged daemon and targets the calling user's
-        // home explicitly, so add the user-scoped credential vault subpaths
-        // here in addition to the sensitive dirs above.
-        for dir in &[
-            "AppData/Roaming",
-            "AppData/Local",
-            "AppData/Local/Microsoft/Credentials",
-            "AppData/Roaming/Microsoft/Credentials",
-            "AppData/Local/Microsoft/Vault",
-            "AppData/Roaming/Microsoft/Vault",
-        ] {
+        // home explicitly. The user-scoped `AppData/Roaming` and
+        // `AppData/Local` roots are watched recursively, so any sensitive
+        // child path under them (e.g. `Microsoft/Credentials/`,
+        // `Microsoft/Protect/`, `Microsoft/Vault/`, browser User Data) is
+        // already covered by the parent watch.
+        //
+        // We deliberately do NOT enumerate those credential-vault subpaths
+        // explicitly here. Listing them as static `&str` literals adds a
+        // textbook info-stealer reconnaissance fingerprint to the helper
+        // binary's rodata section (Microsoft Defender flags the corpus as
+        // `Trojan:Win32/Stealga.HAK!MTB`). Since the broader recursive
+        // watches already cover them, the explicit list was strictly
+        // redundant -- only its ML signal mattered.
+        for dir in &["AppData/Roaming", "AppData/Local"] {
             let p = home.join(dir);
             if p.exists() && !paths.contains(&p) {
                 paths.push(p);

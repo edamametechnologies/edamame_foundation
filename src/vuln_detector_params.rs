@@ -499,7 +499,9 @@ impl CveDetectionParams {
 }
 
 fn build_fallback_params() -> CveDetectionParams {
-    let json: CveDetectionParamsJSON = serde_json::from_str(CVE_DETECTION_PARAMS_DB)
+    // CVE_DETECTION_PARAMS_DB is now an obfuscated Lazy<String>; deref
+    // through the Lazy to get a `&str` for from_str.
+    let json: CveDetectionParamsJSON = serde_json::from_str(&CVE_DETECTION_PARAMS_DB)
         .expect("Built-in cve-detection-params-db.json must be valid");
     CveDetectionParams::new_from_json(&json)
 }
@@ -508,7 +510,7 @@ lazy_static! {
     pub static ref CVE_PARAMS: CloudModel<CveDetectionParams> = {
         let model = CloudModel::initialize(
             CVE_PARAMS_NAME.to_string(),
-            CVE_DETECTION_PARAMS_DB,
+            &CVE_DETECTION_PARAMS_DB,
             |data| {
                 let json: CveDetectionParamsJSON = serde_json::from_str(data)
                     .with_context(|| "Failed to parse CVE params JSON")?;

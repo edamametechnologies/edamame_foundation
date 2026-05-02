@@ -943,6 +943,7 @@ dependencies = [
  "edamame_backend",
  "encoding_rs",
  "envcrypt",
+ "flate2",
  "flodbadd",
  "futures",
  "futures-util",
