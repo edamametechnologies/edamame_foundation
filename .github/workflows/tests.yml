@@ -344,13 +344,15 @@ jobs:
       # github-hosted ephemeral runners). exit_on_vulnerability_findings
       # is false here because fresh ephemeral runners produce baseline
       # CI-runner FPs with no persistent dismissal store. See
-      # workspace.mdc "Self-Hosted Runner Protection".
+      # workspace.mdc "Self-Hosted Runner Protection" and
+      # edamame_app/CICDFPS.md "Follow-up Tasks" -- to be re-enabled once
+      # the v1.3.1 posture release with severity grading propagates.
       - name: EDAMAME Posture vulnerability gate
         if: always()
         uses: edamametechnologies/edamame_posture_action@v1
         with:
           dump_vulnerability_findings: true
-          exit_on_vulnerability_findings: true
+          exit_on_vulnerability_findings: false
 
       - name: Slack alerts
         if: steps.tests.outcome != 'success'
@@ -570,13 +572,15 @@ jobs:
       # github-hosted ephemeral runners). exit_on_vulnerability_findings
       # is false here because fresh ephemeral runners produce baseline
       # CI-runner FPs with no persistent dismissal store. See
-      # workspace.mdc "Self-Hosted Runner Protection".
+      # workspace.mdc "Self-Hosted Runner Protection" and
+      # edamame_app/CICDFPS.md "Follow-up Tasks" -- to be re-enabled once
+      # the v1.3.1 posture release with severity grading propagates.
       - name: EDAMAME Posture vulnerability gate
         if: always()
         uses: edamametechnologies/edamame_posture_action@v1
         with:
           dump_vulnerability_findings: true
-          exit_on_vulnerability_findings: true
+          exit_on_vulnerability_findings: false
 
       - name: Slack alerts
         # Won't work on 18.04 because of glibc version
