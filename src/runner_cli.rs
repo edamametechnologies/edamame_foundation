@@ -732,7 +732,8 @@ Add-Type -Namespace EdamameWin -Name Kernel -MemberDefinition '[System.Runtime.I
             .suffix(".ps1")
             .tempfile()
             .expect("temp .ps1 file");
-        tmp.write_all(script.as_bytes()).expect("write probe script");
+        tmp.write_all(script.as_bytes())
+            .expect("write probe script");
         let tmp_path = tmp.into_temp_path();
 
         let raw_output = Command::new("powershell.exe")

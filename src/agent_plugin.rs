@@ -1,10 +1,10 @@
 use anyhow::{anyhow, bail};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
-use std::process::Command as StdCommand;
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
+use std::path::{Path, PathBuf};
+use std::process::Command as StdCommand;
 use tracing::{info, warn};
 
 /// Windows `CREATE_NO_WINDOW` flag (`0x08000000`).
