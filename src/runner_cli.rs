@@ -666,6 +666,110 @@ mod tests {
         assert_eq!(output.trim(), expected);
     }
 
+    /// Regression guard: `run_cli` MUST spawn its `powershell.exe` child with
+    /// `CREATE_NO_WINDOW` (0x08000000) so the helper daemon does not flash
+    /// visible PowerShell windows on user desktops every threat-check tick.
+    ///
+    /// The original regression (commit `2779929`) silently dropped this
+    /// behaviour when we moved away from the `powershell_script` crate's
+    /// `.hidden(true)` option. We re-added it as
+    /// `command.creation_flags(0x08000000)` and codified the policy in the
+    /// foundation rules ("Windows PowerShell / Console Process Invocation").
+    /// This test fails fast if any future refactor drops the flag.
+    ///
+    /// Mechanism: have the spawned PowerShell call `kernel32!GetConsoleWindow`.
+    /// With `CREATE_NO_WINDOW`, the child process has no console and the call
+    /// returns NULL/0. Without the flag, the child inherits the cargo-test
+    /// parent's console (attached when running `cargo test` from a terminal
+    /// or a github-hosted Windows runner) and the call returns the parent's
+    /// non-zero HWND.
+    ///
+    /// The test also runs a "control" spawn directly through
+    /// `tokio::process::Command` *without* setting `creation_flags`. If that
+    /// control spawn ALSO reports a zero handle, the test environment itself
+    /// has no parent console (e.g. cargo test was launched as a detached
+    /// process) and the test cannot distinguish CREATE_NO_WINDOW from plain
+    /// no-console inheritance. In that case the test is inconclusive and is
+    /// skipped with a printed warning rather than passing falsely.
+    #[cfg(target_os = "windows")]
+    #[tokio::test]
+    async fn test_run_cli_powershell_has_no_console_window() {
+        use std::io::Write as _;
+        use std::process::Stdio;
+
+        // PowerShell script that P/Invokes GetConsoleWindow and prints the
+        // returned HWND as a 64-bit signed integer (so an empty handle is "0").
+        let script = r#"
+Add-Type -Namespace EdamameWin -Name Kernel -MemberDefinition '[System.Runtime.InteropServices.DllImport("kernel32.dll")] public static extern System.IntPtr GetConsoleWindow();'
+[EdamameWin.Kernel]::GetConsoleWindow().ToInt64()
+"#;
+
+        // 1) Probe via run_cli (which sets CREATE_NO_WINDOW). Must be 0.
+        let probe_handle: i64 = run_cli(script, "", false, Some(15))
+            .await
+            .expect("run_cli probe should succeed")
+            .trim()
+            .parse()
+            .expect("run_cli probe output should parse as i64");
+
+        // 2) Control spawn: same script, raw tokio::process::Command, NO
+        // creation_flags. If the cargo-test parent has a console, this child
+        // inherits it and the handle is non-zero, proving the probe above was
+        // meaningful. If the parent has no console, both handles are 0 and we
+        // skip rather than pass false-positive.
+        let mut tmp = tempfile::Builder::new()
+            .suffix(".ps1")
+            .tempfile()
+            .expect("temp .ps1 file");
+        tmp.write_all(script.as_bytes()).expect("write probe script");
+        let tmp_path = tmp.into_temp_path();
+
+        let raw_output = Command::new("powershell.exe")
+            .arg("-NoProfile")
+            .arg("-NonInteractive")
+            .arg("-ExecutionPolicy")
+            .arg("Bypass")
+            .arg("-File")
+            .arg(&*tmp_path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .await
+            .expect("raw control spawn should succeed");
+        drop(tmp_path);
+
+        let control_handle: i64 = String::from_utf8_lossy(&raw_output.stdout)
+            .trim()
+            .replace('\r', "")
+            .replace('\n', "")
+            .parse()
+            .expect("control output should parse as i64");
+
+        if control_handle == 0 {
+            eprintln!(
+                "test_run_cli_powershell_has_no_console_window: INCONCLUSIVE. \
+                 Cargo-test parent has no console (control handle is also 0), \
+                 so this environment cannot distinguish CREATE_NO_WINDOW from \
+                 plain no-console inheritance. Skipping."
+            );
+            return;
+        }
+
+        assert_eq!(
+            probe_handle, 0,
+            "GetConsoleWindow() returned handle {} (0x{:x}) for run_cli's \
+             spawned powershell.exe -- a console is attached. \
+             CREATE_NO_WINDOW (0x08000000) is not being applied, which means \
+             user machines will see visible PowerShell windows pop up on \
+             every threat-check tick. Control spawn (without the flag) saw \
+             handle {} (0x{:x}), confirming the parent does have a console. \
+             See `Windows PowerShell / Console Process Invocation` in \
+             foundation rules.",
+            probe_handle, probe_handle, control_handle, control_handle
+        );
+    }
+
     #[tokio::test]
     async fn test_run_cli_error() {
         // We need a command that returns non-zero exit code AND prints to stderr
