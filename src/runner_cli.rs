@@ -125,6 +125,14 @@ async fn run_windows_ps(
             .arg("-File")
             .arg(&*tmp_path);
 
+        // CREATE_NO_WINDOW (0x08000000) prevents the PowerShell host from
+        // allocating a console, so threat-metric checks running from the
+        // helper daemon don't flash visible cmd/PowerShell windows on the
+        // user's desktop. Equivalent to the `.hidden(true)` option that the
+        // `powershell_script` crate sets internally; tokio::process::Command
+        // does not pass any creation flags by default.
+        command.creation_flags(0x08000000);
+
         debug!("Executing powershell command: {}", script);
         let result = run_command_with_timeout(command, cmd, timeout_opt).await;
         // tmp_path drop closes/removes the temp file after the command has been waited on
