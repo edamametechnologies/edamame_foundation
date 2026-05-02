@@ -3,7 +3,19 @@ use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Command as StdCommand;
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use tracing::{info, warn};
+
+/// Windows `CREATE_NO_WINDOW` flag (`0x08000000`).
+///
+/// Suppresses the visible console host that Windows would otherwise allocate
+/// when the helper daemon (which has no console of its own) spawns a
+/// console-subsystem child like `powershell.exe`. See the foundation
+/// "Windows PowerShell / Console Process Invocation" invariant for the full
+/// policy and reasoning.
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 use crate::agent_plugin_icons::{
     CLAUDE_CODE_ICON_BASE64, CLAUDE_DESKTOP_ICON_BASE64, CURSOR_ICON_BASE64, OPENCLAW_ICON_BASE64,
@@ -944,6 +956,7 @@ fn run_uninstall_script(script: &Path, home: &Path) -> anyhow::Result<()> {
         .arg(script)
         .env("HOME", home)
         .env("USERPROFILE", home)
+        .creation_flags(CREATE_NO_WINDOW)
         .output()?;
 
     #[cfg(not(target_os = "windows"))]
@@ -1003,7 +1016,8 @@ fn run_healthcheck_script(
     let mut cmd = {
         let mut cmd = StdCommand::new("powershell");
         cmd.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
-            .arg(script);
+            .arg(script)
+            .creation_flags(CREATE_NO_WINDOW);
         cmd
     };
 
@@ -1033,6 +1047,8 @@ fn run_healthcheck_node(
         cmd.arg("--config").arg(config_path);
     }
     cmd.env("HOME", home).env("USERPROFILE", home);
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(CREATE_NO_WINDOW);
     Ok(cmd.output()?)
 }
 
@@ -1152,10 +1168,11 @@ fn uninstall_cursor_or_claude_code(agent_type: &str, home: &Path) -> anyhow::Res
 }
 
 fn uninstall_openclaw(home: &Path) -> anyhow::Result<()> {
-    match StdCommand::new("openclaw")
-        .args(["plugins", "disable", "edamame"])
-        .output()
-    {
+    let mut openclaw_disable = StdCommand::new("openclaw");
+    openclaw_disable.args(["plugins", "disable", "edamame"]);
+    #[cfg(target_os = "windows")]
+    openclaw_disable.creation_flags(CREATE_NO_WINDOW);
+    match openclaw_disable.output() {
         Ok(out) if out.status.success() => {
             info!("Disabled OpenClaw edamame plugin via CLI");
         }
