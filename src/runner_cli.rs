@@ -677,25 +677,42 @@ mod tests {
     /// foundation rules ("Windows PowerShell / Console Process Invocation").
     /// This test fails fast if any future refactor drops the flag.
     ///
-    /// Mechanism: have the spawned PowerShell call `kernel32!GetConsoleWindow`.
-    /// With `CREATE_NO_WINDOW`, the child process has no console and the call
-    /// returns NULL/0. Without the flag, the child inherits the cargo-test
-    /// parent's console (attached when running `cargo test` from a terminal
-    /// or a github-hosted Windows runner) and the call returns the parent's
-    /// non-zero HWND.
+    /// Mechanism:
     ///
-    /// The test also runs a "control" spawn directly through
-    /// `tokio::process::Command` *without* setting `creation_flags`. If that
-    /// control spawn ALSO reports a zero handle, the test environment itself
-    /// has no parent console (e.g. cargo test was launched as a detached
-    /// process) and the test cannot distinguish CREATE_NO_WINDOW from plain
-    /// no-console inheritance. In that case the test is inconclusive and is
-    /// skipped with a printed warning rather than passing falsely.
+    /// 1. Force-allocate a console for the cargo-test process via
+    ///    `kernel32!AllocConsole`. github-hosted Windows runners launch
+    ///    cargo test as a detached / no-console process by default, so without
+    ///    this step children spawned without `CREATE_NO_WINDOW` ALSO end up
+    ///    with no console (no parent console to inherit), and the test cannot
+    ///    distinguish a working flag from a missing flag. The `AllocConsole`
+    ///    call gives the parent a console deterministically and is a no-op
+    ///    if one already exists.
+    /// 2. Run a "control" spawn directly through `tokio::process::Command`
+    ///    *without* `creation_flags`. With the parent now holding a console,
+    ///    this child inherits it and `GetConsoleWindow()` returns a non-zero
+    ///    HWND.
+    /// 3. Run the "probe" spawn through `run_cli` (which sets
+    ///    `CREATE_NO_WINDOW`). The child has no console, so
+    ///    `GetConsoleWindow()` returns 0.
+    ///
+    /// If `AllocConsole` fails and the control still reports 0, we self-skip
+    /// rather than pass falsely. Otherwise the assertion is strict.
+    ///
+    /// Marked `#[serial]` so it doesn't race against other tests' env-var or
+    /// console manipulation.
     #[cfg(target_os = "windows")]
     #[tokio::test]
+    #[serial]
     async fn test_run_cli_powershell_has_no_console_window() {
         use std::io::Write as _;
         use std::process::Stdio;
+
+        // FFI imports for the console-allocation precondition.
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn AllocConsole() -> i32;
+            fn FreeConsole() -> i32;
+        }
 
         // PowerShell script that P/Invokes GetConsoleWindow and prints the
         // returned HWND as a 64-bit signed integer (so an empty handle is "0").
@@ -704,19 +721,13 @@ Add-Type -Namespace EdamameWin -Name Kernel -MemberDefinition '[System.Runtime.I
 [EdamameWin.Kernel]::GetConsoleWindow().ToInt64()
 "#;
 
-        // 1) Probe via run_cli (which sets CREATE_NO_WINDOW). Must be 0.
-        let probe_handle: i64 = run_cli(script, "", false, Some(15))
-            .await
-            .expect("run_cli probe should succeed")
-            .trim()
-            .parse()
-            .expect("run_cli probe output should parse as i64");
+        // Step 1: ensure cargo-test has a console so a child without the flag
+        // has something to inherit. If we already have one, AllocConsole
+        // returns 0 (already-attached) which is fine.
+        let allocated = unsafe { AllocConsole() != 0 };
 
-        // 2) Control spawn: same script, raw tokio::process::Command, NO
-        // creation_flags. If the cargo-test parent has a console, this child
-        // inherits it and the handle is non-zero, proving the probe above was
-        // meaningful. If the parent has no console, both handles are 0 and we
-        // skip rather than pass false-positive.
+        // Step 2: control spawn (NO creation_flags). Should inherit the
+        // parent console -> non-zero handle.
         let mut tmp = tempfile::Builder::new()
             .suffix(".ps1")
             .tempfile()
@@ -746,12 +757,29 @@ Add-Type -Namespace EdamameWin -Name Kernel -MemberDefinition '[System.Runtime.I
             .parse()
             .expect("control output should parse as i64");
 
+        // Step 3: probe via run_cli (sets CREATE_NO_WINDOW). Should be 0.
+        let probe_handle: i64 = run_cli(script, "", false, Some(15))
+            .await
+            .expect("run_cli probe should succeed")
+            .trim()
+            .parse()
+            .expect("run_cli probe output should parse as i64");
+
+        // Best-effort cleanup: free the console we allocated so we don't
+        // leave the cargo-test process in a weird state for later tests.
+        if allocated {
+            unsafe {
+                FreeConsole();
+            }
+        }
+
         if control_handle == 0 {
             eprintln!(
                 "test_run_cli_powershell_has_no_console_window: INCONCLUSIVE. \
-                 Cargo-test parent has no console (control handle is also 0), \
-                 so this environment cannot distinguish CREATE_NO_WINDOW from \
-                 plain no-console inheritance. Skipping."
+                 AllocConsole did not establish a parent console (probably \
+                 already detached and FreeConsole is also a no-op here). \
+                 Control handle is 0, so we cannot distinguish \
+                 CREATE_NO_WINDOW from plain no-console inheritance. Skipping."
             );
             return;
         }
