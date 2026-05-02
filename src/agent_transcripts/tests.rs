@@ -182,7 +182,7 @@ fn claude_code_collects_jsonl() {
 
 #[test]
 #[serial]
-fn claude_desktop_collects_from_two_roots() {
+fn claude_desktop_collects_cowork_root_only() {
     // Save originals so concurrent or subsequent tests in the same binary
     // (notably runner_cli's APPDATA-reading tests) see the runner-provided
     // values after this test exits. `#[serial]` keeps env-var-touching tests
@@ -235,15 +235,20 @@ fn claude_desktop_collects_from_two_roots() {
 
     assert_eq!(result.payload.agent_type, "claude_desktop");
     assert!(result.diagnostics.transcripts_root_accessible);
-    assert_eq!(result.payload.sessions.len(), 2);
+    assert_eq!(result.payload.sessions.len(), 1);
     let texts: Vec<String> = result
         .payload
         .sessions
         .iter()
         .map(|s| s.user_text.clone())
         .collect();
-    assert!(texts.iter().any(|t| t.contains("hello from code")));
+    assert!(
+        !texts.iter().any(|t| t.contains("hello from code")),
+        "Claude Desktop must not re-ingest Claude Code project transcripts"
+    );
     assert!(texts.iter().any(|t| t.contains("hello from cowork")));
+    assert_eq!(result.diagnostics.transcripts_roots.len(), 1);
+    assert!(result.diagnostics.transcripts_roots[0].contains("local-agent-mode-sessions"));
 }
 
 #[test]

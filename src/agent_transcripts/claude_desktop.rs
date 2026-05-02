@@ -1,8 +1,5 @@
-//! Claude Desktop transcript adapter. Pulls from two roots:
-//!
-//! - Code-in-Desktop sessions under `~/.claude/projects/...`
-//! - Cowork (local agent mode) sessions under the platform-specific
-//!   Claude data directory.
+//! Claude Desktop transcript adapter. Pulls from the platform-specific
+//! local agent mode session directory.
 
 use std::path::{Path, PathBuf};
 
@@ -59,12 +56,11 @@ const CLAUDE_DESKTOP_SCOPE_PARENT_PATHS: &[&str] = &[
 ];
 
 pub fn collect(home: &Path, options: &CollectOptions) -> anyhow::Result<CollectResult> {
-    let code_root = home.join(".claude").join("projects");
     let cowork_root = cowork_sessions_root(home);
 
-    let roots: Vec<PathBuf> = vec![code_root.clone(), cowork_root.clone()];
+    let roots: Vec<PathBuf> = vec![cowork_root.clone()];
     let mut diagnostics = CollectDiagnostics {
-        transcripts_root_accessible: code_root.is_dir() || cowork_root.is_dir(),
+        transcripts_root_accessible: cowork_root.is_dir(),
         transcripts_roots: roots
             .iter()
             .map(|p| p.to_string_lossy().to_string())
@@ -76,9 +72,6 @@ pub fn collect(home: &Path, options: &CollectOptions) -> anyhow::Result<CollectR
     let now = Utc::now();
 
     let mut candidates: Vec<GenericTranscriptCandidate> = Vec::new();
-    if code_root.is_dir() {
-        candidates.extend(gather_jsonl_transcripts(&code_root, options));
-    }
     if cowork_root.is_dir() {
         candidates.extend(gather_jsonl_transcripts(&cowork_root, options));
     }
@@ -166,7 +159,7 @@ pub fn collect(home: &Path, options: &CollectOptions) -> anyhow::Result<CollectR
         (start, end)
     };
 
-    diagnostics.transcripts_root_accessible = code_root.is_dir() || cowork_root.is_dir();
+    diagnostics.transcripts_root_accessible = cowork_root.is_dir();
 
     Ok(CollectResult {
         payload: CollectedPayload {
