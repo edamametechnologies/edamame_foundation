@@ -1195,6 +1195,10 @@ fn uninstall_openclaw(home: &Path) -> anyhow::Result<()> {
 
     let dirs_to_remove = [
         openclaw_dir.join("extensions/edamame"),
+        // Legacy: edamame-extrapolator skill was removed in favour of the
+        // compiled extrapolator_run_cycle plugin tool plus EDAMAME's
+        // host-side transcript observer. Kept here so uninstall still
+        // cleans up directories left behind by older installations.
         openclaw_dir.join("skills/edamame-extrapolator"),
         openclaw_dir.join("skills/edamame-posture"),
         openclaw_dir.join("edamame-openclaw"),

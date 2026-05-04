@@ -48,6 +48,32 @@ pub struct PlatformHelperMatcherConfigs {
     pub windows: HelperMatcherConfig,
 }
 
+/// Path-substring lists used to suppress browser-cache /
+/// browser-state false positives in `file_system_tampering`.
+///
+/// The sensitive-path classifier inherits "appdata" sensitivity from
+/// the parent directory (e.g. `…/AppData/Local/Google/Chrome/User Data/`).
+/// That's correct for `Login Data`, `Cookies`, `Web Data` -- but wrong
+/// for the recomputable browser-cache subtrees (`Code Cache`,
+/// `GPUCache`, `Service Worker`, etc.) and for the routine-rotation
+/// state files (`Local State`, `Preferences`) that browsers atomically
+/// rewrite many times an hour. See `../edamame_core/FALSEPOSITIVES.md`
+/// FP-WIN-1 / FP-WIN-2 / FP-WIN-5.
+///
+/// All patterns are case-insensitive substring matches against the
+/// FIM event path (after lowercasing). The detector requires BOTH
+/// the user-data root marker AND the cache/state subtree to match
+/// before suppressing -- a coincidentally-named subtree elsewhere on
+/// disk is never sufficient on its own.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct BrowserDataSubtreesJSON {
+    pub chromium_family: Vec<String>,
+    pub chromium_state_files_routine: Vec<String>,
+    pub chromium_user_data_root_markers: Vec<String>,
+    pub firefox_family_subtrees: Vec<String>,
+    pub firefox_user_data_root_markers: Vec<String>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct CveDetectionParamsJSON {
     pub date: String,
@@ -67,6 +93,8 @@ pub struct CveDetectionParamsJSON {
     pub ci_workspace_path_patterns: Vec<String>,
     #[serde(default = "default_keychain_transactional_filename_patterns")]
     pub keychain_transactional_filename_patterns: Vec<String>,
+    #[serde(default = "default_non_sensitive_browser_data_subtrees")]
+    pub non_sensitive_browser_data_subtrees: BrowserDataSubtreesJSON,
     pub suspicious_parent_path_patterns: Vec<String>,
     #[serde(default = "default_benign_temp_artifact_suffixes")]
     pub benign_temp_artifact_suffixes: Vec<String>,
@@ -194,6 +222,77 @@ fn default_ci_workspace_path_patterns() -> Vec<String> {
 /// user file that happens to share a similar name.
 fn default_keychain_transactional_filename_patterns() -> Vec<String> {
     strings(&[".keychain-db.sb-", ".keychain-db-shm.sb-", "/.fl"])
+}
+
+/// Default browser-cache / browser-state suppression patterns. See
+/// the doc comment on [`BrowserDataSubtreesJSON`] for the suppression
+/// model. Patterns are case-insensitive substring matches against the
+/// FIM event path. Intentionally kept narrow: only directories /
+/// state files that are recomputable or that hold browser-internal
+/// configuration with no credential value. Credential-class artifacts
+/// (`Login Data`, `Cookies`, `Web Data`, `History`, `Bookmarks`,
+/// `Network/Cookies`, `Affiliation Database`) are deliberately NOT
+/// in any list here -- those keep their sensitive classification so
+/// a non-browser process touching them still fires.
+fn default_non_sensitive_browser_data_subtrees() -> BrowserDataSubtreesJSON {
+    BrowserDataSubtreesJSON {
+        chromium_family: strings(&[
+            "/code cache/",
+            "/gpucache/",
+            "/service worker/cachestorage/",
+            "/service worker/database/",
+            "/service worker/scriptcache/",
+            "/cache/cache_data/",
+            "/local storage/leveldb/",
+            "/sessionstorage/",
+            "/file system/",
+            "/blob_storage/",
+            "/component_crx_cache/",
+            "/dawn_graphite_cache/",
+            "/dawn_webgpu_cache/",
+            "/grshadercache/",
+            "/shadercache/",
+            "/optimizationhints/",
+            "/segmentation_platform/",
+        ]),
+        chromium_state_files_routine: strings(&[
+            "/local state",
+            "/local state.bak",
+            "/preferences",
+            "/preferences.bak",
+            "/secure preferences",
+            "/network/network persistent state",
+            "/network/transportsecurity",
+            "/network/reportingandnel",
+        ]),
+        chromium_user_data_root_markers: strings(&[
+            "/google/chrome/user data/",
+            "/google/chrome beta/user data/",
+            "/google/chrome canary/user data/",
+            "/microsoft/edge/user data/",
+            "/microsoft/edge beta/user data/",
+            "/brave-browser/user data/",
+            "/brave software/brave-browser/user data/",
+            "/vivaldi/user data/",
+            "/opera software/opera stable/",
+            "/chromium/user data/",
+        ]),
+        firefox_family_subtrees: strings(&[
+            "/cache2/",
+            "/startupcache/",
+            "/jumplistcache/",
+            "/offlinecache/",
+            "/storage/permanent/chrome/",
+            "/safebrowsing/",
+            "/datareporting/archived/",
+            "/saved-telemetry-pings/",
+        ]),
+        firefox_user_data_root_markers: strings(&[
+            "/mozilla/firefox/profiles/",
+            "/firefox/profiles/",
+            "/.mozilla/firefox/",
+        ]),
+    }
 }
 
 fn default_benign_temp_artifact_suffixes() -> Vec<String> {
@@ -418,6 +517,7 @@ pub struct CveDetectionParams {
     pub ci_runner_process_name_prefixes: Vec<String>,
     pub ci_workspace_path_patterns: Vec<String>,
     pub keychain_transactional_filename_patterns: Vec<String>,
+    pub non_sensitive_browser_data_subtrees: BrowserDataSubtreesJSON,
     pub suspicious_parent_path_patterns: Vec<String>,
     pub benign_temp_artifact_suffixes: Vec<String>,
     pub application_storage_patterns: Vec<String>,
@@ -474,6 +574,38 @@ impl CveDetectionParams {
                 .iter()
                 .map(|pattern| pattern.to_ascii_lowercase())
                 .collect(),
+            non_sensitive_browser_data_subtrees: BrowserDataSubtreesJSON {
+                chromium_family: json
+                    .non_sensitive_browser_data_subtrees
+                    .chromium_family
+                    .iter()
+                    .map(|p| p.to_ascii_lowercase())
+                    .collect(),
+                chromium_state_files_routine: json
+                    .non_sensitive_browser_data_subtrees
+                    .chromium_state_files_routine
+                    .iter()
+                    .map(|p| p.to_ascii_lowercase())
+                    .collect(),
+                chromium_user_data_root_markers: json
+                    .non_sensitive_browser_data_subtrees
+                    .chromium_user_data_root_markers
+                    .iter()
+                    .map(|p| p.to_ascii_lowercase())
+                    .collect(),
+                firefox_family_subtrees: json
+                    .non_sensitive_browser_data_subtrees
+                    .firefox_family_subtrees
+                    .iter()
+                    .map(|p| p.to_ascii_lowercase())
+                    .collect(),
+                firefox_user_data_root_markers: json
+                    .non_sensitive_browser_data_subtrees
+                    .firefox_user_data_root_markers
+                    .iter()
+                    .map(|p| p.to_ascii_lowercase())
+                    .collect(),
+            },
             suspicious_parent_path_patterns: json.suspicious_parent_path_patterns.clone(),
             benign_temp_artifact_suffixes: json.benign_temp_artifact_suffixes.clone(),
             application_storage_patterns: json.application_storage_patterns.clone(),
@@ -637,6 +769,72 @@ pub fn is_keychain_transactional_path(path: &str) -> bool {
         .any(|pattern| !pattern.is_empty() && lower.contains(pattern))
 }
 
+/// Returns true when `path` is part of a browser's recomputable cache
+/// subtree or a routine atomic-rewrite state file (e.g. Chrome
+/// `Code Cache/`, `Local State`, `Preferences`). Used by the
+/// `file_system_tampering` detector to suppress sensitive-file FPs
+/// that derive from the appdata-class inheritance rule.
+///
+/// Matching is conjunctive on purpose: BOTH a known browser-user-data
+/// root marker AND a known cache/state subtree must be present in the
+/// path. A `Code Cache/` directory anywhere else on disk is not
+/// suppressed, and a non-cache file inside the browser data root is
+/// not suppressed (`Login Data`, `Cookies`, `Web Data`, etc. continue
+/// to fire).
+pub fn is_non_sensitive_browser_data(path: &str) -> bool {
+    if path.is_empty() {
+        return false;
+    }
+    // Normalize Windows backslashes to forward slashes before matching.
+    // Real-world FIM events on Windows can mix separators within the
+    // same path (e.g. `C:\Users\frank\AppData/Local\Google\Chrome\...`)
+    // depending on which API surfaced the event. Storing both `\` and
+    // `/` variants in the JSON would be brittle; normalizing once here
+    // is more robust and matches how `is_ci_workspace_path` is used
+    // (its patterns are stored with both variants up front, but new
+    // pattern lists should prefer the normalize-then-match shape).
+    let lower = path.to_ascii_lowercase().replace('\\', "/");
+    let snapshot = PARAMS_SNAPSHOT.load();
+    let subtrees = &snapshot.non_sensitive_browser_data_subtrees;
+
+    let in_chromium_root = subtrees
+        .chromium_user_data_root_markers
+        .iter()
+        .any(|marker| !marker.is_empty() && lower.contains(marker));
+    if in_chromium_root {
+        let cache_match = subtrees
+            .chromium_family
+            .iter()
+            .any(|sub| !sub.is_empty() && lower.contains(sub));
+        if cache_match {
+            return true;
+        }
+        let state_match = subtrees
+            .chromium_state_files_routine
+            .iter()
+            .any(|state| !state.is_empty() && lower.ends_with(state));
+        if state_match {
+            return true;
+        }
+    }
+
+    let in_firefox_root = subtrees
+        .firefox_user_data_root_markers
+        .iter()
+        .any(|marker| !marker.is_empty() && lower.contains(marker));
+    if in_firefox_root {
+        let cache_match = subtrees
+            .firefox_family_subtrees
+            .iter()
+            .any(|sub| !sub.is_empty() && lower.contains(sub));
+        if cache_match {
+            return true;
+        }
+    }
+
+    false
+}
+
 pub fn suspicious_parent_path_patterns() -> Vec<String> {
     PARAMS_SNAPSHOT
         .load()
@@ -752,6 +950,92 @@ mod tests {
         assert!(!is_ci_runner_internal_process("provjo"));
         assert!(!is_ci_runner_internal_process("runner"));
         assert!(!is_ci_runner_internal_process("runner.exe"));
+    }
+
+    #[test]
+    fn test_is_non_sensitive_browser_data_chromium_cache() {
+        // Chrome / Edge / Brave Code Cache, GPUCache, Service Worker etc. -- recomputable.
+        assert!(is_non_sensitive_browser_data(
+            "C:/Users/frank/AppData/Local/Google/Chrome/User Data/Profile 1/Code Cache/js/abc_0"
+        ));
+        assert!(is_non_sensitive_browser_data(
+            "C:/Users/frank/AppData/Local/Google/Chrome/User Data/Default/GPUCache/data_0"
+        ));
+        assert!(is_non_sensitive_browser_data(
+            "C:/Users/frank/AppData/Local/Microsoft/Edge/User Data/Default/Service Worker/CacheStorage/foo"
+        ));
+        assert!(is_non_sensitive_browser_data(
+            "/Users/me/Library/Application Support/BraveSoftware/Brave-Browser/User Data/Default/Code Cache/js/0"
+        ));
+    }
+
+    #[test]
+    fn test_is_non_sensitive_browser_data_chromium_state_files() {
+        // Local State / Preferences atomic rewrite at the User Data root or per profile.
+        assert!(is_non_sensitive_browser_data(
+            "C:/Users/frank/AppData/Local/Google/Chrome/User Data/Local State"
+        ));
+        assert!(is_non_sensitive_browser_data(
+            "C:/Users/frank/AppData/Local/Google/Chrome/User Data/Profile 1/Preferences"
+        ));
+        assert!(is_non_sensitive_browser_data(
+            "C:/Users/frank/AppData/Local/Microsoft/Edge/User Data/Default/Secure Preferences"
+        ));
+    }
+
+    #[test]
+    fn test_is_non_sensitive_browser_data_does_not_suppress_credentials() {
+        // Login Data / Cookies / Web Data / History MUST stay sensitive.
+        // These files live under the same User Data root but are NOT in
+        // any allow-listed subtree.
+        assert!(!is_non_sensitive_browser_data(
+            "C:/Users/frank/AppData/Local/Google/Chrome/User Data/Default/Login Data"
+        ));
+        assert!(!is_non_sensitive_browser_data(
+            "C:/Users/frank/AppData/Local/Google/Chrome/User Data/Default/Cookies"
+        ));
+        assert!(!is_non_sensitive_browser_data(
+            "C:/Users/frank/AppData/Local/Google/Chrome/User Data/Default/Web Data"
+        ));
+        assert!(!is_non_sensitive_browser_data(
+            "C:/Users/frank/AppData/Local/Google/Chrome/User Data/Default/History"
+        ));
+        assert!(!is_non_sensitive_browser_data(
+            "C:/Users/frank/AppData/Local/Microsoft/Edge/User Data/Default/Login Data For Account"
+        ));
+    }
+
+    #[test]
+    fn test_is_non_sensitive_browser_data_outside_browser_root_not_suppressed() {
+        // A `Code Cache/` directory elsewhere on disk must NOT be suppressed
+        // -- the suppression requires BOTH a browser user-data root marker
+        // AND a cache subtree to match.
+        assert!(!is_non_sensitive_browser_data(
+            "C:/AttackerStaging/Code Cache/js/abc_0"
+        ));
+        assert!(!is_non_sensitive_browser_data("/tmp/sandbox/Local State"));
+    }
+
+    #[test]
+    fn test_is_non_sensitive_browser_data_firefox_cache() {
+        assert!(is_non_sensitive_browser_data(
+            "/Users/me/Library/Application Support/Firefox/Profiles/abc.default-release/cache2/entries/foo"
+        ));
+        assert!(is_non_sensitive_browser_data(
+            "/home/me/.mozilla/firefox/abc.default/storage/permanent/chrome/idb/blah.sqlite"
+        ));
+        // Firefox sensitive files (e.g. logins.json, key4.db) must keep firing
+        assert!(!is_non_sensitive_browser_data(
+            "/home/me/.mozilla/firefox/abc.default/logins.json"
+        ));
+        assert!(!is_non_sensitive_browser_data(
+            "/home/me/.mozilla/firefox/abc.default/key4.db"
+        ));
+    }
+
+    #[test]
+    fn test_is_non_sensitive_browser_data_empty() {
+        assert!(!is_non_sensitive_browser_data(""));
     }
 
     #[test]
