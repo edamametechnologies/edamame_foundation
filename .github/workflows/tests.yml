@@ -461,14 +461,14 @@ jobs:
           if echo "$ARCHIVED_RELEASES" | grep -qw "$CODENAME"; then
             echo "Switching $CODENAME to old-releases.ubuntu.com (release is archived)"
             sed -ri \
-              -e 's|http://(archive|security)\.ubuntu\.com|http://old-releases.ubuntu.com|g' \
-              -e 's|http://[a-z0-9.]+\.archive\.ubuntu\.com|http://old-releases.ubuntu.com|g' \
+              -e 's#http://(archive|security)\.ubuntu\.com#http://old-releases.ubuntu.com#g' \
+              -e 's#http://[a-z0-9.]+\.archive\.ubuntu\.com#http://old-releases.ubuntu.com#g' \
               /etc/apt/sources.list || true
             if [ -d /etc/apt/sources.list.d ]; then
               find /etc/apt/sources.list.d -type f -name '*.list' \
                 -exec sed -ri \
-                  -e 's|http://(archive|security)\.ubuntu\.com|http://old-releases.ubuntu.com|g' \
-                  -e 's|http://[a-z0-9.]+\.archive\.ubuntu\.com|http://old-releases.ubuntu.com|g' \
+                  -e 's#http://(archive|security)\.ubuntu\.com#http://old-releases.ubuntu.com#g' \
+                  -e 's#http://[a-z0-9.]+\.archive\.ubuntu\.com#http://old-releases.ubuntu.com#g' \
                   {} +
             fi
           fi
