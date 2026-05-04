@@ -443,43 +443,28 @@ jobs:
         run: |
           export DEBIAN_FRONTEND=noninteractive
           echo 'Acquire::ForceIPv4 "true";' > /etc/apt/apt.conf.d/99force-ipv4
+          # In-process apt retries on individual URL fetch failures
+          # (per-mirror transient drops). Independent of the outer
+          # apt_retry() loop which retries the whole apt-get invocation.
+          echo 'Acquire::Retries "5";' > /etc/apt/apt.conf.d/99retries
 
-          # Detect Ubuntu release codename so we can route archived
-          # releases (bionic = 18.04, end-of-standard-support 2023-04;
-          # archive.ubuntu.com no longer serves it) to the
-          # old-releases.ubuntu.com mirror. focal = 20.04 stayed in ESM
-          # so its standard mirror still works, but transient dependency
-          # drops (e.g. libpsl5) need --fix-missing tolerance.
-          CODENAME=""
-          if [ -f /etc/os-release ]; then
-            . /etc/os-release
-            CODENAME="${VERSION_CODENAME:-}"
-          fi
-          echo "Detected Ubuntu codename: ${CODENAME:-unknown}"
-
-          ARCHIVED_RELEASES="bionic xenial trusty"
-          if echo "$ARCHIVED_RELEASES" | grep -qw "$CODENAME"; then
-            echo "Switching $CODENAME to old-releases.ubuntu.com (release is archived)"
-            sed -ri \
-              -e 's#http://(archive|security)\.ubuntu\.com#http://old-releases.ubuntu.com#g' \
-              -e 's#http://[a-z0-9.]+\.archive\.ubuntu\.com#http://old-releases.ubuntu.com#g' \
-              /etc/apt/sources.list || true
-            if [ -d /etc/apt/sources.list.d ]; then
-              find /etc/apt/sources.list.d -type f -name '*.list' \
-                -exec sed -ri \
-                  -e 's#http://(archive|security)\.ubuntu\.com#http://old-releases.ubuntu.com#g' \
-                  -e 's#http://[a-z0-9.]+\.archive\.ubuntu\.com#http://old-releases.ubuntu.com#g' \
-                  {} +
-            fi
-          fi
+          # Note: archive.ubuntu.com / security.ubuntu.com still serve
+          # bionic (18.04) and focal (20.04) Release files; do NOT
+          # redirect to old-releases.ubuntu.com -- that mirror does NOT
+          # have bionic at the standard /ubuntu/dists/<codename>/Release
+          # path and returns 404. The original prep-step failures were
+          # transient "Connection failed" drops to Canonical mirror IPs;
+          # they resolve on retry with longer backoff.
 
           apt_retry() {
-            local max=5 attempt=1
+            local max=8 attempt=1
             while [ $attempt -le $max ]; do
               echo "apt-get $* (attempt $attempt/$max)"
               if apt-get "$@"; then return 0; fi
-              echo "Failed, retrying in $((attempt * 10))s..."
-              sleep $((attempt * 10))
+              local backoff=$(( attempt * 30 ))
+              [ $backoff -gt 300 ] && backoff=300
+              echo "Failed, sleeping ${backoff}s before retry..."
+              sleep "$backoff"
               attempt=$((attempt + 1))
             done
             return 1
