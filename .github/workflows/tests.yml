@@ -530,9 +530,24 @@ jobs:
         if: ${{ !contains(matrix.container_image, 'alpine') }}
         shell: bash
         run: |
-          apt-get update
-          apt-get install -y protobuf-compiler libpcap-dev software-properties-common
-          
+          export DEBIAN_FRONTEND=noninteractive
+          # Same retry/--fix-missing pattern as the prep step above so the
+          # 18.04/20.04 containers don't trip on transient archive.ubuntu.com
+          # connection failures (libpsl5, openssl, ...) during package fetch.
+          apt_retry() {
+            local max=5 attempt=1
+            while [ $attempt -le $max ]; do
+              echo "apt-get $* (attempt $attempt/$max)"
+              if apt-get "$@"; then return 0; fi
+              echo "Failed, retrying in $((attempt * 10))s..."
+              sleep $((attempt * 10))
+              attempt=$((attempt + 1))
+            done
+            return 1
+          }
+          apt_retry update -y || apt_retry update -y --fix-missing
+          apt_retry install -y --fix-missing protobuf-compiler libpcap-dev software-properties-common
+
           # Install GCC 10+ on Ubuntu 20.04 to fix aws-lc-sys memcmp bug (GCC bug #95189)
           # Ubuntu 20.04 ships with GCC 9 which has a known memcmp optimization bug.
           #
@@ -543,13 +558,12 @@ jobs:
           # fix we actually need.
           if grep -q "20.04" /etc/os-release 2>/dev/null; then
             echo "Detected Ubuntu 20.04 - installing GCC 10 to fix aws-lc-sys compilation"
-            apt-get install -y gcc-10 g++-10 || {
+            apt_retry install -y --fix-missing gcc-10 g++-10 || {
               echo "gcc-10 not available in default repos, falling back to ubuntu-toolchain-r PPA"
               add-apt-repository -y ppa:ubuntu-toolchain-r/test
-              apt-get update
-              apt-get install -y gcc-10 g++-10
+              apt_retry update -y || apt_retry update -y --fix-missing
+              apt_retry install -y --fix-missing gcc-10 g++-10
             }
-            # Set GCC 10 as the default compiler
             update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-10 100
             update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-10 100
             update-alternatives --install /usr/bin/cc cc /usr/bin/gcc-10 100
