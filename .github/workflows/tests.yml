@@ -443,6 +443,36 @@ jobs:
         run: |
           export DEBIAN_FRONTEND=noninteractive
           echo 'Acquire::ForceIPv4 "true";' > /etc/apt/apt.conf.d/99force-ipv4
+
+          # Detect Ubuntu release codename so we can route archived
+          # releases (bionic = 18.04, end-of-standard-support 2023-04;
+          # archive.ubuntu.com no longer serves it) to the
+          # old-releases.ubuntu.com mirror. focal = 20.04 stayed in ESM
+          # so its standard mirror still works, but transient dependency
+          # drops (e.g. libpsl5) need --fix-missing tolerance.
+          CODENAME=""
+          if [ -f /etc/os-release ]; then
+            . /etc/os-release
+            CODENAME="${VERSION_CODENAME:-}"
+          fi
+          echo "Detected Ubuntu codename: ${CODENAME:-unknown}"
+
+          ARCHIVED_RELEASES="bionic xenial trusty"
+          if echo "$ARCHIVED_RELEASES" | grep -qw "$CODENAME"; then
+            echo "Switching $CODENAME to old-releases.ubuntu.com (release is archived)"
+            sed -ri \
+              -e 's|http://(archive|security)\.ubuntu\.com|http://old-releases.ubuntu.com|g' \
+              -e 's|http://[a-z0-9.]+\.archive\.ubuntu\.com|http://old-releases.ubuntu.com|g' \
+              /etc/apt/sources.list || true
+            if [ -d /etc/apt/sources.list.d ]; then
+              find /etc/apt/sources.list.d -type f -name '*.list' \
+                -exec sed -ri \
+                  -e 's|http://(archive|security)\.ubuntu\.com|http://old-releases.ubuntu.com|g' \
+                  -e 's|http://[a-z0-9.]+\.archive\.ubuntu\.com|http://old-releases.ubuntu.com|g' \
+                  {} +
+            fi
+          fi
+
           apt_retry() {
             local max=5 attempt=1
             while [ $attempt -le $max ]; do
@@ -454,8 +484,8 @@ jobs:
             done
             return 1
           }
-          apt_retry update -y
-          apt_retry install -y git curl sudo wget jq bc ca-certificates gnupg
+          apt_retry update -y || apt_retry update -y --fix-missing
+          apt_retry install -y --fix-missing git curl sudo wget jq bc ca-certificates gnupg
           git config --global --add safe.directory '*'
 
       - name: Setup EDAMAME Posture
