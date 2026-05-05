@@ -110,6 +110,12 @@ pub struct CveDetectionParamsJSON {
     pub packaged_application_starts_with_patterns: Vec<String>,
     #[serde(default = "default_packaged_application_ends_with_patterns")]
     pub packaged_application_ends_with_patterns: Vec<String>,
+    #[serde(default = "default_platform_metadata_endpoints")]
+    pub platform_metadata_endpoints: PlatformStringLists,
+    #[serde(default = "default_platform_self_state_directories")]
+    pub platform_self_state_directories: PlatformStringLists,
+    #[serde(default = "default_platform_self_state_processes")]
+    pub platform_self_state_processes: PlatformStringLists,
     #[serde(default = "default_fim_hash_size_threshold")]
     pub fim_hash_size_threshold: u64,
     pub fim_temp_executable_patterns: Vec<String>,
@@ -498,6 +504,94 @@ fn default_packaged_application_ends_with_patterns() -> Vec<String> {
     strings(&[".app"])
 }
 
+/// Well-known platform metadata service endpoints. Communication
+/// to these IPs is performed by the OS-managed cloud-agent stack
+/// (Azure Wire Server, EC2/GCE Instance Metadata Service, ...) and
+/// is structurally part of the host's own life-cycle, not user
+/// network activity.
+///
+/// Used by the `sensitive_material_egress` suppression hook
+/// `should_suppress_sensitive_material_egress_as_platform_metadata_call`
+/// so that e.g. `python3 /usr/sbin/waagent` reading
+/// `/var/lib/waagent/Certificates.pem` while talking to
+/// `168.63.129.16` (Azure Wire Server) does not trip a CRITICAL
+/// finding on every Azure Linux VM the daemon runs on.
+///
+/// macOS deliberately ships an empty list -- there is no equivalent
+/// platform metadata endpoint on Apple hosts.
+fn default_platform_metadata_endpoints() -> PlatformStringLists {
+    platform_string_lists(
+        // macos
+        &[],
+        // linux
+        &["168.63.129.16", "169.254.169.254"],
+        // windows
+        &["168.63.129.16", "169.254.169.254"],
+    )
+}
+
+/// Filesystem locations whose contents belong to the platform's own
+/// cloud-agent stack. Companion to
+/// `platform_metadata_endpoints`: a sensitive-material finding is
+/// only suppressed when ALL credential/secret-like files in the
+/// finding live under one of these directories.
+///
+/// Patterns are case-insensitive substring matches against the
+/// normalized (forward-slash, lowercase) file path. Windows entries
+/// keep `\` because the FIM event paths there typically retain the
+/// original separator.
+fn default_platform_self_state_directories() -> PlatformStringLists {
+    platform_string_lists(
+        // macos
+        &[],
+        // linux
+        &[
+            "/var/lib/waagent/",
+            "/etc/cloud/",
+            "/var/lib/cloud/",
+            "/var/log/waagent/",
+            "/var/log/cloud-init/",
+        ],
+        // windows
+        &[
+            "\\windowsazure\\",
+            "\\packages\\plugins\\microsoft.azure.",
+        ],
+    )
+}
+
+/// Process basenames recognized as platform-managed cloud-agent
+/// daemons. Matched case-insensitively against the process name,
+/// parent process name, script basename, and parent-script basename
+/// of the session attribution.
+///
+/// Used as a third gate by
+/// `should_suppress_sensitive_material_egress_as_platform_metadata_call`:
+/// suppression only applies when the responsible process is one of
+/// these platform agents (so a malicious binary impersonating them
+/// from `/tmp/` or `~/.cache/` still trips the gate via the existing
+/// suspicious-lineage / suspicious-path checks).
+fn default_platform_self_state_processes() -> PlatformStringLists {
+    platform_string_lists(
+        // macos
+        &[],
+        // linux
+        &[
+            "waagent",
+            "cloud-init",
+            "cloud-init-local",
+            "azure-network-watcher-agent",
+        ],
+        // windows
+        &[
+            "windowsazureguestagent.exe",
+            "waappagent.exe",
+            "azurewatsoncrashhandler.exe",
+            "azurediagnosticshealthagent.exe",
+        ],
+    )
+}
+
 fn default_fim_hash_size_threshold() -> u64 {
     10_485_760
 }
@@ -526,6 +620,9 @@ pub struct CveDetectionParams {
     pub packaged_application_contains_patterns: Vec<String>,
     pub packaged_application_starts_with_patterns: Vec<String>,
     pub packaged_application_ends_with_patterns: Vec<String>,
+    pub platform_metadata_endpoints: PlatformStringLists,
+    pub platform_self_state_directories: PlatformStringLists,
+    pub platform_self_state_processes: PlatformStringLists,
     pub fim_hash_size_threshold: u64,
     pub fim_temp_executable_patterns: Vec<String>,
 }
@@ -620,6 +717,69 @@ impl CveDetectionParams {
             packaged_application_ends_with_patterns: json
                 .packaged_application_ends_with_patterns
                 .clone(),
+            platform_metadata_endpoints: PlatformStringLists {
+                macos: json
+                    .platform_metadata_endpoints
+                    .macos
+                    .iter()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect(),
+                linux: json
+                    .platform_metadata_endpoints
+                    .linux
+                    .iter()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect(),
+                windows: json
+                    .platform_metadata_endpoints
+                    .windows
+                    .iter()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect(),
+            },
+            platform_self_state_directories: PlatformStringLists {
+                macos: json
+                    .platform_self_state_directories
+                    .macos
+                    .iter()
+                    .map(|p| p.to_ascii_lowercase().replace('\\', "/"))
+                    .collect(),
+                linux: json
+                    .platform_self_state_directories
+                    .linux
+                    .iter()
+                    .map(|p| p.to_ascii_lowercase().replace('\\', "/"))
+                    .collect(),
+                windows: json
+                    .platform_self_state_directories
+                    .windows
+                    .iter()
+                    .map(|p| p.to_ascii_lowercase().replace('\\', "/"))
+                    .collect(),
+            },
+            platform_self_state_processes: PlatformStringLists {
+                macos: json
+                    .platform_self_state_processes
+                    .macos
+                    .iter()
+                    .map(|s| s.to_ascii_lowercase())
+                    .collect(),
+                linux: json
+                    .platform_self_state_processes
+                    .linux
+                    .iter()
+                    .map(|s| s.to_ascii_lowercase())
+                    .collect(),
+                windows: json
+                    .platform_self_state_processes
+                    .windows
+                    .iter()
+                    .map(|s| s.to_ascii_lowercase())
+                    .collect(),
+            },
             fim_hash_size_threshold: json.fim_hash_size_threshold,
             fim_temp_executable_patterns: json.fim_temp_executable_patterns.clone(),
         }
@@ -833,6 +993,69 @@ pub fn is_non_sensitive_browser_data(path: &str) -> bool {
     }
 
     false
+}
+
+/// Returns true if `ip` is a well-known platform metadata service
+/// endpoint (Azure Wire Server, EC2/GCE Instance Metadata Service,
+/// ...) on the current host's OS. Empty `ip` returns false.
+///
+/// Used by the `sensitive_material_egress` suppression hook
+/// `should_suppress_sensitive_material_egress_as_platform_metadata_call`.
+/// Match is exact -- `168.63.129.16` matches but `168.63.129.166` does
+/// not.
+pub fn is_platform_metadata_endpoint(ip: &str) -> bool {
+    if ip.is_empty() {
+        return false;
+    }
+    let snapshot = PARAMS_SNAPSHOT.load();
+    let endpoints = &snapshot.platform_metadata_endpoints;
+    let lists: [&Vec<String>; 3] = [&endpoints.macos, &endpoints.linux, &endpoints.windows];
+    lists
+        .iter()
+        .any(|list| list.iter().any(|known| known == ip))
+}
+
+/// Returns true if the normalized `path` lies within one of the
+/// platform-managed cloud-agent state directories (Azure Wire Agent
+/// `/var/lib/waagent/`, cloud-init `/etc/cloud/`, Windows
+/// `\WindowsAzure\`, ...).
+///
+/// Path matching is case-insensitive and tolerant of separator style:
+/// the input is lowercased and `\` is folded to `/` before substring
+/// matching against the configured patterns (which are also stored
+/// in normalized form).
+pub fn is_platform_self_state_directory(path: &str) -> bool {
+    if path.is_empty() {
+        return false;
+    }
+    let lower = path.to_ascii_lowercase().replace('\\', "/");
+    let snapshot = PARAMS_SNAPSHOT.load();
+    let dirs = &snapshot.platform_self_state_directories;
+    let lists: [&Vec<String>; 3] = [&dirs.macos, &dirs.linux, &dirs.windows];
+    lists.iter().any(|list| {
+        list.iter()
+            .any(|pattern| !pattern.is_empty() && lower.contains(pattern))
+    })
+}
+
+/// Returns true if `name` is the basename of a recognized platform
+/// cloud-agent process (Azure Wire Agent, cloud-init, ...). Match is
+/// case-insensitive exact-match against the configured per-OS lists.
+///
+/// This is intentionally exact-match (not prefix-match) because
+/// platform agent names are stable; CI runner agents that need
+/// prefix matching use `is_ci_runner_internal_process` instead.
+pub fn is_platform_self_state_process_name(name: &str) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+    let lower = name.to_ascii_lowercase();
+    let snapshot = PARAMS_SNAPSHOT.load();
+    let procs = &snapshot.platform_self_state_processes;
+    let lists: [&Vec<String>; 3] = [&procs.macos, &procs.linux, &procs.windows];
+    lists
+        .iter()
+        .any(|list| list.iter().any(|known| known == &lower))
 }
 
 pub fn suspicious_parent_path_patterns() -> Vec<String> {
@@ -1128,6 +1351,60 @@ mod tests {
         assert!(p.secret_content_scan_max_bytes >= 16 * 1024);
         assert!(p.secret_content_min_hits >= 1);
         assert!(p.recent_sensitive_open_file_ttl_secs >= 30);
+    }
+
+    #[test]
+    fn test_platform_metadata_endpoint_lookup() {
+        // Azure Wire Server -- known platform metadata endpoint on
+        // both Linux and Windows guest VMs.
+        assert!(is_platform_metadata_endpoint("168.63.129.16"));
+        // EC2 / GCE / generic link-local IMDS address.
+        assert!(is_platform_metadata_endpoint("169.254.169.254"));
+        // Unrelated address -- not a metadata endpoint.
+        assert!(!is_platform_metadata_endpoint("8.8.8.8"));
+        // Subset of a known IP must NOT match (exact-match only).
+        assert!(!is_platform_metadata_endpoint("168.63.129.166"));
+        assert!(!is_platform_metadata_endpoint(""));
+    }
+
+    #[test]
+    fn test_platform_self_state_directory_lookup() {
+        // Azure Linux guest agent state directory.
+        assert!(is_platform_self_state_directory(
+            "/var/lib/waagent/Certificates.pem"
+        ));
+        // cloud-init state.
+        assert!(is_platform_self_state_directory(
+            "/etc/cloud/cloud.cfg.d/90_dpkg.cfg"
+        ));
+        // Windows guest agent (case + separator-insensitive match).
+        assert!(is_platform_self_state_directory(
+            "C:\\WindowsAzure\\GuestAgent_2.7\\TransparentInstaller.log"
+        ));
+        // User-controlled paths must not match.
+        assert!(!is_platform_self_state_directory("/home/user/.ssh/id_rsa"));
+        assert!(!is_platform_self_state_directory("/var/lib/postgresql/data"));
+        assert!(!is_platform_self_state_directory(""));
+    }
+
+    #[test]
+    fn test_platform_self_state_process_name_lookup() {
+        // Linux Azure Wire Agent + cloud-init.
+        assert!(is_platform_self_state_process_name("waagent"));
+        assert!(is_platform_self_state_process_name("WAAGENT"));
+        assert!(is_platform_self_state_process_name("cloud-init"));
+        assert!(is_platform_self_state_process_name("cloud-init-local"));
+        // Windows guest agent.
+        assert!(is_platform_self_state_process_name(
+            "WindowsAzureGuestAgent.exe"
+        ));
+        // Generic interpreter -- the agent runs under python3 but we
+        // intentionally match the agent name (script basename), not
+        // the interpreter, so a malicious python3 elsewhere does not
+        // get a free pass.
+        assert!(!is_platform_self_state_process_name("python3"));
+        assert!(!is_platform_self_state_process_name("bash"));
+        assert!(!is_platform_self_state_process_name(""));
     }
 
     #[tokio::test]
