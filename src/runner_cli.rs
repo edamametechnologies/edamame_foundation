@@ -660,10 +660,7 @@ mod tests {
     #[cfg(target_os = "windows")]
     fn parse_last_i64_line(s: &str) -> Option<i64> {
         for line in s.lines().rev() {
-            let cleaned: String = line
-                .chars()
-                .filter(|c| !c.is_whitespace())
-                .collect();
+            let cleaned: String = line.chars().filter(|c| !c.is_whitespace()).collect();
             if cleaned.is_empty() {
                 continue;
             }
@@ -794,7 +791,9 @@ Add-Type -Namespace EdamameWin -Name Kernel -MemberDefinition '[System.Runtime.I
                      Skipping (cannot establish AllocConsole baseline)."
                 );
                 if allocated {
-                    unsafe { FreeConsole(); }
+                    unsafe {
+                        FreeConsole();
+                    }
                 }
                 return;
             }
@@ -813,7 +812,9 @@ Add-Type -Namespace EdamameWin -Name Kernel -MemberDefinition '[System.Runtime.I
                      stdout={probe_raw:?}. Skipping."
                 );
                 if allocated {
-                    unsafe { FreeConsole(); }
+                    unsafe {
+                        FreeConsole();
+                    }
                 }
                 return;
             }

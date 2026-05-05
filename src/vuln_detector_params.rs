@@ -553,10 +553,7 @@ fn default_platform_self_state_directories() -> PlatformStringLists {
             "/var/log/cloud-init/",
         ],
         // windows
-        &[
-            "\\windowsazure\\",
-            "\\packages\\plugins\\microsoft.azure.",
-        ],
+        &["\\windowsazure\\", "\\packages\\plugins\\microsoft.azure."],
     )
 }
 
@@ -1383,7 +1380,9 @@ mod tests {
         ));
         // User-controlled paths must not match.
         assert!(!is_platform_self_state_directory("/home/user/.ssh/id_rsa"));
-        assert!(!is_platform_self_state_directory("/var/lib/postgresql/data"));
+        assert!(!is_platform_self_state_directory(
+            "/var/lib/postgresql/data"
+        ));
         assert!(!is_platform_self_state_directory(""));
     }
 
