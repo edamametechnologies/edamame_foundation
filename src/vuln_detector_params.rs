@@ -709,9 +709,13 @@ fn default_package_manager_temp_path_patterns() -> PlatformStringLists {
 fn default_package_manager_temp_writers() -> PlatformStringLists {
     platform_string_lists(
         // macos
-        &["dart", "node", "npm", "yarn", "pnpm", "pip", "pip3", "cargo"],
+        &[
+            "dart", "node", "npm", "yarn", "pnpm", "pip", "pip3", "cargo",
+        ],
         // linux
-        &["dart", "node", "npm", "yarn", "pnpm", "pip", "pip3", "cargo"],
+        &[
+            "dart", "node", "npm", "yarn", "pnpm", "pip", "pip3", "cargo",
+        ],
         // windows
         &[
             "dart.exe",
