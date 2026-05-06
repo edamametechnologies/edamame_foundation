@@ -651,6 +651,24 @@ fn default_installer_toolchain_temp_path_patterns() -> PlatformStringLists {
         &[
             "\\wixtoolset.bootstrapperapplications.wixext_",
             "\\wix-ir\\",
+            // FP-WIN-14: CMake `FetchContent_Populate` writes
+            // `<pkg>-mkdirs.cmake`, `<pkg>-download.cmake`,
+            // `<pkg>-update.cmake`, etc. into
+            // `build\<arch>\_deps\<pkg>-subbuild\<pkg>-populate-prefix\tmp\`
+            // on every Flutter Windows build that uses CMake
+            // FetchContent (corrosion, sentry-native, nuget, ...).
+            // FIM events for these arrive without L7 attribution
+            // and trip `temp_staging` + `temp_mutation` HIGH.
+            "-populate-prefix\\tmp\\",
+            // FP-WIN-14: NuGet's global cross-process scratch/lock
+            // directory at `%LOCALAPPDATA%\Temp\NuGetScratch\lock\`
+            // (also `\plan\`, `\v3-cache\`). Any Visual Studio / MSBuild
+            // / `cargo wix` / Flutter Windows build that resolves NuGet
+            // packages writes hex-named lock files into this tree.
+            // FIM L7 attribution is unreliable here (frequently
+            // misattributed to whichever process happened to be active
+            // during the FIM tick).
+            "\\nugetscratch\\",
         ],
     )
 }
@@ -1893,6 +1911,57 @@ mod tests {
         ));
         assert!(!is_installer_toolchain_temp_path("/etc/passwd"));
         assert!(!is_installer_toolchain_temp_path(""));
+
+        // FP-WIN-14a: CMake `FetchContent_Populate` writes
+        // `<pkg>-mkdirs.cmake` (and `<pkg>-download.cmake`,
+        // `<pkg>-update.cmake`, ...) into
+        // `build\<arch>\_deps\<pkg>-subbuild\<pkg>-populate-prefix\tmp\`
+        // on every Flutter Windows build. The unique substring
+        // `-populate-prefix\tmp\` is what we suppress on.
+        assert!(is_installer_toolchain_temp_path(
+            "C:\\Users\\edamame\\actions-runner\\_work\\edamame_app\\edamame_app\\build\\windows\\x64\\_deps\\nuget-subbuild\\nuget-populate-prefix\\tmp\\nuget-populate-mkdirs.cmake"
+        ));
+        assert!(is_installer_toolchain_temp_path(
+            "C:/Users/edamame/actions-runner/_work/edamame_app/edamame_app/build/windows/x64/_deps/corrosion-subbuild/corrosion-populate-prefix/tmp/corrosion-populate-download.cmake"
+        ));
+        assert!(is_installer_toolchain_temp_path(
+            "C:\\Users\\edamame\\actions-runner\\_work\\edamame_app\\edamame_app\\build\\windows\\x64\\_deps\\sentry-native-subbuild\\sentry-native-populate-prefix\\tmp\\sentry-native-populate-update.cmake"
+        ));
+        // FP-WIN-14a impostor: a temp file that just happens to
+        // mention "populate-prefix" but is NOT in the
+        // `\tmp\` subdir of a CMake FetchContent populate-prefix
+        // tree must NOT match.
+        assert!(!is_installer_toolchain_temp_path(
+            "C:\\Users\\edamame\\AppData\\Local\\Temp\\malware-populate-prefix.exe"
+        ));
+
+        // FP-WIN-14b: NuGet's global cross-process scratch/lock dir
+        // at `%LOCALAPPDATA%\Temp\NuGetScratch\lock\` (and
+        // `\plan\`, `\v3-cache\`). Hex-named lock files trip the
+        // detector with a non-benign suffix; FIM L7 attribution is
+        // unreliable here.
+        assert!(is_installer_toolchain_temp_path(
+            "C:\\Users\\edamame\\AppData\\Local\\Temp\\NuGetScratch\\lock\\db433f173e9b75688465fde95d3d04684cfdb3ae"
+        ));
+        assert!(is_installer_toolchain_temp_path(
+            "C:\\Users\\edamame\\AppData\\Local\\Temp\\NuGetScratch\\plan\\abc123"
+        ));
+        assert!(is_installer_toolchain_temp_path(
+            "C:/Users/edamame/AppData/Local/Temp/NuGetScratch/v3-cache/foo"
+        ));
+        // Case-insensitive.
+        assert!(is_installer_toolchain_temp_path(
+            "C:\\USERS\\EDAMAME\\APPDATA\\LOCAL\\TEMP\\NUGETSCRATCH\\LOCK\\HEX"
+        ));
+        // FP-WIN-14b impostor: a directory whose name contains
+        // "nuget" but is NOT the `NuGetScratch` global cache must
+        // NOT match.
+        assert!(!is_installer_toolchain_temp_path(
+            "C:\\Users\\edamame\\AppData\\Local\\Temp\\my-nuget-stash\\foo"
+        ));
+        assert!(!is_installer_toolchain_temp_path(
+            "C:\\Users\\edamame\\AppData\\Roaming\\NuGet\\packages\\foo.dll"
+        ));
     }
 
     #[test]
