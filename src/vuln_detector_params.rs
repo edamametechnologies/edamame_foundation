@@ -57,7 +57,7 @@ pub struct PlatformHelperMatcherConfigs {
 /// for the recomputable browser-cache subtrees (`Code Cache`,
 /// `GPUCache`, `Service Worker`, etc.) and for the routine-rotation
 /// state files (`Local State`, `Preferences`) that browsers atomically
-/// rewrite many times an hour. See `../edamame_core/FALSEPOSITIVES.md`
+/// rewrite many times an hour. See `FALSEPOSITIVES.md`
 /// FP-WIN-1 / FP-WIN-2 / FP-WIN-5.
 ///
 /// All patterns are case-insensitive substring matches against the
@@ -110,8 +110,16 @@ pub struct CveDetectionParamsJSON {
     pub packaged_application_starts_with_patterns: Vec<String>,
     #[serde(default = "default_packaged_application_ends_with_patterns")]
     pub packaged_application_ends_with_patterns: Vec<String>,
+    #[serde(default = "default_installer_toolchain_temp_path_patterns")]
+    pub installer_toolchain_temp_path_patterns: PlatformStringLists,
+    #[serde(default = "default_package_manager_temp_path_patterns")]
+    pub package_manager_temp_path_patterns: PlatformStringLists,
+    #[serde(default = "default_package_manager_temp_writers")]
+    pub package_manager_temp_writers: PlatformStringLists,
     #[serde(default = "default_platform_metadata_endpoints")]
     pub platform_metadata_endpoints: PlatformStringLists,
+    #[serde(default = "default_platform_runtime_probe_filename_patterns")]
+    pub platform_runtime_probe_filename_patterns: PlatformStringLists,
     #[serde(default = "default_platform_self_state_directories")]
     pub platform_self_state_directories: PlatformStringLists,
     #[serde(default = "default_platform_self_state_processes")]
@@ -589,6 +597,161 @@ fn default_platform_self_state_processes() -> PlatformStringLists {
     )
 }
 
+/// Path substrings that identify per-OS package-manager working
+/// directories where toolchains legitimately stage downloaded
+/// dependency archives. The `file_system_tampering` detector would
+/// otherwise flag every Flutter/dart `pub_*\<pkg>.tar.gz`,
+/// `npm_-_-_-/cache.tgz`, `pip-build-*\source.tar.gz`, etc. that a
+/// CI build downloads while the toolchain has external sessions to
+/// the registry.
+///
+/// The carve-out is conjunctive: BOTH the writer process basename
+/// (matched against `package_manager_temp_writers`) AND the path
+/// pattern (here) must match before the FIM event is suppressed.
+/// A malicious binary writing to a directory that happens to share
+/// the name of a package-manager temp dir does NOT get a free pass
+/// because its process basename will not appear in the writer
+/// allowlist.
+///
+/// Patterns are case-insensitive substring matches against the
+/// normalized (forward-slash, lowercase) FIM event path. Windows
+/// entries keep `\` for the host's native separator style; the
+/// detector normalizes both representations before matching.
+///
+/// Path patterns identifying well-known Windows installer-toolchain
+/// staging directories where benign extraction / build output is
+/// written into `%TEMP%` during MSI builds. The canonical case is
+/// the WiX Toolset's `light.exe`, which extracts
+/// `WixToolset.BootstrapperApplications.wixext_<HASH>` into a
+/// per-build temp directory and emits `wix-ir/*.wxl` localization
+/// resources during `cargo wix` packaging on the Windows runner.
+///
+/// Patterns are case-insensitive substring matches against the
+/// normalized (forward-slash, lowercase) FIM event path. Windows
+/// entries keep `\` for the host's native separator style; the
+/// detector normalizes both representations before matching.
+///
+/// Suppression here is path-only (no writer-process gate) because
+/// FIM events for `light.exe`-spawned `BootstrapperApplications`
+/// extraction frequently arrive with no L7 attribution. The
+/// patterns themselves are deeply specific to the WiX toolchain
+/// (`WixToolset.BootstrapperApplications.wixext_<HASH>` and the
+/// `wix-ir/` intermediate output directory) and combined with the
+/// implicit `\Temp\` gate from the surrounding non-temp branch
+/// they cannot be confused with an attacker drop.
+///
+/// See `FALSEPOSITIVES.md` (FP-WIN-13).
+fn default_installer_toolchain_temp_path_patterns() -> PlatformStringLists {
+    platform_string_lists(
+        // macos
+        &[],
+        // linux
+        &[],
+        // windows
+        &[
+            "\\wixtoolset.bootstrapperapplications.wixext_",
+            "\\wix-ir\\",
+        ],
+    )
+}
+
+/// See `FALSEPOSITIVES.md` (FP-WIN-11).
+fn default_package_manager_temp_path_patterns() -> PlatformStringLists {
+    platform_string_lists(
+        // macos
+        &[
+            "/private/var/folders/",
+            "/library/caches/pub/",
+            "/.pub-cache/",
+            "/.npm/_cacache/",
+            "/.yarn/cache/",
+            "/.cargo/registry/cache/",
+        ],
+        // linux
+        &[
+            "/tmp/pub_",
+            "/tmp/pub-cache-",
+            "/tmp/npm-",
+            "/tmp/yarn-",
+            "/tmp/pip-",
+            "/tmp/cargo-install",
+            "/.cache/pub/",
+            "/.npm/_cacache/",
+            "/.yarn/cache/",
+            "/.cargo/registry/cache/",
+        ],
+        // windows
+        &[
+            "\\temp\\pub_",
+            "\\temp\\npm-",
+            "\\temp\\yarn-",
+            "\\temp\\.yarn-cache\\",
+            "\\temp\\pip-",
+            "\\appdata\\local\\pub-cache\\",
+            "\\appdata\\local\\npm-cache\\",
+            "\\appdata\\roaming\\npm-cache\\",
+            "\\appdata\\local\\yarn\\cache\\",
+            "\\.cargo\\registry\\cache\\",
+        ],
+    )
+}
+
+/// Process basenames recognized as legitimate package-manager
+/// toolchains that download dependency archives into their own
+/// temp/cache directories. Companion to
+/// `package_manager_temp_path_patterns`: a `file_system_tampering`
+/// finding is only suppressed when BOTH the writer basename matches
+/// here AND the artifact path matches the temp pattern list.
+///
+/// Match is case-insensitive exact-match against `process_name`.
+/// Windows entries include the `.exe`/`.cmd` suffix that FIM events
+/// carry; non-Windows variants omit the suffix.
+fn default_package_manager_temp_writers() -> PlatformStringLists {
+    platform_string_lists(
+        // macos
+        &["dart", "node", "npm", "yarn", "pnpm", "pip", "pip3", "cargo"],
+        // linux
+        &["dart", "node", "npm", "yarn", "pnpm", "pip", "pip3", "cargo"],
+        // windows
+        &[
+            "dart.exe",
+            "node.exe",
+            "npm.cmd",
+            "npm.exe",
+            "yarn.cmd",
+            "yarn.js",
+            "pnpm.cmd",
+            "pnpm.exe",
+            "pip.exe",
+            "pip3.exe",
+            "cargo.exe",
+        ],
+    )
+}
+
+/// Filename leaf-prefixes that identify well-known platform-runtime
+/// probe scripts. The canonical case is Windows PowerShell, which
+/// drops a tiny one-line probe `__PSScriptPolicyTest_<random>.<random>.ps1`
+/// into `%TEMP%` every time any process spawns `powershell.exe` to
+/// verify the current execution policy. The probe is recognized,
+/// well-documented Microsoft behaviour, NOT user activity.
+///
+/// Matched as a case-insensitive prefix against the lowercased
+/// filename leaf (path basename). Storing the prefix is sufficient
+/// because the random suffix portion has no security relevance.
+///
+/// See `FALSEPOSITIVES.md` (FP-WIN-12).
+fn default_platform_runtime_probe_filename_patterns() -> PlatformStringLists {
+    platform_string_lists(
+        // macos
+        &[],
+        // linux
+        &[],
+        // windows
+        &["__psscriptpolicytest_"],
+    )
+}
+
 fn default_fim_hash_size_threshold() -> u64 {
     10_485_760
 }
@@ -617,7 +780,11 @@ pub struct CveDetectionParams {
     pub packaged_application_contains_patterns: Vec<String>,
     pub packaged_application_starts_with_patterns: Vec<String>,
     pub packaged_application_ends_with_patterns: Vec<String>,
+    pub installer_toolchain_temp_path_patterns: PlatformStringLists,
+    pub package_manager_temp_path_patterns: PlatformStringLists,
+    pub package_manager_temp_writers: PlatformStringLists,
     pub platform_metadata_endpoints: PlatformStringLists,
+    pub platform_runtime_probe_filename_patterns: PlatformStringLists,
     pub platform_self_state_directories: PlatformStringLists,
     pub platform_self_state_processes: PlatformStringLists,
     pub fim_hash_size_threshold: u64,
@@ -714,6 +881,66 @@ impl CveDetectionParams {
             packaged_application_ends_with_patterns: json
                 .packaged_application_ends_with_patterns
                 .clone(),
+            installer_toolchain_temp_path_patterns: PlatformStringLists {
+                macos: json
+                    .installer_toolchain_temp_path_patterns
+                    .macos
+                    .iter()
+                    .map(|p| p.to_ascii_lowercase().replace('\\', "/"))
+                    .collect(),
+                linux: json
+                    .installer_toolchain_temp_path_patterns
+                    .linux
+                    .iter()
+                    .map(|p| p.to_ascii_lowercase().replace('\\', "/"))
+                    .collect(),
+                windows: json
+                    .installer_toolchain_temp_path_patterns
+                    .windows
+                    .iter()
+                    .map(|p| p.to_ascii_lowercase().replace('\\', "/"))
+                    .collect(),
+            },
+            package_manager_temp_path_patterns: PlatformStringLists {
+                macos: json
+                    .package_manager_temp_path_patterns
+                    .macos
+                    .iter()
+                    .map(|p| p.to_ascii_lowercase().replace('\\', "/"))
+                    .collect(),
+                linux: json
+                    .package_manager_temp_path_patterns
+                    .linux
+                    .iter()
+                    .map(|p| p.to_ascii_lowercase().replace('\\', "/"))
+                    .collect(),
+                windows: json
+                    .package_manager_temp_path_patterns
+                    .windows
+                    .iter()
+                    .map(|p| p.to_ascii_lowercase().replace('\\', "/"))
+                    .collect(),
+            },
+            package_manager_temp_writers: PlatformStringLists {
+                macos: json
+                    .package_manager_temp_writers
+                    .macos
+                    .iter()
+                    .map(|s| s.to_ascii_lowercase())
+                    .collect(),
+                linux: json
+                    .package_manager_temp_writers
+                    .linux
+                    .iter()
+                    .map(|s| s.to_ascii_lowercase())
+                    .collect(),
+                windows: json
+                    .package_manager_temp_writers
+                    .windows
+                    .iter()
+                    .map(|s| s.to_ascii_lowercase())
+                    .collect(),
+            },
             platform_metadata_endpoints: PlatformStringLists {
                 macos: json
                     .platform_metadata_endpoints
@@ -735,6 +962,26 @@ impl CveDetectionParams {
                     .iter()
                     .map(|s| s.trim().to_string())
                     .filter(|s| !s.is_empty())
+                    .collect(),
+            },
+            platform_runtime_probe_filename_patterns: PlatformStringLists {
+                macos: json
+                    .platform_runtime_probe_filename_patterns
+                    .macos
+                    .iter()
+                    .map(|s| s.to_ascii_lowercase())
+                    .collect(),
+                linux: json
+                    .platform_runtime_probe_filename_patterns
+                    .linux
+                    .iter()
+                    .map(|s| s.to_ascii_lowercase())
+                    .collect(),
+                windows: json
+                    .platform_runtime_probe_filename_patterns
+                    .windows
+                    .iter()
+                    .map(|s| s.to_ascii_lowercase())
                     .collect(),
             },
             platform_self_state_directories: PlatformStringLists {
@@ -1053,6 +1300,123 @@ pub fn is_platform_self_state_process_name(name: &str) -> bool {
     lists
         .iter()
         .any(|list| list.iter().any(|known| known == &lower))
+}
+
+/// Returns true if `name` is the basename of a recognized
+/// package-manager toolchain that legitimately stages downloaded
+/// dependency archives (`dart`, `npm`, `pip`, `cargo`, ...). Match
+/// is case-insensitive exact-match against the configured per-OS
+/// lists.
+///
+/// Used by the `file_system_tampering` package-manager temp-write
+/// suppression hook (FP-WIN-11). The hook also requires the artifact
+/// path to match `is_package_manager_temp_path` -- both gates must
+/// fire so a malicious binary writing to a similarly-named
+/// directory does not get a free pass.
+pub fn is_package_manager_temp_writer(name: &str) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+    let lower = name.to_ascii_lowercase();
+    let snapshot = PARAMS_SNAPSHOT.load();
+    let writers = &snapshot.package_manager_temp_writers;
+    let lists: [&Vec<String>; 3] = [&writers.macos, &writers.linux, &writers.windows];
+    lists
+        .iter()
+        .any(|list| list.iter().any(|known| known == &lower))
+}
+
+/// Returns true if the normalized `path` lies within one of the
+/// per-OS package-manager temp/cache working directories
+/// (`%TEMP%\pub_*\`, `~/.npm/_cacache/`, `~/.cargo/registry/cache/`,
+/// ...).
+///
+/// Path matching is case-insensitive and tolerant of separator
+/// style: the input is lowercased and `\` is folded to `/` before
+/// substring matching against the configured patterns (which are
+/// also stored in normalized form).
+///
+/// Used together with `is_package_manager_temp_writer` to suppress
+/// `file_system_tampering` events where a recognized toolchain
+/// downloads a dependency archive into its working dir.
+pub fn is_package_manager_temp_path(path: &str) -> bool {
+    if path.is_empty() {
+        return false;
+    }
+    let lower = path.to_ascii_lowercase().replace('\\', "/");
+    let snapshot = PARAMS_SNAPSHOT.load();
+    let dirs = &snapshot.package_manager_temp_path_patterns;
+    let lists: [&Vec<String>; 3] = [&dirs.macos, &dirs.linux, &dirs.windows];
+    lists.iter().any(|list| {
+        list.iter()
+            .any(|pattern| !pattern.is_empty() && lower.contains(pattern))
+    })
+}
+
+/// Returns true if the normalized `path` lies within one of the
+/// per-OS installer-toolchain temp staging directories (e.g. the
+/// WiX Toolset's `WixToolset.BootstrapperApplications.wixext_<HASH>`
+/// extraction directory and its `wix-ir/` sub-directory, written
+/// during `cargo wix` MSI builds).
+///
+/// Path matching is case-insensitive and tolerant of separator
+/// style: the input is lowercased and `\` is folded to `/` before
+/// substring matching against the configured patterns (which are
+/// also stored in normalized form).
+///
+/// Suppression here is path-only (no writer-process gate) because
+/// FIM events for `light.exe`-spawned `BootstrapperApplications`
+/// extraction frequently arrive without L7 attribution. The
+/// patterns themselves are deeply specific to the WiX toolchain
+/// and combined with the `\Temp\` gate from the surrounding
+/// detector branch they cannot be confused with an attacker drop.
+///
+/// Used by the `file_system_tampering` installer-toolchain
+/// suppression hook (FP-WIN-13).
+pub fn is_installer_toolchain_temp_path(path: &str) -> bool {
+    if path.is_empty() {
+        return false;
+    }
+    let lower = path.to_ascii_lowercase().replace('\\', "/");
+    let snapshot = PARAMS_SNAPSHOT.load();
+    let dirs = &snapshot.installer_toolchain_temp_path_patterns;
+    let lists: [&Vec<String>; 3] = [&dirs.macos, &dirs.linux, &dirs.windows];
+    lists.iter().any(|list| {
+        list.iter()
+            .any(|pattern| !pattern.is_empty() && lower.contains(pattern))
+    })
+}
+
+/// Returns true if the leaf basename of `path` starts with one of
+/// the platform runtime-probe filename prefixes (e.g. Windows
+/// PowerShell's `__PSScriptPolicyTest_*.ps1` execution-policy
+/// probe). The probe is recognized, well-documented Microsoft
+/// behaviour, NOT user activity.
+///
+/// Match is case-insensitive against the lowercased filename leaf
+/// only; the directory portion is irrelevant. Storing the prefix
+/// is sufficient because the random suffix portion has no security
+/// relevance.
+pub fn is_platform_runtime_probe_filename(path: &str) -> bool {
+    if path.is_empty() {
+        return false;
+    }
+    // Extract leaf (basename) tolerant of both separator styles.
+    let leaf = path
+        .rsplit(|c| c == '/' || c == '\\')
+        .next()
+        .unwrap_or(path)
+        .to_ascii_lowercase();
+    if leaf.is_empty() {
+        return false;
+    }
+    let snapshot = PARAMS_SNAPSHOT.load();
+    let probes = &snapshot.platform_runtime_probe_filename_patterns;
+    let lists: [&Vec<String>; 3] = [&probes.macos, &probes.linux, &probes.windows];
+    lists.iter().any(|list| {
+        list.iter()
+            .any(|prefix| !prefix.is_empty() && leaf.starts_with(prefix))
+    })
 }
 
 pub fn suspicious_parent_path_patterns() -> Vec<String> {
@@ -1384,6 +1748,147 @@ mod tests {
             "/var/lib/postgresql/data"
         ));
         assert!(!is_platform_self_state_directory(""));
+    }
+
+    #[test]
+    fn test_package_manager_temp_writer_lookup() {
+        // Cross-platform toolchain basenames.
+        assert!(is_package_manager_temp_writer("dart"));
+        assert!(is_package_manager_temp_writer("DART"));
+        assert!(is_package_manager_temp_writer("npm"));
+        assert!(is_package_manager_temp_writer("cargo"));
+        assert!(is_package_manager_temp_writer("pip"));
+        assert!(is_package_manager_temp_writer("pip3"));
+        // Windows variants.
+        assert!(is_package_manager_temp_writer("dart.exe"));
+        assert!(is_package_manager_temp_writer("npm.cmd"));
+        assert!(is_package_manager_temp_writer("yarn.cmd"));
+        assert!(is_package_manager_temp_writer("pnpm.exe"));
+        assert!(is_package_manager_temp_writer("cargo.exe"));
+        // Generic interpreters and arbitrary process names must NOT
+        // be treated as toolchains -- a malicious python3 or bash
+        // dropping a file into a pub-cache-shaped directory should
+        // still trip.
+        assert!(!is_package_manager_temp_writer("python3"));
+        assert!(!is_package_manager_temp_writer("bash"));
+        assert!(!is_package_manager_temp_writer("powershell.exe"));
+        assert!(!is_package_manager_temp_writer(""));
+    }
+
+    #[test]
+    fn test_package_manager_temp_path_lookup() {
+        // Windows: dart.exe pub-cache temp download.
+        assert!(is_package_manager_temp_path(
+            "C:\\Users\\edamame\\AppData\\Local\\Temp\\pub_9931f52b\\flutter_widget_from_html-0.17.1.tar.gz"
+        ));
+        assert!(is_package_manager_temp_path(
+            "C:\\Users\\frank\\AppData\\Local\\Temp\\npm-cache-foo\\package.tgz"
+        ));
+        assert!(is_package_manager_temp_path(
+            "D:\\Users\\runner\\AppData\\Local\\Temp\\.yarn-cache\\pkg.tgz"
+        ));
+        // Linux: pub / npm / pip / cargo temp paths.
+        assert!(is_package_manager_temp_path(
+            "/tmp/pub_abc123/flutter_widget_from_html-0.17.1.tar.gz"
+        ));
+        assert!(is_package_manager_temp_path(
+            "/home/runner/.npm/_cacache/content-v2/sha512/abc/def.tgz"
+        ));
+        assert!(is_package_manager_temp_path(
+            "/home/runner/.cargo/registry/cache/index.crates.io-XYZ/some-pkg-1.0.0.crate"
+        ));
+        // macOS: dart pub-cache.
+        assert!(is_package_manager_temp_path(
+            "/Users/me/.pub-cache/hosted/pub.dev/flutter_widget_from_html-0.17.1.tar.gz"
+        ));
+        assert!(is_package_manager_temp_path(
+            "/private/var/folders/abc/T/pub_xyz/pkg.tar.gz"
+        ));
+        // Paths outside any known package-cache pattern must NOT
+        // match. Note: the path-only check is permissive on purpose
+        // (anything under `\temp\pub_` matches) -- the conjunctive
+        // gate with `is_package_manager_temp_writer` is what
+        // prevents adversary spoofing.
+        assert!(!is_package_manager_temp_path(
+            "/home/user/repos/some-project/dist/pkg.tar.gz"
+        ));
+        assert!(!is_package_manager_temp_path("/etc/passwd"));
+        assert!(!is_package_manager_temp_path(
+            "C:\\Windows\\System32\\config\\SAM"
+        ));
+        assert!(!is_package_manager_temp_path(""));
+    }
+
+    #[test]
+    fn test_platform_runtime_probe_filename_lookup() {
+        // Canonical Windows PowerShell execution-policy probe.
+        assert!(is_platform_runtime_probe_filename(
+            "C:\\Users\\edamame\\AppData\\Local\\Temp\\__PSScriptPolicyTest_pfet2d4g.i4l.ps1"
+        ));
+        // Case-insensitive.
+        assert!(is_platform_runtime_probe_filename(
+            "C:\\Users\\edamame\\AppData\\Local\\Temp\\__PSSCRIPTPOLICYTEST_ABCDEF.GHI.ps1"
+        ));
+        // Forward-slash separator (FIM events sometimes mix styles).
+        assert!(is_platform_runtime_probe_filename(
+            "C:/Users/edamame/AppData/Local/Temp/__PSScriptPolicyTest_xyz.abc.ps1"
+        ));
+        // Bare leaf without directory portion.
+        assert!(is_platform_runtime_probe_filename(
+            "__PSScriptPolicyTest_aaa.bbb.ps1"
+        ));
+        // Random temp `.ps1` (FP-WIN-4 shape, NOT a runtime probe)
+        // must NOT match -- the operator-scratch carve-out handles
+        // that one with a severity demote, not a full suppression.
+        assert!(!is_platform_runtime_probe_filename(
+            "C:\\Users\\edamame\\AppData\\Local\\Temp\\.tmpW09dzI.ps1"
+        ));
+        // Adversary trying to hide behind the prefix from a non-temp
+        // path is still suppressed by basename (suppression is about
+        // the file shape, not the directory). Acceptable trade-off:
+        // the real PSScriptPolicyTest only ever lives in %TEMP% so
+        // the worst case is a file with this exact basename pattern
+        // anywhere on disk being skipped by the FIM detector.
+        assert!(is_platform_runtime_probe_filename(
+            "C:\\Users\\victim\\Documents\\__PSScriptPolicyTest_attacker.fake.ps1"
+        ));
+        assert!(!is_platform_runtime_probe_filename(""));
+        assert!(!is_platform_runtime_probe_filename("foo.ps1"));
+    }
+
+    #[test]
+    fn test_installer_toolchain_temp_path_lookup() {
+        // Canonical WiX BootstrapperApplication extraction during a
+        // `cargo wix` MSI build on the Windows runner.
+        assert!(is_installer_toolchain_temp_path(
+            "C:\\Users\\edamame\\AppData\\Local\\Temp\\41ftcnya.p4m\\WixToolset.BootstrapperApplications.wixext_HPVZ2YWGIB0GOTbsOi2MVHIa9bk\\wix-ir\\HyperlinkTheme.wxl"
+        ));
+        // Same shape with forward-slash separators (FIM events
+        // sometimes mix styles after normalization).
+        assert!(is_installer_toolchain_temp_path(
+            "C:/Users/edamame/AppData/Local/Temp/abc.def/WixToolset.BootstrapperApplications.wixext_XYZ/wix-ir/Theme.wxl"
+        ));
+        // The bare `wix-ir` directory pattern should also match
+        // (covers wix-ir intermediate output written outside the
+        // BootstrapperApplications hash dir).
+        assert!(is_installer_toolchain_temp_path(
+            "C:\\Users\\edamame\\AppData\\Local\\Temp\\some-build\\wix-ir\\foo.wixobj"
+        ));
+        // Case-insensitive matching.
+        assert!(is_installer_toolchain_temp_path(
+            "C:\\USERS\\EDAMAME\\APPDATA\\LOCAL\\TEMP\\X.Y\\WIXTOOLSET.BOOTSTRAPPERAPPLICATIONS.WIXEXT_HASH\\WIX-IR\\HYPERLINKTHEME.WXL"
+        ));
+        // Non-WiX paths must NOT match: a malicious binary writing
+        // to a similarly-suffixed file outside the WiX staging
+        // directory shape gets no free pass.
+        assert!(!is_installer_toolchain_temp_path(
+            "C:\\Users\\edamame\\AppData\\Local\\Temp\\malicious.wxl"
+        ));
+        assert!(!is_installer_toolchain_temp_path(
+            "/home/user/repos/some-project/wix-ir.txt"
+        ));
+        assert!(!is_installer_toolchain_temp_path("/etc/passwd"));
+        assert!(!is_installer_toolchain_temp_path(""));
     }
 
     #[test]
