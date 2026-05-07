@@ -83,6 +83,10 @@ pub struct CveDetectionParamsJSON {
     pub credential_harvest_min_labels: usize,
     pub secret_content_scan_max_bytes: u64,
     pub secret_content_min_hits: usize,
+    #[serde(default = "default_secret_content_script_extensions")]
+    pub secret_content_script_extensions: Vec<String>,
+    #[serde(default = "default_secret_content_network_command_tokens")]
+    pub secret_content_network_command_tokens: Vec<String>,
     pub recent_sensitive_open_file_ttl_secs: u64,
     pub generic_reuse_tokens: Vec<String>,
     pub generic_application_tokens: Vec<String>,
@@ -163,6 +167,46 @@ fn helper_matcher_config(
 
 fn default_credential_harvest_min_labels() -> usize {
     3
+}
+
+/// Filename suffixes that mark a file as "script-like" for the
+/// secret-content scanner (`secret_content_scan::inspect_secret_like_file`).
+/// Used by the FIM `file_system_tampering` heuristic to corroborate that
+/// a write to `/tmp/` (or `%TEMP%\`) carries an actual script payload.
+///
+/// Tunable in CloudModel so we can add new operator-script extensions
+/// (or remove ones that turn out to be ambiguous) without a release.
+fn default_secret_content_script_extensions() -> Vec<String> {
+    strings(&[
+        ".sh", ".py", ".pl", ".rb", ".ps1", ".bat", ".cmd", ".js", ".vbs",
+    ])
+}
+
+/// Substrings that mark file content as "network-command-like" for the
+/// secret-content scanner. Combined with `script_like` above they let the
+/// vulnerability detector promote a `/tmp/`-resident write that contains an
+/// outbound-fetch payload (`curl `, `wget `, `Invoke-WebRequest`, ...) from
+/// LOW to HIGH severity in `detect_file_system_tampering`.
+///
+/// Bare `http://` / `https://` are intentionally excluded from the default
+/// list: they appear inside benign log/text content (git error messages
+/// referencing https URLs, OpenSSH warnings linking to documentation,
+/// CI step summaries with permalink URLs) and were a noise driver in
+/// `FALSEPOSITIVES.md` FP-MAC-6 on `kralizec-3.local` 1.3.3. Genuine
+/// outbound-fetch payloads always pair URLs with explicit verb tokens
+/// (`curl`, `wget`, `Invoke-WebRequest`, raw socket constructors), all of
+/// which remain in the default. Tunable via CloudModel so new IOC verbs
+/// can be added without a release.
+fn default_secret_content_network_command_tokens() -> Vec<String> {
+    strings(&[
+        "curl ",
+        "wget ",
+        " nc ",
+        "netcat",
+        "invoke-webrequest",
+        "invoke-restmethod",
+        "socket.create_connection",
+    ])
 }
 
 /// CI runner provisioning daemons and runner agent processes that
@@ -786,6 +830,8 @@ pub struct CveDetectionParams {
     pub credential_harvest_min_labels: usize,
     pub secret_content_scan_max_bytes: u64,
     pub secret_content_min_hits: usize,
+    pub secret_content_script_extensions: Vec<String>,
+    pub secret_content_network_command_tokens: Vec<String>,
     pub recent_sensitive_open_file_ttl_secs: u64,
     pub generic_reuse_tokens: HashSet<String>,
     pub generic_application_tokens: HashSet<String>,
@@ -838,6 +884,16 @@ impl CveDetectionParams {
             credential_harvest_min_labels: json.credential_harvest_min_labels,
             secret_content_scan_max_bytes: json.secret_content_scan_max_bytes,
             secret_content_min_hits: json.secret_content_min_hits,
+            secret_content_script_extensions: json
+                .secret_content_script_extensions
+                .iter()
+                .map(|ext| ext.to_ascii_lowercase())
+                .collect(),
+            secret_content_network_command_tokens: json
+                .secret_content_network_command_tokens
+                .iter()
+                .map(|tok| tok.to_ascii_lowercase())
+                .collect(),
             recent_sensitive_open_file_ttl_secs: json.recent_sensitive_open_file_ttl_secs,
             generic_reuse_tokens: json.generic_reuse_tokens.iter().cloned().collect(),
             generic_application_tokens: json.generic_application_tokens.iter().cloned().collect(),
@@ -1492,6 +1548,26 @@ pub fn secret_content_min_hits() -> usize {
     PARAMS_SNAPSHOT.load().secret_content_min_hits
 }
 
+/// Lowercased filename suffixes treated as "script-like" by the secret-
+/// content scanner. Returned as an owned `Vec<String>` so callers can
+/// hold onto the snapshot without keeping the `ArcSwap` guard alive.
+pub fn secret_content_script_extensions() -> Vec<String> {
+    PARAMS_SNAPSHOT
+        .load()
+        .secret_content_script_extensions
+        .clone()
+}
+
+/// Lowercased substrings that mark file content as "network-command-like"
+/// by the secret-content scanner. Returned as an owned `Vec<String>` for
+/// the same reason as `secret_content_script_extensions()`.
+pub fn secret_content_network_command_tokens() -> Vec<String> {
+    PARAMS_SNAPSHOT
+        .load()
+        .secret_content_network_command_tokens
+        .clone()
+}
+
 pub fn recent_sensitive_open_file_ttl_secs() -> u64 {
     PARAMS_SNAPSHOT.load().recent_sensitive_open_file_ttl_secs
 }
@@ -1529,6 +1605,50 @@ mod tests {
         assert!(is_init_process("launchd"));
         assert!(is_init_process("systemd"));
         assert!(!is_init_process("python3"));
+    }
+
+    /// FP-MAC-6 regression guard at the params level: the network-command
+    /// token list MUST NOT contain the bare `http://` / `https://`
+    /// substrings -- those caused HIGH false positives on benign log/text
+    /// content carrying a single URL (git error, OpenSSH warning, CI step
+    /// summary). The list MUST still contain the explicit verb tokens that
+    /// every CVE trigger payload uses.
+    #[test]
+    fn test_secret_content_network_command_tokens_excludes_bare_urls() {
+        let tokens = secret_content_network_command_tokens();
+        assert!(
+            !tokens.iter().any(|t| t == "http://" || t == "https://"),
+            "bare http(s):// substrings must NOT be in the token list (got: {tokens:?})"
+        );
+        for required in [
+            "curl ",
+            "wget ",
+            " nc ",
+            "netcat",
+            "invoke-webrequest",
+            "invoke-restmethod",
+            "socket.create_connection",
+        ] {
+            assert!(
+                tokens.iter().any(|t| t == required),
+                "required verb token {required:?} missing from {tokens:?}"
+            );
+        }
+    }
+
+    /// Companion check: the script-extension list MUST cover the standard
+    /// operator-script suffixes used by CVE triggers.
+    #[test]
+    fn test_secret_content_script_extensions_covers_common_suffixes() {
+        let exts = secret_content_script_extensions();
+        for required in [
+            ".sh", ".py", ".pl", ".rb", ".ps1", ".bat", ".cmd", ".js", ".vbs",
+        ] {
+            assert!(
+                exts.iter().any(|e| e == required),
+                "required script extension {required:?} missing from {exts:?}"
+            );
+        }
     }
 
     #[test]
