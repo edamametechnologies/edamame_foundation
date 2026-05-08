@@ -3,6 +3,56 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fs;
 
+/// Open `path` for reading with the maximally permissive Win32 share mode,
+/// then read the full body. On non-Windows this is a thin wrapper around
+/// `std::fs::read`.
+///
+/// Why this matters on Windows: the vulnerability detector's content-scan
+/// tick momentarily holds a read handle to every candidate path returned by
+/// `flodbadd::open_files::get_open_file_paths()` (which on a CI host
+/// includes every open file of every L7-attributed `cargo.exe` / `rustc.exe`
+/// session, e.g. `target/<profile>/deps/<crate>-<hash>.d`). The default
+/// Rust `File::open` share mode on Windows is
+/// `FILE_SHARE_READ | FILE_SHARE_WRITE` -- it does NOT permit concurrent
+/// `unlink` or `rename`. Cargo's atomic dep-info rewrite path
+/// (`x.d.tmp` -> `x.d` -> overwrite) then fails with
+/// `os error 32` "process cannot access the file because it is being used
+/// by another process", aborting the whole `cargo build`.
+///
+/// Adding `FILE_SHARE_DELETE` (the third bit) tells the Win32 file-system
+/// driver "I do not need to block other processes from deleting or renaming
+/// this file while my handle is open". Combined with the upstream
+/// build-artifact path filter in
+/// [`vuln_detector_params::is_secret_content_scan_excluded_path`], this is
+/// the defense-in-depth layer that ensures a content scan can never wedge
+/// the build tool that produced the file -- even if a future build-artifact
+/// shape slips past the filter.
+fn read_file_with_shared_delete(path: &str) -> std::io::Result<Vec<u8>> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::io::Read;
+        use std::os::windows::fs::OpenOptionsExt;
+        // FILE_SHARE_READ (0x1) | FILE_SHARE_WRITE (0x2) | FILE_SHARE_DELETE (0x4) = 0x7.
+        // We hard-code the literal here because the Win32 constants live in
+        // `windows::Win32::Storage::FileSystem` which would force pulling
+        // an extra cargo feature into the foundation Windows build for a
+        // value that has been stable since Windows NT 3.1.
+        const SHARE_RWD: u32 = 0x0000_0007;
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(SHARE_RWD)
+            .open(path)?;
+        let metadata = file.metadata()?;
+        let mut buf = Vec::with_capacity(metadata.len() as usize);
+        file.read_to_end(&mut buf)?;
+        Ok(buf)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        fs::read(path)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SecretContentFileMatch {
     pub path: String,
@@ -21,7 +71,7 @@ pub fn inspect_secret_like_file(path: &str) -> Option<SecretContentFileMatch> {
         return None;
     }
 
-    let bytes = fs::read(path).ok()?;
+    let bytes = read_file_with_shared_delete(path).ok()?;
     if bytes.is_empty() {
         return None;
     }
@@ -255,5 +305,57 @@ mod tests {
             ".ps1 extension MUST still be script-like (got: {scan:?})"
         );
         cleanup(&path);
+    }
+
+    /// FP-CI-1 Layer-2 regression guard (Windows only): while the secret
+    /// content scanner has the file open via `read_file_with_shared_delete`,
+    /// the file MUST remain renameable / unlinkable from the same process.
+    /// This is what guarantees we never wedge a producing build tool
+    /// (cargo, rustc, link.exe, ...) by holding the file open without
+    /// `FILE_SHARE_DELETE`. We approximate the producer-side `rename`
+    /// pattern by opening the file with `OpenOptions::share_mode(SHARE_RWD)`
+    /// (the same mode the scanner uses) and then renaming it from another
+    /// open handle, asserting that the rename succeeds.
+    ///
+    /// On non-Windows targets this is irrelevant (POSIX rename always works
+    /// regardless of open file handles), so the test is gated to Windows.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn open_for_read_does_not_block_rename_on_windows() {
+        use std::io::Read;
+        use std::os::windows::fs::OpenOptionsExt;
+
+        let path = unique_path("share_delete_probe", ".d");
+        // A short, plausibly-build-artifact-shaped payload; 64-byte body
+        // is large enough that the read goes through the open-then-read
+        // path rather than a synthetic empty-file shortcut.
+        let body =
+            "quick_error-9b6e3a7c2d4f1a08.rmeta: src/lib.rs src/error.rs build.rs\n".repeat(8);
+        write_temp(&path, &body);
+
+        // Open the file the way the scanner does -- this is the handle
+        // that, with the WRONG share mode, would block the rename below
+        // with `os error 32`.
+        let mut scanner_handle = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0x0000_0007) // FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
+            .open(&path)
+            .expect("scanner open with SHARE_RWD must succeed");
+
+        // While the scanner handle is open, attempt the producer-side
+        // atomic rename. Without FILE_SHARE_DELETE on the scanner handle
+        // this fails with `os error 32`; with it, it MUST succeed.
+        let renamed = format!("{}.renamed", &path);
+        std::fs::rename(&path, &renamed)
+            .expect("rename MUST succeed while scanner handle is open with FILE_SHARE_DELETE");
+
+        // The scanner handle still works post-rename.
+        let mut scanned = Vec::new();
+        scanner_handle
+            .read_to_end(&mut scanned)
+            .expect("scanner read MUST succeed post-rename");
+        assert_eq!(scanned.len(), body.len());
+
+        cleanup(&renamed);
     }
 }

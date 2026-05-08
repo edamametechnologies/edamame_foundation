@@ -87,6 +87,8 @@ pub struct CveDetectionParamsJSON {
     pub secret_content_script_extensions: Vec<String>,
     #[serde(default = "default_secret_content_network_command_tokens")]
     pub secret_content_network_command_tokens: Vec<String>,
+    #[serde(default = "default_secret_content_scan_excluded_path_patterns")]
+    pub secret_content_scan_excluded_path_patterns: Vec<String>,
     pub recent_sensitive_open_file_ttl_secs: u64,
     pub generic_reuse_tokens: Vec<String>,
     pub generic_application_tokens: Vec<String>,
@@ -206,6 +208,76 @@ fn default_secret_content_network_command_tokens() -> Vec<String> {
         "invoke-webrequest",
         "invoke-restmethod",
         "socket.create_connection",
+    ])
+}
+
+/// Path substrings that mark a file as "in a transient build-artifact tree"
+/// and therefore NOT worth content-scanning by `inspect_secret_like_file`.
+///
+/// The vulnerability detector enriches input sessions with the live open-file
+/// list of every L7-attributed process via `flodbadd::open_files`. On CI hosts
+/// (and developer machines) those open files routinely include cargo/rustc
+/// intermediate artifacts (`target/<profile>/deps/<crate>-<hash>.d`,
+/// `.rmeta`, `.rlib`, `.o`, `.pdb`, ...), npm `node_modules/`, gradle caches,
+/// pub-cache packages, and so on. None of those artifacts carry security
+/// intent (they are produced and rewritten in tight loops by the build tool),
+/// and content-scanning them is pure waste.
+///
+/// Worse, on Windows the daemon's read momentarily races with the producer's
+/// atomic rename: rustc writes `crate.d.tmp`, atomic-renames it to `crate.d`,
+/// and immediately rewrites the file -- if the daemon has the file open via
+/// `fs::read` (default Win32 share mode lacks `FILE_SHARE_DELETE`), the
+/// producer's next `unlink` or `rename` fails with `os error 32` "process
+/// cannot access the file because it is being used by another process". This
+/// was the root cause of the Windows self-hosted runner test_windows.yml
+/// failure cluster from 2026-05-01 onward (correlated exactly with enabling
+/// `vulnerability_detection: true` on every self-hosted-runner job in
+/// `edamame_app` commit `1b7099f2`).
+///
+/// Match semantics: paths are lowercased and `\` is normalized to `/` BEFORE
+/// the substring check, so JSON entries use forward slashes only and apply
+/// to both POSIX and Windows paths transparently.
+///
+/// Tunable via CloudModel so new build-tool layouts can be added (or
+/// trimmed) without a release.
+fn default_secret_content_scan_excluded_path_patterns() -> Vec<String> {
+    strings(&[
+        // Cargo profile/triple build outputs (covers debug, release, and
+        // every cross-compile triple we ship).
+        "/target/debug/",
+        "/target/release/",
+        "/target/aarch64-",
+        "/target/x86_64-",
+        "/target/i686-",
+        "/target/armv7-",
+        "/target/riscv64-",
+        "/target/wasm32-",
+        "/target/thumbv",
+        // Cargo registry + git checkouts (downloaded crate sources/caches).
+        "/.cargo/registry/cache/",
+        "/.cargo/registry/index/",
+        "/.cargo/registry/src/",
+        "/.cargo/git/db/",
+        "/.cargo/git/checkouts/",
+        // npm / yarn / pnpm.
+        "/node_modules/",
+        // Gradle (wrapper + dep cache).
+        "/.gradle/caches/",
+        "/.gradle/wrapper/",
+        // npm + pub caches outside node_modules / .cargo.
+        "/.npm/_cacache/",
+        "/.pub-cache/",
+        // Dart / Flutter generated tool output.
+        "/.dart_tool/",
+        // Generic Android / Gradle build outputs.
+        "/build/intermediates/",
+        "/build/outputs/",
+        "/build/generated/",
+        // Xcode (DerivedData lives under the user library; the lowercase
+        // forms catch both `~/Library/Developer/Xcode/DerivedData` and
+        // per-project copies). DerivedSources is the SwiftPM equivalent.
+        "/derived data/",
+        "/derivedsources/",
     ])
 }
 
@@ -832,6 +904,7 @@ pub struct CveDetectionParams {
     pub secret_content_min_hits: usize,
     pub secret_content_script_extensions: Vec<String>,
     pub secret_content_network_command_tokens: Vec<String>,
+    pub secret_content_scan_excluded_path_patterns: Vec<String>,
     pub recent_sensitive_open_file_ttl_secs: u64,
     pub generic_reuse_tokens: HashSet<String>,
     pub generic_application_tokens: HashSet<String>,
@@ -893,6 +966,11 @@ impl CveDetectionParams {
                 .secret_content_network_command_tokens
                 .iter()
                 .map(|tok| tok.to_ascii_lowercase())
+                .collect(),
+            secret_content_scan_excluded_path_patterns: json
+                .secret_content_scan_excluded_path_patterns
+                .iter()
+                .map(|pat| pat.to_ascii_lowercase().replace('\\', "/"))
                 .collect(),
             recent_sensitive_open_file_ttl_secs: json.recent_sensitive_open_file_ttl_secs,
             generic_reuse_tokens: json.generic_reuse_tokens.iter().cloned().collect(),
@@ -1568,6 +1646,34 @@ pub fn secret_content_network_command_tokens() -> Vec<String> {
         .clone()
 }
 
+/// Lowercased, slash-normalized path substrings that mark a path as
+/// "transient build-artifact, do not content-scan". See
+/// [`default_secret_content_scan_excluded_path_patterns`] for the
+/// rationale and Win32 race details.
+pub fn secret_content_scan_excluded_path_patterns() -> Vec<String> {
+    PARAMS_SNAPSHOT
+        .load()
+        .secret_content_scan_excluded_path_patterns
+        .clone()
+}
+
+/// Returns true when the path is in a transient build-artifact tree and
+/// MUST NOT be content-scanned. This is the canonical filter the
+/// vulnerability detector's content-scan candidate collector uses.
+///
+/// Match semantics: lowercase the path, replace `\` with `/`, then check
+/// if any configured pattern is a substring of the result. The patterns
+/// themselves are already normalized to lowercase + forward slashes by
+/// `CveDetectionParams::new_from_json`.
+pub fn is_secret_content_scan_excluded_path(path: &str) -> bool {
+    let normalized = path.to_ascii_lowercase().replace('\\', "/");
+    let snapshot = PARAMS_SNAPSHOT.load();
+    snapshot
+        .secret_content_scan_excluded_path_patterns
+        .iter()
+        .any(|pattern| normalized.contains(pattern.as_str()))
+}
+
 pub fn recent_sensitive_open_file_ttl_secs() -> u64 {
     PARAMS_SNAPSHOT.load().recent_sensitive_open_file_ttl_secs
 }
@@ -1634,6 +1740,72 @@ mod tests {
                 "required verb token {required:?} missing from {tokens:?}"
             );
         }
+    }
+
+    /// FP-CI-1 regression guard at the params level: the build-artifact
+    /// excluded-path list MUST cover canonical cargo dep-info / rmeta paths
+    /// (both POSIX and Windows separators) so the vulnerability detector's
+    /// content-scan candidate collector skips them. These are the paths
+    /// that triggered the Win32 atomic-rename race against rustc and broke
+    /// `test_windows.yml` from 2026-05-01 onward.
+    #[test]
+    fn test_is_secret_content_scan_excluded_path_covers_cargo_artifacts() {
+        // Canonical path that broke test_windows.yml run 25513313561.
+        assert!(is_secret_content_scan_excluded_path(
+            "C:\\Users\\edamame\\actions-runner\\_work\\edamame_app\\edamame_app\\edamame_core\\target\\release\\deps\\quick_error-9b6e3a7c2d4f1a08.d"
+        ));
+        // POSIX form on macOS / Linux runners.
+        assert!(is_secret_content_scan_excluded_path(
+            "/home/runner/work/edamame_app/edamame_app/edamame_core/target/debug/deps/serde-12345.rmeta"
+        ));
+        // Cross-compile target triple (iOS sim).
+        assert!(is_secret_content_scan_excluded_path(
+            "/Users/me/proj/target/aarch64-apple-ios-sim/debug/deps/foo-abc.rlib"
+        ));
+        // Cargo registry source dir.
+        assert!(is_secret_content_scan_excluded_path(
+            "/Users/me/.cargo/registry/src/index.crates.io-XXXX/quick-error-2.0.1/src/lib.rs"
+        ));
+        // Generic node_modules.
+        assert!(is_secret_content_scan_excluded_path(
+            "/Users/me/proj/node_modules/some-pkg/dist/index.js"
+        ));
+    }
+
+    /// Negative-control companion: paths that legitimately need
+    /// content-scanning MUST NOT be excluded by the build-artifact filter.
+    /// In particular the credential / secret paths that the detector exists
+    /// to catch (`~/.aws/credentials`, `~/.ssh/id_rsa`, `~/.kube/config`,
+    /// etc.) MUST pass through.
+    #[test]
+    fn test_is_secret_content_scan_excluded_path_does_not_skip_credentials() {
+        assert!(!is_secret_content_scan_excluded_path(
+            "/Users/me/.aws/credentials"
+        ));
+        assert!(!is_secret_content_scan_excluded_path(
+            "C:\\Users\\me\\.aws\\credentials"
+        ));
+        assert!(!is_secret_content_scan_excluded_path(
+            "/Users/me/.ssh/id_rsa"
+        ));
+        assert!(!is_secret_content_scan_excluded_path(
+            "/Users/me/.kube/config"
+        ));
+        // /private/tmp/sifu-autopull.log was the FP-MAC-6 reproducer --
+        // it lives in /tmp/, not in a build-artifact tree, and the
+        // content-scan filter must not silently exclude /tmp/ files.
+        assert!(!is_secret_content_scan_excluded_path(
+            "/private/tmp/sifu-autopull.log"
+        ));
+        // A legitimate user document inside a folder that happens to
+        // contain "target" or "build" but not the cargo/build-tool
+        // sub-shape MUST still be content-scanned.
+        assert!(!is_secret_content_scan_excluded_path(
+            "/Users/me/Documents/sales-target.txt"
+        ));
+        assert!(!is_secret_content_scan_excluded_path(
+            "/Users/me/Documents/build-plan.md"
+        ));
     }
 
     /// Companion check: the script-extension list MUST cover the standard
@@ -1854,6 +2026,19 @@ mod tests {
         assert!(p.secret_content_scan_max_bytes >= 16 * 1024);
         assert!(p.secret_content_min_hits >= 1);
         assert!(p.recent_sensitive_open_file_ttl_secs >= 30);
+        // FP-CI-1 guard: the build-artifact excluded-path list MUST be
+        // populated and MUST cover at minimum the cargo profile dirs that
+        // race against rustc on Windows self-hosted runners.
+        assert!(!p.secret_content_scan_excluded_path_patterns.is_empty());
+        for required in ["/target/debug/", "/target/release/", "/node_modules/"] {
+            assert!(
+                p.secret_content_scan_excluded_path_patterns
+                    .iter()
+                    .any(|pat| pat == required),
+                "required excluded-path pattern {required:?} missing from {:?}",
+                p.secret_content_scan_excluded_path_patterns
+            );
+        }
     }
 
     #[test]
