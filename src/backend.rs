@@ -1,5 +1,6 @@
 use anyhow::{Error, Result};
 use edamame_backend::advisor_todos_backend::AdvisorTodosBackend;
+use edamame_backend::agentic_dismissal_report_backend::AgenticDismissalReportBackend;
 use edamame_backend::feedback_info_backend::FeedbackInfoBackend;
 use edamame_backend::lanscan_device_info_backend::*;
 use edamame_backend::lanscan_dislike_device_info_backend::DislikeDeviceInfoBackend;
@@ -145,6 +146,15 @@ pub trait Backend {
     async fn send_dislike_device_type_info(
         &self,
         dislike_device_info_backend: &DislikeDeviceInfoBackend,
+    ) -> Result<()>;
+
+    /// Operator-initiated, opt-in report sent when a vulnerability or
+    /// divergence finding is dismissed and the operator explicitly checks
+    /// "Report to EDAMAME" in the consent dialog. Mirrors
+    /// `send_dislike_device_type_info` for the agentic surface.
+    async fn send_agentic_dismissal_report(
+        &self,
+        report: &AgenticDismissalReportBackend,
     ) -> Result<()>;
 
     async fn get_remediation_session(
