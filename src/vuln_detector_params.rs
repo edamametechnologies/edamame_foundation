@@ -912,9 +912,19 @@ fn default_package_manager_temp_writers() -> PlatformStringLists {
 fn default_edamame_daemon_self_telemetry_writers() -> PlatformStringLists {
     platform_string_lists(
         // macos
-        &["edamame", "edamame_posture", "edamame_helper", "edamame_security"],
+        &[
+            "edamame",
+            "edamame_posture",
+            "edamame_helper",
+            "edamame_security",
+        ],
         // linux
-        &["edamame", "edamame_posture", "edamame_helper", "edamame_security"],
+        &[
+            "edamame",
+            "edamame_posture",
+            "edamame_helper",
+            "edamame_security",
+        ],
         // windows
         &[
             "edamame.exe",
