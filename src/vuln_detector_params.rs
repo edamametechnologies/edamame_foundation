@@ -122,6 +122,8 @@ pub struct CveDetectionParamsJSON {
     pub package_manager_temp_path_patterns: PlatformStringLists,
     #[serde(default = "default_package_manager_temp_writers")]
     pub package_manager_temp_writers: PlatformStringLists,
+    #[serde(default = "default_edamame_daemon_self_telemetry_writers")]
+    pub edamame_daemon_self_telemetry_writers: PlatformStringLists,
     #[serde(default = "default_platform_metadata_endpoints")]
     pub platform_metadata_endpoints: PlatformStringLists,
     #[serde(default = "default_platform_runtime_probe_filename_patterns")]
@@ -881,6 +883,48 @@ fn default_package_manager_temp_writers() -> PlatformStringLists {
     )
 }
 
+/// Per-OS process basenames that identify the EDAMAME daemon family
+/// (the GUI app, the posture CLI, the privileged helper). Used to
+/// recognize legitimate self-access during the daemon's own threat
+/// checks and self-telemetry uploads.
+///
+/// The deterministic `file_system_tampering` severity grading uses
+/// this list to extend the FP-WIN-4 LOW-demote carve-out
+/// (`operator_scratch_script_shape`) to also fire when
+/// `has_external_process` is true, AS LONG AS the writer is an
+/// EDAMAME daemon binary AND the script content has no
+/// network-command tokens. This handles the canonical FP-WIN-15
+/// shape: `edamame_posture.exe` writes a `.tmp*.ps1` threat-check
+/// stub into `%TEMP%` while concurrently uploading telemetry to
+/// `hub.edamame.tech`. The egress is real but it is the daemon's
+/// own self-telemetry, not malicious payload exfil. Without this
+/// allowance the FP-WIN-4 demote misses the EDAMAME case and the
+/// daemon flags itself HIGH on every CI / dogfood run.
+///
+/// The carve-out is conjunctive (writer name AND no network-command
+/// content AND not in `/tmp/`): an attacker who happens to drop a
+/// `.tmp*.ps1` containing `curl evil.example.com` into `%TEMP%`
+/// would still trip HIGH because `network_command_like` flips the
+/// gate off, regardless of process attribution.
+///
+/// See `FALSEPOSITIVES.md` (FP-WIN-15) and
+/// `FALSEPOSITIVESFIX.md` (FP-WIN-15) for the full case study.
+fn default_edamame_daemon_self_telemetry_writers() -> PlatformStringLists {
+    platform_string_lists(
+        // macos
+        &["edamame", "edamame_posture", "edamame_helper", "edamame_security"],
+        // linux
+        &["edamame", "edamame_posture", "edamame_helper", "edamame_security"],
+        // windows
+        &[
+            "edamame.exe",
+            "edamame_posture.exe",
+            "edamame_helper.exe",
+            "edamame_security.exe",
+        ],
+    )
+}
+
 /// Filename leaf-prefixes that identify well-known platform-runtime
 /// probe scripts. The canonical case is Windows PowerShell, which
 /// drops a tiny one-line probe `__PSScriptPolicyTest_<random>.<random>.ps1`
@@ -938,6 +982,7 @@ pub struct CveDetectionParams {
     pub installer_toolchain_temp_path_patterns: PlatformStringLists,
     pub package_manager_temp_path_patterns: PlatformStringLists,
     pub package_manager_temp_writers: PlatformStringLists,
+    pub edamame_daemon_self_telemetry_writers: PlatformStringLists,
     pub platform_metadata_endpoints: PlatformStringLists,
     pub platform_runtime_probe_filename_patterns: PlatformStringLists,
     pub platform_self_state_directories: PlatformStringLists,
@@ -1106,6 +1151,26 @@ impl CveDetectionParams {
                     .collect(),
                 windows: json
                     .package_manager_temp_writers
+                    .windows
+                    .iter()
+                    .map(|s| s.to_ascii_lowercase())
+                    .collect(),
+            },
+            edamame_daemon_self_telemetry_writers: PlatformStringLists {
+                macos: json
+                    .edamame_daemon_self_telemetry_writers
+                    .macos
+                    .iter()
+                    .map(|s| s.to_ascii_lowercase())
+                    .collect(),
+                linux: json
+                    .edamame_daemon_self_telemetry_writers
+                    .linux
+                    .iter()
+                    .map(|s| s.to_ascii_lowercase())
+                    .collect(),
+                windows: json
+                    .edamame_daemon_self_telemetry_writers
                     .windows
                     .iter()
                     .map(|s| s.to_ascii_lowercase())
@@ -1490,6 +1555,39 @@ pub fn is_package_manager_temp_writer(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     let snapshot = PARAMS_SNAPSHOT.load();
     let writers = &snapshot.package_manager_temp_writers;
+    let lists: [&Vec<String>; 3] = [&writers.macos, &writers.linux, &writers.windows];
+    lists
+        .iter()
+        .any(|list| list.iter().any(|known| known == &lower))
+}
+
+/// Returns true if `name` (a process basename, lowercased) belongs
+/// to the EDAMAME daemon family: the GUI app (`edamame`,
+/// `edamame_security`), the posture CLI (`edamame_posture`), or the
+/// privileged helper (`edamame_helper`). Windows variants include
+/// `.exe`. Comparison is case-insensitive.
+///
+/// Used by the deterministic `file_system_tampering` severity grader
+/// to extend the FP-WIN-4 LOW-demote carve-out to allow
+/// `has_external_process` when the writer is an EDAMAME daemon AND
+/// the script content has no network-command tokens. This is the
+/// canonical FP-WIN-15 shape (the daemon writes a `.tmp*.ps1`
+/// threat-check stub into `%TEMP%` while uploading self-telemetry
+/// to `hub.edamame.tech`). The conjunctive content gate prevents
+/// adversary spoofing: a malicious `.tmp*.ps1` carrying `curl ...`
+/// or `Invoke-WebRequest` would still fire HIGH because
+/// `network_command_like` flips the gate off, regardless of
+/// process attribution.
+///
+/// See `FALSEPOSITIVES.md` (FP-WIN-15) and
+/// `FALSEPOSITIVESFIX.md` (FP-WIN-15).
+pub fn is_edamame_daemon_self_telemetry_writer(name: &str) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+    let lower = name.to_ascii_lowercase();
+    let snapshot = PARAMS_SNAPSHOT.load();
+    let writers = &snapshot.edamame_daemon_self_telemetry_writers;
     let lists: [&Vec<String>; 3] = [&writers.macos, &writers.linux, &writers.windows];
     lists
         .iter()
@@ -2161,6 +2259,43 @@ mod tests {
         assert!(!is_package_manager_temp_writer("bash"));
         assert!(!is_package_manager_temp_writer("powershell.exe"));
         assert!(!is_package_manager_temp_writer(""));
+    }
+
+    #[test]
+    fn test_edamame_daemon_self_telemetry_writer_lookup() {
+        // Unix-style daemon basenames (CLI / helper / GUI).
+        assert!(is_edamame_daemon_self_telemetry_writer("edamame"));
+        assert!(is_edamame_daemon_self_telemetry_writer("edamame_posture"));
+        assert!(is_edamame_daemon_self_telemetry_writer("edamame_helper"));
+        assert!(is_edamame_daemon_self_telemetry_writer("edamame_security"));
+        // Windows variants with `.exe`.
+        assert!(is_edamame_daemon_self_telemetry_writer("edamame.exe"));
+        assert!(is_edamame_daemon_self_telemetry_writer(
+            "edamame_posture.exe"
+        ));
+        assert!(is_edamame_daemon_self_telemetry_writer(
+            "edamame_helper.exe"
+        ));
+        assert!(is_edamame_daemon_self_telemetry_writer(
+            "edamame_security.exe"
+        ));
+        // Case-insensitive matching (FIM / process attribution may
+        // upper-case basenames on Windows).
+        assert!(is_edamame_daemon_self_telemetry_writer(
+            "EDAMAME_POSTURE.EXE"
+        ));
+        assert!(is_edamame_daemon_self_telemetry_writer("EDAMAME"));
+        // Adversary spoofing attempt with a similarly-named binary
+        // that is NOT in the daemon family must NOT match -- the
+        // carve-out applies to the EDAMAME-shipped binaries only.
+        assert!(!is_edamame_daemon_self_telemetry_writer("edamame_cli"));
+        assert!(!is_edamame_daemon_self_telemetry_writer(
+            "edamame_attacker.exe"
+        ));
+        assert!(!is_edamame_daemon_self_telemetry_writer("powershell.exe"));
+        assert!(!is_edamame_daemon_self_telemetry_writer("cmd.exe"));
+        assert!(!is_edamame_daemon_self_telemetry_writer("python3"));
+        assert!(!is_edamame_daemon_self_telemetry_writer(""));
     }
 
     #[test]
