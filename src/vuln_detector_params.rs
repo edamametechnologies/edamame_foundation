@@ -273,6 +273,20 @@ fn default_secret_content_scan_excluded_path_patterns() -> Vec<String> {
         "/build/intermediates/",
         "/build/outputs/",
         "/build/generated/",
+        // Flutter desktop / mobile per-platform build trees. These hold
+        // the MSVC PDB (`vc143.pdb`), MSBuild dep-info (`*.tlog`), Xcode
+        // intermediates, and CMake project caches. Scanning them is what
+        // produced the `error C1090: PDB API call failed, error code '5'`
+        // wedge on Windows self-hosted runners (FP-CI-2 second symptom):
+        // `mspdbsrv.exe` cannot tolerate concurrent foreign opens of the
+        // active PDB even when ours uses `FILE_SHARE_DELETE`. Skipping
+        // these paths up-front is cheaper than retrying the read with
+        // increasingly permissive share modes.
+        "/build/windows/x64/",
+        "/build/macos/build/",
+        "/build/ios/build/",
+        "/build/linux/x64/",
+        "/build/web/",
         // Xcode (DerivedData lives under the user library; the lowercase
         // forms catch both `~/Library/Developer/Xcode/DerivedData` and
         // per-project copies). DerivedSources is the SwiftPM equivalent.
@@ -1770,6 +1784,35 @@ mod tests {
         assert!(is_secret_content_scan_excluded_path(
             "/Users/me/proj/node_modules/some-pkg/dist/index.js"
         ));
+        // Flutter desktop / mobile per-platform build outputs (FP-CI-2
+        // second symptom -- these are the paths that hold MSVC PDBs,
+        // CMake project caches, Xcode intermediates, etc.).
+        // Canonical Windows path that broke test_windows.yml run
+        // 25544402336 with `error C1090: PDB API call failed,
+        // error code '5'`.
+        assert!(is_secret_content_scan_excluded_path(
+            "C:\\Users\\edamame\\actions-runner\\_work\\edamame_app\\edamame_app\\build\\windows\\x64\\plugins\\system_tray\\system_tray_plugin.dir\\Debug\\vc143.pdb"
+        ));
+        // MSBuild per-project dep-info / tlog under the same tree.
+        assert!(is_secret_content_scan_excluded_path(
+            "C:\\Users\\edamame\\actions-runner\\_work\\edamame_app\\edamame_app\\build\\windows\\x64\\plugins\\tray_manager\\tray_manager_plugin.dir\\Debug\\unsuccessfulbuild.tlog"
+        ));
+        // Flutter macOS Xcode intermediates / products.
+        assert!(is_secret_content_scan_excluded_path(
+            "/Users/me/proj/build/macos/Build/Intermediates.noindex/Pods.build/Debug/Pods-Runner.build/Objects-normal/x86_64/Pods_Runner.o"
+        ));
+        // Flutter iOS Xcode build output.
+        assert!(is_secret_content_scan_excluded_path(
+            "/Users/me/proj/build/ios/Build/Products/Debug-iphonesimulator/Runner.app/Runner"
+        ));
+        // Flutter Linux desktop build output.
+        assert!(is_secret_content_scan_excluded_path(
+            "/home/runner/work/edamame_app/edamame_app/build/linux/x64/debug/bundle/edamame"
+        ));
+        // Flutter Web build output.
+        assert!(is_secret_content_scan_excluded_path(
+            "/home/runner/work/edamame_app/edamame_app/build/web/main.dart.js"
+        ));
     }
 
     /// Negative-control companion: paths that legitimately need
@@ -1805,6 +1848,24 @@ mod tests {
         ));
         assert!(!is_secret_content_scan_excluded_path(
             "/Users/me/Documents/build-plan.md"
+        ));
+        // FP-CI-2 second-symptom negative controls. The new Flutter
+        // desktop build patterns are anchored on `/build/<platform>/`
+        // which is unambiguous Flutter output, but let's sanity-check
+        // a few user-doc shapes that happen to mention `build` or a
+        // platform name.
+        assert!(!is_secret_content_scan_excluded_path(
+            "/Users/me/Documents/windows-build-notes.md"
+        ));
+        assert!(!is_secret_content_scan_excluded_path(
+            "/Users/me/Documents/macos-build/notes.txt"
+        ));
+        // A user file inside a folder literally named `build/` but NOT
+        // followed by a recognized Flutter desktop platform subdir
+        // MUST still be content-scanned -- the suppression is shape-
+        // anchored, not just substring `/build/`.
+        assert!(!is_secret_content_scan_excluded_path(
+            "/Users/me/proj/build/notes/credentials.txt"
         ));
     }
 
