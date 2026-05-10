@@ -74,6 +74,15 @@ pub struct BrowserDataSubtreesJSON {
     pub firefox_user_data_root_markers: Vec<String>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct BrowserAppdataUnknownWriterJSON {
+    pub chromium_user_data_root_markers: Vec<String>,
+    pub firefox_user_data_root_markers: Vec<String>,
+    pub chromium_process_names: Vec<String>,
+    pub firefox_process_names: Vec<String>,
+    pub directory_target_names: Vec<String>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct CveDetectionParamsJSON {
     pub date: String,
@@ -101,6 +110,8 @@ pub struct CveDetectionParamsJSON {
     pub keychain_transactional_filename_patterns: Vec<String>,
     #[serde(default = "default_non_sensitive_browser_data_subtrees")]
     pub non_sensitive_browser_data_subtrees: BrowserDataSubtreesJSON,
+    #[serde(default = "default_browser_appdata_unknown_writer")]
+    pub browser_appdata_unknown_writer: BrowserAppdataUnknownWriterJSON,
     pub suspicious_parent_path_patterns: Vec<String>,
     #[serde(default = "default_benign_temp_artifact_suffixes")]
     pub benign_temp_artifact_suffixes: Vec<String>,
@@ -124,6 +135,8 @@ pub struct CveDetectionParamsJSON {
     pub package_manager_temp_writers: PlatformStringLists,
     #[serde(default = "default_edamame_daemon_self_telemetry_writers")]
     pub edamame_daemon_self_telemetry_writers: PlatformStringLists,
+    #[serde(default = "default_edamame_daemon_self_telemetry_install_prefixes")]
+    pub edamame_daemon_self_telemetry_install_prefixes: PlatformStringLists,
     #[serde(default = "default_platform_metadata_endpoints")]
     pub platform_metadata_endpoints: PlatformStringLists,
     #[serde(default = "default_platform_runtime_probe_filename_patterns")]
@@ -277,13 +290,12 @@ fn default_secret_content_scan_excluded_path_patterns() -> Vec<String> {
         "/build/generated/",
         // Flutter desktop / mobile per-platform build trees. These hold
         // the MSVC PDB (`vc143.pdb`), MSBuild dep-info (`*.tlog`), Xcode
-        // intermediates, and CMake project caches. Scanning them is what
-        // produced the `error C1090: PDB API call failed, error code '5'`
-        // wedge on Windows self-hosted runners (FP-CI-2 second symptom):
-        // `mspdbsrv.exe` cannot tolerate concurrent foreign opens of the
-        // active PDB even when ours uses `FILE_SHARE_DELETE`. Skipping
-        // these paths up-front is cheaper than retrying the read with
-        // increasingly permissive share modes.
+        // intermediates, and CMake project caches. The demonstrated FP-CI-2
+        // root cause is Cargo/rustc atomic-renaming under `target/`; the
+        // observed C1090 PDB failures are handled as a separate MSBuild /
+        // `mspdbsrv.exe` contention family. These transient build outputs
+        // still have no value as secret content-scan candidates, so skip
+        // them up front.
         "/build/windows/x64/",
         "/build/macos/build/",
         "/build/ios/build/",
@@ -400,6 +412,7 @@ fn default_non_sensitive_browser_data_subtrees() -> BrowserDataSubtreesJSON {
             "/shadercache/",
             "/optimizationhints/",
             "/segmentation_platform/",
+            "/safe browsing/",
         ]),
         chromium_state_files_routine: strings(&[
             "/local state",
@@ -437,6 +450,59 @@ fn default_non_sensitive_browser_data_subtrees() -> BrowserDataSubtreesJSON {
             "/mozilla/firefox/profiles/",
             "/firefox/profiles/",
             "/.mozilla/firefox/",
+        ]),
+    }
+}
+
+fn default_browser_appdata_unknown_writer() -> BrowserAppdataUnknownWriterJSON {
+    BrowserAppdataUnknownWriterJSON {
+        chromium_user_data_root_markers: strings(&[
+            "/google/chrome/user data/",
+            "/google/chrome beta/user data/",
+            "/google/chrome canary/user data/",
+            "/microsoft/edge/user data/",
+            "/microsoft/edge beta/user data/",
+            "/brave-browser/user data/",
+            "/brave software/brave-browser/user data/",
+            "/vivaldi/user data/",
+            "/opera software/opera stable/",
+            "/chromium/user data/",
+        ]),
+        firefox_user_data_root_markers: strings(&[
+            "/mozilla/firefox/profiles/",
+            "/firefox/profiles/",
+            "/.mozilla/firefox/",
+        ]),
+        chromium_process_names: strings(&[
+            "chrome",
+            "chrome.exe",
+            "google chrome",
+            "msedge",
+            "msedge.exe",
+            "microsoft edge",
+            "brave",
+            "brave.exe",
+            "brave browser",
+            "vivaldi",
+            "vivaldi.exe",
+            "opera",
+            "opera.exe",
+            "chromium",
+            "chromium.exe",
+        ]),
+        firefox_process_names: strings(&["firefox", "firefox.exe", "firefox-bin"]),
+        directory_target_names: strings(&[
+            "user data",
+            "default",
+            "profile 1",
+            "profile 2",
+            "profile 3",
+            "profile 4",
+            "profile 5",
+            "guest profile",
+            "system profile",
+            "network",
+            "profiles",
         ]),
     }
 }
@@ -935,6 +1001,28 @@ fn default_edamame_daemon_self_telemetry_writers() -> PlatformStringLists {
     )
 }
 
+fn default_edamame_daemon_self_telemetry_install_prefixes() -> PlatformStringLists {
+    platform_string_lists(
+        // macos
+        &[
+            "/applications/edamame security.app/contents/macos/",
+            "/usr/local/bin/",
+            "/opt/homebrew/bin/",
+        ],
+        // linux
+        &[
+            "/usr/lib/edamame-security/",
+            "/opt/edamame/",
+            "/usr/local/bin/",
+        ],
+        // windows
+        &[
+            "c:/program files/windowsapps/edamametechnologies.edamamesecurity_",
+            "c:/program files/edamame/",
+        ],
+    )
+}
+
 /// Filename leaf-prefixes that identify well-known platform-runtime
 /// probe scripts. The canonical case is Windows PowerShell, which
 /// drops a tiny one-line probe `__PSScriptPolicyTest_<random>.<random>.ps1`
@@ -981,6 +1069,7 @@ pub struct CveDetectionParams {
     pub ci_workspace_path_patterns: Vec<String>,
     pub keychain_transactional_filename_patterns: Vec<String>,
     pub non_sensitive_browser_data_subtrees: BrowserDataSubtreesJSON,
+    pub browser_appdata_unknown_writer: BrowserAppdataUnknownWriterJSON,
     pub suspicious_parent_path_patterns: Vec<String>,
     pub benign_temp_artifact_suffixes: Vec<String>,
     pub application_storage_patterns: Vec<String>,
@@ -993,6 +1082,7 @@ pub struct CveDetectionParams {
     pub package_manager_temp_path_patterns: PlatformStringLists,
     pub package_manager_temp_writers: PlatformStringLists,
     pub edamame_daemon_self_telemetry_writers: PlatformStringLists,
+    pub edamame_daemon_self_telemetry_install_prefixes: PlatformStringLists,
     pub platform_metadata_endpoints: PlatformStringLists,
     pub platform_runtime_probe_filename_patterns: PlatformStringLists,
     pub platform_self_state_directories: PlatformStringLists,
@@ -1092,6 +1182,38 @@ impl CveDetectionParams {
                     .map(|p| p.to_ascii_lowercase())
                     .collect(),
             },
+            browser_appdata_unknown_writer: BrowserAppdataUnknownWriterJSON {
+                chromium_user_data_root_markers: json
+                    .browser_appdata_unknown_writer
+                    .chromium_user_data_root_markers
+                    .iter()
+                    .map(|p| p.to_ascii_lowercase().replace('\\', "/"))
+                    .collect(),
+                firefox_user_data_root_markers: json
+                    .browser_appdata_unknown_writer
+                    .firefox_user_data_root_markers
+                    .iter()
+                    .map(|p| p.to_ascii_lowercase().replace('\\', "/"))
+                    .collect(),
+                chromium_process_names: json
+                    .browser_appdata_unknown_writer
+                    .chromium_process_names
+                    .iter()
+                    .map(|s| s.to_ascii_lowercase())
+                    .collect(),
+                firefox_process_names: json
+                    .browser_appdata_unknown_writer
+                    .firefox_process_names
+                    .iter()
+                    .map(|s| s.to_ascii_lowercase())
+                    .collect(),
+                directory_target_names: json
+                    .browser_appdata_unknown_writer
+                    .directory_target_names
+                    .iter()
+                    .map(|s| s.to_ascii_lowercase())
+                    .collect(),
+            },
             suspicious_parent_path_patterns: json.suspicious_parent_path_patterns.clone(),
             benign_temp_artifact_suffixes: json.benign_temp_artifact_suffixes.clone(),
             application_storage_patterns: json.application_storage_patterns.clone(),
@@ -1184,6 +1306,26 @@ impl CveDetectionParams {
                     .windows
                     .iter()
                     .map(|s| s.to_ascii_lowercase())
+                    .collect(),
+            },
+            edamame_daemon_self_telemetry_install_prefixes: PlatformStringLists {
+                macos: json
+                    .edamame_daemon_self_telemetry_install_prefixes
+                    .macos
+                    .iter()
+                    .map(|p| p.to_ascii_lowercase().replace('\\', "/"))
+                    .collect(),
+                linux: json
+                    .edamame_daemon_self_telemetry_install_prefixes
+                    .linux
+                    .iter()
+                    .map(|p| p.to_ascii_lowercase().replace('\\', "/"))
+                    .collect(),
+                windows: json
+                    .edamame_daemon_self_telemetry_install_prefixes
+                    .windows
+                    .iter()
+                    .map(|p| p.to_ascii_lowercase().replace('\\', "/"))
                     .collect(),
             },
             platform_metadata_endpoints: PlatformStringLists {
@@ -1604,6 +1746,101 @@ pub fn is_edamame_daemon_self_telemetry_writer(name: &str) -> bool {
         .any(|list| list.iter().any(|known| known == &lower))
 }
 
+/// Path-attested version of [`is_edamame_daemon_self_telemetry_writer`].
+///
+/// Empty/missing paths are accepted for backwards compatibility with older
+/// attribution, but full process paths must live under a configured EDAMAME
+/// install root. The only user-profile exception is the CI posture-action
+/// cache (`C:\Users\{edamame,runneradmin}\edamame_posture.exe`). This keeps
+/// the FP-WIN-15/18 LOW-demote from matching a spoofed `edamame.exe` dropped
+/// into `%TEMP%` or a user profile.
+pub fn is_edamame_daemon_self_telemetry_writer_for_path(name: &str, path: Option<&str>) -> bool {
+    if !is_edamame_daemon_self_telemetry_writer(name) {
+        return false;
+    }
+
+    let Some(path) = path.map(str::trim).filter(|path| !path.is_empty()) else {
+        return true;
+    };
+
+    let normalized = path.to_ascii_lowercase().replace('\\', "/");
+    let lower_name = name.to_ascii_lowercase();
+    if normalized.starts_with("c:/users/") {
+        let rest = normalized.trim_start_matches("c:/users/");
+        let mut parts = rest.split('/');
+        if let (Some(user), Some(file), None) = (parts.next(), parts.next(), parts.next()) {
+            let known_runner_user = matches!(user, "edamame" | "runneradmin");
+            if known_runner_user && file == "edamame_posture.exe" && file == lower_name {
+                return true;
+            }
+        }
+    }
+
+    let snapshot = PARAMS_SNAPSHOT.load();
+    let prefixes = &snapshot.edamame_daemon_self_telemetry_install_prefixes;
+    let lists: [&Vec<String>; 3] = [&prefixes.macos, &prefixes.linux, &prefixes.windows];
+    lists.iter().any(|list| {
+        list.iter()
+            .any(|prefix| !prefix.is_empty() && normalized.starts_with(prefix))
+    })
+}
+
+pub fn browser_appdata_unknown_writer_expected_processes(path: &str) -> Vec<String> {
+    if path.is_empty() {
+        return Vec::new();
+    }
+
+    let normalized = path.to_ascii_lowercase().replace('\\', "/");
+    let snapshot = PARAMS_SNAPSHOT.load();
+    let config = &snapshot.browser_appdata_unknown_writer;
+
+    if config
+        .chromium_user_data_root_markers
+        .iter()
+        .any(|marker| !marker.is_empty() && normalized.contains(marker))
+    {
+        return config.chromium_process_names.clone();
+    }
+
+    if config
+        .firefox_user_data_root_markers
+        .iter()
+        .any(|marker| !marker.is_empty() && normalized.contains(marker))
+    {
+        return config.firefox_process_names.clone();
+    }
+
+    Vec::new()
+}
+
+pub fn is_browser_appdata_unknown_writer_directory_target(path: &str) -> bool {
+    if path.is_empty() {
+        return false;
+    }
+
+    if browser_appdata_unknown_writer_expected_processes(path).is_empty() {
+        return false;
+    }
+
+    let leaf = path
+        .replace('\\', "/")
+        .rsplit('/')
+        .next()
+        .unwrap_or(path)
+        .trim()
+        .to_ascii_lowercase();
+    if leaf.is_empty() {
+        return false;
+    }
+
+    PARAMS_SNAPSHOT
+        .load()
+        .browser_appdata_unknown_writer
+        .directory_target_names
+        .iter()
+        .any(|name| name == &leaf)
+}
+
 /// Returns true if the normalized `path` lies within one of the
 /// per-OS package-manager temp/cache working directories
 /// (`%TEMP%\pub_*\`, `~/.npm/_cacache/`, `~/.cargo/registry/cache/`,
@@ -1892,12 +2129,11 @@ mod tests {
         assert!(is_secret_content_scan_excluded_path(
             "/Users/me/proj/node_modules/some-pkg/dist/index.js"
         ));
-        // Flutter desktop / mobile per-platform build outputs (FP-CI-2
-        // second symptom -- these are the paths that hold MSVC PDBs,
-        // CMake project caches, Xcode intermediates, etc.).
-        // Canonical Windows path that broke test_windows.yml run
-        // 25544402336 with `error C1090: PDB API call failed,
-        // error code '5'`.
+        // Flutter desktop / mobile per-platform build outputs: these are
+        // the paths that hold MSVC PDBs, CMake project caches, Xcode
+        // intermediates, etc. Keep them out of the content-scan candidate
+        // set as hardening, without treating the observed C1090 family as a
+        // demonstrated detector side effect.
         assert!(is_secret_content_scan_excluded_path(
             "C:\\Users\\edamame\\actions-runner\\_work\\edamame_app\\edamame_app\\build\\windows\\x64\\plugins\\system_tray\\system_tray_plugin.dir\\Debug\\vc143.pdb"
         ));
@@ -1957,7 +2193,7 @@ mod tests {
         assert!(!is_secret_content_scan_excluded_path(
             "/Users/me/Documents/build-plan.md"
         ));
-        // FP-CI-2 second-symptom negative controls. The new Flutter
+        // Flutter build-output negative controls. The new Flutter
         // desktop build patterns are anchored on `/build/<platform>/`
         // which is unambiguous Flutter output, but let's sanity-check
         // a few user-doc shapes that happen to mention `build` or a
@@ -2306,6 +2542,65 @@ mod tests {
         assert!(!is_edamame_daemon_self_telemetry_writer("cmd.exe"));
         assert!(!is_edamame_daemon_self_telemetry_writer("python3"));
         assert!(!is_edamame_daemon_self_telemetry_writer(""));
+    }
+
+    #[test]
+    fn test_edamame_daemon_self_telemetry_writer_path_attestation() {
+        assert!(is_edamame_daemon_self_telemetry_writer_for_path(
+            "edamame.exe",
+            Some("C:\\Program Files\\WindowsApps\\EDAMAMETechnologies.EDAMAMESecurity_1.3.5.0_x64__rx2dyyqk4mc6r\\edamame.exe")
+        ));
+        assert!(is_edamame_daemon_self_telemetry_writer_for_path(
+            "edamame_helper",
+            Some("/usr/local/bin/edamame_helper")
+        ));
+        assert!(is_edamame_daemon_self_telemetry_writer_for_path(
+            "edamame_posture.exe",
+            Some("C:\\Users\\edamame\\edamame_posture.exe")
+        ));
+        assert!(is_edamame_daemon_self_telemetry_writer_for_path(
+            "edamame_posture.exe",
+            Some("C:\\Users\\runneradmin\\edamame_posture.exe")
+        ));
+        assert!(is_edamame_daemon_self_telemetry_writer_for_path(
+            "edamame_posture.exe",
+            None
+        ));
+        assert!(!is_edamame_daemon_self_telemetry_writer_for_path(
+            "edamame.exe",
+            Some("C:\\Users\\frank\\edamame.exe")
+        ));
+        assert!(!is_edamame_daemon_self_telemetry_writer_for_path(
+            "edamame_posture.exe",
+            Some("C:\\Users\\frank\\edamame_posture.exe")
+        ));
+        assert!(!is_edamame_daemon_self_telemetry_writer_for_path(
+            "edamame.exe",
+            Some("C:\\Users\\frank\\AppData\\Local\\Temp\\edamame.exe")
+        ));
+        assert!(!is_edamame_daemon_self_telemetry_writer_for_path(
+            "python.exe",
+            Some("C:\\Program Files\\WindowsApps\\EDAMAMETechnologies.EDAMAMESecurity_1.3.5.0_x64__rx2dyyqk4mc6r\\python.exe")
+        ));
+    }
+
+    #[test]
+    fn test_browser_appdata_unknown_writer_matchers() {
+        let chrome_path =
+            "C:\\Users\\frank\\AppData\\Local\\Google\\Chrome\\User Data\\Profile 1\\Safe Browsing\\UrlSoceng.store";
+        let expected = browser_appdata_unknown_writer_expected_processes(chrome_path);
+        assert!(expected.iter().any(|name| name == "chrome.exe"));
+
+        assert!(is_browser_appdata_unknown_writer_directory_target(
+            "C:\\Users\\frank\\AppData\\Local\\Google\\Chrome\\User Data\\Profile 1\\Network"
+        ));
+        assert!(!is_browser_appdata_unknown_writer_directory_target(
+            chrome_path
+        ));
+        assert!(browser_appdata_unknown_writer_expected_processes(
+            "C:\\Users\\frank\\AppData\\Local\\Microsoft\\Windows\\Recent\\foo.lnk"
+        )
+        .is_empty());
     }
 
     #[test]
