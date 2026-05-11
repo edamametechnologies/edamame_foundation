@@ -83,6 +83,94 @@ pub struct BrowserAppdataUnknownWriterJSON {
     pub directory_target_names: Vec<String>,
 }
 
+/// Per-platform routine egress destinations for trusted platform
+/// credential helpers. Used by the session-side credential-helper
+/// self-access suppression hook (FP-MAC-8): when a process attested
+/// as a trusted platform credential helper (e.g. macOS `xpcproxy`
+/// mediating M365 sign-in) reads ONLY OS-managed credential-store
+/// files and egresses to one of these destinations, the
+/// `token_exfiltration` / `sensitive_material_egress` finding is
+/// suppressed.
+///
+/// Match semantics:
+/// - `asn_owners`: case-insensitive substring match against the
+///   session's `dst_asn.owner` field.
+/// - `domain_patterns`: each pattern is matched as a case-insensitive
+///   substring against the resolved destination domain. Patterns that
+///   start with `.` (e.g. `.login.microsoftonline.com`) match any
+///   subdomain of the suffix; patterns without a leading dot match
+///   anywhere in the domain string.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct CredentialHelperDestinationListJSON {
+    pub asn_owners: Vec<String>,
+    pub domain_patterns: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct PlatformCredentialHelperRoutineDestinationsJSON {
+    pub macos: CredentialHelperDestinationListJSON,
+    pub linux: CredentialHelperDestinationListJSON,
+    pub windows: CredentialHelperDestinationListJSON,
+}
+
+/// CI-runner workspace path substrings + suppressible filename
+/// basenames for the FP-CI-7 dotenv demotion. Path substrings are
+/// matched against a forward-slash-normalized, lowercased version of
+/// the FIM event path so a single canonical form covers every platform
+/// AND every CI provider (GitHub Actions, GitLab CI, Jenkins, CircleCI,
+/// Buildkite, Travis, TeamCity, Azure DevOps, Bitbucket Pipelines,
+/// Drone, Woodpecker, Cirrus CI, AppVeyor, Bamboo, GoCD, Codefresh,
+/// Semaphore, ...).
+///
+/// `suppressible_basenames` is the complementary axis: the demotion
+/// only fires for filenames in this allowlist (the canonical
+/// `.env`-family). Other writes inside a CI runner workspace stay
+/// graded by their normal severity rules.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct CiRunnerWorkspacePathPatternsJSON {
+    pub path_substrings: Vec<String>,
+    pub suppressible_basenames: Vec<String>,
+}
+
+/// Per-platform list of build-output tree path substrings used by the
+/// FP-CI-6 sandbox-exploitation severity demotion. When BOTH the process
+/// binary path AND its parent process path lie inside one of these
+/// substrings (matched on lowercased, forward-slash-normalized paths),
+/// the bare-lineage signal "process spawned from a temp-class location"
+/// is treated as a build-tool self-spawn (cargo/flutter/gradle/lima
+/// builds running their own freshly-compiled output) and graded LOW
+/// instead of HIGH.
+///
+/// `PlatformStringLists` is reused here because the patterns are
+/// already platform-agnostic in shape (they're keyed by WHICH OS the
+/// CI runner is on, not by the *binary's* target triple). The detector
+/// reads all three lists per call so a Linux runner finding can match
+/// macOS-style absolute paths if that's what got reported in process
+/// attribution.
+///
+/// Tunable via CloudModel so new build-tool layouts (e.g. a future
+/// Flutter target, a new Cargo profile) can be added without a release.
+///
+/// Per-platform runtime perfdata path entry. JVM HotSpot writes
+/// `/tmp/hsperfdata_<user>/<pid>` files for performance counters;
+/// these are entirely benign FIM noise. The detector fully suppresses
+/// `file_system_tampering` findings whose artifact path matches
+/// `artifact_path_substring` AND whose writer is one of the
+/// allowlisted JVM basenames or installs.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct RuntimePerfdataEntryJSON {
+    pub artifact_path_substring: String,
+    pub writer_basenames: Vec<String>,
+    pub writer_path_prefixes: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct PlatformRuntimePerfdataPathsJSON {
+    pub macos: Vec<RuntimePerfdataEntryJSON>,
+    pub linux: Vec<RuntimePerfdataEntryJSON>,
+    pub windows: Vec<RuntimePerfdataEntryJSON>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct CveDetectionParamsJSON {
     pub date: String,
@@ -104,6 +192,8 @@ pub struct CveDetectionParamsJSON {
     pub init_process_names: Vec<String>,
     #[serde(default = "default_ci_runner_process_name_prefixes")]
     pub ci_runner_process_name_prefixes: Vec<String>,
+    #[serde(default = "default_ci_runner_workspace_path_patterns")]
+    pub ci_runner_workspace_path_patterns: CiRunnerWorkspacePathPatternsJSON,
     #[serde(default = "default_ci_workspace_path_patterns")]
     pub ci_workspace_path_patterns: Vec<String>,
     #[serde(default = "default_keychain_transactional_filename_patterns")]
@@ -112,6 +202,8 @@ pub struct CveDetectionParamsJSON {
     pub non_sensitive_browser_data_subtrees: BrowserDataSubtreesJSON,
     #[serde(default = "default_browser_appdata_unknown_writer")]
     pub browser_appdata_unknown_writer: BrowserAppdataUnknownWriterJSON,
+    #[serde(default = "default_build_output_tree_self_spawn_patterns")]
+    pub build_output_tree_self_spawn_patterns: PlatformStringLists,
     pub suspicious_parent_path_patterns: Vec<String>,
     #[serde(default = "default_benign_temp_artifact_suffixes")]
     pub benign_temp_artifact_suffixes: Vec<String>,
@@ -137,6 +229,9 @@ pub struct CveDetectionParamsJSON {
     pub edamame_daemon_self_telemetry_writers: PlatformStringLists,
     #[serde(default = "default_edamame_daemon_self_telemetry_install_prefixes")]
     pub edamame_daemon_self_telemetry_install_prefixes: PlatformStringLists,
+    #[serde(default = "default_platform_credential_helper_routine_destinations")]
+    pub platform_credential_helper_routine_destinations:
+        PlatformCredentialHelperRoutineDestinationsJSON,
     #[serde(default = "default_platform_metadata_endpoints")]
     pub platform_metadata_endpoints: PlatformStringLists,
     #[serde(default = "default_platform_runtime_probe_filename_patterns")]
@@ -145,6 +240,8 @@ pub struct CveDetectionParamsJSON {
     pub platform_self_state_directories: PlatformStringLists,
     #[serde(default = "default_platform_self_state_processes")]
     pub platform_self_state_processes: PlatformStringLists,
+    #[serde(default = "default_runtime_perfdata_paths")]
+    pub runtime_perfdata_paths: PlatformRuntimePerfdataPathsJSON,
     #[serde(default = "default_fim_hash_size_threshold")]
     pub fim_hash_size_threshold: u64,
     pub fim_temp_executable_patterns: Vec<String>,
@@ -159,6 +256,25 @@ fn platform_string_lists(macos: &[&str], linux: &[&str], windows: &[&str]) -> Pl
         macos: strings(macos),
         linux: strings(linux),
         windows: strings(windows),
+    }
+}
+
+fn normalize_runtime_perfdata_entry(entry: &RuntimePerfdataEntryJSON) -> RuntimePerfdataEntryJSON {
+    RuntimePerfdataEntryJSON {
+        artifact_path_substring: entry
+            .artifact_path_substring
+            .to_ascii_lowercase()
+            .replace('\\', "/"),
+        writer_basenames: entry
+            .writer_basenames
+            .iter()
+            .map(|b| b.to_ascii_lowercase())
+            .collect(),
+        writer_path_prefixes: entry
+            .writer_path_prefixes
+            .iter()
+            .map(|p| p.to_ascii_lowercase().replace('\\', "/"))
+            .collect(),
     }
 }
 
@@ -363,6 +479,97 @@ fn default_ci_workspace_path_patterns() -> Vec<String> {
     ])
 }
 
+/// Default CI runner workspace path patterns + suppressible filename
+/// basenames (FP-CI-7).
+///
+/// The path substrings are matched against the FIM event path AFTER it
+/// has been lowercased AND `\` has been folded to `/` -- so a single
+/// canonical forward-slash form covers Linux, macOS, and Windows
+/// runners across every CI provider in the table below. The detector
+/// suppresses (demotes to LOW) `file_system_tampering` findings
+/// whose:
+///   1. resolved basename is in `suppressible_basenames`, AND
+///   2. normalized path contains one of the substrings here.
+///
+/// Coverage:
+///
+/// | Provider | Canonical workspace shape (Linux/macOS) |
+/// |---|---|
+/// | GitHub Actions self-hosted | `/actions-runner[N]/_work/<repo>/<repo>/` |
+/// | GitHub Actions hosted | `/home/runner/work/<repo>/<repo>/` |
+/// | GitLab CI | `/home/gitlab-runner/builds/<group>/<project>/` |
+/// | Jenkins | `/var/lib/jenkins[-agent]/workspace/<job>/` |
+/// | CircleCI | `/home/circleci/project/` |
+/// | Buildkite | `/var/lib/buildkite-agent/builds/...` |
+/// | Travis CI | `/home/travis/build/<owner>/<repo>/` |
+/// | TeamCity | `/opt/buildAgent/work/<id>/`, `/var/lib/teamcity/buildagent/work/` |
+/// | Azure DevOps | `/agent/_work/<id>/s/`, `/home/vsts/work/<id>/s/`, `/home/AzDevOps/agent/_work/` |
+/// | Bitbucket Pipelines | `/opt/atlassian/pipelines/agent/build/` |
+/// | Drone CI | `/drone/src/` |
+/// | Woodpecker CI | `/woodpecker/src/` |
+/// | Cirrus CI | `/tmp/cirrus-ci-build/` |
+/// | Codefresh | `/codefresh/volume/` |
+/// | Semaphore CI | `/home/semaphore/<repo>/` |
+/// | AppVeyor | `/home/appveyor/projects/<repo>/` |
+/// | Bamboo | `/home/bamboo/bamboo-agent/xml-data/build-dir/` |
+/// | GoCD | `/var/lib/go-agent/pipelines/` |
+///
+/// On Windows the same patterns match because backslashes are folded
+/// to forward slashes before the substring check (e.g. Jenkins
+/// `C:\Jenkins\workspace\Foo\` -> `c:/jenkins/workspace/foo/`).
+fn default_ci_runner_workspace_path_patterns() -> CiRunnerWorkspacePathPatternsJSON {
+    CiRunnerWorkspacePathPatternsJSON {
+        path_substrings: strings(&[
+            "/actions-runner/_work/",
+            "/actions-runner1/_work/",
+            "/actions-runner2/_work/",
+            "/actions-runner3/_work/",
+            "/actions-runner4/_work/",
+            "/runneradmin/actions-runner/_work/",
+            "/runner/_work/",
+            "/runner/work/",
+            "/gitlab-runner/builds/",
+            "/builds/runner/",
+            "/jenkins/workspace/",
+            "/jenkins-agent/workspace/",
+            "/jenkins_home/workspace/",
+            "/var/lib/jenkins/workspace/",
+            "/var/lib/jenkins-agent/workspace/",
+            "/circleci/project/",
+            "/buildkite-agent/builds/",
+            "/buildkite/builds/",
+            "/home/travis/build/",
+            "/travis/build/",
+            "/buildagent/work/",
+            "/teamcity/buildagent/work/",
+            "/var/lib/teamcity/buildagent/work/",
+            "/agent/_work/",
+            "/azdevops/agent/_work/",
+            "/vsts/work/",
+            "/atlassian/pipelines/agent/build/",
+            "/drone/src/",
+            "/woodpecker/src/",
+            "/cirrus-ci-build/",
+            "/codefresh/volume/",
+            "/home/semaphore/",
+            "/home/appveyor/projects/",
+            "/appveyor/projects/",
+            "/bamboo-agent/xml-data/build-dir/",
+            "/go-agent/pipelines/",
+        ]),
+        suppressible_basenames: strings(&[
+            ".env",
+            ".env.example",
+            ".env.local",
+            ".env.template",
+            ".env.test",
+            ".env.development",
+            ".env.production",
+            ".env.sample",
+        ]),
+    }
+}
+
 /// Filename substrings that identify macOS Keychain transactional
 /// artifacts (short-lived sandbox/transactional copies of the Keychain
 /// DB created by the Security framework on every Keychain read). Any
@@ -507,6 +714,63 @@ fn default_browser_appdata_unknown_writer() -> BrowserAppdataUnknownWriterJSON {
     }
 }
 
+/// Per-platform build-output tree path substrings (FP-CI-6). Matched
+/// case-insensitively against forward-slash-normalized paths. The
+/// detector demotes `sandbox_exploitation` "bare lineage" findings
+/// (process living in `/tmp/` with no other suspicious signal) to
+/// LOW when BOTH the process binary path AND its parent process path
+/// contain one of these substrings -- i.e. the binary that just got
+/// spawned is the freshly-built output of a build tool whose own
+/// staging tree it lives in (cargo `target/`, Flutter
+/// `build/<platform>/`, Gradle `build/outputs/`, Lima
+/// `edamame_posture_build/release/`, ...).
+///
+/// Substring (not prefix/regex) matching is intentional: it makes
+/// the patterns trivial to extend across CI provider conventions
+/// without rewriting the detector.
+fn default_build_output_tree_self_spawn_patterns() -> PlatformStringLists {
+    platform_string_lists(
+        // macOS
+        &[
+            "/target/debug/",
+            "/target/release/",
+            "/build/macos/build/",
+            "/build/macos/x64/release/",
+            "/build/macos/x64/debug/",
+            "/build/macos/x64/profile/",
+            "/build/macos/arm64/release/",
+            "/build/macos/arm64/debug/",
+            "/build/macos/arm64/profile/",
+            "/build/outputs/",
+        ],
+        // Linux
+        &[
+            "/target/debug/",
+            "/target/release/",
+            "/build/outputs/",
+            "/build/linux/x64/release/",
+            "/build/linux/x64/debug/",
+            "/build/linux/x64/profile/",
+            "/build/linux/arm64/release/",
+            "/build/linux/arm64/debug/",
+            "/build/linux/arm64/profile/",
+            "/edamame_posture_build/release/",
+            "/edamame_posture_build/debug/",
+            "/edamame_posture/release/",
+            "/edamame_posture/debug/",
+        ],
+        // Windows
+        &[
+            "/target/debug/",
+            "/target/release/",
+            "/build/windows/x64/release/",
+            "/build/windows/x64/debug/",
+            "/build/windows/x64/profile/",
+            "/build/outputs/",
+        ],
+    )
+}
+
 fn default_benign_temp_artifact_suffixes() -> Vec<String> {
     strings(&[
         ".tmp",
@@ -608,6 +872,13 @@ fn default_macos_credential_helper() -> HelperMatcherConfig {
             "keychainaccess",
             "secd",
             "securityd",
+            // FP-MAC-8: xpcproxy is the launchd-spawned XPC service
+            // launcher that mediates Keychain unlocks for M365 /
+            // CloudKit / Mail.app sign-in. cloudd is the macOS
+            // CloudKit daemon that talks to icloud.com/apple.com on
+            // behalf of every iCloud-using app.
+            "xpcproxy",
+            "cloudd",
         ],
         &[
             "secd",
@@ -615,6 +886,12 @@ fn default_macos_credential_helper() -> HelperMatcherConfig {
             "assistantd",
             "commcenter",
             "networkserviceproxy",
+            // FP-MAC-8: same xpcproxy/cloudd attestation, leaf-name
+            // form. Combined with the `/system/library/` /
+            // `/usr/libexec/` prefix gate below, an impostor binary
+            // at `/tmp/xpcproxy` does NOT match.
+            "xpcproxy",
+            "cloudd",
         ],
         &["/system/library/", "/usr/libexec/"],
     )
@@ -793,6 +1070,119 @@ fn default_platform_self_state_processes() -> PlatformStringLists {
             "azurediagnosticshealthagent.exe",
         ],
     )
+}
+
+/// Per-platform routine egress destinations for trusted platform
+/// credential helpers (FP-MAC-8). The detector consults this list
+/// from `should_suppress_session_credential_helper_self_access`
+/// after confirming:
+///   1. The session's process is a trusted platform credential
+///      helper (`looks_like_trusted_platform_credential_helper_*`),
+///      AND
+///   2. Every derived sensitive file is an OS-managed credential
+///      store (`credential_store_kind_for_path`).
+///
+/// Only then does the egress destination get checked here. The check
+/// is cheap and intentionally per-platform: macOS `xpcproxy` mediating
+/// M365 sign-in legitimately egresses to Microsoft Azure, but a Linux
+/// `gnome-keyring-daemon` should not be talking to Microsoft. A
+/// helper egressing to a destination not on its platform's allowlist
+/// stays alertable.
+fn default_platform_credential_helper_routine_destinations(
+) -> PlatformCredentialHelperRoutineDestinationsJSON {
+    PlatformCredentialHelperRoutineDestinationsJSON {
+        macos: CredentialHelperDestinationListJSON {
+            asn_owners: strings(&[
+                "Microsoft Corporation",
+                "Microsoft Azure",
+                "Apple Inc",
+                "Apple Inc.",
+                "Akamai Technologies",
+                "Akamai International",
+            ]),
+            domain_patterns: strings(&[
+                ".login.microsoftonline.com",
+                ".login.live.com",
+                ".graph.microsoft.com",
+                ".outlook.office365.com",
+                ".outlook.office.com",
+                ".office365.com",
+                ".office.com",
+                ".appleid.apple.com",
+                ".icloud.com",
+                ".gsa.apple.com",
+                ".gsas.apple.com",
+                ".apple.com",
+            ]),
+        },
+        linux: CredentialHelperDestinationListJSON::default(),
+        windows: CredentialHelperDestinationListJSON {
+            asn_owners: strings(&["Microsoft Corporation", "Microsoft Azure"]),
+            domain_patterns: strings(&[
+                ".login.microsoftonline.com",
+                ".login.live.com",
+                ".graph.microsoft.com",
+                ".outlook.office365.com",
+                ".outlook.office.com",
+                ".office365.com",
+                ".office.com",
+            ]),
+        },
+    }
+}
+
+/// Per-platform JVM HotSpot perfdata path entries (FP-CI-5). The
+/// detector fully suppresses `file_system_tampering` findings whose
+/// artifact path contains `artifact_path_substring` AND whose writer
+/// matches one of the allowlisted JVM basenames OR install path
+/// prefixes. These are transient counter files HotSpot creates for
+/// every JVM PID, never security-relevant.
+fn default_runtime_perfdata_paths() -> PlatformRuntimePerfdataPathsJSON {
+    let java_basenames = strings(&["java"]);
+    PlatformRuntimePerfdataPathsJSON {
+        macos: vec![
+            RuntimePerfdataEntryJSON {
+                artifact_path_substring: "/private/tmp/hsperfdata_".to_string(),
+                writer_basenames: java_basenames.clone(),
+                writer_path_prefixes: strings(&[
+                    "/Library/Java/JavaVirtualMachines/",
+                    "/Applications/Android Studio.app/Contents/jbr/",
+                    "/opt/homebrew/Cellar/openjdk",
+                    "/usr/local/Cellar/openjdk",
+                ]),
+            },
+            RuntimePerfdataEntryJSON {
+                artifact_path_substring: "/tmp/hsperfdata_".to_string(),
+                writer_basenames: java_basenames.clone(),
+                writer_path_prefixes: strings(&[
+                    "/Library/Java/JavaVirtualMachines/",
+                    "/Applications/Android Studio.app/Contents/jbr/",
+                    "/opt/homebrew/Cellar/openjdk",
+                    "/usr/local/Cellar/openjdk",
+                ]),
+            },
+        ],
+        linux: vec![RuntimePerfdataEntryJSON {
+            artifact_path_substring: "/tmp/hsperfdata_".to_string(),
+            writer_basenames: java_basenames,
+            writer_path_prefixes: strings(&[
+                "/usr/lib/jvm/",
+                "/opt/temurin",
+                "/opt/openjdk",
+                "/opt/jdk",
+                "/Library/Java/JavaVirtualMachines/",
+                "/actions-runner/_work/_tool/Java_",
+                "/actions-runner1/_work/_tool/Java_",
+                "/actions-runner2/_work/_tool/Java_",
+                "/actions-runner3/_work/_tool/Java_",
+                "/actions-runner4/_work/_tool/Java_",
+                "/.sdkman/candidates/java/",
+                "/.gradle/jdks/",
+                "/.android/sdk/",
+            ]),
+        }],
+        windows: vec![],
+    }
 }
 
 /// Path substrings that identify per-OS package-manager working
@@ -1066,10 +1456,12 @@ pub struct CveDetectionParams {
     pub generic_application_tokens: HashSet<String>,
     pub init_process_names: HashSet<String>,
     pub ci_runner_process_name_prefixes: Vec<String>,
+    pub ci_runner_workspace_path_patterns: CiRunnerWorkspacePathPatternsJSON,
     pub ci_workspace_path_patterns: Vec<String>,
     pub keychain_transactional_filename_patterns: Vec<String>,
     pub non_sensitive_browser_data_subtrees: BrowserDataSubtreesJSON,
     pub browser_appdata_unknown_writer: BrowserAppdataUnknownWriterJSON,
+    pub build_output_tree_self_spawn_patterns: PlatformStringLists,
     pub suspicious_parent_path_patterns: Vec<String>,
     pub benign_temp_artifact_suffixes: Vec<String>,
     pub application_storage_patterns: Vec<String>,
@@ -1083,10 +1475,13 @@ pub struct CveDetectionParams {
     pub package_manager_temp_writers: PlatformStringLists,
     pub edamame_daemon_self_telemetry_writers: PlatformStringLists,
     pub edamame_daemon_self_telemetry_install_prefixes: PlatformStringLists,
+    pub platform_credential_helper_routine_destinations:
+        PlatformCredentialHelperRoutineDestinationsJSON,
     pub platform_metadata_endpoints: PlatformStringLists,
     pub platform_runtime_probe_filename_patterns: PlatformStringLists,
     pub platform_self_state_directories: PlatformStringLists,
     pub platform_self_state_processes: PlatformStringLists,
+    pub runtime_perfdata_paths: PlatformRuntimePerfdataPathsJSON,
     pub fim_hash_size_threshold: u64,
     pub fim_temp_executable_patterns: Vec<String>,
 }
@@ -1140,6 +1535,20 @@ impl CveDetectionParams {
                 .iter()
                 .map(|prefix| prefix.to_ascii_lowercase())
                 .collect(),
+            ci_runner_workspace_path_patterns: CiRunnerWorkspacePathPatternsJSON {
+                path_substrings: json
+                    .ci_runner_workspace_path_patterns
+                    .path_substrings
+                    .iter()
+                    .map(|p| p.to_ascii_lowercase().replace('\\', "/"))
+                    .collect(),
+                suppressible_basenames: json
+                    .ci_runner_workspace_path_patterns
+                    .suppressible_basenames
+                    .iter()
+                    .map(|b| b.to_ascii_lowercase())
+                    .collect(),
+            },
             ci_workspace_path_patterns: json
                 .ci_workspace_path_patterns
                 .iter()
@@ -1212,6 +1621,26 @@ impl CveDetectionParams {
                     .directory_target_names
                     .iter()
                     .map(|s| s.to_ascii_lowercase())
+                    .collect(),
+            },
+            build_output_tree_self_spawn_patterns: PlatformStringLists {
+                macos: json
+                    .build_output_tree_self_spawn_patterns
+                    .macos
+                    .iter()
+                    .map(|p| p.to_ascii_lowercase().replace('\\', "/"))
+                    .collect(),
+                linux: json
+                    .build_output_tree_self_spawn_patterns
+                    .linux
+                    .iter()
+                    .map(|p| p.to_ascii_lowercase().replace('\\', "/"))
+                    .collect(),
+                windows: json
+                    .build_output_tree_self_spawn_patterns
+                    .windows
+                    .iter()
+                    .map(|p| p.to_ascii_lowercase().replace('\\', "/"))
                     .collect(),
             },
             suspicious_parent_path_patterns: json.suspicious_parent_path_patterns.clone(),
@@ -1328,6 +1757,57 @@ impl CveDetectionParams {
                     .map(|p| p.to_ascii_lowercase().replace('\\', "/"))
                     .collect(),
             },
+            platform_credential_helper_routine_destinations:
+                PlatformCredentialHelperRoutineDestinationsJSON {
+                    macos: CredentialHelperDestinationListJSON {
+                        asn_owners: json
+                            .platform_credential_helper_routine_destinations
+                            .macos
+                            .asn_owners
+                            .iter()
+                            .map(|s| s.to_ascii_lowercase())
+                            .collect(),
+                        domain_patterns: json
+                            .platform_credential_helper_routine_destinations
+                            .macos
+                            .domain_patterns
+                            .iter()
+                            .map(|s| s.to_ascii_lowercase())
+                            .collect(),
+                    },
+                    linux: CredentialHelperDestinationListJSON {
+                        asn_owners: json
+                            .platform_credential_helper_routine_destinations
+                            .linux
+                            .asn_owners
+                            .iter()
+                            .map(|s| s.to_ascii_lowercase())
+                            .collect(),
+                        domain_patterns: json
+                            .platform_credential_helper_routine_destinations
+                            .linux
+                            .domain_patterns
+                            .iter()
+                            .map(|s| s.to_ascii_lowercase())
+                            .collect(),
+                    },
+                    windows: CredentialHelperDestinationListJSON {
+                        asn_owners: json
+                            .platform_credential_helper_routine_destinations
+                            .windows
+                            .asn_owners
+                            .iter()
+                            .map(|s| s.to_ascii_lowercase())
+                            .collect(),
+                        domain_patterns: json
+                            .platform_credential_helper_routine_destinations
+                            .windows
+                            .domain_patterns
+                            .iter()
+                            .map(|s| s.to_ascii_lowercase())
+                            .collect(),
+                    },
+                },
             platform_metadata_endpoints: PlatformStringLists {
                 macos: json
                     .platform_metadata_endpoints
@@ -1409,6 +1889,26 @@ impl CveDetectionParams {
                     .windows
                     .iter()
                     .map(|s| s.to_ascii_lowercase())
+                    .collect(),
+            },
+            runtime_perfdata_paths: PlatformRuntimePerfdataPathsJSON {
+                macos: json
+                    .runtime_perfdata_paths
+                    .macos
+                    .iter()
+                    .map(normalize_runtime_perfdata_entry)
+                    .collect(),
+                linux: json
+                    .runtime_perfdata_paths
+                    .linux
+                    .iter()
+                    .map(normalize_runtime_perfdata_entry)
+                    .collect(),
+                windows: json
+                    .runtime_perfdata_paths
+                    .windows
+                    .iter()
+                    .map(normalize_runtime_perfdata_entry)
                     .collect(),
             },
             fim_hash_size_threshold: json.fim_hash_size_threshold,
@@ -1541,6 +2041,295 @@ pub fn is_ci_workspace_path(path: &str) -> bool {
         .ci_workspace_path_patterns
         .iter()
         .any(|pattern| !pattern.is_empty() && lower.contains(pattern))
+}
+
+/// Returns true if `path` is the canonical CI runner workspace home for
+/// a `.env`-family file written by a checkout-style step (FP-CI-7).
+///
+/// Match semantics:
+/// 1. The path's basename (final segment after the last `/` or `\`) must
+///    be in `ci_runner_workspace_path_patterns.suppressible_basenames`
+///    (case-insensitive exact match).
+/// 2. The lowercased, forward-slash-normalized path must contain one of
+///    the substrings in `ci_runner_workspace_path_patterns.path_substrings`.
+///
+/// The path-shape allowlist covers the canonical workspace root for
+/// every supported CI provider: GitHub Actions (self-hosted +
+/// hosted), GitLab CI, Jenkins, CircleCI, Buildkite, Travis,
+/// TeamCity, Azure DevOps, Bitbucket Pipelines, Drone, Woodpecker,
+/// Cirrus, AppVeyor, Bamboo, GoCD, Codefresh, Semaphore. Backslash
+/// folding lets a single canonical forward-slash form match both POSIX
+/// and Windows paths transparently.
+///
+/// Used by the `file_system_tampering` detector to demote (not
+/// suppress) findings whose only suspicious signal is "an `.env` file
+/// got written somewhere a checkout step would legitimately write
+/// one". The finding still appears in the dashboard for operator
+/// triage; it just no longer trips the runtime alertable gate.
+pub fn is_ci_runner_workspace_committed_dotenv(path: &str) -> bool {
+    if path.is_empty() {
+        return false;
+    }
+    let normalized = path.to_ascii_lowercase().replace('\\', "/");
+    let basename = normalized
+        .rsplit('/')
+        .next()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(&normalized);
+
+    let snapshot = PARAMS_SNAPSHOT.load();
+    let patterns = &snapshot.ci_runner_workspace_path_patterns;
+    if !patterns
+        .suppressible_basenames
+        .iter()
+        .any(|name| !name.is_empty() && basename == name.as_str())
+    {
+        return false;
+    }
+    patterns
+        .path_substrings
+        .iter()
+        .any(|p| !p.is_empty() && normalized.contains(p))
+}
+
+/// Returns true when BOTH `process_path` and `parent_process_path`
+/// lie inside one of the configured per-platform build-output trees
+/// (cargo `target/`, Flutter `build/<platform>/`, Gradle
+/// `build/outputs/`, Lima `edamame_posture_build/release/`, ...).
+///
+/// Used by the `sandbox_exploitation` detector to demote bare-lineage
+/// HIGH findings to LOW when the binary that just got spawned is
+/// clearly the freshly-built output of the parent build tool whose
+/// own staging tree it lives in (FP-CI-6). Both halves of the
+/// conjunction must match -- a single half is not enough to rule out
+/// a malicious dropper that happens to live in `/tmp/`.
+///
+/// Matching is case-insensitive and `\` is folded to `/` before the
+/// substring check, so a single canonical forward-slash form covers
+/// every host OS. Per-platform lists are all consulted (the loader
+/// has no way to know which OS produced the FIM event) -- there is no
+/// privilege risk because all three lists are restricted to
+/// well-known build-output shapes.
+pub fn is_build_output_tree_self_spawn(
+    process_path: Option<&str>,
+    parent_process_path: Option<&str>,
+) -> bool {
+    let proc = match process_path {
+        Some(p) if !p.is_empty() => p.to_ascii_lowercase().replace('\\', "/"),
+        _ => return false,
+    };
+    let parent = match parent_process_path {
+        Some(p) if !p.is_empty() => p.to_ascii_lowercase().replace('\\', "/"),
+        _ => return false,
+    };
+
+    let snapshot = PARAMS_SNAPSHOT.load();
+    let patterns = &snapshot.build_output_tree_self_spawn_patterns;
+    let lists: [&Vec<String>; 3] = [&patterns.macos, &patterns.linux, &patterns.windows];
+
+    let path_matches = |path: &str| -> bool {
+        lists
+            .iter()
+            .any(|list| list.iter().any(|p| !p.is_empty() && path.contains(p)))
+    };
+
+    path_matches(&proc) && path_matches(&parent)
+}
+
+/// Returns true if `egress_destination_domain` and/or
+/// `egress_destination_asn_owner` match the per-platform routine
+/// destination allowlist for trusted credential helpers (FP-MAC-8).
+///
+/// Match semantics:
+/// - If `domain` is non-empty, each configured `domain_patterns` entry
+///   is checked. A pattern that starts with `.` (e.g.
+///   `.login.microsoftonline.com`) matches any host that ends with the
+///   suffix; other patterns are case-insensitive substring matches.
+/// - If `asn_owner` is non-empty, each configured `asn_owners` entry
+///   is checked as a case-insensitive substring (`Microsoft Azure`
+///   matches `MICROSOFT-CORP-MSN-AS-BLOCK Microsoft Azure`).
+/// - `process_name` and `process_path` are used to pick which
+///   platform's allowlist to check: macOS / Windows are determined from
+///   suspicious-path tokens (`/usr/libexec/`, `\system32\`, ...); when
+///   no platform tokens are present, ALL configured platform lists are
+///   consulted so the caller doesn't need to know which OS the helper
+///   lives on.
+pub fn is_platform_credential_helper_routine_destination(
+    process_name: Option<&str>,
+    process_path: Option<&str>,
+    egress_destination_domain: Option<&str>,
+    egress_destination_asn_owner: Option<&str>,
+) -> bool {
+    let domain_lower = egress_destination_domain
+        .map(|d| d.to_ascii_lowercase())
+        .filter(|d| !d.is_empty());
+    let asn_lower = egress_destination_asn_owner
+        .map(|a| a.to_ascii_lowercase())
+        .filter(|a| !a.is_empty());
+    if domain_lower.is_none() && asn_lower.is_none() {
+        return false;
+    }
+
+    let snapshot = PARAMS_SNAPSHOT.load();
+    let dests = &snapshot.platform_credential_helper_routine_destinations;
+
+    let proc_path_lower = process_path
+        .map(|p| p.to_ascii_lowercase().replace('\\', "/"))
+        .unwrap_or_default();
+    let proc_name_lower = process_name
+        .map(|n| n.to_ascii_lowercase())
+        .unwrap_or_default();
+
+    let looks_macos = proc_path_lower.starts_with("/usr/libexec/")
+        || proc_path_lower.starts_with("/system/library/")
+        || proc_path_lower.starts_with("/library/")
+        || proc_path_lower.starts_with("/applications/")
+        || proc_name_lower == "xpcproxy"
+        || proc_name_lower == "securityd"
+        || proc_name_lower == "cloudd";
+    let looks_windows = proc_path_lower.contains("/system32/")
+        || proc_path_lower.contains("/syswow64/")
+        || proc_name_lower.ends_with(".exe");
+    let looks_linux = proc_path_lower.starts_with("/usr/bin/")
+        || proc_path_lower.starts_with("/usr/sbin/")
+        || proc_path_lower.starts_with("/usr/lib/")
+        || proc_name_lower == "gnome-keyring-daemon"
+        || proc_name_lower.starts_with("kwalletd");
+
+    let mut candidate_lists: Vec<&CredentialHelperDestinationListJSON> = Vec::new();
+    if looks_macos {
+        candidate_lists.push(&dests.macos);
+    }
+    if looks_linux {
+        candidate_lists.push(&dests.linux);
+    }
+    if looks_windows {
+        candidate_lists.push(&dests.windows);
+    }
+    if candidate_lists.is_empty() {
+        // Unknown platform shape -- consult all three lists (safe; each
+        // is constrained to that OS's canonical credential-validation
+        // backends, not arbitrary destinations).
+        candidate_lists.push(&dests.macos);
+        candidate_lists.push(&dests.linux);
+        candidate_lists.push(&dests.windows);
+    }
+
+    candidate_lists.iter().any(|list| {
+        if let Some(domain) = domain_lower.as_deref() {
+            for pattern in &list.domain_patterns {
+                if pattern.is_empty() {
+                    continue;
+                }
+                if pattern.starts_with('.') {
+                    let suffix = &pattern[1..];
+                    if domain == suffix
+                        || domain.ends_with(pattern.as_str())
+                        || domain.ends_with(&format!(".{suffix}"))
+                    {
+                        return true;
+                    }
+                } else if domain.contains(pattern) {
+                    return true;
+                }
+            }
+        }
+        if let Some(asn) = asn_lower.as_deref() {
+            for owner in &list.asn_owners {
+                if !owner.is_empty() && asn.contains(owner) {
+                    return true;
+                }
+            }
+        }
+        false
+    })
+}
+
+/// Returns true when `artifact_path`, `process_name`, and
+/// `process_path` together match a JVM HotSpot perfdata write
+/// (`/tmp/hsperfdata_<user>/<pid>` on Linux / macOS) authored by a
+/// recognized JVM install (FP-CI-5). The detector fully suppresses
+/// these `file_system_tampering` findings -- they are transient
+/// performance counter files that HotSpot creates for every JVM PID,
+/// never security-relevant, never editable to plant a payload.
+///
+/// All comparisons are case-insensitive on forward-slash-normalized
+/// paths. The writer attestation is conjunctive: the artifact-path
+/// substring must match AND (the writer basename matches OR the
+/// writer path prefix matches a recognized JVM install location).
+/// A malicious binary writing to `/tmp/hsperfdata_user/12345` from a
+/// non-JVM path is NOT suppressed.
+pub fn is_runtime_perfdata_self_write(
+    artifact_path: &str,
+    process_name: Option<&str>,
+    process_path: Option<&str>,
+) -> bool {
+    if artifact_path.is_empty() {
+        return false;
+    }
+    let path_lower = artifact_path.to_ascii_lowercase().replace('\\', "/");
+    let proc_name_lower = process_name
+        .map(|n| n.to_ascii_lowercase())
+        .unwrap_or_default();
+    let proc_path_lower = process_path
+        .map(|p| p.to_ascii_lowercase().replace('\\', "/"))
+        .unwrap_or_default();
+
+    let snapshot = PARAMS_SNAPSHOT.load();
+    let entries = &snapshot.runtime_perfdata_paths;
+    let lists: [&Vec<RuntimePerfdataEntryJSON>; 3] =
+        [&entries.macos, &entries.linux, &entries.windows];
+
+    for list in &lists {
+        for entry in list.iter() {
+            if entry.artifact_path_substring.is_empty()
+                || !path_lower.contains(&entry.artifact_path_substring)
+            {
+                continue;
+            }
+            // Path-shape gate (FP-CI-5): for every JVM HotSpot
+            // perfdata entry the basename of the artifact path MUST
+            // be all decimal digits (the JVM PID). HotSpot creates
+            // exactly `/tmp/hsperfdata_<user>/<pid>` -- a
+            // non-numeric basename like `notdigits` is not a JVM
+            // perfdata file even when the parent directory matches.
+            // Without this guard an attacker could drop arbitrary
+            // payloads under `/tmp/hsperfdata_*/` and have them
+            // suppressed if the writer happened to be a trusted JDK.
+            let basename = path_lower.rsplit('/').next().unwrap_or("");
+            let basename_is_digits =
+                !basename.is_empty() && basename.chars().all(|c| c.is_ascii_digit());
+            if !basename_is_digits {
+                continue;
+            }
+            // Writer attestation is **conjunctive**: BOTH the basename
+            // AND the install-path prefix must match. A bare basename
+            // match is too weak (a malicious `/tmp/java` writing
+            // `/tmp/hsperfdata_root/12345` would otherwise be
+            // suppressed). A bare install-prefix match is also too
+            // weak (the prefix list spans large parent dirs like
+            // `/usr/lib/jvm/`, an attacker dropping a non-`java`
+            // binary into `/usr/lib/jvm/evil` would otherwise be
+            // suppressed). Combined with the artifact-path-substring
+            // gate above, this is the path-shape + writer-identity
+            // attestation pair documented in `FALSEPOSITIVESFIX.md`
+            // (FP-CI-5).
+            let basename_match = !proc_name_lower.is_empty()
+                && entry
+                    .writer_basenames
+                    .iter()
+                    .any(|b| !b.is_empty() && b == &proc_name_lower);
+            let prefix_match = !proc_path_lower.is_empty()
+                && entry
+                    .writer_path_prefixes
+                    .iter()
+                    .any(|p| !p.is_empty() && proc_path_lower.contains(p));
+            if basename_match && prefix_match {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Returns true if `path` is a macOS Keychain transactional artifact
