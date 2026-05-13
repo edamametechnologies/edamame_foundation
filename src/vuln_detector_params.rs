@@ -422,6 +422,20 @@ fn default_secret_content_scan_excluded_path_patterns() -> Vec<String> {
         // per-project copies). DerivedSources is the SwiftPM equivalent.
         "/derived data/",
         "/derivedsources/",
+        // prost-build / tonic-build descriptor temp dirs (FP-CI-2 family).
+        // tonic-build runs prost-build during cargo build script execution
+        // and writes the protobuf descriptor to a `prost-buildXXXXXX/`
+        // mkdtemp directory under the OS temp dir
+        // (`%TEMP%\prost-buildXXX\prost-descriptor-set` on Windows,
+        //  `/tmp/prost-buildXXX/...` on Linux,
+        //  `/var/folders/.../T/prost-buildXXX/...` on macOS). The detector's
+        // open-files enumeration would otherwise race the build's atomic
+        // descriptor rewrite and trip `os error 32` on the build side.
+        "/prost-build",
+        // `cargo install --target-dir` and cargo bootstrap scratch trees.
+        // Same race shape -- build-tool transient outputs with no secret
+        // content value.
+        "/cargo-install",
     ])
 }
 
@@ -2945,6 +2959,27 @@ mod tests {
         // Flutter Web build output.
         assert!(is_secret_content_scan_excluded_path(
             "/home/runner/work/edamame_app/edamame_app/build/web/main.dart.js"
+        ));
+        // prost-build descriptor temp dir on Windows -- the canonical path
+        // that broke edamame_helper/test_windows.yml run 25774821450 with
+        // `os error 32` on prost-descriptor-set. tonic-build runs
+        // prost-build during the edamame_foundation build script and the
+        // runner-installed posture daemon's open-files enumeration was
+        // racing build.rs's atomic descriptor rewrite.
+        assert!(is_secret_content_scan_excluded_path(
+            "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\prost-buildGWIvnp\\prost-descriptor-set"
+        ));
+        // prost-build descriptor temp dir on Linux.
+        assert!(is_secret_content_scan_excluded_path(
+            "/tmp/prost-buildAbc123/prost-descriptor-set"
+        ));
+        // prost-build descriptor temp dir on macOS (under /var/folders/).
+        assert!(is_secret_content_scan_excluded_path(
+            "/var/folders/zz/abc/T/prost-buildXyz/prost-descriptor-set"
+        ));
+        // `cargo install --target-dir` bootstrap path.
+        assert!(is_secret_content_scan_excluded_path(
+            "/tmp/cargo-install_xyz/release/deps/foo-bar.d"
         ));
     }
 
