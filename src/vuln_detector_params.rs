@@ -180,6 +180,12 @@ pub struct ManagedTempStagingPatternsJSON {
     pub demote_path_patterns: PlatformStringLists,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct TrustedBuildTempStagingJSON {
+    pub writer_path_patterns: PlatformStringLists,
+    pub artifact_path_patterns: PlatformStringLists,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct CveDetectionParamsJSON {
     pub date: String,
@@ -230,6 +236,8 @@ pub struct CveDetectionParamsJSON {
     pub packaged_application_ends_with_patterns: Vec<String>,
     #[serde(default = "default_managed_temp_staging_patterns")]
     pub managed_temp_staging_patterns: ManagedTempStagingPatternsJSON,
+    #[serde(default = "default_trusted_build_temp_staging")]
+    pub trusted_build_temp_staging: TrustedBuildTempStagingJSON,
     #[serde(default = "default_package_manager_temp_path_patterns")]
     pub package_manager_temp_path_patterns: PlatformStringLists,
     #[serde(default = "default_package_manager_temp_writers")]
@@ -635,7 +643,10 @@ fn default_non_sensitive_browser_data_subtrees() -> BrowserDataSubtreesJSON {
             "/sessionstorage/",
             "/file system/",
             "/blob_storage/",
+            "/crashpad/",
             "/component_crx_cache/",
+            "/extensions/temp/",
+            "/extensions_crx_cache/",
             "/dawn_graphite_cache/",
             "/dawn_webgpu_cache/",
             "/grshadercache/",
@@ -1302,8 +1313,45 @@ fn default_managed_temp_staging_patterns() -> ManagedTempStagingPatternsJSON {
             &[],
             // linux
             &[],
-            // windows -- WiX Bootstrapper Application runtime extraction tree.
-            &["\\.ba"],
+            // windows -- WiX Bootstrapper Application runtime extraction tree
+            // and Chromium extension install/unpack staging.
+            &["\\.ba", "\\chromecrx_"],
+        ),
+    }
+}
+
+/// Build and signing tools that legitimately materialize installer
+/// artifacts under OS temp directories while also talking to package or
+/// signing services. The detector demotes these to LOW only when BOTH the
+/// writer path and artifact path match, so a spoofed `light.exe` in temp does
+/// not inherit trust.
+fn default_trusted_build_temp_staging() -> TrustedBuildTempStagingJSON {
+    TrustedBuildTempStagingJSON {
+        writer_path_patterns: platform_string_lists(
+            // macos
+            &[],
+            // linux
+            &[],
+            // windows
+            &[
+                "\\program files (x86)\\wix toolset",
+                "\\program files\\wix toolset",
+                "\\.dotnet\\tools\\azuresigntool.exe",
+            ],
+        ),
+        artifact_path_patterns: platform_string_lists(
+            // macos
+            &[],
+            // linux
+            &[],
+            // windows
+            &[
+                "\\appdata\\local\\temp\\",
+                "\\temp\\axs.",
+                "\\temp\\00000001.",
+                "\\temp\\npmiemut\\",
+                "\\temp\\#media",
+            ],
         ),
     }
 }
@@ -1518,6 +1566,7 @@ pub struct CveDetectionParams {
     pub packaged_application_starts_with_patterns: Vec<String>,
     pub packaged_application_ends_with_patterns: Vec<String>,
     pub managed_temp_staging_patterns: ManagedTempStagingPatternsJSON,
+    pub trusted_build_temp_staging: TrustedBuildTempStagingJSON,
     pub package_manager_temp_path_patterns: PlatformStringLists,
     pub package_manager_temp_writers: PlatformStringLists,
     pub edamame_daemon_self_telemetry_writers: PlatformStringLists,
@@ -1571,6 +1620,19 @@ fn normalize_managed_temp_staging_patterns(
         ),
         demote_path_patterns: normalize_platform_string_lists_patterns(
             &patterns.demote_path_patterns,
+        ),
+    }
+}
+
+fn normalize_trusted_build_temp_staging(
+    patterns: &TrustedBuildTempStagingJSON,
+) -> TrustedBuildTempStagingJSON {
+    TrustedBuildTempStagingJSON {
+        writer_path_patterns: normalize_platform_string_lists_patterns(
+            &patterns.writer_path_patterns,
+        ),
+        artifact_path_patterns: normalize_platform_string_lists_patterns(
+            &patterns.artifact_path_patterns,
         ),
     }
 }
@@ -1751,6 +1813,9 @@ impl CveDetectionParams {
                 .clone(),
             managed_temp_staging_patterns: normalize_managed_temp_staging_patterns(
                 &json.managed_temp_staging_patterns,
+            ),
+            trusted_build_temp_staging: normalize_trusted_build_temp_staging(
+                &json.trusted_build_temp_staging,
             ),
             package_manager_temp_path_patterns: PlatformStringLists {
                 macos: json
@@ -2496,7 +2561,7 @@ pub fn is_non_sensitive_browser_data(path: &str) -> bool {
         let cache_match = subtrees
             .chromium_family
             .iter()
-            .any(|sub| !sub.is_empty() && lower.contains(sub));
+            .any(|sub| browser_subtree_path_matches(&lower, sub));
         if cache_match {
             return true;
         }
@@ -2517,13 +2582,28 @@ pub fn is_non_sensitive_browser_data(path: &str) -> bool {
         let cache_match = subtrees
             .firefox_family_subtrees
             .iter()
-            .any(|sub| !sub.is_empty() && lower.contains(sub));
+            .any(|sub| browser_subtree_path_matches(&lower, sub));
         if cache_match {
             return true;
         }
     }
 
     false
+}
+
+fn browser_subtree_path_matches(lower_path: &str, pattern: &str) -> bool {
+    let pattern = pattern.trim().trim_matches('/');
+    if pattern.is_empty() {
+        return false;
+    }
+
+    let pattern_with_separators = format!("/{}/", pattern);
+    if lower_path.contains(&pattern_with_separators) {
+        return true;
+    }
+
+    let pattern_suffix = format!("/{}", pattern);
+    lower_path.ends_with(&pattern_suffix)
 }
 
 fn browser_profile_state_group_for_root(
@@ -2884,6 +2964,28 @@ pub fn is_managed_temp_staging_demoted_path(path: &str) -> bool {
     matches_platform_patterns(
         path,
         &snapshot.managed_temp_staging_patterns.demote_path_patterns,
+    )
+}
+
+/// Returns true when a trusted build/signing tool is writing its own
+/// installer/signing scratch artifact under an OS temp directory. This is a
+/// LOW audit signal, not a HIGH alert, because the tool's network egress is
+/// expected package/signature activity.
+pub fn is_trusted_build_temp_staging_artifact(path: &str, process_path: Option<&str>) -> bool {
+    let Some(process_path) = process_path else {
+        return false;
+    };
+    if path.is_empty() || process_path.is_empty() {
+        return false;
+    }
+
+    let snapshot = PARAMS_SNAPSHOT.load();
+    matches_platform_patterns(
+        process_path,
+        &snapshot.trusted_build_temp_staging.writer_path_patterns,
+    ) && matches_platform_patterns(
+        path,
+        &snapshot.trusted_build_temp_staging.artifact_path_patterns,
     )
 }
 
