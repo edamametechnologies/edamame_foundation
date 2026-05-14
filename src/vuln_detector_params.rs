@@ -69,8 +69,10 @@ pub struct PlatformHelperMatcherConfigs {
 pub struct BrowserDataSubtreesJSON {
     pub chromium_family: Vec<String>,
     pub chromium_state_files_routine: Vec<String>,
+    pub chromium_profile_state_volatile: Vec<String>,
     pub chromium_user_data_root_markers: Vec<String>,
     pub firefox_family_subtrees: Vec<String>,
+    pub firefox_profile_state_volatile: Vec<String>,
     pub firefox_user_data_root_markers: Vec<String>,
 }
 
@@ -104,6 +106,7 @@ pub struct BrowserAppdataUnknownWriterJSON {
 pub struct CredentialHelperDestinationListJSON {
     pub asn_owners: Vec<String>,
     pub domain_patterns: Vec<String>,
+    pub ip_prefixes: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -171,6 +174,12 @@ pub struct PlatformRuntimePerfdataPathsJSON {
     pub windows: Vec<RuntimePerfdataEntryJSON>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct ManagedTempStagingPatternsJSON {
+    pub suppress_path_patterns: PlatformStringLists,
+    pub demote_path_patterns: PlatformStringLists,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct CveDetectionParamsJSON {
     pub date: String,
@@ -219,8 +228,8 @@ pub struct CveDetectionParamsJSON {
     pub packaged_application_starts_with_patterns: Vec<String>,
     #[serde(default = "default_packaged_application_ends_with_patterns")]
     pub packaged_application_ends_with_patterns: Vec<String>,
-    #[serde(default = "default_installer_toolchain_temp_path_patterns")]
-    pub installer_toolchain_temp_path_patterns: PlatformStringLists,
+    #[serde(default = "default_managed_temp_staging_patterns")]
+    pub managed_temp_staging_patterns: ManagedTempStagingPatternsJSON,
     #[serde(default = "default_package_manager_temp_path_patterns")]
     pub package_manager_temp_path_patterns: PlatformStringLists,
     #[serde(default = "default_package_manager_temp_writers")]
@@ -645,6 +654,19 @@ fn default_non_sensitive_browser_data_subtrees() -> BrowserDataSubtreesJSON {
             "/network/transportsecurity",
             "/network/reportingandnel",
         ]),
+        chromium_profile_state_volatile: strings(&[
+            "/bookmarks",
+            "/bookmarks.bak",
+            "/downloadmetadata",
+            "/session storage/",
+            "/sessionstorage/",
+            "/sessions/",
+            "/sync data/",
+            "/current session",
+            "/current tabs",
+            "/last session",
+            "/last tabs",
+        ]),
         chromium_user_data_root_markers: strings(&[
             "/google/chrome/user data/",
             "/google/chrome beta/user data/",
@@ -667,6 +689,7 @@ fn default_non_sensitive_browser_data_subtrees() -> BrowserDataSubtreesJSON {
             "/datareporting/archived/",
             "/saved-telemetry-pings/",
         ]),
+        firefox_profile_state_volatile: strings(&["/sessionstore-backups/"]),
         firefox_user_data_root_markers: strings(&[
             "/mozilla/firefox/profiles/",
             "/firefox/profiles/",
@@ -886,6 +909,12 @@ fn default_macos_credential_helper() -> HelperMatcherConfig {
             "keychainaccess",
             "secd",
             "securityd",
+            // FP-MAC-9: Apple-maintained Keychain peers and Safari
+            // platform helpers legitimately update real Keychain DB
+            // sidecars. These are trusted only by compact name and,
+            // for path matches, by the system-library prefix gate.
+            "trustedpeershelper",
+            "comapplesafariplatformsupporthelper",
             // FP-MAC-8: xpcproxy is the launchd-spawned XPC service
             // launcher that mediates Keychain unlocks for M365 /
             // CloudKit / Mail.app sign-in. cloudd is the macOS
@@ -900,6 +929,8 @@ fn default_macos_credential_helper() -> HelperMatcherConfig {
             "assistantd",
             "commcenter",
             "networkserviceproxy",
+            "trustedpeershelper",
+            "comapplesafariplatformsupporthelper",
             // FP-MAC-8: same xpcproxy/cloudd attestation, leaf-name
             // form. Combined with the `/system/library/` /
             // `/usr/libexec/` prefix gate below, an impostor binary
@@ -1128,6 +1159,7 @@ fn default_platform_credential_helper_routine_destinations(
                 ".gsas.apple.com",
                 ".apple.com",
             ]),
+            ip_prefixes: strings(&["2603:1026:", "2603:1061:"]),
         },
         linux: CredentialHelperDestinationListJSON::default(),
         windows: CredentialHelperDestinationListJSON {
@@ -1141,6 +1173,7 @@ fn default_platform_credential_helper_routine_destinations(
                 ".office365.com",
                 ".office.com",
             ]),
+            ip_prefixes: strings(&["2603:1026:", "2603:1061:"]),
         },
     }
 }
@@ -1220,13 +1253,16 @@ fn default_runtime_perfdata_paths() -> PlatformRuntimePerfdataPathsJSON {
 /// entries keep `\` for the host's native separator style; the
 /// detector normalizes both representations before matching.
 ///
-/// Path patterns identifying well-known Windows installer-toolchain
-/// staging directories where benign extraction / build output is
-/// written into `%TEMP%` during MSI builds. The canonical case is
+/// Path patterns identifying well-known managed temp-staging
+/// directories where benign extraction / build output is written into
+/// OS temp directories during builds. One canonical Windows case is
 /// the WiX Toolset's `light.exe`, which extracts
 /// `WixToolset.BootstrapperApplications.wixext_<HASH>` into a
 /// per-build temp directory and emits `wix-ir/*.wxl` localization
 /// resources during `cargo wix` packaging on the Windows runner.
+/// Another cross-platform case is tonic/prost writing protobuf
+/// descriptor sets into `prost-buildXXXXXX/` temp trees during Cargo
+/// build-script execution.
 ///
 /// Patterns are case-insensitive substring matches against the
 /// normalized (forward-slash, lowercase) FIM event path. Windows
@@ -1243,36 +1279,33 @@ fn default_runtime_perfdata_paths() -> PlatformRuntimePerfdataPathsJSON {
 /// they cannot be confused with an attacker drop.
 ///
 /// See `FALSEPOSITIVES.md` (FP-WIN-13).
-fn default_installer_toolchain_temp_path_patterns() -> PlatformStringLists {
-    platform_string_lists(
-        // macos
-        &[],
-        // linux
-        &[],
-        // windows
-        &[
-            "\\wixtoolset.bootstrapperapplications.wixext_",
-            "\\wix-ir\\",
-            // FP-WIN-14: CMake `FetchContent_Populate` writes
-            // `<pkg>-mkdirs.cmake`, `<pkg>-download.cmake`,
-            // `<pkg>-update.cmake`, etc. into
-            // `build\<arch>\_deps\<pkg>-subbuild\<pkg>-populate-prefix\tmp\`
-            // on every Flutter Windows build that uses CMake
-            // FetchContent (corrosion, sentry-native, nuget, ...).
-            // FIM events for these arrive without L7 attribution
-            // and trip `temp_staging` + `temp_mutation` HIGH.
-            "-populate-prefix\\tmp\\",
-            // FP-WIN-14: NuGet's global cross-process scratch/lock
-            // directory at `%LOCALAPPDATA%\Temp\NuGetScratch\lock\`
-            // (also `\plan\`, `\v3-cache\`). Any Visual Studio / MSBuild
-            // / `cargo wix` / Flutter Windows build that resolves NuGet
-            // packages writes hex-named lock files into this tree.
-            // FIM L7 attribution is unreliable here (frequently
-            // misattributed to whichever process happened to be active
-            // during the FIM tick).
-            "\\nugetscratch\\",
-        ],
-    )
+fn default_managed_temp_staging_patterns() -> ManagedTempStagingPatternsJSON {
+    ManagedTempStagingPatternsJSON {
+        suppress_path_patterns: platform_string_lists(
+            // macos
+            &["/prost-build"],
+            // linux
+            &["/prost-build"],
+            // windows
+            &[
+                "\\prost-build",
+                "\\wixtoolset.bootstrapperapplications.wixext_",
+                "\\wix-ir\\",
+                "-populate-prefix\\tmp\\",
+                "\\nugetscratch\\",
+            ],
+        ),
+        // Weaker path-only evidence: keep as LOW audit evidence instead of
+        // suppressing it completely.
+        demote_path_patterns: platform_string_lists(
+            // macos
+            &[],
+            // linux
+            &[],
+            // windows -- WiX Bootstrapper Application runtime extraction tree.
+            &["\\.ba"],
+        ),
+    }
 }
 
 /// See `FALSEPOSITIVES.md` (FP-WIN-11).
@@ -1484,7 +1517,7 @@ pub struct CveDetectionParams {
     pub packaged_application_contains_patterns: Vec<String>,
     pub packaged_application_starts_with_patterns: Vec<String>,
     pub packaged_application_ends_with_patterns: Vec<String>,
-    pub installer_toolchain_temp_path_patterns: PlatformStringLists,
+    pub managed_temp_staging_patterns: ManagedTempStagingPatternsJSON,
     pub package_manager_temp_path_patterns: PlatformStringLists,
     pub package_manager_temp_writers: PlatformStringLists,
     pub edamame_daemon_self_telemetry_writers: PlatformStringLists,
@@ -1506,6 +1539,39 @@ impl CloudSignature for CveDetectionParams {
     }
     fn set_signature(&mut self, signature: String) {
         self.signature = signature;
+    }
+}
+
+fn normalize_platform_string_lists_patterns(lists: &PlatformStringLists) -> PlatformStringLists {
+    PlatformStringLists {
+        macos: lists
+            .macos
+            .iter()
+            .map(|p| p.to_ascii_lowercase().replace('\\', "/"))
+            .collect(),
+        linux: lists
+            .linux
+            .iter()
+            .map(|p| p.to_ascii_lowercase().replace('\\', "/"))
+            .collect(),
+        windows: lists
+            .windows
+            .iter()
+            .map(|p| p.to_ascii_lowercase().replace('\\', "/"))
+            .collect(),
+    }
+}
+
+fn normalize_managed_temp_staging_patterns(
+    patterns: &ManagedTempStagingPatternsJSON,
+) -> ManagedTempStagingPatternsJSON {
+    ManagedTempStagingPatternsJSON {
+        suppress_path_patterns: normalize_platform_string_lists_patterns(
+            &patterns.suppress_path_patterns,
+        ),
+        demote_path_patterns: normalize_platform_string_lists_patterns(
+            &patterns.demote_path_patterns,
+        ),
     }
 }
 
@@ -1586,6 +1652,12 @@ impl CveDetectionParams {
                     .iter()
                     .map(|p| p.to_ascii_lowercase())
                     .collect(),
+                chromium_profile_state_volatile: json
+                    .non_sensitive_browser_data_subtrees
+                    .chromium_profile_state_volatile
+                    .iter()
+                    .map(|p| p.to_ascii_lowercase().replace('\\', "/"))
+                    .collect(),
                 chromium_user_data_root_markers: json
                     .non_sensitive_browser_data_subtrees
                     .chromium_user_data_root_markers
@@ -1597,6 +1669,12 @@ impl CveDetectionParams {
                     .firefox_family_subtrees
                     .iter()
                     .map(|p| p.to_ascii_lowercase())
+                    .collect(),
+                firefox_profile_state_volatile: json
+                    .non_sensitive_browser_data_subtrees
+                    .firefox_profile_state_volatile
+                    .iter()
+                    .map(|p| p.to_ascii_lowercase().replace('\\', "/"))
                     .collect(),
                 firefox_user_data_root_markers: json
                     .non_sensitive_browser_data_subtrees
@@ -1671,26 +1749,9 @@ impl CveDetectionParams {
             packaged_application_ends_with_patterns: json
                 .packaged_application_ends_with_patterns
                 .clone(),
-            installer_toolchain_temp_path_patterns: PlatformStringLists {
-                macos: json
-                    .installer_toolchain_temp_path_patterns
-                    .macos
-                    .iter()
-                    .map(|p| p.to_ascii_lowercase().replace('\\', "/"))
-                    .collect(),
-                linux: json
-                    .installer_toolchain_temp_path_patterns
-                    .linux
-                    .iter()
-                    .map(|p| p.to_ascii_lowercase().replace('\\', "/"))
-                    .collect(),
-                windows: json
-                    .installer_toolchain_temp_path_patterns
-                    .windows
-                    .iter()
-                    .map(|p| p.to_ascii_lowercase().replace('\\', "/"))
-                    .collect(),
-            },
+            managed_temp_staging_patterns: normalize_managed_temp_staging_patterns(
+                &json.managed_temp_staging_patterns,
+            ),
             package_manager_temp_path_patterns: PlatformStringLists {
                 macos: json
                     .package_manager_temp_path_patterns
@@ -1788,6 +1849,13 @@ impl CveDetectionParams {
                             .iter()
                             .map(|s| s.to_ascii_lowercase())
                             .collect(),
+                        ip_prefixes: json
+                            .platform_credential_helper_routine_destinations
+                            .macos
+                            .ip_prefixes
+                            .iter()
+                            .map(|s| s.to_ascii_lowercase())
+                            .collect(),
                     },
                     linux: CredentialHelperDestinationListJSON {
                         asn_owners: json
@@ -1804,6 +1872,13 @@ impl CveDetectionParams {
                             .iter()
                             .map(|s| s.to_ascii_lowercase())
                             .collect(),
+                        ip_prefixes: json
+                            .platform_credential_helper_routine_destinations
+                            .linux
+                            .ip_prefixes
+                            .iter()
+                            .map(|s| s.to_ascii_lowercase())
+                            .collect(),
                     },
                     windows: CredentialHelperDestinationListJSON {
                         asn_owners: json
@@ -1817,6 +1892,13 @@ impl CveDetectionParams {
                             .platform_credential_helper_routine_destinations
                             .windows
                             .domain_patterns
+                            .iter()
+                            .map(|s| s.to_ascii_lowercase())
+                            .collect(),
+                        ip_prefixes: json
+                            .platform_credential_helper_routine_destinations
+                            .windows
+                            .ip_prefixes
                             .iter()
                             .map(|s| s.to_ascii_lowercase())
                             .collect(),
@@ -2159,6 +2241,10 @@ pub fn is_build_output_tree_self_spawn(
 ///   is checked. A pattern that starts with `.` (e.g.
 ///   `.login.microsoftonline.com`) matches any host that ends with the
 ///   suffix; other patterns are case-insensitive substring matches.
+/// - If `ip` is non-empty, each configured `ip_prefixes` entry is
+///   checked as a case-insensitive prefix. These prefixes are only for
+///   vendor identity-service ranges that routinely arrive without
+///   DNS/ASN enrichment in packet telemetry.
 /// - If `asn_owner` is non-empty, each configured `asn_owners` entry
 ///   is checked as a case-insensitive substring (`Microsoft Azure`
 ///   matches `MICROSOFT-CORP-MSN-AS-BLOCK Microsoft Azure`).
@@ -2172,15 +2258,19 @@ pub fn is_platform_credential_helper_routine_destination(
     process_name: Option<&str>,
     process_path: Option<&str>,
     egress_destination_domain: Option<&str>,
+    egress_destination_ip: Option<&str>,
     egress_destination_asn_owner: Option<&str>,
 ) -> bool {
     let domain_lower = egress_destination_domain
         .map(|d| d.to_ascii_lowercase())
         .filter(|d| !d.is_empty());
+    let ip_lower = egress_destination_ip
+        .map(|ip| ip.to_ascii_lowercase())
+        .filter(|ip| !ip.is_empty());
     let asn_lower = egress_destination_asn_owner
         .map(|a| a.to_ascii_lowercase())
         .filter(|a| !a.is_empty());
-    if domain_lower.is_none() && asn_lower.is_none() {
+    if domain_lower.is_none() && ip_lower.is_none() && asn_lower.is_none() {
         return false;
     }
 
@@ -2251,6 +2341,13 @@ pub fn is_platform_credential_helper_routine_destination(
         if let Some(asn) = asn_lower.as_deref() {
             for owner in &list.asn_owners {
                 if !owner.is_empty() && asn.contains(owner) {
+                    return true;
+                }
+            }
+        }
+        if let Some(ip) = ip_lower.as_deref() {
+            for prefix in &list.ip_prefixes {
+                if !prefix.is_empty() && ip.starts_with(prefix) {
                     return true;
                 }
             }
@@ -2427,6 +2524,90 @@ pub fn is_non_sensitive_browser_data(path: &str) -> bool {
     }
 
     false
+}
+
+fn browser_profile_state_group_for_root(
+    lower: &str,
+    family: &str,
+    root_markers: &[String],
+    volatile_patterns: &[String],
+) -> Option<String> {
+    for marker in root_markers {
+        if marker.is_empty() {
+            continue;
+        }
+        let Some(marker_index) = lower.find(marker) else {
+            continue;
+        };
+        let suffix = &lower[marker_index + marker.len()..];
+        let segments: Vec<&str> = suffix
+            .split('/')
+            .filter(|segment| !segment.is_empty())
+            .collect();
+        if segments.is_empty() {
+            continue;
+        }
+
+        for pattern in volatile_patterns {
+            let pattern_segments: Vec<&str> = pattern
+                .trim_matches('/')
+                .split('/')
+                .filter(|segment| !segment.is_empty())
+                .collect();
+            if pattern_segments.is_empty() || pattern_segments.len() > segments.len() {
+                continue;
+            }
+
+            for start in 0..=segments.len() - pattern_segments.len() {
+                if segments[start..start + pattern_segments.len()] == pattern_segments[..] {
+                    let profile = if start == 0 {
+                        "root".to_string()
+                    } else {
+                        segments[..start].join("/")
+                    };
+                    return Some(format!(
+                        "{}:{}:{}",
+                        family,
+                        profile,
+                        pattern_segments.join("/")
+                    ));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Returns a stable browser-managed volatile-state bucket for FIM paths
+/// such as Chromium `Session Storage`, `Sessions`, and `Sync Data`.
+///
+/// These files may contain privacy-sensitive browser state, so callers
+/// should not treat them as fully non-sensitive cache. The bucket exists
+/// to demote/group unknown-writer browser housekeeping bursts only when
+/// an independent browser-alive signal is present; credential stores such
+/// as `Login Data`, `Cookies`, and `Web Data` intentionally do not match.
+pub fn browser_volatile_profile_state_group(path: &str) -> Option<String> {
+    if path.is_empty() {
+        return None;
+    }
+    let lower = path.to_ascii_lowercase().replace('\\', "/");
+    let snapshot = PARAMS_SNAPSHOT.load();
+    let subtrees = &snapshot.non_sensitive_browser_data_subtrees;
+
+    browser_profile_state_group_for_root(
+        &lower,
+        "chromium",
+        &subtrees.chromium_user_data_root_markers,
+        &subtrees.chromium_profile_state_volatile,
+    )
+    .or_else(|| {
+        browser_profile_state_group_for_root(
+            &lower,
+            "firefox",
+            &subtrees.firefox_user_data_root_markers,
+            &subtrees.firefox_profile_state_volatile,
+        )
+    })
 }
 
 /// Returns true if `ip` is a well-known platform metadata service
@@ -2671,38 +2852,39 @@ pub fn is_package_manager_temp_path(path: &str) -> bool {
     })
 }
 
-/// Returns true if the normalized `path` lies within one of the
-/// per-OS installer-toolchain temp staging directories (e.g. the
-/// WiX Toolset's `WixToolset.BootstrapperApplications.wixext_<HASH>`
-/// extraction directory and its `wix-ir/` sub-directory, written
-/// during `cargo wix` MSI builds).
-///
-/// Path matching is case-insensitive and tolerant of separator
-/// style: the input is lowercased and `\` is folded to `/` before
-/// substring matching against the configured patterns (which are
-/// also stored in normalized form).
-///
-/// Suppression here is path-only (no writer-process gate) because
-/// FIM events for `light.exe`-spawned `BootstrapperApplications`
-/// extraction frequently arrive without L7 attribution. The
-/// patterns themselves are deeply specific to the WiX toolchain
-/// and combined with the `\Temp\` gate from the surrounding
-/// detector branch they cannot be confused with an attacker drop.
-///
-/// Used by the `file_system_tampering` installer-toolchain
-/// suppression hook (FP-WIN-13).
-pub fn is_installer_toolchain_temp_path(path: &str) -> bool {
+fn matches_platform_patterns(path: &str, dirs: &PlatformStringLists) -> bool {
     if path.is_empty() {
         return false;
     }
     let lower = path.to_ascii_lowercase().replace('\\', "/");
-    let snapshot = PARAMS_SNAPSHOT.load();
-    let dirs = &snapshot.installer_toolchain_temp_path_patterns;
     let lists: [&Vec<String>; 3] = [&dirs.macos, &dirs.linux, &dirs.windows];
     lists.iter().any(|list| {
         list.iter()
             .any(|pattern| !pattern.is_empty() && lower.contains(pattern))
     })
+}
+
+/// Returns true for managed temp-staging artifacts that are specific enough to
+/// suppress entirely (compiler/build-tool scratch trees such as prost-build,
+/// WiX `wix-ir`, CMake populate temp, and NuGetScratch).
+pub fn is_managed_temp_staging_suppressed_path(path: &str) -> bool {
+    let snapshot = PARAMS_SNAPSHOT.load();
+    matches_platform_patterns(
+        path,
+        &snapshot
+            .managed_temp_staging_patterns
+            .suppress_path_patterns,
+    )
+}
+
+/// Returns true for managed temp-staging artifacts that should stay visible as
+/// LOW audit evidence instead of disappearing.
+pub fn is_managed_temp_staging_demoted_path(path: &str) -> bool {
+    let snapshot = PARAMS_SNAPSHOT.load();
+    matches_platform_patterns(
+        path,
+        &snapshot.managed_temp_staging_patterns.demote_path_patterns,
+    )
 }
 
 /// Returns true if the leaf basename of `path` starts with one of
@@ -3111,6 +3293,50 @@ mod tests {
     }
 
     #[test]
+    fn test_browser_volatile_profile_state_group_lookup() {
+        assert_eq!(
+            browser_volatile_profile_state_group(
+                "C:/Users/frank/AppData/Local/Google/Chrome/User Data/Profile 1/Session Storage/000003.log"
+            )
+            .as_deref(),
+            Some("chromium:profile 1:session storage")
+        );
+        assert_eq!(
+            browser_volatile_profile_state_group(
+                "C:/Users/frank/AppData/Local/Microsoft/Edge/User Data/Default/Sync Data/LevelDB/000001.log"
+            )
+            .as_deref(),
+            Some("chromium:default:sync data")
+        );
+        assert_eq!(
+            browser_volatile_profile_state_group(
+                "C:/Users/frank/AppData/Local/Google/Chrome/User Data/Profile 1/DownloadMetadata"
+            )
+            .as_deref(),
+            Some("chromium:profile 1:downloadmetadata")
+        );
+        assert_eq!(
+            browser_volatile_profile_state_group(
+                "C:/Users/frank/AppData/Local/Google/Chrome/User Data/Profile 1/Bookmarks"
+            )
+            .as_deref(),
+            Some("chromium:profile 1:bookmarks")
+        );
+        assert_eq!(
+            browser_volatile_profile_state_group(
+                "/home/me/.mozilla/firefox/abc.default/sessionstore-backups/recovery.jsonlz4"
+            )
+            .as_deref(),
+            Some("firefox:abc.default:sessionstore-backups")
+        );
+        assert!(browser_volatile_profile_state_group(
+            "C:/Users/frank/AppData/Local/Google/Chrome/User Data/Default/Login Data"
+        )
+        .is_none());
+        assert!(browser_volatile_profile_state_group("/tmp/Session Storage/000003.log").is_none());
+    }
+
+    #[test]
     fn test_is_non_sensitive_browser_data_does_not_suppress_credentials() {
         // Login Data / Cookies / Web Data / History MUST stay sensitive.
         // These files live under the same User Data root but are NOT in
@@ -3282,6 +3508,31 @@ mod tests {
         // Subset of a known IP must NOT match (exact-match only).
         assert!(!is_platform_metadata_endpoint("168.63.129.166"));
         assert!(!is_platform_metadata_endpoint(""));
+    }
+
+    #[test]
+    fn test_platform_credential_helper_routine_destination_ip_prefix_lookup() {
+        assert!(is_platform_credential_helper_routine_destination(
+            Some("securityd"),
+            None,
+            None,
+            Some("2603:1026:3000::1"),
+            None,
+        ));
+        assert!(is_platform_credential_helper_routine_destination(
+            Some("accountsd"),
+            None,
+            None,
+            Some("2603:1061:1000::5"),
+            None,
+        ));
+        assert!(!is_platform_credential_helper_routine_destination(
+            Some("securityd"),
+            None,
+            None,
+            Some("2001:db8::1"),
+            None,
+        ));
     }
 
     #[test]
@@ -3509,38 +3760,53 @@ mod tests {
     }
 
     #[test]
-    fn test_installer_toolchain_temp_path_lookup() {
+    fn test_managed_temp_staging_path_lookup() {
+        // FP-CI-9: tonic/prost descriptor temp trees during Cargo
+        // build-script execution.
+        assert!(is_managed_temp_staging_suppressed_path(
+            "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\prost-buildSHbPlE\\prost-descriptor-set"
+        ));
+        assert!(is_managed_temp_staging_suppressed_path(
+            "/tmp/prost-buildabc123/prost-descriptor-set"
+        ));
+        assert!(is_managed_temp_staging_suppressed_path(
+            "/var/folders/aa/bb/T/prost-buildabc123/prost-descriptor-set"
+        ));
+        assert!(!is_managed_temp_staging_suppressed_path(
+            "C:\\Users\\runneradmin\\AppData\\Local\\Temp\\evil\\prost-descriptor-set"
+        ));
+
         // Canonical WiX BootstrapperApplication extraction during a
         // `cargo wix` MSI build on the Windows runner.
-        assert!(is_installer_toolchain_temp_path(
+        assert!(is_managed_temp_staging_suppressed_path(
             "C:\\Users\\edamame\\AppData\\Local\\Temp\\41ftcnya.p4m\\WixToolset.BootstrapperApplications.wixext_HPVZ2YWGIB0GOTbsOi2MVHIa9bk\\wix-ir\\HyperlinkTheme.wxl"
         ));
         // Same shape with forward-slash separators (FIM events
         // sometimes mix styles after normalization).
-        assert!(is_installer_toolchain_temp_path(
+        assert!(is_managed_temp_staging_suppressed_path(
             "C:/Users/edamame/AppData/Local/Temp/abc.def/WixToolset.BootstrapperApplications.wixext_XYZ/wix-ir/Theme.wxl"
         ));
         // The bare `wix-ir` directory pattern should also match
         // (covers wix-ir intermediate output written outside the
         // BootstrapperApplications hash dir).
-        assert!(is_installer_toolchain_temp_path(
+        assert!(is_managed_temp_staging_suppressed_path(
             "C:\\Users\\edamame\\AppData\\Local\\Temp\\some-build\\wix-ir\\foo.wixobj"
         ));
         // Case-insensitive matching.
-        assert!(is_installer_toolchain_temp_path(
+        assert!(is_managed_temp_staging_suppressed_path(
             "C:\\USERS\\EDAMAME\\APPDATA\\LOCAL\\TEMP\\X.Y\\WIXTOOLSET.BOOTSTRAPPERAPPLICATIONS.WIXEXT_HASH\\WIX-IR\\HYPERLINKTHEME.WXL"
         ));
         // Non-WiX paths must NOT match: a malicious binary writing
         // to a similarly-suffixed file outside the WiX staging
         // directory shape gets no free pass.
-        assert!(!is_installer_toolchain_temp_path(
+        assert!(!is_managed_temp_staging_suppressed_path(
             "C:\\Users\\edamame\\AppData\\Local\\Temp\\malicious.wxl"
         ));
-        assert!(!is_installer_toolchain_temp_path(
+        assert!(!is_managed_temp_staging_suppressed_path(
             "/home/user/repos/some-project/wix-ir.txt"
         ));
-        assert!(!is_installer_toolchain_temp_path("/etc/passwd"));
-        assert!(!is_installer_toolchain_temp_path(""));
+        assert!(!is_managed_temp_staging_suppressed_path("/etc/passwd"));
+        assert!(!is_managed_temp_staging_suppressed_path(""));
 
         // FP-WIN-14a: CMake `FetchContent_Populate` writes
         // `<pkg>-mkdirs.cmake` (and `<pkg>-download.cmake`,
@@ -3548,20 +3814,20 @@ mod tests {
         // `build\<arch>\_deps\<pkg>-subbuild\<pkg>-populate-prefix\tmp\`
         // on every Flutter Windows build. The unique substring
         // `-populate-prefix\tmp\` is what we suppress on.
-        assert!(is_installer_toolchain_temp_path(
+        assert!(is_managed_temp_staging_suppressed_path(
             "C:\\Users\\edamame\\actions-runner\\_work\\edamame_app\\edamame_app\\build\\windows\\x64\\_deps\\nuget-subbuild\\nuget-populate-prefix\\tmp\\nuget-populate-mkdirs.cmake"
         ));
-        assert!(is_installer_toolchain_temp_path(
+        assert!(is_managed_temp_staging_suppressed_path(
             "C:/Users/edamame/actions-runner/_work/edamame_app/edamame_app/build/windows/x64/_deps/corrosion-subbuild/corrosion-populate-prefix/tmp/corrosion-populate-download.cmake"
         ));
-        assert!(is_installer_toolchain_temp_path(
+        assert!(is_managed_temp_staging_suppressed_path(
             "C:\\Users\\edamame\\actions-runner\\_work\\edamame_app\\edamame_app\\build\\windows\\x64\\_deps\\sentry-native-subbuild\\sentry-native-populate-prefix\\tmp\\sentry-native-populate-update.cmake"
         ));
         // FP-WIN-14a impostor: a temp file that just happens to
         // mention "populate-prefix" but is NOT in the
         // `\tmp\` subdir of a CMake FetchContent populate-prefix
         // tree must NOT match.
-        assert!(!is_installer_toolchain_temp_path(
+        assert!(!is_managed_temp_staging_suppressed_path(
             "C:\\Users\\edamame\\AppData\\Local\\Temp\\malware-populate-prefix.exe"
         ));
 
@@ -3570,27 +3836,34 @@ mod tests {
         // `\plan\`, `\v3-cache\`). Hex-named lock files trip the
         // detector with a non-benign suffix; FIM L7 attribution is
         // unreliable here.
-        assert!(is_installer_toolchain_temp_path(
+        assert!(is_managed_temp_staging_suppressed_path(
             "C:\\Users\\edamame\\AppData\\Local\\Temp\\NuGetScratch\\lock\\db433f173e9b75688465fde95d3d04684cfdb3ae"
         ));
-        assert!(is_installer_toolchain_temp_path(
+        assert!(is_managed_temp_staging_suppressed_path(
             "C:\\Users\\edamame\\AppData\\Local\\Temp\\NuGetScratch\\plan\\abc123"
         ));
-        assert!(is_installer_toolchain_temp_path(
+        assert!(is_managed_temp_staging_suppressed_path(
             "C:/Users/edamame/AppData/Local/Temp/NuGetScratch/v3-cache/foo"
         ));
         // Case-insensitive.
-        assert!(is_installer_toolchain_temp_path(
+        assert!(is_managed_temp_staging_suppressed_path(
             "C:\\USERS\\EDAMAME\\APPDATA\\LOCAL\\TEMP\\NUGETSCRATCH\\LOCK\\HEX"
         ));
         // FP-WIN-14b impostor: a directory whose name contains
         // "nuget" but is NOT the `NuGetScratch` global cache must
         // NOT match.
-        assert!(!is_installer_toolchain_temp_path(
+        assert!(!is_managed_temp_staging_suppressed_path(
             "C:\\Users\\edamame\\AppData\\Local\\Temp\\my-nuget-stash\\foo"
         ));
-        assert!(!is_installer_toolchain_temp_path(
+        assert!(!is_managed_temp_staging_suppressed_path(
             "C:\\Users\\edamame\\AppData\\Roaming\\NuGet\\packages\\foo.dll"
+        ));
+
+        assert!(is_managed_temp_staging_demoted_path(
+            "C:\\Users\\frank\\AppData\\Local\\Temp\\{6d8f8f9a-1111-4444-9999-2bdf4d7a9c3c}\\.ba\\wixstdba.exe"
+        ));
+        assert!(!is_managed_temp_staging_demoted_path(
+            "C:\\Users\\frank\\AppData\\Local\\Temp\\ordinary\\wixstdba.exe"
         ));
     }
 
