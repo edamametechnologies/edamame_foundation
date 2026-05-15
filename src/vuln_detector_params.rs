@@ -1303,7 +1303,10 @@ fn default_managed_temp_staging_patterns() -> ManagedTempStagingPatternsJSON {
                 "\\wixtoolset.bootstrapperapplications.wixext_",
                 "\\wix-ir\\",
                 "-populate-prefix\\tmp\\",
-                "\\nugetscratch\\",
+                "\\nugetscratch",
+                "\\chocolatey\\chocolateyscratch",
+                "\\system-commandline-sentinel-files",
+                "\\remoteipmoproxy_configdefender_",
             ],
         ),
         // Weaker path-only evidence: keep as LOW audit evidence instead of
@@ -3947,9 +3950,21 @@ mod tests {
         assert!(is_managed_temp_staging_suppressed_path(
             "C:/Users/edamame/AppData/Local/Temp/NuGetScratch/v3-cache/foo"
         ));
+        assert!(is_managed_temp_staging_suppressed_path(
+            "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\NuGetScratch"
+        ));
         // Case-insensitive.
         assert!(is_managed_temp_staging_suppressed_path(
             "C:\\USERS\\EDAMAME\\APPDATA\\LOCAL\\TEMP\\NUGETSCRATCH\\LOCK\\HEX"
+        ));
+        assert!(is_managed_temp_staging_suppressed_path(
+            "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\chocolatey\\ChocolateyScratch\\protoc\\25.3.0\\protoc.25.3.0.nupkg"
+        ));
+        assert!(is_managed_temp_staging_suppressed_path(
+            "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\system-commandline-sentinel-files\\dotnet-suggest-registration-git-credential-manager, Version=2.7.3.0, Culture=neutral, PublicKeyToken=null"
+        ));
+        assert!(is_managed_temp_staging_suppressed_path(
+            "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\tmp_phcbtzg1.x2e\\remoteIpMoProxy_ConfigDefender_1.0_localhost_a84523b9-7559-4633-8baf-e255b093fcaa.psd1"
         ));
         // FP-WIN-14b impostor: a directory whose name contains
         // "nuget" but is NOT the `NuGetScratch` global cache must
@@ -3959,6 +3974,9 @@ mod tests {
         ));
         assert!(!is_managed_temp_staging_suppressed_path(
             "C:\\Users\\edamame\\AppData\\Roaming\\NuGet\\packages\\foo.dll"
+        ));
+        assert!(!is_managed_temp_staging_suppressed_path(
+            "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\remoteIpMoProxy_OtherModule_1.0\\payload.ps1"
         ));
 
         assert!(is_managed_temp_staging_demoted_path(
