@@ -92,7 +92,7 @@ jobs:
           # full detector. See workspace.mdc.
           vulnerability_detection: ${{ runner.os != 'Linux' }}
           vulnerability_detection_interval: "60"
-          agentic_mode: analyze
+          agentic_mode: ${{ runner.os != 'Linux' && 'analyze' || 'disabled' }}
           agentic_provider: edamame
           agentic_interval: 600
         env:
@@ -485,7 +485,7 @@ jobs:
           # full detector. See workspace.mdc.
           vulnerability_detection: ${{ runner.os != 'Linux' }}
           vulnerability_detection_interval: "60"
-          agentic_mode: analyze
+          agentic_mode: ${{ runner.os != 'Linux' && 'analyze' || 'disabled' }}
           agentic_provider: edamame
           agentic_interval: 600
         env:
