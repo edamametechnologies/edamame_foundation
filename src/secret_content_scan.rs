@@ -286,6 +286,7 @@ mod tests {
             scan.network_command_like,
             "socket.create_connection MUST still be network-command-like (got: {scan:?})"
         );
+        cleanup(&path);
     }
 
     /// Negative-control: a PowerShell `Invoke-WebRequest` payload must

@@ -1415,11 +1415,27 @@ fn default_package_manager_temp_writers() -> PlatformStringLists {
     platform_string_lists(
         // macos
         &[
-            "dart", "node", "npm", "yarn", "pnpm", "pip", "pip3", "cargo",
+            "dart",
+            "node",
+            "npm",
+            "yarn",
+            "pnpm",
+            "pip",
+            "pip3",
+            "cargo",
+            "rustup-init",
         ],
         // linux
         &[
-            "dart", "node", "npm", "yarn", "pnpm", "pip", "pip3", "cargo",
+            "dart",
+            "node",
+            "npm",
+            "yarn",
+            "pnpm",
+            "pip",
+            "pip3",
+            "cargo",
+            "rustup-init",
         ],
         // windows
         &[
@@ -1434,6 +1450,7 @@ fn default_package_manager_temp_writers() -> PlatformStringLists {
             "pip.exe",
             "pip3.exe",
             "cargo.exe",
+            "rustup-init.exe",
         ],
     )
 }
