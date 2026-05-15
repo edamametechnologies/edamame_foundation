@@ -654,6 +654,7 @@ fn default_non_sensitive_browser_data_subtrees() -> BrowserDataSubtreesJSON {
             "/optimizationhints/",
             "/segmentation_platform/",
             "/safe browsing/",
+            "/certificaterevocation/",
         ]),
         chromium_state_files_routine: strings(&[
             "/local state",
@@ -2951,6 +2952,9 @@ fn matches_platform_patterns(path: &str, dirs: &PlatformStringLists) -> bool {
 /// suppress entirely (compiler/build-tool scratch trees such as prost-build,
 /// WiX `wix-ir`, CMake populate temp, and NuGetScratch).
 pub fn is_managed_temp_staging_suppressed_path(path: &str) -> bool {
+    if is_linux_systemd_coredump_private_tmp(path) || is_linux_x11_runtime_artifact(path) {
+        return true;
+    }
     let snapshot = PARAMS_SNAPSHOT.load();
     matches_platform_patterns(
         path,
@@ -2958,6 +2962,46 @@ pub fn is_managed_temp_staging_suppressed_path(path: &str) -> bool {
             .managed_temp_staging_patterns
             .suppress_path_patterns,
     )
+}
+
+fn is_linux_systemd_coredump_private_tmp(path: &str) -> bool {
+    if path.is_empty() {
+        return false;
+    }
+    let lower = path.to_ascii_lowercase().replace('\\', "/");
+    (lower.starts_with("/tmp/systemd-private-") || lower.starts_with("/var/tmp/systemd-private-"))
+        && lower.contains("-systemd-coredump@")
+        && lower.contains(".service-")
+}
+
+fn is_ascii_digits(value: &str) -> bool {
+    !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit())
+}
+
+fn is_linux_x11_runtime_artifact(path: &str) -> bool {
+    if path.is_empty() {
+        return false;
+    }
+    let lower = path.to_ascii_lowercase().replace('\\', "/");
+    if let Some(display) = lower.strip_prefix("/tmp/.x11-unix/x") {
+        return is_ascii_digits(display);
+    }
+    if let Some(display) = lower
+        .strip_prefix("/tmp/.x")
+        .and_then(|rest| rest.strip_suffix("-lock"))
+    {
+        return is_ascii_digits(display);
+    }
+    if let Some(display) = lower
+        .strip_prefix("/tmp/.tx")
+        .and_then(|rest| rest.strip_suffix("-lock"))
+    {
+        return is_ascii_digits(display);
+    }
+    if let Some(lock_id) = lower.strip_prefix("/tmp/#") {
+        return is_ascii_digits(lock_id);
+    }
+    false
 }
 
 /// Returns true for managed temp-staging artifacts that should stay visible as
