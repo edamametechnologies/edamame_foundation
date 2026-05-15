@@ -1318,8 +1318,8 @@ fn default_managed_temp_staging_patterns() -> ManagedTempStagingPatternsJSON {
             // linux
             &[],
             // windows -- WiX Bootstrapper Application runtime extraction tree
-            // and Chromium extension install/unpack staging.
-            &["\\.ba", "\\chromecrx_"],
+            // Chocolatey installer cache, and Chromium extension install/unpack staging.
+            &["\\.ba", "\\appdata\\local\\temp\\chocolatey", "\\chromecrx_"],
         ),
     }
 }
