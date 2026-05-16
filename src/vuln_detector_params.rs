@@ -259,6 +259,18 @@ pub struct CveDetectionParamsJSON {
     pub platform_self_state_processes: PlatformStringLists,
     #[serde(default = "default_runtime_perfdata_paths")]
     pub runtime_perfdata_paths: PlatformRuntimePerfdataPathsJSON,
+    /// Informational hint to the LLM adjudicator. Per-platform process
+    /// names of well-known OS system daemons whose legitimate job
+    /// includes touching platform credential stores (e.g. macOS
+    /// `sharingd`/`accountsd`/`apsd` syncing iCloud Keychain, Linux
+    /// `dbus-daemon`/`accounts-daemon`, Windows `lsass.exe`). The
+    /// vulnerability detector flags this in `FindingEvidence` so the
+    /// LLM can weigh "writer is a recognized system daemon AND target
+    /// is a platform credential store AND no corroboration" as benign
+    /// maintenance. NOT a deterministic suppression -- a name match
+    /// alone never silences a finding.
+    #[serde(default = "default_known_system_daemon_credential_maintenance_hints")]
+    pub known_system_daemon_credential_maintenance_hints: PlatformStringLists,
     #[serde(default = "default_fim_hash_size_threshold")]
     pub fim_hash_size_threshold: u64,
     pub fim_temp_executable_patterns: Vec<String>,
@@ -1244,6 +1256,63 @@ fn default_runtime_perfdata_paths() -> PlatformRuntimePerfdataPathsJSON {
     }
 }
 
+/// Per-platform process names of well-known OS system daemons whose
+/// legitimate maintenance work includes touching platform credential
+/// stores. Used as an **informational hint** to the LLM adjudicator,
+/// not as a deterministic suppression switch.
+///
+/// macOS examples: `sharingd` (iCloud Keychain sync), `accountsd`
+/// (Account Authentication framework), `apsd` (Apple Push), `securityd`
+/// (Security framework), `cloudd` (CloudKit), `keychainsharingd`.
+///
+/// Linux examples: `dbus-daemon`, `accounts-daemon`,
+/// `gnome-keyring-daemon`, `kwalletd5`/`kwalletd6`, `polkitd`,
+/// `systemd`/`systemd-userdbd`.
+///
+/// Windows examples: `lsass.exe`, `services.exe`, `svchost.exe`,
+/// `vaultsvc.exe`, `dwm.exe`, `winlogon.exe`.
+///
+/// A name match alone NEVER silences a finding. The detector flags the
+/// match in `FindingEvidence::process_name_matches_known_system_daemon_hint`
+/// so the LLM can weigh it together with corroboration (anomaly,
+/// blacklist, suspicious lineage) when deciding KEEP/DEMOTE/SUPPRESS.
+fn default_known_system_daemon_credential_maintenance_hints() -> PlatformStringLists {
+    platform_string_lists(
+        &[
+            "sharingd",
+            "accountsd",
+            "apsd",
+            "securityd",
+            "cloudd",
+            "keychainsharingd",
+            "trustd",
+            "syspolicyd",
+            "amfid",
+        ],
+        &[
+            "dbus-daemon",
+            "accounts-daemon",
+            "gnome-keyring-daemon",
+            "kwalletd5",
+            "kwalletd6",
+            "polkitd",
+            "systemd",
+            "systemd-userdbd",
+            "systemd-logind",
+        ],
+        &[
+            "lsass.exe",
+            "services.exe",
+            "svchost.exe",
+            "vaultsvc.exe",
+            "dwm.exe",
+            "winlogon.exe",
+            "wininit.exe",
+            "csrss.exe",
+        ],
+    )
+}
+
 /// Path substrings that identify per-OS package-manager working
 /// directories where toolchains legitimately stage downloaded
 /// dependency archives. The `file_system_tampering` detector would
@@ -1603,6 +1672,7 @@ pub struct CveDetectionParams {
     pub platform_self_state_directories: PlatformStringLists,
     pub platform_self_state_processes: PlatformStringLists,
     pub runtime_perfdata_paths: PlatformRuntimePerfdataPathsJSON,
+    pub known_system_daemon_credential_maintenance_hints: PlatformStringLists,
     pub fim_hash_size_threshold: u64,
     pub fim_temp_executable_patterns: Vec<String>,
 }
@@ -2097,6 +2167,26 @@ impl CveDetectionParams {
                     .map(normalize_runtime_perfdata_entry)
                     .collect(),
             },
+            known_system_daemon_credential_maintenance_hints: PlatformStringLists {
+                macos: json
+                    .known_system_daemon_credential_maintenance_hints
+                    .macos
+                    .iter()
+                    .map(|name| name.to_ascii_lowercase())
+                    .collect(),
+                linux: json
+                    .known_system_daemon_credential_maintenance_hints
+                    .linux
+                    .iter()
+                    .map(|name| name.to_ascii_lowercase())
+                    .collect(),
+                windows: json
+                    .known_system_daemon_credential_maintenance_hints
+                    .windows
+                    .iter()
+                    .map(|name| name.to_ascii_lowercase())
+                    .collect(),
+            },
             fim_hash_size_threshold: json.fim_hash_size_threshold,
             fim_temp_executable_patterns: json.fim_temp_executable_patterns.clone(),
         }
@@ -2193,6 +2283,36 @@ pub fn is_generic_application_token(token: &str) -> bool {
 
 pub fn is_init_process(name: &str) -> bool {
     PARAMS_SNAPSHOT.load().init_process_names.contains(name)
+}
+
+/// Returns true if `name` is in the per-platform
+/// `known_system_daemon_credential_maintenance_hints` list. Match is
+/// case-insensitive on the basename (stripping any directory prefix).
+///
+/// This is an **informational signal** for the LLM adjudicator. It
+/// answers: "the writer process name looks like a recognized OS
+/// system daemon whose legitimate maintenance work includes touching
+/// platform credential stores". The match alone never suppresses a
+/// finding -- the LLM still adjudicates KEEP/DEMOTE/SUPPRESS in the
+/// context of corroboration (anomaly, blacklist, suspicious lineage).
+pub fn is_known_system_daemon_credential_maintenance_hint(name: &str) -> bool {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let basename = trimmed
+        .rsplit(|c| c == '/' || c == '\\')
+        .next()
+        .unwrap_or(trimmed)
+        .to_ascii_lowercase();
+    let params = PARAMS_SNAPSHOT.load();
+    let lists = &params.known_system_daemon_credential_maintenance_hints;
+    lists
+        .macos
+        .iter()
+        .chain(lists.linux.iter())
+        .chain(lists.windows.iter())
+        .any(|hint| !hint.is_empty() && hint == &basename)
 }
 
 /// Returns true if `name` is a known CI runner agent or provisioning
