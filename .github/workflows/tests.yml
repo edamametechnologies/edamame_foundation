@@ -345,10 +345,7 @@ jobs:
         uses: edamametechnologies/edamame_posture_action@v1
         with:
           dump_vulnerability_findings: true
-          # GitHub-hosted runners use the previously released posture binary and
-          # have no persistent dismissal store. Dump findings there for visibility,
-          # but only enforce the gate on persistent self-hosted runners.
-          exit_on_vulnerability_findings: ${{ startsWith(matrix.runs-on, 'vm-runner-') }}
+          exit_on_vulnerability_findings: true
 
       - name: Slack alerts
         if: steps.tests.outcome != 'success'
@@ -598,10 +595,7 @@ jobs:
         uses: edamametechnologies/edamame_posture_action@v1
         with:
           dump_vulnerability_findings: true
-          # GitHub-hosted container lanes use the previously released posture
-          # binary, so their runtime findings are informational. Self-hosted
-          # lanes remain strict per runner-protection policy.
-          exit_on_vulnerability_findings: ${{ startsWith(matrix.runs-on, 'vm-runner-') }}
+          exit_on_vulnerability_findings: true
 
       - name: Slack alerts
         # Won't work on 18.04 because of glibc version
