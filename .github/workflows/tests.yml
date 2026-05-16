@@ -86,13 +86,9 @@ jobs:
           checkout: true
           # Runtime runner protection. See workspace.mdc.
           packet_capture: true
-          # NOTE: vulnerability_detection is gated off on Linux because
-          # `vulnerability-start` currently hangs on github-hosted ubuntu
-          # runners (under investigation). macOS/Windows runners use the
-          # full detector. See workspace.mdc.
-          vulnerability_detection: ${{ runner.os != 'Linux' }}
+          vulnerability_detection: true
           vulnerability_detection_interval: "60"
-          agentic_mode: ${{ runner.os != 'Linux' && 'analyze' || 'disabled' }}
+          agentic_mode: analyze
           agentic_provider: edamame
           agentic_interval: 600
         env:
@@ -479,13 +475,9 @@ jobs:
           # packet_capture has limited host visibility but FIM and
           # process introspection still detect tampering / exfil.
           packet_capture: true
-          # NOTE: vulnerability_detection is gated off on Linux because
-          # `vulnerability-start` currently hangs on github-hosted ubuntu
-          # runners (under investigation). macOS/Windows runners use the
-          # full detector. See workspace.mdc.
-          vulnerability_detection: ${{ runner.os != 'Linux' }}
+          vulnerability_detection: true
           vulnerability_detection_interval: "60"
-          agentic_mode: ${{ runner.os != 'Linux' && 'analyze' || 'disabled' }}
+          agentic_mode: analyze
           agentic_provider: edamame
           agentic_interval: 600
         env:
