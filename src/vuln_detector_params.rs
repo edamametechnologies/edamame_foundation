@@ -186,6 +186,247 @@ pub struct TrustedBuildTempStagingJSON {
     pub artifact_path_patterns: PlatformStringLists,
 }
 
+/// P1 symmetric-evidence weight table (`evidence_weights`).
+///
+/// The CloudModel JSON shape mirrors `EvidenceWeights` in
+/// `edamame_core::agentic::vulnerability_score`. We deliberately keep
+/// it as flat `f32` fields rather than a generic
+/// `HashMap<String, f32>` so:
+///
+/// - the schema is self-documenting (one struct field per signal),
+/// - the embedded fallback can be a typed default (no risk of a
+///   stringly-typed CloudModel publish silently dropping a signal),
+/// - the `EvidenceWeights` runtime view shares the same shape and the
+///   conversion is field-by-field.
+///
+/// **Defaults policy.** Every field uses `#[serde(default = "fn")]`
+/// pointing at the named-default helper below. Per the foundation
+/// invariants (`No #[serde(default)] on CloudModel structs unless
+/// they have a named default`), this is acceptable because the
+/// defaults are meaningful initial weights, not silent zeros, and a
+/// missing field in a future CloudModel publish falls back to the
+/// calibrated initial value rather than silencing the signal.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct EvidenceWeightsJSON {
+    // ---- Attack signals ----
+    #[serde(default = "default_ew_session_is_anomalous")]
+    pub session_is_anomalous: f32,
+    #[serde(default = "default_ew_session_is_blacklisted")]
+    pub session_is_blacklisted: f32,
+    #[serde(default = "default_ew_destination_is_public_diagnostic")]
+    pub destination_is_public_diagnostic: f32,
+    #[serde(default = "default_ew_destination_is_blacklisted")]
+    pub destination_is_blacklisted: f32,
+    #[serde(default = "default_ew_sensitive_material_evidence_present")]
+    pub sensitive_material_evidence_present: f32,
+    #[serde(default = "default_ew_suspicious_lineage_present")]
+    pub suspicious_lineage_present: f32,
+    #[serde(default = "default_ew_process_path_matches_suspicious_lineage")]
+    pub process_path_matches_suspicious_lineage: f32,
+    #[serde(default = "default_ew_is_system_binary_target")]
+    pub is_system_binary_target: f32,
+
+    // ---- Benign signals ----
+    #[serde(default = "default_ew_destination_is_routine_vendor_backend")]
+    pub destination_is_routine_vendor_backend: f32,
+    #[serde(default = "default_ew_process_in_trusted_credential_helper_list")]
+    pub process_in_trusted_credential_helper_list: f32,
+    #[serde(default = "default_ew_process_in_generic_git_credential_manager_list")]
+    pub process_in_generic_git_credential_manager_list: f32,
+    #[serde(default = "default_ew_process_path_matches_packaged_application")]
+    pub process_path_matches_packaged_application: f32,
+    #[serde(default = "default_ew_process_in_ci_runner_internal_agent_list")]
+    pub process_in_ci_runner_internal_agent_list: f32,
+    #[serde(default = "default_ew_process_in_ide_project_config_helper_list")]
+    pub process_in_ide_project_config_helper_list: f32,
+    #[serde(default = "default_ew_process_in_jvm_hsperfdata_writer_list")]
+    pub process_in_jvm_hsperfdata_writer_list: f32,
+    #[serde(default = "default_ew_process_name_matches_known_system_daemon_hint")]
+    pub process_name_matches_known_system_daemon_hint: f32,
+    /// P2 writer-equal-egresser predicate. Benign weight applied when
+    /// a session-based finding fires for a process that owns its
+    /// sensitive material AND talks to a routine destination AND has
+    /// no anomaly/blacklist corroboration. This is the structural
+    /// "OS daemon doing ambient self-access to its own backend"
+    /// shape; targeted at session-based FPs (the FIM-based dogfood
+    /// FP class is already covered by the system-daemon hint signal).
+    #[serde(default = "default_ew_ambient_external_egress")]
+    pub ambient_external_egress: f32,
+    /// P3 publisher attestation: writer process binary carries a valid
+    /// platform-publisher signature (Apple Developer ID + canonical
+    /// `/usr/*` or `/System/*` path on macOS, Microsoft Authenticode +
+    /// `C:\Windows\*` or `C:\Program Files\*` path on Windows, distro
+    /// package signature + `/usr/bin` / `/usr/lib` path on Linux).
+    /// Benign weight applied when the signature verifies AND the
+    /// canonical-path predicate holds.
+    #[serde(default = "default_ew_publisher_attestation_signed_by_canonical_publisher")]
+    pub publisher_attestation_signed_by_canonical_publisher: f32,
+    /// P3 publisher attestation impostor: writer process binary lives
+    /// under a canonical OS install path BUT lacks a valid platform-
+    /// publisher signature (relocated tool / spoofed-OS-publisher
+    /// shape, `Stealga.HAK!MTB`-class). Attack weight applied when
+    /// the binary's path matches a canonical OS install path AND its
+    /// signature does NOT verify against the expected publisher.
+    #[serde(default = "default_ew_invalid_signature_in_canonical_path")]
+    pub invalid_signature_in_canonical_path: f32,
+    /// P4 ambient baseline credit: finding's `lineage_key` is present
+    /// in the per-host `vuln_ambient_baseline.json` snapshot for at
+    /// least N consecutive days (default 7) without operator
+    /// escalation. Small benign weight that dampens the long-tail of
+    /// persistent FPs that recur day-after-day. Anti-spoofing: weight
+    /// is intentionally small (15) so a single attack signal swamps
+    /// it; CVE scenarios still alert on the first observation.
+    #[serde(default = "default_ew_ambient_baseline_credit")]
+    pub ambient_baseline_credit: f32,
+    #[serde(default = "default_ew_attribution_full_path")]
+    pub attribution_full_path: f32,
+    #[serde(default = "default_ew_attribution_name_only")]
+    pub attribution_name_only: f32,
+    #[serde(default = "default_ew_attribution_missing")]
+    pub attribution_missing: f32,
+}
+
+impl Default for EvidenceWeightsJSON {
+    fn default() -> Self {
+        Self {
+            session_is_anomalous: default_ew_session_is_anomalous(),
+            session_is_blacklisted: default_ew_session_is_blacklisted(),
+            destination_is_public_diagnostic: default_ew_destination_is_public_diagnostic(),
+            destination_is_blacklisted: default_ew_destination_is_blacklisted(),
+            sensitive_material_evidence_present:
+                default_ew_sensitive_material_evidence_present(),
+            suspicious_lineage_present: default_ew_suspicious_lineage_present(),
+            process_path_matches_suspicious_lineage:
+                default_ew_process_path_matches_suspicious_lineage(),
+            is_system_binary_target: default_ew_is_system_binary_target(),
+            destination_is_routine_vendor_backend:
+                default_ew_destination_is_routine_vendor_backend(),
+            process_in_trusted_credential_helper_list:
+                default_ew_process_in_trusted_credential_helper_list(),
+            process_in_generic_git_credential_manager_list:
+                default_ew_process_in_generic_git_credential_manager_list(),
+            process_path_matches_packaged_application:
+                default_ew_process_path_matches_packaged_application(),
+            process_in_ci_runner_internal_agent_list:
+                default_ew_process_in_ci_runner_internal_agent_list(),
+            process_in_ide_project_config_helper_list:
+                default_ew_process_in_ide_project_config_helper_list(),
+            process_in_jvm_hsperfdata_writer_list:
+                default_ew_process_in_jvm_hsperfdata_writer_list(),
+            process_name_matches_known_system_daemon_hint:
+                default_ew_process_name_matches_known_system_daemon_hint(),
+            ambient_external_egress: default_ew_ambient_external_egress(),
+            publisher_attestation_signed_by_canonical_publisher:
+                default_ew_publisher_attestation_signed_by_canonical_publisher(),
+            invalid_signature_in_canonical_path:
+                default_ew_invalid_signature_in_canonical_path(),
+            ambient_baseline_credit: default_ew_ambient_baseline_credit(),
+            attribution_full_path: default_ew_attribution_full_path(),
+            attribution_name_only: default_ew_attribution_name_only(),
+            attribution_missing: default_ew_attribution_missing(),
+        }
+    }
+}
+
+// P1 initial weights -- mirror EvidenceWeights::default in
+// `edamame_core::agentic::vulnerability_score`. See
+// `FALSEPOSITIVESFIX.md` "Breakthrough: symmetric two-axis evidence"
+// for the calibration source. Do NOT tune these here outside the
+// fixture-driven P1 shadow window; the CloudModel publish is the
+// authoritative knob.
+fn default_ew_session_is_anomalous() -> f32 {
+    50.0
+}
+fn default_ew_session_is_blacklisted() -> f32 {
+    50.0
+}
+fn default_ew_destination_is_public_diagnostic() -> f32 {
+    30.0
+}
+fn default_ew_destination_is_blacklisted() -> f32 {
+    50.0
+}
+fn default_ew_sensitive_material_evidence_present() -> f32 {
+    40.0
+}
+fn default_ew_suspicious_lineage_present() -> f32 {
+    30.0
+}
+fn default_ew_process_path_matches_suspicious_lineage() -> f32 {
+    30.0
+}
+fn default_ew_is_system_binary_target() -> f32 {
+    60.0
+}
+fn default_ew_destination_is_routine_vendor_backend() -> f32 {
+    25.0
+}
+fn default_ew_process_in_trusted_credential_helper_list() -> f32 {
+    40.0
+}
+fn default_ew_process_in_generic_git_credential_manager_list() -> f32 {
+    35.0
+}
+fn default_ew_process_path_matches_packaged_application() -> f32 {
+    20.0
+}
+fn default_ew_process_in_ci_runner_internal_agent_list() -> f32 {
+    30.0
+}
+fn default_ew_process_in_ide_project_config_helper_list() -> f32 {
+    25.0
+}
+fn default_ew_process_in_jvm_hsperfdata_writer_list() -> f32 {
+    30.0
+}
+fn default_ew_process_name_matches_known_system_daemon_hint() -> f32 {
+    15.0
+}
+// P2 -- writer-equal-egresser predicate. Conservative benign weight
+// matching the system-daemon-hint level: enough to dampen findings
+// whose only attack contribution is weak corroboration, not enough
+// to swamp a real anomaly/blacklist/lineage signal.
+fn default_ew_ambient_external_egress() -> f32 {
+    15.0
+}
+// P3 -- publisher attestation signed. Stronger than the system-
+// daemon hint because it is a cryptographically verified signal:
+// when the OS verifies an Apple/Microsoft/distro publisher signature
+// on a binary in its canonical install path, the binary is what its
+// path claims it is. Targeted at the FP-MAC-9/10/11 + Windows
+// DismHost class.
+fn default_ew_publisher_attestation_signed_by_canonical_publisher() -> f32 {
+    35.0
+}
+// P3 -- publisher attestation impostor. NEW attack class: a binary
+// living under a canonical OS install path with INVALID publisher
+// signature is the canonical relocated-tool / spoofed-OS-publisher
+// shape (`Stealga.HAK!MTB`-class). Strong attack weight because the
+// path claim is structural and the signature failure is decisive.
+fn default_ew_invalid_signature_in_canonical_path() -> f32 {
+    60.0
+}
+// P4 -- ambient baseline credit. Intentionally small so a single
+// attack signal (anomaly, blacklist, suspicious lineage, sensitive
+// material) swamps it. The shape catches the long tail of persistent
+// FPs that recur day-after-day without escalation.
+fn default_ew_ambient_baseline_credit() -> f32 {
+    15.0
+}
+fn default_ew_attribution_full_path() -> f32 {
+    0.0
+}
+fn default_ew_attribution_name_only() -> f32 {
+    0.0
+}
+fn default_ew_attribution_missing() -> f32 {
+    0.0
+}
+
+fn default_evidence_weights() -> EvidenceWeightsJSON {
+    EvidenceWeightsJSON::default()
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct CveDetectionParamsJSON {
     pub date: String,
@@ -274,6 +515,14 @@ pub struct CveDetectionParamsJSON {
     #[serde(default = "default_fim_hash_size_threshold")]
     pub fim_hash_size_threshold: u64,
     pub fim_temp_executable_patterns: Vec<String>,
+    /// P1 symmetric-evidence shadow-scoring weight table. See
+    /// `EvidenceWeightsJSON` for the per-field documentation and the
+    /// CloudModel publishing policy. `#[serde(default)]` so older
+    /// CloudModel publishes (pre-P1) fall back to the embedded
+    /// defaults instead of crashing the parse and falling all the way
+    /// back to the embedded snapshot.
+    #[serde(default = "default_evidence_weights")]
+    pub evidence_weights: EvidenceWeightsJSON,
 }
 
 fn strings(values: &[&str]) -> Vec<String> {
@@ -1675,6 +1924,7 @@ pub struct CveDetectionParams {
     pub known_system_daemon_credential_maintenance_hints: PlatformStringLists,
     pub fim_hash_size_threshold: u64,
     pub fim_temp_executable_patterns: Vec<String>,
+    pub evidence_weights: EvidenceWeightsJSON,
 }
 
 impl CloudSignature for CveDetectionParams {
@@ -2189,6 +2439,7 @@ impl CveDetectionParams {
             },
             fim_hash_size_threshold: json.fim_hash_size_threshold,
             fim_temp_executable_patterns: json.fim_temp_executable_patterns.clone(),
+            evidence_weights: json.evidence_weights.clone(),
         }
     }
 
@@ -3222,6 +3473,17 @@ pub fn fim_hash_size_threshold() -> u64 {
 
 pub fn fim_temp_executable_patterns() -> Vec<String> {
     PARAMS_SNAPSHOT.load().fim_temp_executable_patterns.clone()
+}
+
+/// P1 symmetric-evidence weight table accessor.
+///
+/// Returns a clone of the current `EvidenceWeightsJSON` snapshot from
+/// the CloudModel. Cheap: `EvidenceWeightsJSON` is 19 `f32` fields,
+/// no heap allocation. Callers should clone-then-reuse for the
+/// duration of one detector tick rather than calling this per-finding,
+/// even though both shapes are cheap.
+pub fn evidence_weights() -> EvidenceWeightsJSON {
+    PARAMS_SNAPSHOT.load().evidence_weights.clone()
 }
 
 pub fn check_severity(check_name: &str, fallback: &str) -> String {
