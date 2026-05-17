@@ -309,15 +309,14 @@ impl Default for EvidenceWeightsJSON {
             session_is_blacklisted: default_ew_session_is_blacklisted(),
             destination_is_public_diagnostic: default_ew_destination_is_public_diagnostic(),
             destination_is_blacklisted: default_ew_destination_is_blacklisted(),
-            sensitive_material_evidence_present:
-                default_ew_sensitive_material_evidence_present(),
+            sensitive_material_evidence_present: default_ew_sensitive_material_evidence_present(),
             suspicious_lineage_present: default_ew_suspicious_lineage_present(),
             process_path_matches_suspicious_lineage:
                 default_ew_process_path_matches_suspicious_lineage(),
             is_system_binary_target: default_ew_is_system_binary_target(),
             target_in_sensitive_path_class: default_ew_target_in_sensitive_path_class(),
-            destination_is_routine_vendor_backend:
-                default_ew_destination_is_routine_vendor_backend(),
+            destination_is_routine_vendor_backend: default_ew_destination_is_routine_vendor_backend(
+            ),
             process_in_trusted_credential_helper_list:
                 default_ew_process_in_trusted_credential_helper_list(),
             process_in_generic_git_credential_manager_list:
@@ -328,15 +327,14 @@ impl Default for EvidenceWeightsJSON {
                 default_ew_process_in_ci_runner_internal_agent_list(),
             process_in_ide_project_config_helper_list:
                 default_ew_process_in_ide_project_config_helper_list(),
-            process_in_jvm_hsperfdata_writer_list:
-                default_ew_process_in_jvm_hsperfdata_writer_list(),
+            process_in_jvm_hsperfdata_writer_list: default_ew_process_in_jvm_hsperfdata_writer_list(
+            ),
             process_name_matches_known_system_daemon_hint:
                 default_ew_process_name_matches_known_system_daemon_hint(),
             ambient_external_egress: default_ew_ambient_external_egress(),
             publisher_attestation_signed_by_canonical_publisher:
                 default_ew_publisher_attestation_signed_by_canonical_publisher(),
-            invalid_signature_in_canonical_path:
-                default_ew_invalid_signature_in_canonical_path(),
+            invalid_signature_in_canonical_path: default_ew_invalid_signature_in_canonical_path(),
             ambient_baseline_credit: default_ew_ambient_baseline_credit(),
             attribution_full_path: default_ew_attribution_full_path(),
             attribution_name_only: default_ew_attribution_name_only(),
