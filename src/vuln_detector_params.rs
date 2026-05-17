@@ -225,6 +225,22 @@ pub struct EvidenceWeightsJSON {
     pub process_path_matches_suspicious_lineage: f32,
     #[serde(default = "default_ew_is_system_binary_target")]
     pub is_system_binary_target: f32,
+    /// Structural attack signal: the finding's target path is in a
+    /// sensitive class (ssh private key, AWS credentials, .env file,
+    /// platform credential store, etc.). Distinct from
+    /// `sensitive_material_evidence_present` -- that signal captures
+    /// "a related session/process holds sensitive material"; this
+    /// signal captures "this finding's actual target IS sensitive".
+    ///
+    /// Populated for both FIM evidence (`build_fim_finding_evidence`,
+    /// derived from `is_sensitive`) and session evidence
+    /// (`build_session_finding_evidence`, derived from the first
+    /// sensitive_file label). Default weight 50.0 -- meets the
+    /// `apply_crs_severity` CRITICAL guardrail ARIS floor of 50, so
+    /// a FIM-only finding on a sensitive file (the canonical
+    /// `cve_file_events` strict-gate shape) lands at CRITICAL alone.
+    #[serde(default = "default_ew_target_in_sensitive_path_class")]
+    pub target_in_sensitive_path_class: f32,
 
     // ---- Benign signals ----
     #[serde(default = "default_ew_destination_is_routine_vendor_backend")]
@@ -299,6 +315,7 @@ impl Default for EvidenceWeightsJSON {
             process_path_matches_suspicious_lineage:
                 default_ew_process_path_matches_suspicious_lineage(),
             is_system_binary_target: default_ew_is_system_binary_target(),
+            target_in_sensitive_path_class: default_ew_target_in_sensitive_path_class(),
             destination_is_routine_vendor_backend:
                 default_ew_destination_is_routine_vendor_backend(),
             process_in_trusted_credential_helper_list:
@@ -358,6 +375,19 @@ fn default_ew_process_path_matches_suspicious_lineage() -> f32 {
 fn default_ew_is_system_binary_target() -> f32 {
     60.0
 }
+// ITER 1 calibration target: FIM-only sensitive-file tampering (the
+// `cve_file_events` scenario) produced 0 ARIS / 0 ABIS under P5 LIVE
+// because the legacy classifier's "is_sensitive == true => CRITICAL"
+// gate did not have a corresponding boolean attack signal in the
+// CRS model. The result on iter 1 (tests.yml run 25998184563) was
+// 4 platform-scenario failures (file_events FAIL on all 4 platforms)
+// while the idle baseline was CLEAN 4/4. Weight set to 50.0 so the
+// signal alone meets the `apply_crs_severity` CRITICAL guardrail
+// ARIS floor of 50; a benign signal must therefore add real weight
+// (or several benigns must stack) to demote the finding below LOW.
+fn default_ew_target_in_sensitive_path_class() -> f32 {
+    50.0
+}
 fn default_ew_destination_is_routine_vendor_backend() -> f32 {
     25.0
 }
@@ -379,8 +409,19 @@ fn default_ew_process_in_ide_project_config_helper_list() -> f32 {
 fn default_ew_process_in_jvm_hsperfdata_writer_list() -> f32 {
     30.0
 }
+// ITER 1 calibration: raised from 15 -> 40 so the FP-MAC-9 / FP-MAC-10 /
+// FP-MAC-11 class (macOS sharingd / mobilesoftwareupdate / assistantd
+// renaming login.keychain-db) can offset the new
+// `target_in_sensitive_path_class` 50-weight attack signal and demote
+// to LOW. The CRS model is additive, so a real attack on the same
+// daemon (anomaly + blacklist = 100 ARIS) still wins handily
+// (CRS = 60/140 = 0.43 -> HIGH alertable). The earlier "informational
+// only" comment reflected the legacy LLM-driven model where the hint
+// was a soft suggestion; under CRS, structural signals ARE the
+// adjudicator and the daemon-hint list -- vetted against dogfood
+// evidence on macOS, Linux, Windows -- earns a stronger benign weight.
 fn default_ew_process_name_matches_known_system_daemon_hint() -> f32 {
-    15.0
+    40.0
 }
 // P2 -- writer-equal-egresser predicate. Conservative benign weight
 // matching the system-daemon-hint level: enough to dampen findings
