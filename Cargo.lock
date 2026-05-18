@@ -769,9 +769,9 @@ dependencies = [
 
 [[package]]
 name = "dashmap"
-version = "6.1.0"
+version = "6.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5041cc499144891f3790297212f32a74fb938e5136a14943f338ef9e0ae276cf"
+checksum = "e6361d5c062261c78a176addb82d4c821ae42bed6089de0e12603cd25de2059c"
 dependencies = [
  "cfg-if",
  "crossbeam-utils",
@@ -896,7 +896,7 @@ dependencies = [
 
 [[package]]
 name = "edamame_foundation"
-version = "1.3.10"
+version = "1.3.11"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -1142,8 +1142,8 @@ dependencies = [
 
 [[package]]
 name = "flodbadd"
-version = "1.3.10"
-source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#716ba49f0fff3627c3aeba8c0d6fe05107ffb0ca"
+version = "1.3.11"
+source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#704637d7213673ceb56e521bf085740de40d6ab1"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -3689,7 +3689,7 @@ dependencies = [
 [[package]]
 name = "threatmodels_rs"
 version = "0.1.1"
-source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#fb296f480208e96cef80e5d31cf7ee46a5702545"
+source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#ae3d7ee3c1c83e5e4db2698d3dd2669eaa27eb45"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4048,7 +4048,7 @@ checksum = "40ce102ab67701b8526c123c1bab5cbe42d7040ccfd0f64af1a385808d2f43de"
 [[package]]
 name = "undeadlock"
 version = "1.2.0"
-source = "git+https://github.com/edamametechnologies/undeadlock?branch=main#d51fa3a67d8237d7a2a95afb30e9071af50ff67c"
+source = "git+https://github.com/edamametechnologies/undeadlock?branch=main#77451cf9f6e27f2773f284e7f6a2968b66e58733"
 dependencies = [
  "dashmap",
  "tokio",
