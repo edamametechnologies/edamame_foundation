@@ -1162,6 +1162,8 @@ fn default_application_storage_patterns() -> Vec<String> {
         "/.cache/",
         "/.local/share/",
         "/.local/state/",
+        "/private/var/folders/",
+        "/var/folders/",
     ])
 }
 
@@ -1333,6 +1335,7 @@ fn default_packaged_application_contains_patterns() -> Vec<String> {
         "/applications/",
         "/program files/",
         "/appdata/local/programs/",
+        "/appdata/local/microsoft/",
     ])
 }
 
@@ -1576,6 +1579,9 @@ fn default_known_system_daemon_credential_maintenance_hints() -> PlatformStringL
             "trustd",
             "syspolicyd",
             "amfid",
+            "com.apple.mobilesoftwareupdate.",
+            "softwareupdated",
+            "mobileassetd",
         ],
         &[
             "dbus-daemon",
