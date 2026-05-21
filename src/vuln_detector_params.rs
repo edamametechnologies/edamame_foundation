@@ -186,6 +186,35 @@ pub struct TrustedBuildTempStagingJSON {
     pub artifact_path_patterns: PlatformStringLists,
 }
 
+/// Pair-wise writer/target allowlist entry for FP-WIN-7c
+/// "trusted-app self-temp-staging" deterministic suppression.
+///
+/// Each entry documents a single vendor's legitimate self-update or
+/// self-extract pattern as a pair (writer_path_patterns,
+/// target_path_patterns). Both lists are case-insensitive substring
+/// matches against the lowercased path. A finding is suppressed only
+/// when the writer matches AND the target matches in the SAME entry --
+/// the pair shape prevents collapsing two unrelated legitimate writers
+/// and trusted targets into a cross-match (e.g. it would NOT suppress
+/// `chrome.exe` writing to a WinGet target directory).
+///
+/// `name` is a stable identifier used in logs and audit evidence.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct AppSelfTempStagingEntryJSON {
+    pub name: String,
+    pub writer_path_patterns: Vec<String>,
+    pub target_path_patterns: Vec<String>,
+}
+
+/// Per-platform list of `AppSelfTempStagingEntryJSON` (FP-WIN-7c).
+/// See [`AppSelfTempStagingEntryJSON`] for the pair-wise semantics.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct AppSelfTempStagingJSON {
+    pub macos: Vec<AppSelfTempStagingEntryJSON>,
+    pub linux: Vec<AppSelfTempStagingEntryJSON>,
+    pub windows: Vec<AppSelfTempStagingEntryJSON>,
+}
+
 /// P1 symmetric-evidence weight table (`evidence_weights`).
 ///
 /// The CloudModel JSON shape mirrors `EvidenceWeights` in
@@ -518,6 +547,8 @@ pub struct CveDetectionParamsJSON {
     pub managed_temp_staging_patterns: ManagedTempStagingPatternsJSON,
     #[serde(default = "default_trusted_build_temp_staging")]
     pub trusted_build_temp_staging: TrustedBuildTempStagingJSON,
+    #[serde(default = "default_app_self_temp_staging")]
+    pub app_self_temp_staging: AppSelfTempStagingJSON,
     #[serde(default = "default_package_manager_temp_path_patterns")]
     pub package_manager_temp_path_patterns: PlatformStringLists,
     #[serde(default = "default_package_manager_temp_writers")]
@@ -1727,6 +1758,78 @@ fn default_trusted_build_temp_staging() -> TrustedBuildTempStagingJSON {
     }
 }
 
+/// FP-WIN-7c -- trusted-app self-temp-staging pair-wise allowlist.
+///
+/// Documents legitimate self-update / self-extract flows that look
+/// like file-system tampering to the FIM-backed detector. Each entry
+/// pairs a writer process binary with the temp directory it writes
+/// into; both must match for the deterministic suppression hook to
+/// fire. See `FALSEPOSITIVES.md` (FP-WIN-7c) for the dogfood evidence
+/// these entries cover.
+fn default_app_self_temp_staging() -> AppSelfTempStagingJSON {
+    AppSelfTempStagingJSON {
+        macos: Vec::new(),
+        linux: Vec::new(),
+        windows: vec![
+            AppSelfTempStagingEntryJSON {
+                name: "chrome_self_update".to_string(),
+                writer_path_patterns: vec![
+                    "\\program files\\google\\chrome\\application\\chrome.exe".to_string(),
+                    "\\program files (x86)\\google\\chrome\\application\\chrome.exe".to_string(),
+                ],
+                target_path_patterns: vec![
+                    "\\appdata\\local\\temp\\chrome_chrome_bits_".to_string(),
+                    "\\appdata\\local\\temp\\chrome_chrome_unpacker_".to_string(),
+                ],
+            },
+            AppSelfTempStagingEntryJSON {
+                name: "edge_self_update".to_string(),
+                writer_path_patterns: vec![
+                    "\\program files\\microsoft\\edge\\application\\msedge.exe".to_string(),
+                    "\\program files (x86)\\microsoft\\edge\\application\\msedge.exe".to_string(),
+                ],
+                target_path_patterns: vec![
+                    "\\appdata\\local\\temp\\msedgeedge_bits_".to_string(),
+                    "\\appdata\\local\\temp\\msedge_chrome_unpacker_".to_string(),
+                    "\\appdata\\local\\temp\\msedge_chrome_bits_".to_string(),
+                ],
+            },
+            AppSelfTempStagingEntryJSON {
+                name: "brave_self_update".to_string(),
+                writer_path_patterns: vec![
+                    "\\program files\\bravesoftware\\brave-browser\\application\\brave.exe"
+                        .to_string(),
+                ],
+                target_path_patterns: vec![
+                    "\\appdata\\local\\temp\\brave_chrome_bits_".to_string(),
+                    "\\appdata\\local\\temp\\brave_chrome_unpacker_".to_string(),
+                ],
+            },
+            AppSelfTempStagingEntryJSON {
+                name: "windows_winget_svchost".to_string(),
+                writer_path_patterns: vec![
+                    "\\windows\\system32\\svchost.exe".to_string(),
+                    "\\windows\\syswow64\\svchost.exe".to_string(),
+                ],
+                target_path_patterns: vec![
+                    "\\appdata\\local\\temp\\winget\\".to_string(),
+                ],
+            },
+            AppSelfTempStagingEntryJSON {
+                name: "vs_installer_background_download_self_extracted".to_string(),
+                writer_path_patterns: vec![
+                    "\\resources\\app\\servicehub\\services\\microsoft.visualstudio.setup.service\\backgrounddownload.exe"
+                        .to_string(),
+                ],
+                target_path_patterns: vec![
+                    "\\appdata\\local\\temp\\dd_backgrounddownload_".to_string(),
+                    "\\appdata\\local\\temp\\".to_string(),
+                ],
+            },
+        ],
+    }
+}
+
 /// See `FALSEPOSITIVES.md` (FP-WIN-11).
 fn default_package_manager_temp_path_patterns() -> PlatformStringLists {
     platform_string_lists(
@@ -1955,6 +2058,7 @@ pub struct CveDetectionParams {
     pub packaged_application_ends_with_patterns: Vec<String>,
     pub managed_temp_staging_patterns: ManagedTempStagingPatternsJSON,
     pub trusted_build_temp_staging: TrustedBuildTempStagingJSON,
+    pub app_self_temp_staging: AppSelfTempStagingJSON,
     pub package_manager_temp_path_patterns: PlatformStringLists,
     pub package_manager_temp_writers: PlatformStringLists,
     pub edamame_daemon_self_telemetry_writers: PlatformStringLists,
@@ -2024,6 +2128,46 @@ fn normalize_trusted_build_temp_staging(
         artifact_path_patterns: normalize_platform_string_lists_patterns(
             &patterns.artifact_path_patterns,
         ),
+    }
+}
+
+fn normalize_app_self_temp_staging_entry(
+    entry: &AppSelfTempStagingEntryJSON,
+) -> AppSelfTempStagingEntryJSON {
+    AppSelfTempStagingEntryJSON {
+        name: entry.name.clone(),
+        writer_path_patterns: entry
+            .writer_path_patterns
+            .iter()
+            .map(|p| p.to_ascii_lowercase().replace('\\', "/"))
+            .collect(),
+        target_path_patterns: entry
+            .target_path_patterns
+            .iter()
+            .map(|p| p.to_ascii_lowercase().replace('\\', "/"))
+            .collect(),
+    }
+}
+
+fn normalize_app_self_temp_staging(
+    patterns: &AppSelfTempStagingJSON,
+) -> AppSelfTempStagingJSON {
+    AppSelfTempStagingJSON {
+        macos: patterns
+            .macos
+            .iter()
+            .map(normalize_app_self_temp_staging_entry)
+            .collect(),
+        linux: patterns
+            .linux
+            .iter()
+            .map(normalize_app_self_temp_staging_entry)
+            .collect(),
+        windows: patterns
+            .windows
+            .iter()
+            .map(normalize_app_self_temp_staging_entry)
+            .collect(),
     }
 }
 
@@ -2207,6 +2351,7 @@ impl CveDetectionParams {
             trusted_build_temp_staging: normalize_trusted_build_temp_staging(
                 &json.trusted_build_temp_staging,
             ),
+            app_self_temp_staging: normalize_app_self_temp_staging(&json.app_self_temp_staging),
             package_manager_temp_path_patterns: PlatformStringLists {
                 macos: json
                     .package_manager_temp_path_patterns
@@ -3473,6 +3618,50 @@ pub fn is_trusted_build_temp_staging_artifact(path: &str, process_path: Option<&
     )
 }
 
+/// FP-WIN-7c -- trusted-app self-temp-staging deterministic suppression.
+///
+/// Returns true when `process_path` (writer) and `target_path` BOTH
+/// match patterns in the SAME `AppSelfTempStagingEntryJSON` entry across
+/// any platform list. The pair-wise shape is critical: collapsing the
+/// writer and target pattern lists into one would suppress a malicious
+/// writer that happened to write into ANY trusted target -- this
+/// function requires the writer-target pair to be co-listed in a
+/// single entry, so adding a new vendor only widens the trust for that
+/// vendor's own paths.
+///
+/// Inputs are case-insensitive substring matches against the lowercased
+/// path (normalization done at snapshot load time in
+/// `normalize_app_self_temp_staging`).
+pub fn is_app_self_temp_staging_pair(target_path: &str, process_path: &str) -> bool {
+    if target_path.is_empty() || process_path.is_empty() {
+        return false;
+    }
+    let lower_target = target_path.to_ascii_lowercase().replace('\\', "/");
+    let lower_writer = process_path.to_ascii_lowercase().replace('\\', "/");
+
+    let snapshot = PARAMS_SNAPSHOT.load();
+    let lists: [&Vec<AppSelfTempStagingEntryJSON>; 3] = [
+        &snapshot.app_self_temp_staging.macos,
+        &snapshot.app_self_temp_staging.linux,
+        &snapshot.app_self_temp_staging.windows,
+    ];
+    lists.iter().any(|list| {
+        list.iter().any(|entry| {
+            let writer_match = entry
+                .writer_path_patterns
+                .iter()
+                .any(|p| !p.is_empty() && lower_writer.contains(p));
+            if !writer_match {
+                return false;
+            }
+            entry
+                .target_path_patterns
+                .iter()
+                .any(|p| !p.is_empty() && lower_target.contains(p))
+        })
+    })
+}
+
 /// Returns true if the leaf basename of `path` starts with one of
 /// the platform runtime-probe filename prefixes (e.g. Windows
 /// PowerShell's `__PSScriptPolicyTest_*.ps1` execution-policy
@@ -4476,6 +4665,71 @@ mod tests {
         ));
         assert!(!is_managed_temp_staging_demoted_path(
             "C:\\Users\\frank\\AppData\\Local\\Temp\\ordinary\\wixstdba.exe"
+        ));
+    }
+
+    /// FP-WIN-7c regression guard at the params level: the pair-wise
+    /// trusted-app self-temp-staging allowlist MUST recognize the four
+    /// canonical legitimate writer/target shapes observed on the
+    /// shiawase Windows dogfood host (Chrome self-update bits, Edge
+    /// self-update bits, WinGet svchost staging, Visual Studio Setup
+    /// `BackgroundDownload.exe` self-extracted scratch), AND MUST NOT
+    /// cross-match an impostor writer against a trusted target (the
+    /// suppression is pair-wise, not "any trusted writer + any trusted
+    /// target").
+    #[test]
+    fn test_is_app_self_temp_staging_pair_positive_and_impostor_cases() {
+        // Positive: Chrome self-update writing chrome_chrome_bits_*.
+        assert!(is_app_self_temp_staging_pair(
+            "C:\\Users\\frank\\AppData\\Local\\Temp\\chrome_chrome_bits_12345.tmp",
+            "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+        ));
+        // Positive: Edge self-update writing msedge_chrome_bits_*.
+        assert!(is_app_self_temp_staging_pair(
+            "C:\\Users\\frank\\AppData\\Local\\Temp\\msedge_chrome_bits_67890.tmp",
+            "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+        ));
+        // Positive: WinGet svchost staging under \AppData\Local\Temp\WinGet\.
+        assert!(is_app_self_temp_staging_pair(
+            "C:\\Users\\frank\\AppData\\Local\\Temp\\WinGet\\Microsoft.Edge.0fcfde91\\Edge.exe",
+            "C:\\Windows\\System32\\svchost.exe",
+        ));
+        // Positive: Visual Studio Setup BackgroundDownload writing
+        // dd_BackgroundDownload_*.
+        assert!(is_app_self_temp_staging_pair(
+            "C:\\Users\\frank\\AppData\\Local\\Temp\\dd_BackgroundDownload_20260520.log",
+            "C:\\Users\\frank\\AppData\\Local\\Microsoft\\VisualStudio\\Setup\\Cache\\InstallerCache\\Resources\\App\\ServiceHub\\Services\\Microsoft.VisualStudio.Setup.Service\\BackgroundDownload.exe",
+        ));
+
+        // Impostor 1: a writer in /tmp/ (suspicious) writing to a
+        // Chrome trusted target. MUST NOT suppress.
+        assert!(!is_app_self_temp_staging_pair(
+            "C:\\Users\\frank\\AppData\\Local\\Temp\\chrome_chrome_bits_12345.tmp",
+            "C:\\Users\\frank\\AppData\\Local\\Temp\\malware.exe",
+        ));
+        // Impostor 2: Chrome legitimately running, but writing to a
+        // sensitive target (e.g. ~/.ssh/id_rsa). MUST NOT suppress.
+        assert!(!is_app_self_temp_staging_pair(
+            "C:\\Users\\frank\\.ssh\\id_rsa",
+            "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+        ));
+        // Impostor 3: svchost (legitimate WinGet writer) writing to a
+        // Chrome target. Cross-bucket match -- MUST NOT suppress.
+        assert!(!is_app_self_temp_staging_pair(
+            "C:\\Users\\frank\\AppData\\Local\\Temp\\chrome_chrome_bits_99999.tmp",
+            "C:\\Windows\\System32\\svchost.exe",
+        ));
+        // Impostor 4: chrome.exe writing to a WinGet target. Cross-
+        // bucket match -- MUST NOT suppress.
+        assert!(!is_app_self_temp_staging_pair(
+            "C:\\Users\\frank\\AppData\\Local\\Temp\\WinGet\\some-app\\installer.exe",
+            "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+        ));
+        // Empty arguments are never a pair match.
+        assert!(!is_app_self_temp_staging_pair("", ""));
+        assert!(!is_app_self_temp_staging_pair(
+            "C:\\Users\\frank\\AppData\\Local\\Temp\\chrome_chrome_bits_12345.tmp",
+            "",
         ));
     }
 
