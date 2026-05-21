@@ -2149,9 +2149,7 @@ fn normalize_app_self_temp_staging_entry(
     }
 }
 
-fn normalize_app_self_temp_staging(
-    patterns: &AppSelfTempStagingJSON,
-) -> AppSelfTempStagingJSON {
+fn normalize_app_self_temp_staging(patterns: &AppSelfTempStagingJSON) -> AppSelfTempStagingJSON {
     AppSelfTempStagingJSON {
         macos: patterns
             .macos
