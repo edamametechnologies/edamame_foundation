@@ -117,7 +117,7 @@ service EDAMAMEHelper {
   external transcript observer (so the macOS-sandboxed app can ingest
   transcripts from the user's real home).
 - `scan_secret_content` - Helper-side content scanner for sensitive paths
-  surfaced by the vulnerability detector.
+  surfaced by the attack pattern detector.
 
 ### Serialization
 

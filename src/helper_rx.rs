@@ -9,11 +9,12 @@ use base64::Engine;
 use edamame_proto::edamame_helper_server::{EdamameHelper, EdamameHelperServer};
 use edamame_proto::{HelperRequest, HelperResponse};
 use lazy_static::lazy_static;
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::str;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
-use tokio::sync::oneshot;
+use tokio::sync::{broadcast, oneshot};
 use tonic::transport::{Certificate, Identity, Server, ServerTlsConfig};
 use tonic::{Code, Request, Response, Status};
 use tracing::{error, info, trace, warn};
@@ -21,13 +22,22 @@ use undeadlock::CustomMutex;
 
 lazy_static! {
     pub static ref BRANCH: Arc<CustomMutex<String>> = Arc::new(CustomMutex::new("".to_string()));
-    // Set of orders currently being executed by the helper, keyed by the full incoming
-    // RPC tuple (see `order_key`). A duplicate that arrives while a matching order is
-    // still in-flight is rejected with `Code::AlreadyExists`. A plain `std::sync::Mutex`
-    // is used here because operations are pure HashSet insert/remove and we never hold
-    // the lock across an `.await`.
-    static ref PENDING_ORDERS: Arc<StdMutex<HashSet<String>>> =
-        Arc::new(StdMutex::new(HashSet::new()));
+    // Single-flight dedup table. Each in-flight order is keyed by its full incoming RPC
+    // tuple (see `order_key`) and stores a `broadcast::Sender` that the executor uses to
+    // hand the eventual result to any duplicate that arrived while it was running.
+    //
+    // Followers DO NOT re-execute the order and DO NOT receive an error like
+    // `Code::AlreadyExists`. They wait for the in-flight executor and return the same
+    // result the executor returned -- the first identical order is doing the real work,
+    // so returning that result on the duplicates is correct (and avoids the foot-gun
+    // where a caller treats the duplicate-rejection error as if the underlying operation
+    // had failed, then aggressively rolls back state on its own behalf).
+    //
+    // A plain `std::sync::Mutex` is used here because we only hold the lock for the
+    // small register / remove / subscribe critical sections; we never hold it across
+    // an `.await`.
+    static ref PENDING_ORDERS: Arc<StdMutex<HashMap<String, broadcast::Sender<Result<String, String>>>>> =
+        Arc::new(StdMutex::new(HashMap::new()));
 }
 
 // Version
@@ -82,32 +92,84 @@ fn order_key(ordertype: &str, subordertype: &str, arg1: &str, arg2: &str) -> Str
     format!("{}|{}|{}|{}", ordertype, subordertype, arg1, arg2)
 }
 
-// RAII guard that registers an order as pending on creation and removes it on drop.
-// Drop fires on every exit path (Ok, Err, panic, future cancellation), so the registry
-// can never strand a key.
-struct PendingGuard {
-    key: String,
+// Per-receiver buffer for the dedup broadcast channel. The executor only ever sends
+// a single value (the order's result) per channel, so capacity 1 would technically
+// be enough; a small headroom keeps things robust if the implementation ever grows
+// a second send (for example, a partial-progress notification).
+const PENDING_BROADCAST_CAPACITY: usize = 4;
+
+// Role assigned to a single `register_order` caller.
+enum DedupRole {
+    // First arrival for this key: this caller will actually execute the order and is
+    // responsible for broadcasting the result via its `ExecutorGuard`.
+    Executor(broadcast::Sender<Result<String, String>>),
+    // A matching order is already in flight: this caller waits for the executor's
+    // broadcast and returns the same result instead of re-running the order.
+    Follower(broadcast::Receiver<Result<String, String>>),
 }
 
-impl PendingGuard {
-    /// Returns `Some(_)` if registered, `None` if a duplicate is already pending.
-    fn try_register(key: String) -> Option<Self> {
-        let mut set = PENDING_ORDERS
-            .lock()
-            .expect("PENDING_ORDERS mutex poisoned");
-        if set.contains(&key) {
-            return None;
+fn register_order(key: &str) -> DedupRole {
+    let mut map = PENDING_ORDERS
+        .lock()
+        .expect("PENDING_ORDERS mutex poisoned");
+    match map.get(key) {
+        Some(tx) => DedupRole::Follower(tx.subscribe()),
+        None => {
+            let (tx, _) = broadcast::channel(PENDING_BROADCAST_CAPACITY);
+            map.insert(key.to_string(), tx.clone());
+            DedupRole::Executor(tx)
         }
-        set.insert(key.clone());
-        Some(PendingGuard { key })
     }
 }
 
-impl Drop for PendingGuard {
-    fn drop(&mut self) {
-        if let Ok(mut set) = PENDING_ORDERS.lock() {
-            set.remove(&self.key);
+// RAII helper held by the executor task. On normal completion `complete()` removes
+// the dedup slot and broadcasts the real result to any followers; on panic / future
+// cancellation `Drop` does the same cleanup and broadcasts a cancellation error so
+// followers don't hang forever.
+struct ExecutorGuard {
+    key: String,
+    tx: broadcast::Sender<Result<String, String>>,
+    completed: AtomicBool,
+}
+
+impl ExecutorGuard {
+    fn new(key: String, tx: broadcast::Sender<Result<String, String>>) -> Self {
+        Self {
+            key,
+            tx,
+            completed: AtomicBool::new(false),
         }
+    }
+
+    fn complete(&self, shared: Result<String, String>) {
+        // Remove from the map FIRST so any duplicate that arrives after this point
+        // starts a fresh execution rather than joining a channel that's about to
+        // close.
+        if let Ok(mut map) = PENDING_ORDERS.lock() {
+            map.remove(&self.key);
+        }
+        self.completed.store(true, Ordering::Release);
+        // `send` returns Err if no followers ever subscribed; that's fine -- nobody
+        // was waiting, so there is nothing to deliver.
+        let _ = self.tx.send(shared);
+    }
+}
+
+impl Drop for ExecutorGuard {
+    fn drop(&mut self) {
+        if self.completed.load(Ordering::Acquire) {
+            return;
+        }
+        warn!(
+            "ExecutorGuard dropped without completion (panic or cancellation): key={}",
+            self.key
+        );
+        if let Ok(mut map) = PENDING_ORDERS.lock() {
+            map.remove(&self.key);
+        }
+        let _ = self
+            .tx
+            .send(Err("order canceled before completion".to_string()));
     }
 }
 
@@ -119,22 +181,58 @@ pub async fn rpc_run_safe(
     signature: &str,
     version: &str,
 ) -> Result<Response<HelperResponse>, Status> {
-    // Single-flight dedup: reject only orders that are byte-for-byte identical to one
-    // already being executed. Different orders run concurrently as before.
+    // Single-flight dedup: orders that are byte-for-byte identical to one already
+    // being executed do NOT re-execute. The follower(s) wait for the in-flight
+    // executor and return the SAME result -- the first identical order is doing the
+    // real work, so returning success (or its actual error) is the right answer for
+    // the duplicates.
     let key = order_key(ordertype, subordertype, arg1, arg2);
-    let _guard = match PendingGuard::try_register(key.clone()) {
-        Some(g) => g,
-        None => {
-            warn!("Rejecting duplicate order already pending: {}", key);
-            return Err(Status::new(
-                Code::AlreadyExists,
-                format!("duplicate order already pending: {}", key),
-            ));
+
+    let executor_guard = match register_order(&key) {
+        DedupRole::Executor(tx) => ExecutorGuard::new(key.clone(), tx),
+        DedupRole::Follower(mut rx) => {
+            trace!("Duplicate order joining in-flight execution: {}", key);
+            return match rx.recv().await {
+                Ok(Ok(output)) => Ok(Response::new(HelperResponse { output })),
+                Ok(Err(msg)) => {
+                    warn!(
+                        "In-flight order returned error to follower (key={}): {}",
+                        key, msg
+                    );
+                    Err(Status::new(Code::Internal, msg))
+                }
+                Err(broadcast::error::RecvError::Closed) => {
+                    warn!("In-flight order channel closed before result (key={})", key);
+                    Err(Status::new(
+                        Code::Internal,
+                        "in-flight order canceled before completion",
+                    ))
+                }
+                Err(broadcast::error::RecvError::Lagged(n)) => {
+                    warn!(
+                        "In-flight order broadcast lagged by {} (key={})",
+                        n, key
+                    );
+                    Err(Status::new(
+                        Code::Internal,
+                        "in-flight order broadcast lagged",
+                    ))
+                }
+            };
         }
     };
 
-    rpc_run(ordertype, subordertype, arg1, arg2, signature, version)
-        .await
+    let result = rpc_run(ordertype, subordertype, arg1, arg2, signature, version).await;
+
+    // Hand the result (or its stringified error) off to any followers and clear the
+    // dedup slot. The original `result` is then returned to the executor's own caller.
+    let shared: Result<String, String> = match &result {
+        Ok(s) => Ok(s.clone()),
+        Err(e) => Err(e.to_string()),
+    };
+    executor_guard.complete(shared);
+
+    result
         .map(|output| {
             let response = HelperResponse { output };
             Response::new(response)
@@ -1847,58 +1945,133 @@ mod tests {
         );
     }
 
+    fn pending_orders_contains(key: &str) -> bool {
+        PENDING_ORDERS
+            .lock()
+            .expect("PENDING_ORDERS mutex poisoned")
+            .contains_key(key)
+    }
+
     #[tokio::test]
-    async fn test_pending_guard_rejects_duplicates() {
+    async fn test_register_order_first_is_executor_subsequent_are_followers() {
         // Use a unique key per test to avoid colliding with other tests that may run
-        // concurrently and share the static PENDING_ORDERS set.
-        let key = format!("test_pending_guard|sub|{}|", uuid::Uuid::new_v4());
+        // concurrently and share the static PENDING_ORDERS map.
+        let key = format!("test_register_order|sub|{}|", uuid::Uuid::new_v4());
 
-        let g1 = PendingGuard::try_register(key.clone());
-        assert!(g1.is_some(), "first registration should succeed");
+        let executor_tx = match register_order(&key) {
+            DedupRole::Executor(tx) => tx,
+            DedupRole::Follower(_) => panic!("first registration should be executor"),
+        };
 
-        // Second registration of the *same* key is rejected.
-        let g2 = PendingGuard::try_register(key.clone());
-        assert!(g2.is_none(), "duplicate registration should be rejected");
+        // Second registration of the same key is a follower.
+        match register_order(&key) {
+            DedupRole::Follower(_) => {}
+            DedupRole::Executor(_) => {
+                panic!("duplicate registration should be a follower, not a new executor")
+            }
+        }
 
-        // A different key registers fine even while the first is held.
-        let other = format!("test_pending_guard|sub|{}|", uuid::Uuid::new_v4());
-        let g3 = PendingGuard::try_register(other);
-        assert!(g3.is_some(), "distinct key should register");
+        // A different key gets its own executor slot even while the first is held.
+        let other = format!("test_register_order|sub|{}|", uuid::Uuid::new_v4());
+        match register_order(&other) {
+            DedupRole::Executor(_) => {}
+            DedupRole::Follower(_) => panic!("distinct key should be its own executor"),
+        }
 
-        // Drop the first guard and verify the slot is freed.
-        drop(g1);
-        let g4 = PendingGuard::try_register(key);
+        // Completing the original executor clears the slot, so the same key registers
+        // as a fresh executor afterwards.
+        let guard = ExecutorGuard::new(key.clone(), executor_tx);
+        guard.complete(Ok("done".to_string()));
+        match register_order(&key) {
+            DedupRole::Executor(_) => {}
+            DedupRole::Follower(_) => {
+                panic!("key should register as a new executor after completion")
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_follower_receives_same_result_as_executor() {
+        let key = format!("dedup_follower_ok|{}|", uuid::Uuid::new_v4());
+
+        let executor_tx = match register_order(&key) {
+            DedupRole::Executor(tx) => tx,
+            DedupRole::Follower(_) => panic!("first should be executor"),
+        };
+        let mut follower_rx = match register_order(&key) {
+            DedupRole::Follower(rx) => rx,
+            DedupRole::Executor(_) => panic!("second should be follower"),
+        };
+
+        let guard = ExecutorGuard::new(key.clone(), executor_tx);
+        guard.complete(Ok("hello-follower".to_string()));
+
+        let received = follower_rx
+            .recv()
+            .await
+            .expect("follower should receive executor's result");
+        assert_eq!(received, Ok("hello-follower".to_string()));
+
         assert!(
-            g4.is_some(),
-            "key should be re-registerable after the guard is dropped"
+            !pending_orders_contains(&key),
+            "PENDING_ORDERS slot must be released after the executor completes"
         );
     }
 
     #[tokio::test]
-    async fn test_rpc_run_safe_rejects_exact_duplicate() {
-        // Pin the dedup slot ourselves so we can assert rpc_run_safe rejects the second
-        // call without ever invoking rpc_run.
-        let arg1 = format!("dedup_rpc_run_safe_{}", uuid::Uuid::new_v4());
-        let key = order_key("utilityorder", "helper_check", &arg1, "");
-        let _holder =
-            PendingGuard::try_register(key.clone()).expect("first registration should succeed");
+    async fn test_follower_receives_executor_error_string() {
+        // If the executor returns an Err, the follower must see the same stringified
+        // error (not a separate "duplicate" error) so it does not mistakenly retry
+        // or roll state back independently.
+        let key = format!("dedup_follower_err|{}|", uuid::Uuid::new_v4());
 
-        let err = rpc_run_safe(
-            "utilityorder",
-            "helper_check",
-            &arg1,
-            "",
-            "",
-            env!("CARGO_PKG_VERSION"),
-        )
-        .await
-        .expect_err("rpc_run_safe should reject the duplicate");
+        let executor_tx = match register_order(&key) {
+            DedupRole::Executor(tx) => tx,
+            DedupRole::Follower(_) => panic!("first should be executor"),
+        };
+        let mut follower_rx = match register_order(&key) {
+            DedupRole::Follower(rx) => rx,
+            DedupRole::Executor(_) => panic!("second should be follower"),
+        };
 
-        assert_eq!(err.code(), Code::AlreadyExists);
+        let guard = ExecutorGuard::new(key.clone(), executor_tx);
+        guard.complete(Err("boom".to_string()));
+
+        let received = follower_rx
+            .recv()
+            .await
+            .expect("follower should receive executor's error");
+        assert_eq!(received, Err("boom".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_executor_drop_without_complete_notifies_followers() {
+        // If the executor is dropped before completing (panic or future cancellation),
+        // followers must not hang -- the guard's Drop broadcasts a cancellation error
+        // and releases the slot so the next attempt becomes a new executor.
+        let key = format!("dedup_executor_panic|{}|", uuid::Uuid::new_v4());
+
+        let executor_tx = match register_order(&key) {
+            DedupRole::Executor(tx) => tx,
+            DedupRole::Follower(_) => panic!("first should be executor"),
+        };
+        let mut follower_rx = match register_order(&key) {
+            DedupRole::Follower(rx) => rx,
+            DedupRole::Executor(_) => panic!("second should be follower"),
+        };
+
+        // Build the guard and drop it without calling complete().
+        drop(ExecutorGuard::new(key.clone(), executor_tx));
+
+        let received = follower_rx
+            .recv()
+            .await
+            .expect("follower should receive cancellation message");
+        assert!(received.is_err(), "expected Err, got {:?}", received);
+
         assert!(
-            err.message().contains("duplicate order already pending"),
-            "unexpected message: {}",
-            err.message()
+            !pending_orders_contains(&key),
+            "PENDING_ORDERS slot must be released after the executor guard drops"
         );
     }
 
@@ -1909,7 +2082,6 @@ mod tests {
         // utilityorder so rpc_run returns an error quickly without external side effects.
         let arg1 = format!("dedup_release_{}", uuid::Uuid::new_v4());
 
-        // First call: not a duplicate, runs to (error) completion, slot released on drop.
         let _ = rpc_run_safe(
             "utilityorder",
             "this_subordertype_does_not_exist",
@@ -1920,23 +2092,21 @@ mod tests {
         )
         .await;
 
-        // Slot should be free now: re-registering succeeds.
         let key = order_key(
             "utilityorder",
             "this_subordertype_does_not_exist",
             &arg1,
             "",
         );
-        let g = PendingGuard::try_register(key);
         assert!(
-            g.is_some(),
+            !pending_orders_contains(&key),
             "PENDING_ORDERS slot should be released after rpc_run_safe returns"
         );
     }
 
     #[tokio::test]
     async fn test_rpc_run_safe_distinct_orders_run_concurrently() {
-        // Two different keys should both be registerable simultaneously.
+        // Two different keys should both get their own executor slot simultaneously.
         let key_a = order_key(
             "utilityorder",
             "helper_check",
@@ -1950,9 +2120,17 @@ mod tests {
             "",
         );
 
-        let ga = PendingGuard::try_register(key_a);
-        let gb = PendingGuard::try_register(key_b);
-        assert!(ga.is_some());
-        assert!(gb.is_some());
+        let role_a = register_order(&key_a);
+        let role_b = register_order(&key_b);
+        assert!(matches!(role_a, DedupRole::Executor(_)));
+        assert!(matches!(role_b, DedupRole::Executor(_)));
+
+        // Manually drain the slots so we don't leak entries for other tests.
+        if let DedupRole::Executor(tx) = role_a {
+            ExecutorGuard::new(key_a, tx).complete(Ok(String::new()));
+        }
+        if let DedupRole::Executor(tx) = role_b {
+            ExecutorGuard::new(key_b, tx).complete(Ok(String::new()));
+        }
     }
 }
