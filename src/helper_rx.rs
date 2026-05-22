@@ -209,10 +209,7 @@ pub async fn rpc_run_safe(
                     ))
                 }
                 Err(broadcast::error::RecvError::Lagged(n)) => {
-                    warn!(
-                        "In-flight order broadcast lagged by {} (key={})",
-                        n, key
-                    );
+                    warn!("In-flight order broadcast lagged by {} (key={})", n, key);
                     Err(Status::new(
                         Code::Internal,
                         "in-flight order broadcast lagged",
