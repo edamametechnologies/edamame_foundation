@@ -9,7 +9,7 @@ use crate::runner_cli::run_cli;
 use anyhow::Result;
 #[cfg(all(
     any(target_os = "macos", target_os = "linux", target_os = "windows"),
-    feature = "packetcapture"
+    any(feature = "packetcapture", feature = "fim")
 ))]
 use base64::{engine::general_purpose, Engine as _};
 use flodbadd::broadcast::scan_hosts_broadcast;
@@ -38,7 +38,7 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 #[cfg(all(
     any(target_os = "macos", target_os = "linux", target_os = "windows"),
-    feature = "packetcapture"
+    any(feature = "packetcapture", feature = "fim")
 ))]
 use std::time::Instant;
 use tokio::time::{sleep, Duration};
@@ -869,17 +869,51 @@ pub async fn utility_stop_file_monitor() -> Result<String> {
     Ok("".to_string())
 }
 
+/// Bincode payload returned by `utility_get_file_events`. Both the helper
+/// (sender, in this file) and the core (`helper_tx_utility::utility_get_file_events`
+/// typed wrapper, the receiver) reference this same struct so the wire format
+/// stays bit-identical.
+///
+/// `events` is either the full snapshot (`incremental == false`) or only the
+/// subset whose `last_modified` is strictly newer than the helper-side cursor
+/// stored in `FimWatcher::last_get_file_events_fetch_timestamp`
+/// (`incremental == true`). The core merges incremental deltas into its own
+/// `app_fim_cache` (an `Arc<FimEventStore>`), mirroring how the capture pipeline
+/// merges incremental session deltas.
 #[cfg(all(
     any(target_os = "macos", target_os = "linux", target_os = "windows"),
     feature = "fim"
 ))]
-pub async fn utility_get_file_events() -> Result<String> {
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FimEventsPayload {
+    pub events: Vec<flodbadd::fim_events::FimEvent>,
+    pub is_monitoring: bool,
+    pub watch_paths: Vec<String>,
+    pub event_count: u64,
+    pub last_event_time: Option<String>,
+    pub has_suspicious_events: bool,
+    pub cursor_now: chrono::DateTime<chrono::Utc>,
+    pub incremental: bool,
+}
+
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux", target_os = "windows"),
+    feature = "fim"
+))]
+pub async fn utility_get_file_events(incremental: bool) -> Result<String> {
+    let start = Instant::now();
+    let now = chrono::Utc::now();
+
     // Snapshot only what we need under the FIM_WATCHER read lock, then drop
     // the guard. The Tier-3 fallback in backfill_missing_process_attribution
     // probes live processes via lsof / sysinfo, which can stall on macOS
     // sandbox / SIP boundaries. Holding FIM_WATCHER.read() across that work
     // starves utility_start_file_monitor / utility_stop_file_monitor writers
     // (Sentry: EDAMAME-HELPER-1HP).
+    //
+    // We also clone the watcher's store + watch_paths + monitoring flag here,
+    // and call `watcher.get_events(incremental)` AFTER dropping the read guard
+    // by carrying the cursor lock through the cloned store/state path.
     let snapshot_inputs = {
         let guard = FIM_WATCHER.read().await;
         guard.as_ref().map(|watcher| {
@@ -890,49 +924,91 @@ pub async fn utility_get_file_events() -> Result<String> {
                     .iter()
                     .map(|p| p.to_string_lossy().to_string())
                     .collect::<Vec<_>>(),
+                watcher.is_running(),
+                watcher.fetch_cursor(),
             )
         })
     };
 
-    let snapshot = match snapshot_inputs {
-        Some((store, watch_paths)) => {
+    let payload = match snapshot_inputs {
+        Some((store, watch_paths, is_monitoring, cursor)) => {
+            // Backfill mutates the store and bumps `last_modified` on affected
+            // events so the next incremental tick picks them up automatically.
             flodbadd::fim::backfill_missing_process_attribution(
                 &store,
                 FIM_PROCESS_ATTRIBUTION_BACKFILL_LIMIT,
             );
-            let all_events = store.get_all_events();
-            let sensitive: Vec<_> = all_events
-                .iter()
-                .filter(|event| event.is_sensitive)
-                .cloned()
-                .collect();
+
+            // Mirror `FlodbaddCapture::get_sessions(incremental: bool)`:
+            // read the previous cursor, fetch deltas, then advance the cursor.
+            let prev_cursor = {
+                let reader = cursor.read().await;
+                *reader
+            };
+            let events = if incremental {
+                store.get_events_modified_since(prev_cursor)
+            } else {
+                store.get_all_events()
+            };
+            {
+                let mut writer = cursor.write().await;
+                *writer = now;
+            }
+
             let event_count = store.event_count() as u64;
-            let last_event_time = all_events.first().map(|e| e.timestamp.to_rfc3339());
+            let last_event_time = events.first().map(|e| e.last_modified.to_rfc3339());
             let has_suspicious = store.has_suspicious_events();
 
-            serde_json::json!({
-                "events": all_events,
-                "sensitive_events": sensitive,
-                "is_monitoring": true,
-                "watch_paths": watch_paths,
-                "event_count": event_count,
-                "last_event_time": last_event_time,
-                "has_suspicious_events": has_suspicious,
-            })
+            FimEventsPayload {
+                events,
+                is_monitoring,
+                watch_paths,
+                event_count,
+                last_event_time,
+                has_suspicious_events: has_suspicious,
+                cursor_now: now,
+                incremental,
+            }
         }
-        None => serde_json::json!({
-            "events": [],
-            "sensitive_events": [],
-            "is_monitoring": false,
-            "watch_paths": [],
-            "event_count": 0,
-            "last_event_time": null,
-            "has_suspicious_events": false,
-        }),
+        None => FimEventsPayload {
+            events: vec![],
+            is_monitoring: false,
+            watch_paths: vec![],
+            event_count: 0,
+            last_event_time: None,
+            has_suspicious_events: false,
+            cursor_now: now,
+            incremental,
+        },
     };
 
-    serde_json::to_string(&snapshot)
-        .map_err(|e| anyhow::anyhow!("Failed to serialize FIM snapshot: {}", e))
+    // bincode + base64, same envelope as utility_get_sessions, so the gRPC
+    // string-only channel can carry binary payloads end-to-end.
+    let bincode_payload =
+        match bincode::serde::encode_to_vec(&payload, bincode::config::standard()) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                error!("Error serializing FIM events to bincode: {}", e);
+                return order_error(
+                    &format!("error serializing FIM events to bincode: {}", e),
+                    false,
+                );
+            }
+        };
+    let bincode_len = bincode_payload.len();
+    let encoded = general_purpose::STANDARD.encode(&bincode_payload);
+    let elapsed_ms = start.elapsed().as_millis();
+
+    info!(
+        "Returning {} FIM events, incremental: {}, size: {} bytes (bincode: {} bytes, total: {}ms)",
+        payload.events.len(),
+        incremental,
+        encoded.len(),
+        bincode_len,
+        elapsed_ms
+    );
+
+    Ok(encoded)
 }
 
 #[cfg(all(

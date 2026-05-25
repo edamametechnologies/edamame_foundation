@@ -718,7 +718,10 @@ pub async fn rpc_run(
                 any(target_os = "macos", target_os = "linux", target_os = "windows"),
                 feature = "fim"
             ))]
-            "get_file_events" => utility_get_file_events().await,
+            "get_file_events" => {
+                let incremental: bool = serde_json::from_str(arg1).unwrap_or(false);
+                utility_get_file_events(incremental).await
+            }
             #[cfg(all(
                 any(target_os = "macos", target_os = "linux", target_os = "windows"),
                 feature = "fim"
