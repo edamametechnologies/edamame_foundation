@@ -984,17 +984,17 @@ pub async fn utility_get_file_events(incremental: bool) -> Result<String> {
 
     // bincode + base64, same envelope as utility_get_sessions, so the gRPC
     // string-only channel can carry binary payloads end-to-end.
-    let bincode_payload =
-        match bincode::serde::encode_to_vec(&payload, bincode::config::standard()) {
-            Ok(bytes) => bytes,
-            Err(e) => {
-                error!("Error serializing FIM events to bincode: {}", e);
-                return order_error(
-                    &format!("error serializing FIM events to bincode: {}", e),
-                    false,
-                );
-            }
-        };
+    let bincode_payload = match bincode::serde::encode_to_vec(&payload, bincode::config::standard())
+    {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            error!("Error serializing FIM events to bincode: {}", e);
+            return order_error(
+                &format!("error serializing FIM events to bincode: {}", e),
+                false,
+            );
+        }
+    };
     let bincode_len = bincode_payload.len();
     let encoded = general_purpose::STANDARD.encode(&bincode_payload);
     let elapsed_ms = start.elapsed().as_millis();
