@@ -4176,6 +4176,65 @@ mod tests {
     }
 
     #[test]
+    fn test_fp_win_21_chromium_extension_housekeeping_suppressed() {
+        // FP-WIN-21: installed-extension subtree under a Chromium
+        // user-data root is now in the `chromium_family` allowlist.
+        // Manifest cache, locale resources, verified-contents
+        // regeneration, and extension state DB all match.
+        assert!(is_non_sensitive_browser_data(
+            "C:/Users/frank/AppData/Local/Google/Chrome/User Data/Default/Extensions/abc/1.0/manifest.json"
+        ));
+        assert!(is_non_sensitive_browser_data(
+            "C:/Users/frank/AppData/Local/Google/Chrome/User Data/Default/Extensions/abcdef0123456789/2.5.1/_locales/en/messages.json"
+        ));
+        assert!(is_non_sensitive_browser_data(
+            "C:/Users/frank/AppData/Local/Google/Chrome/User Data/Default/Extensions/abcdef0123456789/2.5.1/_metadata/verified_contents.json"
+        ));
+        assert!(is_non_sensitive_browser_data(
+            "C:/Users/frank/AppData/Local/Microsoft/Edge/User Data/Profile 1/Extensions/xyz/3.0/background.js"
+        ));
+        assert!(is_non_sensitive_browser_data(
+            "C:/Users/frank/AppData/Local/Google/Chrome/User Data/Default/Extension Rules/000003.log"
+        ));
+        assert!(is_non_sensitive_browser_data(
+            "C:/Users/frank/AppData/Local/Google/Chrome/User Data/Default/Extension State/MANIFEST-000001"
+        ));
+        assert!(is_non_sensitive_browser_data(
+            "C:/Users/frank/AppData/Local/Google/Chrome/User Data/Default/Extension Scripts/000004.ldb"
+        ));
+    }
+
+    #[test]
+    fn test_fp_win_21_extension_path_outside_browser_root_not_suppressed() {
+        // Defense-in-depth: an `Extensions/` directory OUTSIDE the
+        // Chromium user-data root MUST NOT be suppressed -- the
+        // double-gate is what makes the FP-WIN-21 allowlist safe.
+        assert!(!is_non_sensitive_browser_data(
+            "/tmp/sandbox/Extensions/abc/1.0/manifest.json"
+        ));
+        assert!(!is_non_sensitive_browser_data(
+            "C:/AttackerStaging/Extensions/evil/1.0/manifest.json"
+        ));
+    }
+
+    #[test]
+    fn test_fp_win_21_does_not_relax_credential_store_guard() {
+        // Negative regression: the new /extensions/ allowlist must
+        // NOT broaden coverage to credential-store files at the
+        // Default/ root. Login Data / Cookies / Web Data are at the
+        // profile root, not inside Extensions/.
+        assert!(!is_non_sensitive_browser_data(
+            "C:/Users/frank/AppData/Local/Google/Chrome/User Data/Default/Login Data"
+        ));
+        assert!(!is_non_sensitive_browser_data(
+            "C:/Users/frank/AppData/Local/Google/Chrome/User Data/Default/Cookies"
+        ));
+        assert!(!is_non_sensitive_browser_data(
+            "C:/Users/frank/AppData/Local/Microsoft/Edge/User Data/Default/Web Data"
+        ));
+    }
+
+    #[test]
     fn test_ci_workspace_path_lookup() {
         // GitHub Actions workspace and diagnostic dirs on Linux/macOS:
         assert!(is_ci_workspace_path(
