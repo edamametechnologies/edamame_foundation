@@ -61,6 +61,14 @@ jobs:
         env:
           EDAMAME_LLM_API_KEY: ${{ secrets.EDAMAME_LLM_API_KEY }}
 
+      - name: Configure git for private edamametechnologies deps
+        env:
+          DEV_GITHUB_TOKEN: ${{ secrets.DEV_GITHUB_TOKEN }}
+        if: env.DEV_GITHUB_TOKEN != ''
+        run: |
+          set -euo pipefail
+          git config --global url."https://edamamedev:${DEV_GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
+
       - name: Install cargo-deny
         run: |
           set -euo pipefail
@@ -71,6 +79,8 @@ jobs:
           cargo-deny --version
 
       - name: Run cargo-deny check ${{ matrix.checks }}
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
         run: cargo-deny --all-features check ${{ matrix.checks }}
 
       - name: EDAMAME Posture vulnerability gate
