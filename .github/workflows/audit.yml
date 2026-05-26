@@ -1,0 +1,98 @@
+name: Supply-chain audit
+
+# CANONICAL TEMPLATE -- mirrored from edamame_rules/supply-chain/audit.yml.template
+# by edamame_rules/supply-chain/sync.sh. Do not edit per-repo copies; edit the
+# template and re-run sync.sh.
+
+on:
+  pull_request:
+    branches: ["*"]
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'deny.toml'
+      - '.github/workflows/audit.yml'
+  push:
+    branches:
+      - 'dev'
+      - 'main'
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'deny.toml'
+      - '.github/workflows/audit.yml'
+  schedule:
+    # Daily at 04:00 UTC: catches advisories that land against an unchanged
+    # lockfile (RustSec database update), and detects per-repo drift of
+    # deny.toml against the canonical edamame_rules/supply-chain/deny.toml.
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions: read-all
+
+jobs:
+  cargo-deny:
+    name: cargo-deny (${{ matrix.checks }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        checks:
+          - advisories
+          - licenses
+          - bans
+          - sources
+    # Self-hosted runners are not needed: cargo-deny only reads Cargo.toml /
+    # Cargo.lock and does NOT need any private dep to resolve. Stay on
+    # github-hosted ubuntu-latest so the gate is fast and cheap.
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Install cargo-deny
+        # Pinned to a known-good release. Bump deliberately, not via Renovate.
+        run: |
+          set -euo pipefail
+          version="0.18.5"
+          url="https://github.com/EmbarkStudios/cargo-deny/releases/download/${version}/cargo-deny-${version}-x86_64-unknown-linux-musl.tar.gz"
+          curl --proto '=https' --tlsv1.2 -fsSL "$url" -o /tmp/cargo-deny.tgz
+          sudo tar -C /usr/local/bin --strip-components=1 -xzf /tmp/cargo-deny.tgz "cargo-deny-${version}-x86_64-unknown-linux-musl/cargo-deny"
+          cargo-deny --version
+
+      - name: Run cargo-deny check ${{ matrix.checks }}
+        run: cargo-deny --all-features check ${{ matrix.checks }}
+
+  drift-check:
+    # Verifies the local deny.toml has not drifted from the canonical
+    # edamame_rules/supply-chain/deny.toml. Runs on the daily schedule and
+    # on every push -- a manual edit to per-repo deny.toml will trip this
+    # gate and force a re-sync via edamame_rules/supply-chain/sync.sh.
+    name: deny.toml drift check
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: repo
+
+      - name: Checkout edamame_rules
+        uses: actions/checkout@v4
+        with:
+          repository: edamametechnologies/edamame_rules
+          path: edamame_rules
+          ref: main
+
+      - name: Verify deny.toml matches canonical source
+        run: |
+          set -euo pipefail
+          if ! diff -u edamame_rules/supply-chain/deny.toml repo/deny.toml; then
+            echo "ERROR: deny.toml has drifted from edamame_rules/supply-chain/deny.toml"
+            echo "Run: cd edamame_rules/supply-chain && ./sync.sh"
+            exit 1
+          fi
+          echo "OK: deny.toml is in sync with canonical source."

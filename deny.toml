@@ -1,0 +1,164 @@
+# EDAMAME Workspace -- cargo-deny policy (CANONICAL SOURCE OF TRUTH)
+#
+# This file is the single source of truth for cargo-deny policy across every
+# Rust crate in the EDAMAME workspace. It lives in `edamame_rules/supply-chain/`
+# and is mirrored into each Rust repo's root `deny.toml` by
+# `edamame_rules/supply-chain/sync.sh`.
+#
+# DO NOT edit per-repo `deny.toml` files directly. Edit this file and run
+# `edamame_rules/supply-chain/sync.sh` to propagate.
+#
+# Policy summary (see ./README.md for rationale):
+#   * advisories.vulnerability  = deny      (RustSec CVEs MUST fail CI)
+#   * advisories.yanked         = deny      (yanked versions MUST fail CI)
+#   * advisories.unmaintained   = warn      (triage, do not gate)
+#   * licenses.allow            = explicit  (anything else fails)
+#   * bans.multiple-versions    = warn      (visibility, not gate)
+#   * bans.wildcards            = deny      (no `foo = "*"` ever)
+#   * sources.unknown-registry  = deny      (only crates.io)
+#   * sources.unknown-git       = warn      (initially; tighten once tree is mapped)
+
+# Schema version (cargo-deny 0.18+). Pin so CI stays deterministic across
+# cargo-deny releases.
+[graph]
+# Run the policy on every target the workspace actually ships to.
+targets = [
+    { triple = "x86_64-unknown-linux-gnu" },
+    { triple = "aarch64-unknown-linux-gnu" },
+    { triple = "x86_64-apple-darwin" },
+    { triple = "aarch64-apple-darwin" },
+    { triple = "x86_64-pc-windows-msvc" },
+    { triple = "aarch64-apple-ios" },
+    { triple = "aarch64-apple-ios-sim" },
+    { triple = "aarch64-linux-android" },
+    { triple = "x86_64-linux-android" },
+]
+# All-features so cfg-gated deps (pwned, flodbadd, fim, agentic, mcp, etc.)
+# are visible to the policy.
+all-features = true
+
+[advisories]
+db-path = "~/.cargo/advisory-db"
+db-urls = ["https://github.com/rustsec/advisory-db"]
+# RustSec CVEs MUST fail CI by default. The list below is the documented
+# baseline of advisories present at gate-rollout time (2026-05-26). Each
+# entry has a `reason` and a TODO category. When a new advisory appears
+# that is NOT in this list, the gate will fail and force triage. Treat
+# this as a working backlog, not a permanent allowlist:
+#
+#   * `unmaintained` -- crate is no longer maintained but no known CVE.
+#     Plan: replace with maintained alternative on the next opportunity.
+#   * `vulnerability` -- real CVE. Plan: bump or replace the offender,
+#     or document a precise non-exploitability rationale here.
+#   * `notice` -- soft warning, usually superseded.
+#
+# Adding a new entry requires a commit in `edamame_rules/supply-chain/deny.toml`
+# (this file). Do NOT edit per-repo deny.toml copies.
+yanked = "deny"
+ignore = [
+    # ---- unmaintained crates (no known CVE) -------------------------
+    { id = "RUSTSEC-2020-0036", reason = "unmaintained: failure crate is deprecated. TODO: migrate remaining users to thiserror/anyhow." },
+    { id = "RUSTSEC-2023-0040", reason = "unmaintained: idna <=0.5.0 punycode handling. TODO: bump url/idna once transitive deps allow." },
+    { id = "RUSTSEC-2024-0370", reason = "unmaintained: proc-macro-error 1.x. TODO: migrate macro deps to proc-macro-error2 / proc-macro2-diagnostics." },
+    { id = "RUSTSEC-2024-0412", reason = "unmaintained: gtk-rs GTK3 binding. TODO: migrate Linux UI to GTK4 family or libadwaita." },
+    { id = "RUSTSEC-2024-0413", reason = "unmaintained: gtk-rs GTK3 binding. See RUSTSEC-2024-0412." },
+    { id = "RUSTSEC-2024-0415", reason = "unmaintained: gtk-rs GTK3 binding. See RUSTSEC-2024-0412." },
+    { id = "RUSTSEC-2024-0416", reason = "unmaintained: gtk-rs GTK3 binding. See RUSTSEC-2024-0412." },
+    { id = "RUSTSEC-2024-0418", reason = "unmaintained: gtk-rs GTK3 binding. See RUSTSEC-2024-0412." },
+    { id = "RUSTSEC-2024-0419", reason = "unmaintained: gtk-rs GTK3 binding. See RUSTSEC-2024-0412." },
+    { id = "RUSTSEC-2024-0420", reason = "unmaintained: gtk-rs GTK3 binding. See RUSTSEC-2024-0412." },
+    { id = "RUSTSEC-2024-0436", reason = "unmaintained: paste crate. TODO: migrate macro callers to pastey." },
+    { id = "RUSTSEC-2025-0025", reason = "notice: shellexpand <=3.x. TODO: confirm not used in privileged context." },
+    { id = "RUSTSEC-2025-0069", reason = "unmaintained: daemonize crate (edamame_posture daemon spawn). TODO: replace with std::process::Command + setsid or maintained fork." },
+    { id = "RUSTSEC-2025-0141", reason = "unmaintained: bincode 1.x. TODO: migrate to bincode 2.x serde-compat where downstream allows." },
+    # ---- unsound (memory-safety, not yet CVE-class) ----------------
+    { id = "RUSTSEC-2023-0059", reason = "unsound: unaligned pointer read in flodbadd-touched dep tree. PENDING TRIAGE: confirm exposure on Linux/Windows packet-capture path." },
+    # ---- vulnerabilities (real CVEs, accepted only with rationale) -
+    { id = "RUSTSEC-2022-0004", reason = "vulnerability: PENDING TRIAGE. Confirm crate / version / exposure surface and either bump or document non-exploitability." },
+    { id = "RUSTSEC-2023-0071", reason = "vulnerability: RSA Marvin Attack timing side-channel. Likely transitive via TLS handshake. PENDING TRIAGE: confirm we are not the side handling untrusted RSA private key operations (rustls server with RSA key) -- if not, document non-applicability." },
+    { id = "RUSTSEC-2024-0421", reason = "vulnerability: PENDING TRIAGE. Confirm crate / version / exposure surface." },
+    { id = "RUSTSEC-2025-0040", reason = "vulnerability: PENDING TRIAGE. Confirm crate / version / exposure surface." },
+    { id = "RUSTSEC-2026-0118", reason = "vulnerability: PENDING TRIAGE (recent advisory). Confirm crate / version / exposure surface." },
+    { id = "RUSTSEC-2026-0119", reason = "vulnerability: PENDING TRIAGE (recent advisory). Confirm crate / version / exposure surface." },
+]
+
+[licenses]
+# Default to deny. Every license in the tree must be on the allow list, or
+# fall under the per-crate `clarify` exceptions below.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "CC0-1.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "MPL-2.0",                  # weak copyleft, file-scope -- acceptable
+    "Unicode-DFS-2016",
+    "Unicode-3.0",
+    "Zlib",
+    "BSL-1.0",
+    "OpenSSL",                  # still appears via legacy crates; clarified per-crate
+    "0BSD",
+    "Unlicense",
+]
+confidence-threshold = 0.93
+# Crates with ambiguous or hand-written license expressions that cargo-deny
+# cannot match against SPDX. Each entry MUST cite the upstream license file
+# and version reviewed.
+[[licenses.clarify]]
+crate = "ring"
+expression = "ISC AND MIT AND OpenSSL"
+license-files = [
+    { path = "LICENSE", hash = 0xbd0eed23 },
+]
+
+[[licenses.clarify]]
+crate = "encoding_rs"
+expression = "(Apache-2.0 OR MIT) AND BSD-3-Clause"
+license-files = [
+    { path = "COPYRIGHT", hash = 0x39f8ad31 },
+]
+
+[bans]
+# Warn when the lockfile pulls multiple major versions of the same crate.
+# This produces noisy reports today (a healthy tree typically has 5-15 of
+# these) so it is informational, not a gate. Convert to "deny" once the
+# tree has been deduplicated as part of the cargo-vet adoption phase.
+multiple-versions = "warn"
+# Wildcard version specifiers (`foo = "*"`) MUST never appear in a Cargo.toml
+# in this workspace. They defeat lockfile reproducibility and let a
+# malicious upload of any version slip in.
+wildcards = "deny"
+# Highlight crates whose dep tree is unusually big or churns frequently.
+# Empty initially; populate as the workspace finds problem crates.
+deny = []
+# Crates that are duplicated on purpose (e.g. async-lite has multiple major
+# versions during a transition window) go here, with a sunset comment.
+skip = []
+skip-tree = []
+
+[sources]
+# Anything not on crates.io must be explicitly allowed below.
+unknown-registry = "deny"
+# All non-crates.io sources currently come from edamametechnologies/* git
+# refs (workspace crates) plus a small allowlist of upstream forks.
+# `warn` rather than `deny` initially so the rollout does not bounce on a
+# transitive git dep we missed; flip to `deny` after the tree is mapped.
+unknown-git = "warn"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = [
+    # EDAMAME workspace crates (all consumed via git refs in non-`flip local` mode)
+    "https://github.com/edamametechnologies/threatmodels-rs",
+    "https://github.com/edamametechnologies/undeadlock",
+    "https://github.com/edamametechnologies/flodbadd",
+    "https://github.com/edamametechnologies/edamame_backend",
+    "https://github.com/edamametechnologies/edamame_foundation",
+    "https://github.com/edamametechnologies/edamame_core",
+    "https://github.com/edamametechnologies/edamame_helper",
+    "https://github.com/edamametechnologies/edamame_posture",
+    "https://github.com/edamametechnologies/edamame_cli",
+    "https://github.com/edamametechnologies/extended-isolation-forest",
+    "https://github.com/edamametechnologies/system-configuration-rs",
+]
