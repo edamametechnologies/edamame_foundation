@@ -1,8 +1,8 @@
 name: Supply-chain audit
 
-# CANONICAL TEMPLATE -- mirrored from edamame_rules/supply-chain/audit.yml.template
-# by edamame_rules/supply-chain/sync.sh. Do not edit per-repo copies; edit the
-# template and re-run sync.sh.
+# Synced from edamame_rules/supply-chain/audit.yml.template by
+# edamame_rules/supply-chain/sync.sh. Do not edit per-repo copies;
+# edit the template and re-run sync.sh.
 
 on:
   pull_request:
@@ -22,9 +22,6 @@ on:
       - 'deny.toml'
       - '.github/workflows/audit.yml'
   schedule:
-    # Daily at 04:00 UTC: catches advisories that land against an unchanged
-    # lockfile (RustSec database update), and detects per-repo drift of
-    # deny.toml against the canonical edamame_rules/supply-chain/deny.toml.
     - cron: '0 4 * * *'
   workflow_dispatch:
 
@@ -46,23 +43,6 @@ jobs:
           - licenses
           - bans
           - sources
-    # Self-hosted runners are not needed: cargo-deny only reads Cargo.toml /
-    # Cargo.lock and does NOT need any private dep to resolve. We stay on
-    # github-hosted ubuntu-latest so the gate is fast and cheap, but the
-    # job still has to be able to `actions/checkout@v4` the host repo --
-    # which is `edamametechnologies/<repo>` and therefore subject to the
-    # org IP allow list. Setup EDAMAME Posture (connected mode) lifts the
-    # allow list for the runner IP for the duration of the job; see
-    # edamame_app/.cursor/rules/workspace.mdc "Org IP Allow List Lift on
-    # Github-Hosted Runners (MUST follow)" for the full policy.
-    #
-    # The job ALSO has to satisfy the github-hosted runner-protection
-    # invariant (`Github-Hosted Runners (Enforced Gate)` in the same
-    # workspace rule): vulnerability_detection ON + agentic_mode analyze
-    # + a trailing exit_on_vulnerability_findings: true gate. The audit
-    # job is a shallow TOML-only check, but the rule applies to every
-    # github-hosted runner job that touches a private edamametechnologies
-    # repo, not just full test workflows.
     steps:
       - name: Setup EDAMAME Posture
         uses: edamametechnologies/edamame_posture_action@v1
@@ -83,7 +63,7 @@ jobs:
           EDAMAME_LLM_API_KEY: ${{ secrets.EDAMAME_LLM_API_KEY }}
 
       - name: Install cargo-deny
-        # Pinned to a known-good release. Bump deliberately, not via Renovate.
+        # Pinned release; bump deliberately, not via Renovate.
         run: |
           set -euo pipefail
           version="0.18.5"
@@ -103,22 +83,12 @@ jobs:
           exit_on_vulnerability_findings: true
 
   drift-check:
-    # Verifies the local deny.toml has not drifted from the canonical
-    # edamame_rules/supply-chain/deny.toml. Runs on the daily schedule and
-    # on every push -- a manual edit to per-repo deny.toml will trip this
-    # gate and force a re-sync via edamame_rules/supply-chain/sync.sh.
     name: deny.toml drift check
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
-      # The audit job is a TOML-only check, but the workspace rule
-      # `Org IP Allow List Lift on Github-Hosted Runners (MUST follow)`
-      # applies to every github-hosted runner job that calls
-      # `actions/checkout` against a private edamametechnologies repo --
-      # which is exactly what this job does (twice: this repo + the
-      # edamame_rules repo). Posture comes first with checkout=false so
-      # we can keep the explicit two-checkout layout (path: repo + path:
-      # edamame_rules) the drift comparison needs.
+      # checkout=false here so the explicit two-checkout layout below
+      # (path: repo + path: edamame_rules) can be preserved.
       - name: Setup EDAMAME Posture
         uses: edamametechnologies/edamame_posture_action@v1
         with:
