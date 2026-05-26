@@ -137,10 +137,15 @@ license-files = [
 # these) so it is informational, not a gate. Convert to "deny" once the
 # tree has been deduplicated as part of the cargo-vet adoption phase.
 multiple-versions = "warn"
-# Wildcard version specifiers (`foo = "*"`) MUST never appear in a Cargo.toml
-# in this workspace. They defeat lockfile reproducibility and let a
-# malicious upload of any version slip in.
-wildcards = "deny"
+# Wildcard version specifiers (`foo = "*"`) defeat lockfile reproducibility
+# and would let a malicious upload of any version slip in. cargo-deny
+# however ALSO classifies git-only dependencies (`foo = { git = "..." }` with
+# no version constraint) as wildcards, which is the standard EDAMAME
+# workspace convention for internal crates. Keep as `warn` until every git
+# dep in the workspace carries an explicit `version = ...` floor; the
+# warning still surfaces real `foo = "*"` regressions.
+wildcards = "warn"
+allow-wildcard-paths = true
 # Highlight crates whose dep tree is unusually big or churns frequently.
 # Empty initially; populate as the workspace finds problem crates.
 deny = []

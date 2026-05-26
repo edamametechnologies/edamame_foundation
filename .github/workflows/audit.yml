@@ -64,9 +64,11 @@ jobs:
 
       - name: Install cargo-deny
         # Pinned release; bump deliberately, not via Renovate.
+        # 0.19.x is required for CVSS 4.0 advisory parsing (RustSec advisories
+        # published after 2026-05 use CVSS 4.0 vectors; 0.18.x rejects them).
         run: |
           set -euo pipefail
-          version="0.18.5"
+          version="0.19.7"
           url="https://github.com/EmbarkStudios/cargo-deny/releases/download/${version}/cargo-deny-${version}-x86_64-unknown-linux-musl.tar.gz"
           curl --proto '=https' --tlsv1.2 -fsSL "$url" -o /tmp/cargo-deny.tgz
           sudo tar -C /usr/local/bin --strip-components=1 -xzf /tmp/cargo-deny.tgz "cargo-deny-${version}-x86_64-unknown-linux-musl/cargo-deny"
