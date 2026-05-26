@@ -117,6 +117,7 @@ jobs:
           repository: edamametechnologies/edamame_rules
           path: edamame_rules
           ref: main
+          token: ${{ secrets.DEV_GITHUB_TOKEN }}
 
       - name: Verify deny.toml matches canonical source
         run: |

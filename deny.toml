@@ -91,6 +91,7 @@ allow = [
     "BSD-2-Clause",
     "BSD-3-Clause",
     "CC0-1.0",
+    "CDLA-Permissive-2.0",      # webpki-roots (Mozilla CA bundle redistribution)
     "ISC",
     "MIT",
     "MIT-0",
@@ -104,6 +105,15 @@ allow = [
     "Unlicense",
 ]
 confidence-threshold = 0.93
+
+# Workspace crates loaded via git from the edamametechnologies org are
+# closed-source internal libraries -- they intentionally do not carry an
+# SPDX license field. cargo-deny would otherwise treat them as
+# `unlicensed`. Listing the org URL here tells cargo-deny to ignore the
+# unlicensed check for any crate whose Cargo.lock source matches.
+private = { ignore = true, ignore-sources = [
+    "https://github.com/edamametechnologies",
+] }
 # Crates with ambiguous or hand-written license expressions that cargo-deny
 # cannot match against SPDX. Each entry MUST cite the upstream license file
 # and version reviewed.
