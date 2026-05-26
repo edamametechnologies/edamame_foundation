@@ -47,12 +47,40 @@ jobs:
           - bans
           - sources
     # Self-hosted runners are not needed: cargo-deny only reads Cargo.toml /
-    # Cargo.lock and does NOT need any private dep to resolve. Stay on
-    # github-hosted ubuntu-latest so the gate is fast and cheap.
+    # Cargo.lock and does NOT need any private dep to resolve. We stay on
+    # github-hosted ubuntu-latest so the gate is fast and cheap, but the
+    # job still has to be able to `actions/checkout@v4` the host repo --
+    # which is `edamametechnologies/<repo>` and therefore subject to the
+    # org IP allow list. Setup EDAMAME Posture (connected mode) lifts the
+    # allow list for the runner IP for the duration of the job; see
+    # edamame_app/.cursor/rules/workspace.mdc "Org IP Allow List Lift on
+    # Github-Hosted Runners (MUST follow)" for the full policy.
+    #
+    # The job ALSO has to satisfy the github-hosted runner-protection
+    # invariant (`Github-Hosted Runners (Enforced Gate)` in the same
+    # workspace rule): vulnerability_detection ON + agentic_mode analyze
+    # + a trailing exit_on_vulnerability_findings: true gate. The audit
+    # job is a shallow TOML-only check, but the rule applies to every
+    # github-hosted runner job that touches a private edamametechnologies
+    # repo, not just full test workflows.
     steps:
-      - uses: actions/checkout@v4
+      - name: Setup EDAMAME Posture
+        uses: edamametechnologies/edamame_posture_action@v1
         with:
-          submodules: false
+          edamame_user: ${{ vars.EDAMAME_POSTURE_USER }}
+          edamame_domain: ${{ vars.EDAMAME_POSTURE_DOMAIN }}
+          edamame_pin: ${{ secrets.EDAMAME_POSTURE_PIN }}
+          edamame_id: ${{ github.run_id }}-audit-${{ matrix.checks }}
+          checkout: true
+          wait_for_api: true
+          packet_capture: true
+          vulnerability_detection: true
+          vulnerability_detection_interval: "60"
+          agentic_mode: analyze
+          agentic_provider: edamame
+          agentic_interval: 600
+        env:
+          EDAMAME_LLM_API_KEY: ${{ secrets.EDAMAME_LLM_API_KEY }}
 
       - name: Install cargo-deny
         # Pinned to a known-good release. Bump deliberately, not via Renovate.
@@ -67,6 +95,13 @@ jobs:
       - name: Run cargo-deny check ${{ matrix.checks }}
         run: cargo-deny --all-features check ${{ matrix.checks }}
 
+      - name: EDAMAME Posture vulnerability gate
+        if: always()
+        uses: edamametechnologies/edamame_posture_action@v1
+        with:
+          dump_vulnerability_findings: true
+          exit_on_vulnerability_findings: true
+
   drift-check:
     # Verifies the local deny.toml has not drifted from the canonical
     # edamame_rules/supply-chain/deny.toml. Runs on the daily schedule and
@@ -76,6 +111,32 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
+      # The audit job is a TOML-only check, but the workspace rule
+      # `Org IP Allow List Lift on Github-Hosted Runners (MUST follow)`
+      # applies to every github-hosted runner job that calls
+      # `actions/checkout` against a private edamametechnologies repo --
+      # which is exactly what this job does (twice: this repo + the
+      # edamame_rules repo). Posture comes first with checkout=false so
+      # we can keep the explicit two-checkout layout (path: repo + path:
+      # edamame_rules) the drift comparison needs.
+      - name: Setup EDAMAME Posture
+        uses: edamametechnologies/edamame_posture_action@v1
+        with:
+          edamame_user: ${{ vars.EDAMAME_POSTURE_USER }}
+          edamame_domain: ${{ vars.EDAMAME_POSTURE_DOMAIN }}
+          edamame_pin: ${{ secrets.EDAMAME_POSTURE_PIN }}
+          edamame_id: ${{ github.run_id }}-audit-drift
+          checkout: false
+          wait_for_api: true
+          packet_capture: true
+          vulnerability_detection: true
+          vulnerability_detection_interval: "60"
+          agentic_mode: analyze
+          agentic_provider: edamame
+          agentic_interval: 600
+        env:
+          EDAMAME_LLM_API_KEY: ${{ secrets.EDAMAME_LLM_API_KEY }}
+
       - uses: actions/checkout@v4
         with:
           path: repo
@@ -96,3 +157,10 @@ jobs:
             exit 1
           fi
           echo "OK: deny.toml is in sync with canonical source."
+
+      - name: EDAMAME Posture vulnerability gate
+        if: always()
+        uses: edamametechnologies/edamame_posture_action@v1
+        with:
+          dump_vulnerability_findings: true
+          exit_on_vulnerability_findings: true
