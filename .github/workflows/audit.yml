@@ -1,8 +1,7 @@
 name: Supply-chain audit
 
-# Synced from edamame_rules/supply-chain/audit.yml.template by
-# edamame_rules/supply-chain/sync.sh. Do not edit per-repo copies;
-# edit the template and re-run sync.sh.
+# Synced from edamametechnologies/edamame_supply_chain by sync.sh.
+# Do not edit per-repo copies; edit the template and re-run sync.sh.
 
 on:
   pull_request:
@@ -63,9 +62,6 @@ jobs:
           EDAMAME_LLM_API_KEY: ${{ secrets.EDAMAME_LLM_API_KEY }}
 
       - name: Install cargo-deny
-        # Pinned release; bump deliberately, not via Renovate.
-        # 0.19.x is required for CVSS 4.0 advisory parsing (RustSec advisories
-        # published after 2026-05 use CVSS 4.0 vectors; 0.18.x rejects them).
         run: |
           set -euo pipefail
           version="0.19.7"
@@ -89,8 +85,6 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
-      # checkout=false here so the explicit two-checkout layout below
-      # (path: repo + path: edamame_rules) can be preserved.
       - name: Setup EDAMAME Posture
         uses: edamametechnologies/edamame_posture_action@v1
         with:
@@ -113,20 +107,19 @@ jobs:
         with:
           path: repo
 
-      - name: Checkout edamame_rules
+      - name: Checkout edamame_supply_chain
         uses: actions/checkout@v4
         with:
-          repository: edamametechnologies/edamame_rules
-          path: edamame_rules
+          repository: edamametechnologies/edamame_supply_chain
+          path: edamame_supply_chain
           ref: main
-          token: ${{ secrets.DEV_GITHUB_TOKEN }}
 
       - name: Verify deny.toml matches canonical source
         run: |
           set -euo pipefail
-          if ! diff -u edamame_rules/supply-chain/deny.toml repo/deny.toml; then
-            echo "ERROR: deny.toml has drifted from edamame_rules/supply-chain/deny.toml"
-            echo "Run: cd edamame_rules/supply-chain && ./sync.sh"
+          if ! diff -u edamame_supply_chain/deny.toml repo/deny.toml; then
+            echo "ERROR: deny.toml has drifted from edamametechnologies/edamame_supply_chain/deny.toml"
+            echo "Run: cd edamame_supply_chain && ./sync.sh"
             exit 1
           fi
           echo "OK: deny.toml is in sync with canonical source."

@@ -1,12 +1,12 @@
 # EDAMAME Workspace -- cargo-deny policy (CANONICAL SOURCE OF TRUTH)
 #
 # This file is the single source of truth for cargo-deny policy across every
-# Rust crate in the EDAMAME workspace. It lives in `edamame_rules/supply-chain/`
-# and is mirrored into each Rust repo's root `deny.toml` by
-# `edamame_rules/supply-chain/sync.sh`.
+# Rust crate in the EDAMAME workspace. It lives in
+# https://github.com/edamametechnologies/edamame_supply_chain and is mirrored
+# into each Rust repo's root `deny.toml` by `sync.sh`.
 #
 # DO NOT edit per-repo `deny.toml` files directly. Edit this file and run
-# `edamame_rules/supply-chain/sync.sh` to propagate.
+# `./sync.sh` in the edamame_supply_chain checkout to propagate.
 #
 # Policy summary (see ./README.md for rationale):
 #   * advisories.vulnerability  = deny      (RustSec CVEs MUST fail CI)
@@ -52,7 +52,7 @@ db-urls = ["https://github.com/rustsec/advisory-db"]
 #     or document a precise non-exploitability rationale here.
 #   * `notice` -- soft warning, usually superseded.
 #
-# Adding a new entry requires a commit in `edamame_rules/supply-chain/deny.toml`
+# Adding a new entry requires a commit in `edamame_supply_chain/deny.toml`
 # (this file). Do NOT edit per-repo deny.toml copies.
 yanked = "deny"
 ignore = [
