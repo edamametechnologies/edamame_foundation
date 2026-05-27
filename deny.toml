@@ -14,7 +14,9 @@
 #   * advisories.unmaintained   = warn      (triage, do not gate)
 #   * licenses.allow            = explicit  (anything else fails)
 #   * bans.multiple-versions    = warn      (visibility, not gate)
-#   * bans.wildcards            = deny      (no `foo = "*"` ever)
+#   * bans.wildcards            = warn      (real `foo = "*"` flagged; git-only
+#                                            workspace deps allowed via
+#                                            allow-wildcard-paths = true)
 #   * sources.unknown-registry  = deny      (only crates.io)
 #   * sources.unknown-git       = warn      (initially; tighten once tree is mapped)
 
