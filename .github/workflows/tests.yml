@@ -84,7 +84,6 @@ jobs:
           edamame_pin: ${{ secrets.EDAMAME_POSTURE_PIN }}
           edamame_id: ${{ github.run_id }}
           checkout: true
-          # Runtime runner protection. See workspace.mdc.
           packet_capture: true
           vulnerability_detection: true
           vulnerability_detection_interval: "60"
@@ -471,9 +470,9 @@ jobs:
           edamame_id: ${{ github.run_id }}-container-${{ matrix.container_name }}
           # Don't checkout the repo, as we will do that in the next step
           checkout: false
-          # Runtime runner protection. Inside Docker containers
-          # packet_capture has limited host visibility but FIM and
-          # process introspection still detect tampering / exfil.
+          # Inside Docker containers packet_capture has limited host
+          # visibility but FIM and process introspection still detect
+          # tampering / exfil.
           packet_capture: true
           vulnerability_detection: true
           vulnerability_detection_interval: "60"

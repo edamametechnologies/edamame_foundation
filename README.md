@@ -15,7 +15,8 @@ This library follows a modular design, organized into several functional categor
 - **version.rs** - Version management and comparison utilities
 - **runtime.rs** - Async runtime management and task handling
 - **logger.rs** - Structured logging facilities with memory buffering
-- **rwlock.rs** - Custom read-write locks with deadlock detection
+
+Thread-safe read-write locks with deadlock detection are provided by the separate `undeadlock` crate, not a foundation module.
 
 ### Helper Architecture (Privileged Operations)
 
@@ -25,38 +26,14 @@ This library follows a modular design, organized into several functional categor
 - **helper_rx_utility.rs** - Helper utility functions (network interfaces, capture)
 - **helper_state.rs** - Helper activation state management
 
-### Network Analysis (Flodbadd)
+### Network Analysis
 
-#### Core Network Components
-- **flodbadd_interface.rs** - Network interface discovery and management
-- **flodbadd_ip.rs** - IP address utilities and LAN detection
-- **flodbadd_arp.rs** - Address Resolution Protocol operations
-- **flodbadd_broadcast.rs** - Network broadcast scanning
-- **flodbadd_neighbors.rs** - Neighbor discovery across platforms
-- **flodbadd_sessions.rs** - Network connection session tracking
-- **flodbadd_resolver.rs** - DNS resolution services
-
-#### Packet Capture and Analysis
-- **flodbadd_capture.rs** - Network traffic capture engine
-- **flodbadd_packets.rs** - Packet parsing and classification
-- **flodbadd_dns.rs** - DNS packet analysis
-- **flodbadd_l7.rs** - Layer 7 (application) protocol analysis
-- **flodbadd_mdns.rs** - Multicast DNS service discovery
-
-#### Device Intelligence
-- **flodbadd_device_info.rs** - Device profile data structure
-- **flodbadd_oui.rs** - MAC address vendor identification
-- **flodbadd_profiles.rs** - Device type identification engine
-- **flodbadd_profiles_db.rs** - Device profile database
-
-#### Vulnerability Management
-- **flodbadd_port_info.rs** - Port information structures
-- **flodbadd_port_vulns.rs** - Port vulnerability assessment
-- **flodbadd_port_vulns_db.rs** - Port vulnerability database
-- **flodbadd_vendor_vulns.rs** - Vendor vulnerability tracking
-- **flodbadd_vulnerability_info.rs** - Vulnerability data structures
-- **flodbadd_asn.rs** - Autonomous System Number lookups
-- **asn_db.rs** - ASN database operations
+Network packet capture, session tracking, Layer 7 (application) protocol
+attribution, DNS/mDNS resolution, device intelligence, port/vendor
+vulnerability data, ASN lookups, whitelists/blacklists, and ML-based anomaly
+detection are **not** part of `edamame_foundation`. They live in the separate
+[`flodbadd`](https://github.com/edamametechnologies/flodbadd) crate
+(see `../flodbadd/ARCHITECTURE.md`).
 
 ### Security Assessment Engine
 
@@ -74,15 +51,11 @@ This library follows a modular design, organized into several functional categor
 - **order.rs** - Remediation order data structures
 - **order_type.rs** - Order type definitions
 - **history.rs** - Order execution history tracking
-- **pwned_breach.rs** - Password breach detection
-
-#### Network Policy
-- **whitelists.rs** - Network connection whitelist implementation
-- **whitelists_db.rs** - Whitelist database and inheritance
+- **pwned.rs** - Password breach detection
 
 ### Cloud Integration
 
-- **edamame_model.rs** - Base trait for cloud-synchronized models
+- **cloud_model_fallback.rs** - Embedded CloudModel fallback snapshots used when the remote fetch is unavailable
 - **backend.rs** - Backend service interface
 - **health.rs** - Health metrics tracking
 - **runner_cli.rs** - CLI command execution engine
