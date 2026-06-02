@@ -236,10 +236,7 @@ fn has_sqlite_db(dir: &Path) -> bool {
     for entry in entries.flatten() {
         if let Some(name) = entry.path().file_name().and_then(|n| n.to_str()) {
             let lower = name.to_ascii_lowercase();
-            if lower.ends_with(".db")
-                || lower.ends_with(".sqlite")
-                || lower.ends_with(".sqlite3")
-            {
+            if lower.ends_with(".db") || lower.ends_with(".sqlite") || lower.ends_with(".sqlite3") {
                 return true;
             }
         }
@@ -378,16 +375,10 @@ fn sessions_from_manifest(
             continue;
         }
 
-        let session_key = obj_str(
-            &obj,
-            &["id", "session_id", "sessionId", "uuid", "key"],
-        )
-        .or(key_hint)
-        .unwrap_or_else(|| format!("hermes-manifest-{modified_secs}"));
-        let title_hint = obj_str(
-            &obj,
-            &["title", "name", "summary", "description", "topic"],
-        );
+        let session_key = obj_str(&obj, &["id", "session_id", "sessionId", "uuid", "key"])
+            .or(key_hint)
+            .unwrap_or_else(|| format!("hermes-manifest-{modified_secs}"));
+        let title_hint = obj_str(&obj, &["title", "name", "summary", "description", "topic"]);
 
         let inputs = SessionInputs {
             session_key,
@@ -399,7 +390,10 @@ fn sessions_from_manifest(
             started_at: datetime_from_secs(started_secs),
             modified_at: datetime_from_secs(modified_secs),
         };
-        built.push((modified_secs, build_session(inputs, workspace_root, home_str)));
+        built.push((
+            modified_secs,
+            build_session(inputs, workspace_root, home_str),
+        ));
     }
 
     built.sort_by(|left, right| right.0.cmp(&left.0));
@@ -447,9 +441,9 @@ fn looks_like_session(value: &Value) -> bool {
         "updated_at",
         "started_at",
     ];
-    value
-        .as_object()
-        .map_or(false, |obj| SESSION_KEYS.iter().any(|key| obj.contains_key(*key)))
+    value.as_object().map_or(false, |obj| {
+        SESSION_KEYS.iter().any(|key| obj.contains_key(*key))
+    })
 }
 
 /// Extract `(user_text, assistant_text, raw_text)` from a manifest session
