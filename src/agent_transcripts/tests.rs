@@ -379,6 +379,138 @@ fn openclaw_legacy_root_layout_is_no_longer_probed() {
 }
 
 #[test]
+#[serial]
+fn hermes_returns_empty_and_undiscovered_when_absent() {
+    // HERMES_HOME overrides the default ~/.hermes; clear it so the test's
+    // home-relative path is used and stays deterministic on CI runners.
+    let saved_hermes_home = std::env::var("HERMES_HOME").ok();
+    std::env::remove_var("HERMES_HOME");
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let result = collect("hermes", temp.path(), &options()).expect("hermes collect");
+
+    match saved_hermes_home {
+        Some(value) => std::env::set_var("HERMES_HOME", value),
+        None => std::env::remove_var("HERMES_HOME"),
+    }
+
+    assert_eq!(result.payload.agent_type, "hermes");
+    assert!(
+        !result.diagnostics.transcripts_root_accessible,
+        "no ~/.hermes should mean not discovered"
+    );
+    assert!(result.payload.sessions.is_empty());
+}
+
+#[test]
+#[serial]
+fn hermes_discovered_via_config_even_without_transcripts() {
+    // The unsecured_hermes threat fires on discovered && !enabled. Hermes
+    // stores sessions in SQLite, which the L1 observer does not read, so
+    // "discovered" MUST be driven by the presence of a Hermes store/config,
+    // not by ingestible transcript content.
+    let saved_hermes_home = std::env::var("HERMES_HOME").ok();
+    std::env::remove_var("HERMES_HOME");
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let home = temp.path();
+    write(&home.join(".hermes/config.yaml"), "mcp_servers: {}\n");
+    write(&home.join(".hermes/sessions.db"), "SQLite format 3\0");
+
+    let result = collect("hermes", home, &options()).expect("hermes collect");
+
+    match saved_hermes_home {
+        Some(value) => std::env::set_var("HERMES_HOME", value),
+        None => std::env::remove_var("HERMES_HOME"),
+    }
+
+    assert!(
+        result.diagnostics.transcripts_root_accessible,
+        "Hermes config + SQLite db must mark the host as discovered"
+    );
+    assert!(
+        result.payload.sessions.is_empty(),
+        "no JSON/JSONL transcripts means no ingested sessions"
+    );
+}
+
+#[test]
+#[serial]
+fn hermes_collects_jsonl_sessions() {
+    let saved_hermes_home = std::env::var("HERMES_HOME").ok();
+    std::env::remove_var("HERMES_HOME");
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let home = temp.path();
+    let sessions = home.join(".hermes/sessions");
+    let line_user =
+        "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"clone the repo and run tests\"}]}}";
+    let line_assistant = "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"running cargo test --lib now\"}]}}";
+    write(
+        &sessions.join("session-1.jsonl"),
+        &format!("{}\n{}\n", line_user, line_assistant),
+    );
+    let result = collect("hermes", home, &options()).expect("hermes collect");
+
+    match saved_hermes_home {
+        Some(value) => std::env::set_var("HERMES_HOME", value),
+        None => std::env::remove_var("HERMES_HOME"),
+    }
+
+    assert_eq!(result.payload.agent_type, "hermes");
+    assert!(result.diagnostics.transcripts_root_accessible);
+    assert_eq!(result.payload.sessions.len(), 1);
+    let session = &result.payload.sessions[0];
+    assert!(session.user_text.contains("clone the repo"));
+    assert!(session.commands.iter().any(|c| c.starts_with("cargo test")));
+}
+
+#[test]
+#[serial]
+fn hermes_collects_from_sessions_json_manifest() {
+    // When Hermes exposes a sessions.json manifest (rather than per-session
+    // JSONL files), the tolerant manifest reader should still ingest the
+    // recorded intent.
+    let saved_hermes_home = std::env::var("HERMES_HOME").ok();
+    std::env::remove_var("HERMES_HOME");
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let home = temp.path();
+    let manifest = home.join(".hermes/sessions.json");
+    let body = r#"{
+        "sessions": [
+            {
+                "id": "abc123",
+                "title": "deploy staging",
+                "messages": [
+                    {"role": "user", "content": "deploy to staging with kubectl apply -f deploy.yaml"},
+                    {"role": "assistant", "content": "running kubectl apply -f deploy.yaml"}
+                ]
+            }
+        ]
+    }"#;
+    write(&manifest, body);
+
+    let result = collect("hermes", home, &options()).expect("hermes collect");
+
+    match saved_hermes_home {
+        Some(value) => std::env::set_var("HERMES_HOME", value),
+        None => std::env::remove_var("HERMES_HOME"),
+    }
+
+    assert!(result.diagnostics.transcripts_root_accessible);
+    assert_eq!(result.payload.sessions.len(), 1);
+    let session = &result.payload.sessions[0];
+    assert_eq!(session.session_key, "abc123");
+    assert_eq!(session.title, "deploy staging");
+    assert!(session.user_text.contains("deploy to staging"));
+    assert!(session
+        .commands
+        .iter()
+        .any(|c| c.starts_with("kubectl apply")));
+}
+
+#[test]
 fn unknown_agent_type_returns_empty_payload() {
     let temp = tempfile::tempdir().expect("tempdir");
     let result = collect("does_not_exist", temp.path(), &options()).expect("collect");

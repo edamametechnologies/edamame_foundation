@@ -582,6 +582,22 @@ pub struct CveDetectionParamsJSON {
     /// alone never silences a finding.
     #[serde(default = "default_known_system_daemon_credential_maintenance_hints")]
     pub known_system_daemon_credential_maintenance_hints: PlatformStringLists,
+    /// Per-platform basenames of trusted OS/vendor *self-extracting
+    /// installers* that unpack a worker into `%LocalAppData%\Temp\<random>\`
+    /// (Windows) or an equivalent temp extraction directory and write their
+    /// own payload there by design. Windows examples: `dismhost.exe` (the
+    /// DISM worker copied out by `Dism.exe`/TrustedInstaller) and
+    /// `wixstdba.exe` (the WiX Burn standard bootstrapper application).
+    ///
+    /// A basename match alone NEVER suppresses a finding -- the
+    /// `file_system_tampering` detector additionally requires structural
+    /// self-containment (the writer runs from a temp extraction dir AND
+    /// writes into that same dir). These FIM events carry NO parent
+    /// attribution, so parent-invoker attestation is impossible; the
+    /// self-containment conjunction is what keeps a same-named dropper
+    /// writing elsewhere alertable. See FP-WIN-3 / FP-WIN-8.
+    #[serde(default = "default_trusted_self_extracting_installers")]
+    pub trusted_self_extracting_installers: PlatformStringLists,
     #[serde(default = "default_fim_hash_size_threshold")]
     pub fim_hash_size_threshold: u64,
     pub fim_temp_executable_patterns: Vec<String>,
@@ -1638,6 +1654,30 @@ fn default_known_system_daemon_credential_maintenance_hints() -> PlatformStringL
     )
 }
 
+/// Default trusted self-extracting installer basenames. See
+/// [`CveDetectionParamsJSON::trusted_self_extracting_installers`] for the
+/// full contract: basename membership is a NECESSARY but not SUFFICIENT
+/// condition for `file_system_tampering` suppression -- the detector also
+/// requires structural self-containment in a temp extraction directory.
+///
+/// - `dismhost.exe`: the Windows DISM worker. `Dism.exe` / TrustedInstaller
+///   copy a self-contained `DismHost.exe` + `DismCorePS.dll` into a
+///   GUID-named subdir under `%LocalAppData%\Temp\` and run from there
+///   (FP-WIN-3).
+/// - `wixstdba.exe`: the WiX Burn Standard Bootstrapper Application,
+///   extracted into `%LocalAppData%\Temp\{GUID}\.ba\` by the bundle engine
+///   (FP-WIN-8).
+fn default_trusted_self_extracting_installers() -> PlatformStringLists {
+    platform_string_lists(
+        // macos
+        &[],
+        // linux
+        &[],
+        // windows
+        &["dismhost.exe", "wixstdba.exe"],
+    )
+}
+
 /// Path substrings that identify per-OS package-manager working
 /// directories where toolchains legitimately stage downloaded
 /// dependency archives. The `file_system_tampering` detector would
@@ -2071,6 +2111,7 @@ pub struct CveDetectionParams {
     pub platform_self_state_processes: PlatformStringLists,
     pub runtime_perfdata_paths: PlatformRuntimePerfdataPathsJSON,
     pub known_system_daemon_credential_maintenance_hints: PlatformStringLists,
+    pub trusted_self_extracting_installers: PlatformStringLists,
     pub fim_hash_size_threshold: u64,
     pub fim_temp_executable_patterns: Vec<String>,
     pub evidence_weights: EvidenceWeightsJSON,
@@ -2625,6 +2666,26 @@ impl CveDetectionParams {
                     .map(|name| name.to_ascii_lowercase())
                     .collect(),
             },
+            trusted_self_extracting_installers: PlatformStringLists {
+                macos: json
+                    .trusted_self_extracting_installers
+                    .macos
+                    .iter()
+                    .map(|name| name.to_ascii_lowercase())
+                    .collect(),
+                linux: json
+                    .trusted_self_extracting_installers
+                    .linux
+                    .iter()
+                    .map(|name| name.to_ascii_lowercase())
+                    .collect(),
+                windows: json
+                    .trusted_self_extracting_installers
+                    .windows
+                    .iter()
+                    .map(|name| name.to_ascii_lowercase())
+                    .collect(),
+            },
             fim_hash_size_threshold: json.fim_hash_size_threshold,
             fim_temp_executable_patterns: json.fim_temp_executable_patterns.clone(),
             evidence_weights: json.evidence_weights.clone(),
@@ -2752,6 +2813,36 @@ pub fn is_known_system_daemon_credential_maintenance_hint(name: &str) -> bool {
         .chain(lists.linux.iter())
         .chain(lists.windows.iter())
         .any(|hint| !hint.is_empty() && hint == &basename)
+}
+
+/// Returns true if `name` is in the per-platform
+/// `trusted_self_extracting_installers` list. Match is case-insensitive
+/// on the basename (stripping any directory prefix).
+///
+/// This is a NECESSARY but not SUFFICIENT condition for
+/// `file_system_tampering` suppression. The detector additionally requires
+/// structural self-containment (the writer runs from a temp extraction dir
+/// AND writes only into that same dir subtree). A same-named dropper that
+/// writes its payload elsewhere does NOT satisfy self-containment and stays
+/// alertable. See FP-WIN-3 / FP-WIN-8.
+pub fn is_trusted_self_extracting_installer(name: &str) -> bool {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let basename = trimmed
+        .rsplit(|c| c == '/' || c == '\\')
+        .next()
+        .unwrap_or(trimmed)
+        .to_ascii_lowercase();
+    let params = PARAMS_SNAPSHOT.load();
+    let lists = &params.trusted_self_extracting_installers;
+    lists
+        .macos
+        .iter()
+        .chain(lists.linux.iter())
+        .chain(lists.windows.iter())
+        .any(|entry| !entry.is_empty() && entry == &basename)
 }
 
 /// Returns true if `name` is a known CI runner agent or provisioning

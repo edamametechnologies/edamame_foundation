@@ -186,6 +186,25 @@ impl SupportedAgentDefinition {
                         }
                     }
                 }
+                "hermes_config_yaml" => {
+                    // Hermes declares MCP servers under `mcp_servers:` in config.yaml.
+                    // HERMES_HOME overrides the default ~/.hermes location.
+                    let hermes_home = std::env::var("HERMES_HOME")
+                        .map(PathBuf::from)
+                        .unwrap_or_else(|_| home.join(".hermes"));
+                    paths.push(hermes_home.join("config.yaml"));
+
+                    // Windows installs may instead live under %LOCALAPPDATA%\hermes.
+                    #[cfg(target_os = "windows")]
+                    {
+                        if let Ok(localappdata) = std::env::var("LOCALAPPDATA") {
+                            let alt = PathBuf::from(localappdata).join("hermes/config.yaml");
+                            if alt.parent().map_or(false, |p| p.exists()) {
+                                paths.push(alt);
+                            }
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -570,6 +589,41 @@ fn builtin_supported_agents() -> LoadedSupportedAgents {
                     intent_timeout_seconds: Some(900),
                 }),
                 registry_icon_relpath: Some("codex/icon.svg".to_string()),
+            },
+            SupportedAgentDefinition {
+                agent_type: "hermes".to_string(),
+                display_name: "EDAMAME for Hermes".to_string(),
+                description: "Hermes Agent workstation integration with transcript ingest, pairing, verdicts, and health checks.".to_string(),
+                repo_name: "edamame_hermes".to_string(),
+                strategy_kind: "workstation_stdio_mcp".to_string(),
+                sort_order: 37,
+                requires_workspace_arg: false,
+                repo_scripts: AgentRepoScripts {
+                    install_unix: Some("setup/install.sh".to_string()),
+                    install_windows: Some("setup/install.ps1".to_string()),
+                    uninstall_unix: Some("setup/uninstall.sh".to_string()),
+                    uninstall_windows: Some("setup/uninstall.ps1".to_string()),
+                    healthcheck_relpath: "service/healthcheck_cli.mjs".to_string(),
+                },
+                install_layout: AgentInstallLayout {
+                    install_base: "data_dir".to_string(),
+                    install_relative_path: "hermes-edamame/current".to_string(),
+                    config_kind: "platform_config_slug".to_string(),
+                    config_slug: Some("hermes-edamame".to_string()),
+                    state_kind: "platform_state_slug".to_string(),
+                    state_slug: Some("hermes-edamame".to_string()),
+                    bundle_icon_relpath: Some("assets/plugin_hermes.png".to_string()),
+                },
+                mcp: Some(AgentMcpConfig {
+                    server_key: "edamame".to_string(),
+                    config_targets: vec!["hermes_config_yaml".to_string()],
+                }),
+                e2e: Some(AgentE2eConfig {
+                    repo_env_var: Some("HERMES_REPO".to_string()),
+                    intent_script: Some("tests/e2e_inject_intent.sh".to_string()),
+                    intent_timeout_seconds: Some(900),
+                }),
+                registry_icon_relpath: Some("hermes/icon.svg".to_string()),
             },
             SupportedAgentDefinition {
                 agent_type: "openclaw".to_string(),

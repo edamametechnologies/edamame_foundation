@@ -27,6 +27,7 @@ pub mod claude_code;
 pub mod claude_desktop;
 pub mod codex;
 pub mod cursor;
+pub mod hermes;
 pub mod openclaw;
 pub mod parsing;
 
@@ -143,8 +144,9 @@ pub struct CollectResult {
 /// Dispatch to the per-agent adapter.
 ///
 /// `agent_type` MUST be one of `cursor`, `claude_code`, `claude_desktop`,
-/// `openclaw`. Unknown agent types return an empty payload + diagnostics so
-/// upstream callers can surface "no observer for this agent" cleanly.
+/// `codex`, `hermes`, `openclaw`. Unknown agent types return an empty payload
+/// + diagnostics so upstream callers can surface "no observer for this agent"
+/// cleanly.
 pub fn collect(
     agent_type: &str,
     home: &Path,
@@ -155,6 +157,7 @@ pub fn collect(
         "claude_code" => claude_code::collect(home, options),
         "claude_desktop" => claude_desktop::collect(home, options),
         "codex" => codex::collect(home, options),
+        "hermes" => hermes::collect(home, options),
         "openclaw" => openclaw::collect(home, options),
         other => Ok(CollectResult {
             payload: empty_payload(other, home),

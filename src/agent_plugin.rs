@@ -1140,6 +1140,7 @@ fn uninstall_cursor_or_claude_code(agent_type: &str, home: &Path) -> anyhow::Res
         "cursor" => "cursor-edamame",
         "claude_code" => "claude-code-edamame",
         "claude_desktop" => "claude-desktop-edamame",
+        "hermes" => "hermes-edamame",
         _ => bail!("Unsupported agent type for uninstall: {}", agent_type),
     };
 
