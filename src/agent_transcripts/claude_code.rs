@@ -18,11 +18,21 @@ use super::{
 const CLAUDE_CODE_LLM_HOSTS: &[&str] = &[
     "api.anthropic.com:443",
     "api.openai.com:443",
+    // AWS entries cover the default Anthropic-on-AWS routing and the
+    // Bedrock backend (CLAUDE_CODE_USE_BEDROCK=1 ->
+    // bedrock-runtime.<region>.amazonaws.com). Many sessions resolve only
+    // to raw IPs without reverse DNS, so the ASN entry catches what
+    // amazonaws.com suffix matching misses.
     "amazonaws.com:443",
     "asn:CLOUDFLARENET",
     "asn:NOTION",
     "asn:MICROSOFT-CORP",
     "asn:AMAZON",
+    // Vertex AI backend (CLAUDE_CODE_USE_VERTEX=1) routes to
+    // <region>-aiplatform.googleapis.com on Google (AS15169 GOOGLE,
+    // AS396982 GOOGLE-CLOUD-PLATFORM). asn:GOOGLE substring-matches both.
+    "googleapis.com:443",
+    "asn:GOOGLE",
 ];
 
 const CLAUDE_CODE_SCOPE_PARENT_PATHS: &[&str] = &[
