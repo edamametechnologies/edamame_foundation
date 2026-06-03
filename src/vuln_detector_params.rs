@@ -116,6 +116,40 @@ pub struct PlatformCredentialHelperRoutineDestinationsJSON {
     pub windows: CredentialHelperDestinationListJSON,
 }
 
+/// Per-cloud-provider SDK control-plane destinations, used by the
+/// `cloud_provider_sdk_self_auth` token-exfiltration demotion. Unlike
+/// `CredentialHelperDestinationListJSON` (which is platform-keyed and
+/// uses `domain_patterns` substring semantics), this list is
+/// provider-keyed and uses strict suffix semantics on `domain_suffixes`:
+/// each entry begins with `.` and matches a host that equals the suffix
+/// without the leading dot, or ends with the suffix.
+///
+/// - `asn_owners`: case-insensitive substring match against the
+///   session's `dst_asn.owner` (so a bare-IP Bedrock session with no
+///   reverse DNS still matches via `Amazon`).
+/// - `domain_suffixes`: case-insensitive suffix match against the
+///   resolved destination domain.
+/// - `ip_prefixes`: case-insensitive prefix match for vendor ranges
+///   that routinely arrive without DNS/ASN enrichment.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct CloudProviderSdkDestinationListJSON {
+    pub asn_owners: Vec<String>,
+    pub domain_suffixes: Vec<String>,
+    pub ip_prefixes: Vec<String>,
+}
+
+/// Provider-keyed cloud-SDK destination allowlist. Keys MUST match the
+/// sensitive-path label strings emitted by `flodbadd`'s sensitive-path
+/// classifier (`aws` -> `~/.aws/`, `azure` -> `~/.azure/`,
+/// `gcp` -> `~/.config/gcloud/`) so the detector can map a credential
+/// file's provider label directly to the matching destination list.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct CloudProviderSdkDestinationsJSON {
+    pub aws: CloudProviderSdkDestinationListJSON,
+    pub azure: CloudProviderSdkDestinationListJSON,
+    pub gcp: CloudProviderSdkDestinationListJSON,
+}
+
 /// CI-runner workspace path substrings + suppressible filename
 /// basenames for the FP-CI-7 dotenv demotion. Path substrings are
 /// matched against a forward-slash-normalized, lowercased version of
@@ -557,6 +591,8 @@ pub struct CveDetectionParamsJSON {
     pub edamame_daemon_self_telemetry_writers: PlatformStringLists,
     #[serde(default = "default_edamame_daemon_self_telemetry_install_prefixes")]
     pub edamame_daemon_self_telemetry_install_prefixes: PlatformStringLists,
+    #[serde(default = "default_cloud_provider_sdk_destinations")]
+    pub cloud_provider_sdk_destinations: CloudProviderSdkDestinationsJSON,
     #[serde(default = "default_platform_credential_helper_routine_destinations")]
     pub platform_credential_helper_routine_destinations:
         PlatformCredentialHelperRoutineDestinationsJSON,
@@ -1540,6 +1576,72 @@ fn default_platform_credential_helper_routine_destinations(
     }
 }
 
+/// Default cloud-provider SDK control-plane destinations for the
+/// `cloud_provider_sdk_self_auth` token-exfiltration demotion. Each
+/// provider key matches a sensitive-path label string. The domain
+/// suffixes are scoped to the cloud's control-plane / auth surface
+/// (the SDKs and CLI auth flows that legitimately read the matching
+/// credential file): for AWS this covers Bedrock, STS, SSO, and the
+/// general `*.amazonaws.com` service surface; for Azure the AAD login
+/// and Azure OpenAI / Cognitive Services surface; for GCP the
+/// `*.googleapis.com` (incl. Vertex AI `aiplatform.googleapis.com`)
+/// and account-auth surface. The ASN owners are the catch-all for
+/// bare-IP sessions that arrive without reverse DNS.
+fn default_cloud_provider_sdk_destinations() -> CloudProviderSdkDestinationsJSON {
+    CloudProviderSdkDestinationsJSON {
+        aws: CloudProviderSdkDestinationListJSON {
+            asn_owners: strings(&["Amazon", "AWS"]),
+            domain_suffixes: strings(&[
+                ".amazonaws.com",
+                ".amazonaws.com.cn",
+                ".aws.amazon.com",
+            ]),
+            ip_prefixes: Vec::new(),
+        },
+        azure: CloudProviderSdkDestinationListJSON {
+            asn_owners: strings(&["Microsoft Azure", "Microsoft Corporation"]),
+            domain_suffixes: strings(&[
+                ".azure.com",
+                ".azure.net",
+                ".windows.net",
+                ".microsoftonline.com",
+                ".cognitiveservices.azure.com",
+                ".openai.azure.com",
+            ]),
+            ip_prefixes: Vec::new(),
+        },
+        gcp: CloudProviderSdkDestinationListJSON {
+            asn_owners: strings(&["Google"]),
+            domain_suffixes: strings(&[".googleapis.com", ".google.com"]),
+            ip_prefixes: Vec::new(),
+        },
+    }
+}
+
+/// Lowercase every entry of a cloud-provider SDK destination list for
+/// the snapshot (matching is done against lowercased session fields).
+fn lowercase_cloud_provider_sdk_destination_list(
+    list: &CloudProviderSdkDestinationListJSON,
+) -> CloudProviderSdkDestinationListJSON {
+    CloudProviderSdkDestinationListJSON {
+        asn_owners: list
+            .asn_owners
+            .iter()
+            .map(|s| s.to_ascii_lowercase())
+            .collect(),
+        domain_suffixes: list
+            .domain_suffixes
+            .iter()
+            .map(|s| s.to_ascii_lowercase())
+            .collect(),
+        ip_prefixes: list
+            .ip_prefixes
+            .iter()
+            .map(|s| s.to_ascii_lowercase())
+            .collect(),
+    }
+}
+
 /// Per-platform JVM HotSpot perfdata path entries (FP-CI-5). The
 /// detector fully suppresses `file_system_tampering` findings whose
 /// artifact path contains `artifact_path_substring` AND whose writer
@@ -2105,6 +2207,7 @@ pub struct CveDetectionParams {
     pub edamame_daemon_self_telemetry_install_prefixes: PlatformStringLists,
     pub platform_credential_helper_routine_destinations:
         PlatformCredentialHelperRoutineDestinationsJSON,
+    pub cloud_provider_sdk_destinations: CloudProviderSdkDestinationsJSON,
     pub platform_metadata_endpoints: PlatformStringLists,
     pub platform_runtime_probe_filename_patterns: PlatformStringLists,
     pub platform_self_state_directories: PlatformStringLists,
@@ -2543,6 +2646,17 @@ impl CveDetectionParams {
                             .collect(),
                     },
                 },
+            cloud_provider_sdk_destinations: CloudProviderSdkDestinationsJSON {
+                aws: lowercase_cloud_provider_sdk_destination_list(
+                    &json.cloud_provider_sdk_destinations.aws,
+                ),
+                azure: lowercase_cloud_provider_sdk_destination_list(
+                    &json.cloud_provider_sdk_destinations.azure,
+                ),
+                gcp: lowercase_cloud_provider_sdk_destination_list(
+                    &json.cloud_provider_sdk_destinations.gcp,
+                ),
+            },
             platform_metadata_endpoints: PlatformStringLists {
                 macos: json
                     .platform_metadata_endpoints
@@ -3094,6 +3208,106 @@ pub fn is_platform_credential_helper_routine_destination(
         }
         false
     })
+}
+
+fn cloud_provider_sdk_list_for_label<'a>(
+    dests: &'a CloudProviderSdkDestinationsJSON,
+    label: &str,
+) -> Option<&'a CloudProviderSdkDestinationListJSON> {
+    match label.to_ascii_lowercase().as_str() {
+        "aws" => Some(&dests.aws),
+        "azure" => Some(&dests.azure),
+        "gcp" => Some(&dests.gcp),
+        _ => None,
+    }
+}
+
+/// True when `label` is a sensitive-path label that names a cloud
+/// provider with a configured (non-empty) SDK-destination policy. Used
+/// by the `cloud_provider_sdk_self_auth` token-exfiltration demotion to
+/// decide whether a finding's single credential family is a known
+/// cloud provider. An operator who clears a provider's destination list
+/// in the tunable disables the demotion for that provider (the label is
+/// then no longer "known"), so the feature is fully data-driven.
+pub fn is_known_cloud_provider_sdk_label(label: &str) -> bool {
+    let snapshot = PARAMS_SNAPSHOT.load();
+    cloud_provider_sdk_list_for_label(&snapshot.cloud_provider_sdk_destinations, label)
+        .map(|list| {
+            !list.asn_owners.is_empty()
+                || !list.domain_suffixes.is_empty()
+                || !list.ip_prefixes.is_empty()
+        })
+        .unwrap_or(false)
+}
+
+/// True when the egress destination belongs to the cloud provider named
+/// by `provider_label`'s configured SDK-destination list. Matching is:
+///
+/// - `domain_suffixes`: every configured entry begins with `.`; a host
+///   matches when it equals the suffix without the leading dot OR ends
+///   with the suffix. The leading dot defeats the `evil-amazonaws.com`
+///   bypass (it does not end with `.amazonaws.com`).
+/// - `asn_owners`: case-insensitive substring (so a bare-IP Bedrock
+///   session whose `dst_asn.owner` is `AMAZON-02 Amazon.com, Inc.`
+///   matches `amazon`).
+/// - `ip_prefixes`: case-insensitive prefix (for ranges that arrive
+///   without DNS/ASN enrichment).
+///
+/// Returns false when the provider label is unknown or when every
+/// destination field is empty.
+pub fn cloud_provider_sdk_destination_matches(
+    provider_label: &str,
+    egress_destination_domain: Option<&str>,
+    egress_destination_ip: Option<&str>,
+    egress_destination_asn_owner: Option<&str>,
+) -> bool {
+    let domain_lower = egress_destination_domain
+        .map(|d| d.to_ascii_lowercase())
+        .filter(|d| !d.is_empty());
+    let ip_lower = egress_destination_ip
+        .map(|ip| ip.to_ascii_lowercase())
+        .filter(|ip| !ip.is_empty());
+    let asn_lower = egress_destination_asn_owner
+        .map(|a| a.to_ascii_lowercase())
+        .filter(|a| !a.is_empty());
+    if domain_lower.is_none() && ip_lower.is_none() && asn_lower.is_none() {
+        return false;
+    }
+
+    let snapshot = PARAMS_SNAPSHOT.load();
+    let Some(list) = cloud_provider_sdk_list_for_label(
+        &snapshot.cloud_provider_sdk_destinations,
+        provider_label,
+    ) else {
+        return false;
+    };
+
+    if let Some(domain) = domain_lower.as_deref() {
+        for suffix in &list.domain_suffixes {
+            if suffix.is_empty() {
+                continue;
+            }
+            let bare = suffix.strip_prefix('.').unwrap_or(suffix.as_str());
+            if domain == bare || domain.ends_with(suffix.as_str()) {
+                return true;
+            }
+        }
+    }
+    if let Some(asn) = asn_lower.as_deref() {
+        for owner in &list.asn_owners {
+            if !owner.is_empty() && asn.contains(owner) {
+                return true;
+            }
+        }
+    }
+    if let Some(ip) = ip_lower.as_deref() {
+        for prefix in &list.ip_prefixes {
+            if !prefix.is_empty() && ip.starts_with(prefix) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Returns true when `artifact_path`, `process_name`, and
@@ -3930,6 +4144,97 @@ mod tests {
         assert!(is_init_process("launchd"));
         assert!(is_init_process("systemd"));
         assert!(!is_init_process("python3"));
+    }
+
+    // FP-WS-1: cloud-provider SDK destination accessors backing the
+    // `cloud_provider_sdk_self_auth` demotion (Claude Code on Bedrock /
+    // Vertex / Azure-OpenAI reading ~/.aws|~/.config/gcloud|az creds).
+    #[test]
+    fn test_is_known_cloud_provider_sdk_label() {
+        // The embedded snapshot ships non-empty aws/azure/gcp lists, so
+        // each provider label is "known" (case-insensitive).
+        assert!(is_known_cloud_provider_sdk_label("aws"));
+        assert!(is_known_cloud_provider_sdk_label("AWS"));
+        assert!(is_known_cloud_provider_sdk_label("azure"));
+        assert!(is_known_cloud_provider_sdk_label("gcp"));
+        // Anything that is not a configured provider key is not "known",
+        // so the demotion never fires for it.
+        assert!(!is_known_cloud_provider_sdk_label("ssh"));
+        assert!(!is_known_cloud_provider_sdk_label("generic_credential"));
+        assert!(!is_known_cloud_provider_sdk_label(""));
+    }
+
+    #[test]
+    fn test_cloud_provider_sdk_destination_matches_domain_suffix() {
+        // Bedrock control-plane domain ends with .amazonaws.com.
+        assert!(cloud_provider_sdk_destination_matches(
+            "aws",
+            Some("bedrock-runtime.us-east-1.amazonaws.com"),
+            None,
+            None,
+        ));
+        // Leading-dot anti-bypass: evil-amazonaws.com does NOT end with
+        // ".amazonaws.com" so it must NOT match.
+        assert!(!cloud_provider_sdk_destination_matches(
+            "aws",
+            Some("evil-amazonaws.com"),
+            None,
+            None,
+        ));
+        // Cross-provider: an AWS domain must not match the gcp list.
+        assert!(!cloud_provider_sdk_destination_matches(
+            "gcp",
+            Some("bedrock-runtime.us-east-1.amazonaws.com"),
+            None,
+            None,
+        ));
+        // Vertex / Azure-OpenAI control-plane suffixes.
+        assert!(cloud_provider_sdk_destination_matches(
+            "gcp",
+            Some("us-central1-aiplatform.googleapis.com"),
+            None,
+            None,
+        ));
+        assert!(cloud_provider_sdk_destination_matches(
+            "azure",
+            Some("my-resource.openai.azure.com"),
+            None,
+            None,
+        ));
+    }
+
+    #[test]
+    fn test_cloud_provider_sdk_destination_matches_asn_owner_substring() {
+        // Bare-IP Bedrock session whose only enrichment is the ASN owner
+        // string -- case-insensitive substring against "amazon".
+        assert!(cloud_provider_sdk_destination_matches(
+            "aws",
+            None,
+            Some("16.182.40.10"),
+            Some("AMAZON-02 Amazon Data Services"),
+        ));
+        // A non-Amazon ASN owner must not match the aws list.
+        assert!(!cloud_provider_sdk_destination_matches(
+            "aws",
+            None,
+            Some("203.0.113.10"),
+            Some("DigitalOcean, LLC"),
+        ));
+    }
+
+    #[test]
+    fn test_cloud_provider_sdk_destination_matches_empty_and_unknown() {
+        // No egress fields at all -> no match (cannot affirm provider).
+        assert!(!cloud_provider_sdk_destination_matches(
+            "aws", None, None, None
+        ));
+        // Unknown provider label -> no match regardless of destination.
+        assert!(!cloud_provider_sdk_destination_matches(
+            "ssh",
+            Some("bedrock-runtime.us-east-1.amazonaws.com"),
+            None,
+            None,
+        ));
     }
 
     /// FP-MAC-6 regression guard at the params level: the network-command
