@@ -1591,11 +1591,7 @@ fn default_cloud_provider_sdk_destinations() -> CloudProviderSdkDestinationsJSON
     CloudProviderSdkDestinationsJSON {
         aws: CloudProviderSdkDestinationListJSON {
             asn_owners: strings(&["Amazon", "AWS"]),
-            domain_suffixes: strings(&[
-                ".amazonaws.com",
-                ".amazonaws.com.cn",
-                ".aws.amazon.com",
-            ]),
+            domain_suffixes: strings(&[".amazonaws.com", ".amazonaws.com.cn", ".aws.amazon.com"]),
             ip_prefixes: Vec::new(),
         },
         azure: CloudProviderSdkDestinationListJSON {
