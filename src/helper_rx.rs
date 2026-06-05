@@ -109,9 +109,13 @@ enum DedupRole {
 }
 
 fn register_order(key: &str) -> DedupRole {
+    // Recover from poisoning instead of panicking. A poisoned lock here would
+    // cascade into every subsequent helper order panicking (silent helper
+    // death); the protected map only tracks in-flight dedup senders, so
+    // recovering the inner value after a panic is safe.
     let mut map = PENDING_ORDERS
         .lock()
-        .expect("PENDING_ORDERS mutex poisoned");
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     match map.get(key) {
         Some(tx) => DedupRole::Follower(tx.subscribe()),
         None => {
@@ -145,9 +149,13 @@ impl ExecutorGuard {
         // Remove from the map FIRST so any duplicate that arrives after this point
         // starts a fresh execution rather than joining a channel that's about to
         // close.
-        if let Ok(mut map) = PENDING_ORDERS.lock() {
-            map.remove(&self.key);
-        }
+        // Recover from poisoning so the dedup slot is always cleared; leaving a
+        // stale entry would strand every future identical order on a closed
+        // broadcast channel.
+        PENDING_ORDERS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&self.key);
         self.completed.store(true, Ordering::Release);
         // `send` returns Err if no followers ever subscribed; that's fine -- nobody
         // was waiting, so there is nothing to deliver.
@@ -164,9 +172,12 @@ impl Drop for ExecutorGuard {
             "ExecutorGuard dropped without completion (panic or cancellation): key={}",
             self.key
         );
-        if let Ok(mut map) = PENDING_ORDERS.lock() {
-            map.remove(&self.key);
-        }
+        // Recover from poisoning so the dedup slot is always cleared (see
+        // `complete`).
+        PENDING_ORDERS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&self.key);
         let _ = self
             .tx
             .send(Err("order canceled before completion".to_string()));

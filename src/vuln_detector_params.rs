@@ -4112,6 +4112,18 @@ mod tests {
     use super::*;
     use serial_test::serial;
 
+    /// Regression guard (helper/app/posture startup): the embedded CVE/FIM
+    /// detection-params snapshot MUST decode and parse. If a bad regen of
+    /// `cve_detection_params_db.rs` makes it unparseable, the `CVE_PARAMS`
+    /// CloudModel `lazy_static` panics on its first deref and the daemon dies at
+    /// startup. This catches it in CI instead. See also
+    /// whitelists/blacklists/sensitive_paths/threats.
+    #[test]
+    fn test_embedded_cve_params_snapshot_parses() {
+        serde_json::from_str::<CveDetectionParamsJSON>(&CVE_DETECTION_PARAMS_DB)
+            .expect("embedded CVE detection params snapshot must parse as CveDetectionParamsJSON");
+    }
+
     #[tokio::test]
     #[serial]
     async fn test_params_loaded() {

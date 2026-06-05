@@ -528,8 +528,16 @@ pub fn init_logger(
     // Add the provided log level to the env variable log level
     env_log_spec.push_str(format!(",{}", provided_env_log_spec).as_str());
 
-    // Set filter
-    let filter_layer = EnvFilter::try_new(env_log_spec).unwrap();
+    // Set filter. A malformed `EDAMAME_LOG_LEVEL` (operator-supplied) must NOT
+    // abort daemon startup, so fall back to the always-valid default directive
+    // on a parse error instead of unwrapping.
+    let filter_layer = EnvFilter::try_new(&env_log_spec).unwrap_or_else(|e| {
+        eprintln!(
+            "EDAMAME_LOG_LEVEL filter '{}' is invalid ({}); falling back to '{}'",
+            env_log_spec, e, default_log_spec
+        );
+        EnvFilter::new(default_log_spec)
+    });
 
     // Check if we are installed in /usr or /opt
     let exe_path = current_exe().unwrap_or_else(|_| PathBuf::from(""));

@@ -200,6 +200,27 @@ mod tests {
         // Setup code here if needed
     }
 
+    /// Regression guard (helper/app/posture startup): EVERY platform's embedded
+    /// threat-model snapshot MUST decode and parse, mirroring the `THREATS`
+    /// CloudModel init closure. The `THREATS` lazy_static only validates the
+    /// CURRENT build target's snapshot at runtime, so a bad regen of any OTHER
+    /// platform's `threat_metrics_*` snapshot would ship undetected and crash
+    /// that platform's daemon on its first deref of `THREATS`. This validates
+    /// all five. See also whitelists/blacklists/sensitive_paths/cve_params.
+    #[test]
+    fn test_all_platform_embedded_threat_snapshots_parse() {
+        for platform in ["macos", "windows", "ios", "android", "linux"] {
+            let builtin = get_builtin_version(platform)
+                .unwrap_or_else(|e| panic!("no embedded threat model for {platform}: {e}"));
+            let json: ThreatMetricsJSON = serde_json::from_str(builtin).unwrap_or_else(|e| {
+                panic!("embedded threat snapshot for {platform} failed to parse: {e}")
+            });
+            ThreatMetrics::new_from_json(&json, platform).unwrap_or_else(|e| {
+                panic!("ThreatMetrics::new_from_json failed for {platform}: {e}")
+            });
+        }
+    }
+
     #[tokio::test]
     #[serial]
     async fn test_builtin_version() {
