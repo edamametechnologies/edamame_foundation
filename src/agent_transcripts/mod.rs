@@ -141,6 +141,52 @@ pub struct CollectResult {
     pub diagnostics: CollectDiagnostics,
 }
 
+/// Deterministic per-session "run economics": exact token usage, cache
+/// breakdown, tool-call counts, wall-clock duration, and an estimated dollar
+/// cost, parsed from the transcript a session was already loaded from.
+///
+/// This is developer-centric observability EDAMAME already has the raw data
+/// for -- the transcript observer reads the agent's `.jsonl` (Claude Code,
+/// Codex) which carries `message.usage` / `total_token_usage` per turn -- but
+/// historically discarded, keeping only the divergence-relevant fields. We
+/// surface it here without feeding it to the LLM behavioral-model path (it is
+/// computed locally in core from `CollectedRawSession.raw_text`, never added
+/// to the `RawReasoningSession` payload).
+///
+/// `est_cost_usd` is an ESTIMATE derived from an embedded per-model price
+/// table (`parsing::model_price`). The token counts themselves are EXACT when
+/// the transcript carries usage metadata. Plain `.txt` transcripts (Cursor's
+/// text export) carry no usage, so `has_token_data` is false and the
+/// token/cost fields stay zero -- the UI shows "token data not available"
+/// rather than a misleading $0.00.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct SessionEconomics {
+    pub session_key: String,
+    pub source_path: String,
+    /// Most recent non-empty model identifier seen in the transcript.
+    pub model: String,
+    /// Number of assistant turns that carried usage metadata.
+    pub assistant_turns: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_creation_input_tokens: u64,
+    pub cache_read_input_tokens: u64,
+    /// input + output + cache_creation + cache_read.
+    pub total_tokens: u64,
+    /// Number of tool invocations (`tool_use` / `function_call` blocks).
+    pub tool_calls: u64,
+    /// Number of tool results flagged as errors (`is_error` / error output).
+    pub tool_errors: u64,
+    /// Estimated cost in USD from the embedded per-model price table.
+    pub est_cost_usd: f64,
+    pub first_event_at: Option<DateTime<Utc>>,
+    pub last_event_at: Option<DateTime<Utc>>,
+    /// last_event_at - first_event_at, in seconds (0 when timestamps absent).
+    pub duration_secs: u64,
+    /// True when the transcript carried real `usage` token metadata.
+    pub has_token_data: bool,
+}
+
 /// Dispatch to the per-agent adapter.
 ///
 /// `agent_type` MUST be one of `cursor`, `claude_code`, `claude_desktop`,

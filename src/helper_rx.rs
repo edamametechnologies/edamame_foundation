@@ -750,6 +750,7 @@ pub async fn rpc_run(
             "uninstall_agent_plugin" => utility_uninstall_agent_plugin(arg1, arg2).await,
             "test_agent_plugin" => utility_test_agent_plugin(arg1, arg2).await,
             "collect_agent_transcripts" => utility_collect_agent_transcripts(arg1, arg2).await,
+            "collect_agent_visibility" => utility_collect_agent_visibility(arg1, arg2).await,
             _ => order_error(
                 &format!("unknown or unimplemented utilityorder {}", subordertype),
                 false,

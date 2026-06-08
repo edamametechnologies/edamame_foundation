@@ -808,6 +808,48 @@ pub async fn utility_collect_agent_transcripts(
     crate::agent_transcripts::collect_to_json(agent_type, &home_path, &options)
 }
 
+/// Build the structural agent-visibility bundle (MCP inventory + risk findings,
+/// agent SBOMs, capability-graph edges) for the host. Like
+/// `utility_collect_agent_transcripts`, this crosses the macOS sandbox boundary
+/// on behalf of the (sandboxed) app so MCP config files under the user's actual
+/// home directory are readable.
+///
+/// `arg1` is a reserved domain selector (`"all"` for MVP -- the full bundle is
+/// always built in one discovery pass since it is cheap). `arg2` is a JSON
+/// object carrying the user home: `{"home": "/Users/foo"}` (empty -> resolve
+/// `real_home_dir()`).
+pub async fn utility_collect_agent_visibility(
+    _domain: &str,
+    args_json: &str,
+) -> Result<String> {
+    #[derive(serde::Deserialize)]
+    struct Args {
+        #[serde(default)]
+        home: String,
+    }
+
+    let args: Args = if args_json.trim().is_empty() {
+        Args {
+            home: String::new(),
+        }
+    } else {
+        serde_json::from_str(args_json)
+            .map_err(|e| anyhow::anyhow!("Failed to parse collect_agent_visibility args: {}", e))?
+    };
+
+    let home_path = if args.home.is_empty() {
+        crate::agent_plugin::real_home_dir().ok_or_else(|| {
+            anyhow::anyhow!("Unable to resolve real_home_dir for agent visibility")
+        })?
+    } else {
+        std::path::PathBuf::from(args.home)
+    };
+
+    let bundle = crate::agent_visibility::build_visibility_bundle(&home_path);
+    serde_json::to_string(&bundle)
+        .map_err(|e| anyhow::anyhow!("Failed to serialize visibility bundle: {}", e))
+}
+
 #[cfg(all(
     any(target_os = "macos", target_os = "linux", target_os = "windows"),
     feature = "fim"

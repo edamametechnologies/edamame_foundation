@@ -20,6 +20,7 @@ pub const UTILITY_ORDER_NAMES: &[&str] = &[
     "broadcast_ping",
     "clear_file_events",
     "collect_agent_transcripts",
+    "collect_agent_visibility",
     "compare_custom_whitelists",
     "create_custom_whitelists",
     "get_agent_plugin_status",

@@ -4,7 +4,7 @@ use serde_json::Value;
 use std::path::Path;
 use std::time::Duration;
 use tokio::time::timeout;
-use tracing::{debug, error, warn};
+use tracing::{debug, warn};
 
 /// Check if a binary exists in PATH or as absolute path
 fn binary_exists(binary_name: &str) -> bool {
@@ -98,13 +98,13 @@ async fn discover_tailscale(username: &str) -> Vec<(String, String)> {
                         }
                     }
                     Err(e) => {
-                        error!("Failed to parse Tailscale status JSON: {}", e);
+                        warn!("Failed to parse Tailscale status JSON: {}", e);
                         debug!("Tailscale stdout: {}", ts);
                     }
                 }
             }
             Err(e) => {
-                error!(
+                warn!(
                     "Tailscale binary exists but failed to execute: {} - {}",
                     tailscale_cmd, e
                 );
@@ -157,8 +157,7 @@ async fn discover_zerotier() -> Vec<(String, String)> {
                 }
             }
             Err(e) => {
-                error!("ZeroTier command execution failed: {} - {}", cmd_string, e);
-                println!("ZeroTier command execution failed: {} - {}", cmd_string, e);
+                warn!("ZeroTier command execution failed: {} - {}", cmd_string, e);
             }
         }
     } else {
@@ -192,7 +191,7 @@ async fn discover_netbird() -> Vec<(String, String)> {
         match run_cli(&cmd_string, "", false, Some(20)).await {
             Ok(stdout) => {
                 if stdout.is_empty() {
-                    error!(
+                    warn!(
                         "NetBird command execution returned empty string: {}",
                         cmd_string
                     );
@@ -215,13 +214,13 @@ async fn discover_netbird() -> Vec<(String, String)> {
                             );
                         }
                         Err(e) => {
-                            error!("Failed to parse NetBird status JSON: {}", e);
+                            warn!("Failed to parse NetBird status JSON: {}", e);
                         }
                     }
                 }
             }
             Err(e) => {
-                error!("NetBird command execution failed: {} - {}", cmd_string, e);
+                warn!("NetBird command execution failed: {} - {}", cmd_string, e);
             }
         }
     } else {
@@ -285,13 +284,13 @@ async fn discover_netskope() -> Vec<(String, String)> {
                         }
                     }
                     Err(e) => {
-                        error!("Failed to parse Netskope config JSON: {}", e);
+                        warn!("Failed to parse Netskope config JSON: {}", e);
                         debug!("Netskope raw content: {}", config_content);
                     }
                 }
             }
             Err(e) => {
-                error!(
+                warn!(
                     "Netskope config file exists but failed to read: {} - {}",
                     nsconfig_path, e
                 );

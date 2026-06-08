@@ -4,7 +4,7 @@ use std::{env, path::PathBuf};
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use tokio::time::{timeout, Duration, Instant};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 #[cfg(target_os = "windows")]
 use std::ffi::{c_void, OsStr, OsString};
@@ -12,8 +12,6 @@ use std::ffi::{c_void, OsStr, OsString};
 use std::io::Write;
 #[cfg(target_os = "windows")]
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
-#[cfg(target_os = "windows")]
-use tracing::warn;
 #[cfg(target_os = "windows")]
 use windows::{
     core::{PCWSTR, PWSTR},
@@ -252,7 +250,7 @@ async fn run_command_with_timeout(
                 ));
             }
             Err(_) => {
-                error!(
+                warn!(
                     "Execution of command {:?} timed out after {} seconds, killing process tree",
                     cmd_for_log, secs
                 );
@@ -271,7 +269,7 @@ async fn run_command_with_timeout(
 
     let Some(stdout_bytes) = join_pipe_with_deadline(&mut stdout_task, deadline).await else {
         if let Some(secs) = timeout_opt {
-            error!(
+            warn!(
                 "Execution of command {:?} timed out after {} seconds while draining stdout, killing process tree",
                 cmd_for_log, secs
             );
@@ -288,7 +286,7 @@ async fn run_command_with_timeout(
     };
     let Some(stderr_bytes) = join_pipe_with_deadline(&mut stderr_task, deadline).await else {
         if let Some(secs) = timeout_opt {
-            error!(
+            warn!(
                 "Execution of command {:?} timed out after {} seconds while draining stderr, killing process tree",
                 cmd_for_log, secs
             );

@@ -724,3 +724,463 @@ pub fn classify_open_files_excluding_sensitive(paths: &[String], home: &str) -> 
         .cloned()
         .collect()
 }
+
+// ---------------------------------------------------------------------------
+// Run economics: deterministic token / cost / latency / tool-call extraction.
+//
+// Parses the per-session "what did this run cost" figures from the transcript
+// the session was loaded from. Pure function -- no filesystem or network
+// access; it consumes the `raw_text` the adapter already read. The output
+// rides a dedicated economics RPC, NOT the LLM behavioral-model path, so it
+// adds zero tokens to the divergence prompt.
+//
+// Handles two on-disk shapes:
+//   * Anthropic / Claude Code `.jsonl` -- per-turn `message.usage`
+//     {input_tokens, output_tokens, cache_creation_input_tokens,
+//      cache_read_input_tokens}; summed across assistant turns.
+//   * OpenAI / Codex `.jsonl` -- cumulative `total_token_usage`
+//     (under `payload.info` / `info`); the largest snapshot is the session
+//     total. Key spellings (prompt_tokens / completion_tokens /
+//     cached_input_tokens) are aliased.
+//
+// Plain `.txt` transcripts carry no usage -> `has_token_data == false`.
+// ---------------------------------------------------------------------------
+
+/// Per-model price in USD per 1,000,000 tokens. Cost is an ESTIMATE: token
+/// counts are exact, the dollar conversion is approximate and drifts as
+/// providers change pricing. A future increment can move this to a
+/// CloudModel-refreshable table; an embedded table is sufficient for an
+/// at-a-glance "what did this run cost" figure.
+#[derive(Debug, Clone, Copy)]
+struct ModelPrice {
+    input: f64,
+    output: f64,
+    cache_write: f64,
+    cache_read: f64,
+}
+
+/// Resolve approximate pricing for a model identifier by lowercased substring.
+/// Falls back to a Sonnet-class rate for unknown models so the estimate is
+/// never wildly off for a mainstream coding model.
+fn model_price(model: &str) -> ModelPrice {
+    let m = model.to_ascii_lowercase();
+    // Anthropic.
+    if m.contains("opus") {
+        return ModelPrice {
+            input: 15.0,
+            output: 75.0,
+            cache_write: 18.75,
+            cache_read: 1.5,
+        };
+    }
+    if m.contains("haiku") {
+        return ModelPrice {
+            input: 0.80,
+            output: 4.0,
+            cache_write: 1.0,
+            cache_read: 0.08,
+        };
+    }
+    if m.contains("sonnet") {
+        return ModelPrice {
+            input: 3.0,
+            output: 15.0,
+            cache_write: 3.75,
+            cache_read: 0.30,
+        };
+    }
+    // OpenAI / Codex.
+    if m.contains("gpt-5") || m.contains("gpt5") || m.contains("codex") {
+        return ModelPrice {
+            input: 1.25,
+            output: 10.0,
+            cache_write: 0.0,
+            cache_read: 0.125,
+        };
+    }
+    if m.contains("gpt-4o") || m.contains("gpt4o") {
+        return ModelPrice {
+            input: 2.5,
+            output: 10.0,
+            cache_write: 0.0,
+            cache_read: 1.25,
+        };
+    }
+    if m.contains("gpt-4.1") || m.contains("gpt-4-1") {
+        return ModelPrice {
+            input: 2.0,
+            output: 8.0,
+            cache_write: 0.0,
+            cache_read: 0.5,
+        };
+    }
+    if m.contains("o3") || m.contains("o4-mini") || m.contains("o4 ") {
+        return ModelPrice {
+            input: 2.0,
+            output: 8.0,
+            cache_write: 0.0,
+            cache_read: 0.5,
+        };
+    }
+    // Google Gemini.
+    if m.contains("gemini") {
+        return ModelPrice {
+            input: 1.25,
+            output: 5.0,
+            cache_write: 0.0,
+            cache_read: 0.31,
+        };
+    }
+    // Fallback: Sonnet-class.
+    ModelPrice {
+        input: 3.0,
+        output: 15.0,
+        cache_write: 3.75,
+        cache_read: 0.30,
+    }
+}
+
+fn as_u64_any(v: &serde_json::Value) -> u64 {
+    match v {
+        serde_json::Value::Number(n) => n
+            .as_u64()
+            .or_else(|| n.as_f64().map(|f| f.max(0.0) as u64))
+            .unwrap_or(0),
+        serde_json::Value::String(s) => s.trim().parse::<u64>().unwrap_or(0),
+        _ => 0,
+    }
+}
+
+/// First non-zero value among the given key aliases of a usage object.
+fn usage_field(usage: &serde_json::Value, keys: &[&str]) -> u64 {
+    for key in keys {
+        if let Some(v) = usage.get(key) {
+            let n = as_u64_any(v);
+            if n > 0 {
+                return n;
+            }
+        }
+    }
+    0
+}
+
+/// (input, output, cache_creation, cache_read, total) from a usage object,
+/// tolerating Anthropic and OpenAI key spellings.
+fn read_usage(usage: &serde_json::Value) -> (u64, u64, u64, u64, u64) {
+    let input = usage_field(usage, &["input_tokens", "prompt_tokens"]);
+    let output = usage_field(usage, &["output_tokens", "completion_tokens"]);
+    let cache_creation = usage_field(
+        usage,
+        &[
+            "cache_creation_input_tokens",
+            "cache_creation_tokens",
+            "cache_write_tokens",
+        ],
+    );
+    let cache_read = usage_field(
+        usage,
+        &[
+            "cache_read_input_tokens",
+            "cached_input_tokens",
+            "cache_read_tokens",
+        ],
+    );
+    let total = usage_field(usage, &["total_tokens"]);
+    (input, output, cache_creation, cache_read, total)
+}
+
+fn epoch_to_dt(n: i64) -> Option<chrono::DateTime<chrono::Utc>> {
+    use chrono::TimeZone;
+    // Values above ~1e12 are milliseconds since epoch; below are seconds.
+    let (secs, nsecs) = if n > 1_000_000_000_000 {
+        (n / 1000, ((n % 1000) * 1_000_000) as u32)
+    } else {
+        (n, 0)
+    };
+    chrono::Utc.timestamp_opt(secs, nsecs).single()
+}
+
+fn parse_ts(v: &serde_json::Value) -> Option<chrono::DateTime<chrono::Utc>> {
+    match v {
+        serde_json::Value::String(s) => {
+            let s = s.trim();
+            if s.is_empty() {
+                return None;
+            }
+            if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+                return Some(dt.with_timezone(&chrono::Utc));
+            }
+            s.parse::<i64>().ok().and_then(epoch_to_dt)
+        }
+        serde_json::Value::Number(n) => n.as_i64().and_then(epoch_to_dt),
+        _ => None,
+    }
+}
+
+/// Parse deterministic run economics from a single session's transcript text.
+/// See module-level economics comment for the supported on-disk shapes.
+pub fn parse_session_economics(
+    session_key: &str,
+    source_path: &str,
+    raw_text: &str,
+) -> super::SessionEconomics {
+    use chrono::{DateTime, Utc};
+
+    // Per-turn accumulators (Anthropic / Claude Code).
+    let mut summed_input = 0u64;
+    let mut summed_output = 0u64;
+    let mut summed_cache_creation = 0u64;
+    let mut summed_cache_read = 0u64;
+
+    // Cumulative snapshot (Codex `total_token_usage`): keep the object with the
+    // largest total seen -- that is the session-final cumulative count.
+    let mut cum_seen = false;
+    let mut cum_total = 0u64;
+    let mut cum_input = 0u64;
+    let mut cum_output = 0u64;
+    let mut cum_cache_creation = 0u64;
+    let mut cum_cache_read = 0u64;
+
+    let mut assistant_turns = 0u64;
+    let mut tool_calls = 0u64;
+    let mut tool_errors = 0u64;
+    let mut model = String::new();
+    let mut first_ts: Option<DateTime<Utc>> = None;
+    let mut last_ts: Option<DateTime<Utc>> = None;
+    let mut had_usage = false;
+
+    for line in raw_text.split('\n') {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let value: serde_json::Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        // Model (most recent non-empty wins).
+        for candidate in [
+            value
+                .get("message")
+                .and_then(|m| m.get("model"))
+                .and_then(|v| v.as_str()),
+            value.get("model").and_then(|v| v.as_str()),
+            value
+                .get("payload")
+                .and_then(|p| p.get("model"))
+                .and_then(|v| v.as_str()),
+            value
+                .get("response")
+                .and_then(|r| r.get("model"))
+                .and_then(|v| v.as_str()),
+        ] {
+            if let Some(s) = candidate {
+                if !s.trim().is_empty() {
+                    model = s.trim().to_string();
+                }
+            }
+        }
+
+        // Timestamps (min/max for wall-clock duration).
+        for candidate in [
+            value.get("timestamp"),
+            value.get("payload").and_then(|p| p.get("timestamp")),
+            value.get("ts"),
+        ] {
+            if let Some(v) = candidate {
+                if let Some(dt) = parse_ts(v) {
+                    if first_ts.map(|f| dt < f).unwrap_or(true) {
+                        first_ts = Some(dt);
+                    }
+                    if last_ts.map(|l| dt > l).unwrap_or(true) {
+                        last_ts = Some(dt);
+                    }
+                }
+            }
+        }
+
+        // Per-turn usage (Anthropic message.usage / OpenAI usage).
+        let per_turn_usage = value
+            .get("message")
+            .and_then(|m| m.get("usage"))
+            .or_else(|| value.get("usage"))
+            .or_else(|| value.get("response").and_then(|r| r.get("usage")))
+            .or_else(|| value.get("payload").and_then(|p| p.get("usage")));
+        if let Some(usage) = per_turn_usage {
+            if usage.is_object() {
+                let (i, o, cc, cr, _t) = read_usage(usage);
+                if i > 0 || o > 0 || cc > 0 || cr > 0 {
+                    summed_input += i;
+                    summed_output += o;
+                    summed_cache_creation += cc;
+                    summed_cache_read += cr;
+                    had_usage = true;
+                }
+            }
+        }
+
+        // Cumulative usage (Codex token_count event `total_token_usage`).
+        let cumulative_usage = value
+            .get("payload")
+            .and_then(|p| p.get("info"))
+            .and_then(|i| i.get("total_token_usage"))
+            .or_else(|| {
+                value
+                    .get("info")
+                    .and_then(|i| i.get("total_token_usage"))
+            })
+            .or_else(|| value.get("total_token_usage"));
+        if let Some(usage) = cumulative_usage {
+            if usage.is_object() {
+                let (i, o, cc, cr, t) = read_usage(usage);
+                let total = if t > 0 { t } else { i + o + cc + cr };
+                if total >= cum_total {
+                    cum_seen = true;
+                    cum_total = total;
+                    cum_input = i;
+                    cum_output = o;
+                    cum_cache_creation = cc;
+                    cum_cache_read = cr;
+                }
+                if total > 0 {
+                    had_usage = true;
+                }
+            }
+        }
+
+        // Assistant turns + tool-call / tool-error counts from the content array.
+        let role = value
+            .get("message")
+            .and_then(|m| m.get("role"))
+            .and_then(|v| v.as_str())
+            .or_else(|| value.get("role").and_then(|v| v.as_str()))
+            .unwrap_or("");
+        if role == "assistant" {
+            assistant_turns += 1;
+        }
+        let content = value
+            .get("message")
+            .and_then(|m| m.get("content"))
+            .and_then(|c| c.as_array())
+            .or_else(|| value.get("content").and_then(|c| c.as_array()));
+        if let Some(items) = content {
+            for item in items {
+                let kind = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                match kind {
+                    "tool_use" | "function_call" => tool_calls += 1,
+                    "tool_result" | "function_call_output" => {
+                        let is_err = item
+                            .get("is_error")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false)
+                            || item.get("error").map(|e| !e.is_null()).unwrap_or(false);
+                        if is_err {
+                            tool_errors += 1;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    // Prefer the cumulative snapshot when present (Codex), else the per-turn
+    // sum (Claude).
+    let (input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens) =
+        if cum_seen && cum_total > 0 {
+            (cum_input, cum_output, cum_cache_creation, cum_cache_read)
+        } else {
+            (
+                summed_input,
+                summed_output,
+                summed_cache_creation,
+                summed_cache_read,
+            )
+        };
+
+    let total_tokens =
+        input_tokens + output_tokens + cache_creation_input_tokens + cache_read_input_tokens;
+
+    let price = model_price(&model);
+    let est_cost_usd = (input_tokens as f64) / 1_000_000.0 * price.input
+        + (output_tokens as f64) / 1_000_000.0 * price.output
+        + (cache_creation_input_tokens as f64) / 1_000_000.0 * price.cache_write
+        + (cache_read_input_tokens as f64) / 1_000_000.0 * price.cache_read;
+
+    let duration_secs = match (first_ts, last_ts) {
+        (Some(f), Some(l)) if l > f => (l - f).num_seconds().max(0) as u64,
+        _ => 0,
+    };
+
+    super::SessionEconomics {
+        session_key: session_key.to_string(),
+        source_path: source_path.to_string(),
+        model,
+        assistant_turns,
+        input_tokens,
+        output_tokens,
+        cache_creation_input_tokens,
+        cache_read_input_tokens,
+        total_tokens,
+        tool_calls,
+        tool_errors,
+        est_cost_usd,
+        first_event_at: first_ts,
+        last_event_at: last_ts,
+        duration_secs,
+        has_token_data: had_usage,
+    }
+}
+
+#[cfg(test)]
+mod economics_tests {
+    use super::*;
+
+    #[test]
+    fn parses_claude_per_turn_usage_and_tools() {
+        let jsonl = concat!(
+            r#"{"type":"user","timestamp":"2026-05-06T18:15:00.000Z","message":{"role":"user","content":[{"type":"text","text":"hi"}]}}"#, "\n",
+            r#"{"type":"assistant","timestamp":"2026-05-06T18:15:10.000Z","message":{"role":"assistant","model":"claude-sonnet-4-6","content":[{"type":"text","text":"ok"},{"type":"tool_use","name":"Read"}],"usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":10,"cache_read_input_tokens":200}}}"#, "\n",
+            r#"{"type":"user","timestamp":"2026-05-06T18:15:20.000Z","message":{"role":"user","content":[{"type":"tool_result","is_error":true,"content":"boom"}]}}"#, "\n",
+            r#"{"type":"assistant","timestamp":"2026-05-06T18:16:00.000Z","message":{"role":"assistant","model":"claude-sonnet-4-6","content":[{"type":"text","text":"done"}],"usage":{"input_tokens":300,"output_tokens":80,"cache_creation_input_tokens":0,"cache_read_input_tokens":210}}}"#, "\n",
+        );
+        let econ = parse_session_economics("sess-1", "/tmp/sess-1.jsonl", jsonl);
+        assert!(econ.has_token_data);
+        assert_eq!(econ.model, "claude-sonnet-4-6");
+        assert_eq!(econ.input_tokens, 400);
+        assert_eq!(econ.output_tokens, 130);
+        assert_eq!(econ.cache_creation_input_tokens, 10);
+        assert_eq!(econ.cache_read_input_tokens, 410);
+        assert_eq!(econ.total_tokens, 950);
+        assert_eq!(econ.assistant_turns, 2);
+        assert_eq!(econ.tool_calls, 1);
+        assert_eq!(econ.tool_errors, 1);
+        assert_eq!(econ.duration_secs, 60);
+        assert!(econ.est_cost_usd > 0.0);
+    }
+
+    #[test]
+    fn cumulative_codex_total_token_usage_wins() {
+        let jsonl = concat!(
+            r#"{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"output_tokens":20,"total_tokens":120}}}}"#, "\n",
+            r#"{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":500,"output_tokens":90,"total_tokens":590}}}}"#, "\n",
+        );
+        let econ = parse_session_economics("c1", "/tmp/c1.jsonl", jsonl);
+        assert!(econ.has_token_data);
+        // Cumulative -> the larger snapshot wins (not summed to 710).
+        assert_eq!(econ.input_tokens, 500);
+        assert_eq!(econ.output_tokens, 90);
+        assert_eq!(econ.total_tokens, 590);
+    }
+
+    #[test]
+    fn txt_transcript_has_no_token_data() {
+        let txt = "user:\nhello\n\nassistant:\nhi there\n";
+        let econ = parse_session_economics("t1", "/tmp/t1.txt", txt);
+        assert!(!econ.has_token_data);
+        assert_eq!(econ.total_tokens, 0);
+        assert_eq!(econ.est_cost_usd, 0.0);
+        assert_eq!(econ.duration_secs, 0);
+    }
+}

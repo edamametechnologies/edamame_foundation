@@ -634,6 +634,24 @@ pub struct CveDetectionParamsJSON {
     /// writing elsewhere alertable. See FP-WIN-3 / FP-WIN-8.
     #[serde(default = "default_trusted_self_extracting_installers")]
     pub trusted_self_extracting_installers: PlatformStringLists,
+    /// Per-platform process basenames of trusted OS *content indexer*
+    /// services (Windows Search `searchindexer.exe`/`searchprotocolhost.exe`,
+    /// macOS Spotlight `mds`/`mds_stores`/`mdworker*`, Linux GNOME Tracker
+    /// `tracker-*` and KDE `baloo_file*`). These daemons crawl and update
+    /// index metadata over user files as a routine OS task, so a
+    /// `file_system_tampering` write by one of them to a sensitive but
+    /// NON-credential file (e.g. a Chromium profile's `Network` cookie-state
+    /// file) is index maintenance, not exfiltration -- the indexer never
+    /// egresses the bytes.
+    ///
+    /// A basename match alone NEVER suppresses a finding -- the
+    /// `file_system_tampering` detector additionally requires the writer to
+    /// run from a system binary path AND the target to NOT be a platform
+    /// credential store. A same-named impostor in `%TEMP%` or an indexer
+    /// touching the OS keychain / Credential Manager / keyring stays
+    /// alertable. See FP-WIN-23.
+    #[serde(default = "default_os_content_indexer_processes")]
+    pub os_content_indexer_processes: PlatformStringLists,
     #[serde(default = "default_fim_hash_size_threshold")]
     pub fim_hash_size_threshold: u64,
     pub fim_temp_executable_patterns: Vec<String>,
@@ -1776,6 +1794,53 @@ fn default_trusted_self_extracting_installers() -> PlatformStringLists {
     )
 }
 
+/// Default trusted OS content-indexer process basenames. See
+/// [`CveDetectionParamsJSON::os_content_indexer_processes`] for the full
+/// contract: basename membership is a NECESSARY but not SUFFICIENT
+/// condition for `file_system_tampering` demotion -- the detector also
+/// requires the writer to run from a system binary path AND the sensitive
+/// target to NOT be a platform credential store. A same-named impostor in
+/// `%TEMP%` or an indexer touching a credential store stays alertable.
+///
+/// - Windows Search: `searchindexer.exe` (the service host) plus its
+///   `searchprotocolhost.exe` / `searchfilterhost.exe` crawler workers,
+///   which touch indexed user files (incl. browser profile state) from
+///   `C:\Windows\System32\` (FP-WIN-23).
+/// - macOS Spotlight: `mds`/`mds_stores`/`mdworker`/`mdworker_shared`/
+///   `mdbulkimport` run from the CoreServices Metadata framework support
+///   dir under `/System/Library/`.
+/// - Linux: GNOME Tracker (`tracker-miner-fs[-3]`, `tracker-extract[-3]`)
+///   and KDE Baloo (`baloo_file`, `baloo_file_extractor`) run from
+///   `/usr/bin/` / `/usr/libexec/`.
+fn default_os_content_indexer_processes() -> PlatformStringLists {
+    platform_string_lists(
+        // macOS Spotlight
+        &[
+            "mds",
+            "mds_stores",
+            "mdworker",
+            "mdworker_shared",
+            "mdbulkimport",
+            "mdsync",
+        ],
+        // Linux: GNOME Tracker + KDE Baloo
+        &[
+            "tracker-miner-fs",
+            "tracker-miner-fs-3",
+            "tracker-extract",
+            "tracker-extract-3",
+            "baloo_file",
+            "baloo_file_extractor",
+        ],
+        // Windows Search
+        &[
+            "searchindexer.exe",
+            "searchprotocolhost.exe",
+            "searchfilterhost.exe",
+        ],
+    )
+}
+
 /// Path substrings that identify per-OS package-manager working
 /// directories where toolchains legitimately stage downloaded
 /// dependency archives. The `file_system_tampering` detector would
@@ -2211,6 +2276,7 @@ pub struct CveDetectionParams {
     pub runtime_perfdata_paths: PlatformRuntimePerfdataPathsJSON,
     pub known_system_daemon_credential_maintenance_hints: PlatformStringLists,
     pub trusted_self_extracting_installers: PlatformStringLists,
+    pub os_content_indexer_processes: PlatformStringLists,
     pub fim_hash_size_threshold: u64,
     pub fim_temp_executable_patterns: Vec<String>,
     pub evidence_weights: EvidenceWeightsJSON,
@@ -2796,6 +2862,26 @@ impl CveDetectionParams {
                     .map(|name| name.to_ascii_lowercase())
                     .collect(),
             },
+            os_content_indexer_processes: PlatformStringLists {
+                macos: json
+                    .os_content_indexer_processes
+                    .macos
+                    .iter()
+                    .map(|name| name.to_ascii_lowercase())
+                    .collect(),
+                linux: json
+                    .os_content_indexer_processes
+                    .linux
+                    .iter()
+                    .map(|name| name.to_ascii_lowercase())
+                    .collect(),
+                windows: json
+                    .os_content_indexer_processes
+                    .windows
+                    .iter()
+                    .map(|name| name.to_ascii_lowercase())
+                    .collect(),
+            },
             fim_hash_size_threshold: json.fim_hash_size_threshold,
             fim_temp_executable_patterns: json.fim_temp_executable_patterns.clone(),
             evidence_weights: json.evidence_weights.clone(),
@@ -2947,6 +3033,36 @@ pub fn is_trusted_self_extracting_installer(name: &str) -> bool {
         .to_ascii_lowercase();
     let params = PARAMS_SNAPSHOT.load();
     let lists = &params.trusted_self_extracting_installers;
+    lists
+        .macos
+        .iter()
+        .chain(lists.linux.iter())
+        .chain(lists.windows.iter())
+        .any(|entry| !entry.is_empty() && entry == &basename)
+}
+
+/// Returns true if `name` is in the per-platform
+/// `os_content_indexer_processes` list. Match is case-insensitive on the
+/// basename (stripping any directory prefix).
+///
+/// This is a NECESSARY but not SUFFICIENT condition for
+/// `file_system_tampering` demotion. The detector additionally requires
+/// the writer to run from a system binary path AND the sensitive target
+/// to NOT be a platform credential store, so a same-named impostor in
+/// `%TEMP%` or an indexer touching the OS keychain stays alertable.
+/// See FP-WIN-23.
+pub fn is_os_content_indexer_process(name: &str) -> bool {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let basename = trimmed
+        .rsplit(|c| c == '/' || c == '\\')
+        .next()
+        .unwrap_or(trimmed)
+        .to_ascii_lowercase();
+    let params = PARAMS_SNAPSHOT.load();
+    let lists = &params.os_content_indexer_processes;
     lists
         .macos
         .iter()
