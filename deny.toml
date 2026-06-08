@@ -62,6 +62,7 @@ ignore = [
     { id = "RUSTSEC-2020-0036", reason = "unmaintained: failure crate is deprecated. TODO: migrate remaining users to thiserror/anyhow." },
     { id = "RUSTSEC-2023-0040", reason = "unmaintained: idna <=0.5.0 punycode handling. TODO: bump url/idna once transitive deps allow." },
     { id = "RUSTSEC-2024-0370", reason = "unmaintained: proc-macro-error 1.x. TODO: migrate macro deps to proc-macro-error2 / proc-macro2-diagnostics." },
+    { id = "RUSTSEC-2026-0173", reason = "unmaintained: proc-macro-error2 2.x (the maintained fork of proc-macro-error is now also unmaintained per author). Build-time-only proc-macro helper, transitive via the rusqlite/libsqlite3-sys stack pulled into flodbadd. No runtime exposure. TODO: migrate macro deps to proc-macro2-diagnostics." },
     { id = "RUSTSEC-2024-0412", reason = "unmaintained: gtk-rs GTK3 binding. TODO: migrate Linux UI to GTK4 family or libadwaita." },
     { id = "RUSTSEC-2024-0413", reason = "unmaintained: gtk-rs GTK3 binding. See RUSTSEC-2024-0412." },
     { id = "RUSTSEC-2024-0415", reason = "unmaintained: gtk-rs GTK3 binding. See RUSTSEC-2024-0412." },
