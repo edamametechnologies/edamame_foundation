@@ -203,7 +203,10 @@ fn build_rationale(
         .map(|c| format!("{} ({:.0})", c.domain, c.deduction))
         .collect();
     if drivers.is_empty() {
-        format!("Aligned: no alertable drift across domains (score {:.0}/100).", score)
+        format!(
+            "Aligned: no alertable drift across domains (score {:.0}/100).",
+            score
+        )
     } else {
         format!(
             "{} alignment {:.0}/100; top drivers: {}.",

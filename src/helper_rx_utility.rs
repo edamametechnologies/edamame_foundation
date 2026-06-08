@@ -818,10 +818,7 @@ pub async fn utility_collect_agent_transcripts(
 /// always built in one discovery pass since it is cheap). `arg2` is a JSON
 /// object carrying the user home: `{"home": "/Users/foo"}` (empty -> resolve
 /// `real_home_dir()`).
-pub async fn utility_collect_agent_visibility(
-    _domain: &str,
-    args_json: &str,
-) -> Result<String> {
+pub async fn utility_collect_agent_visibility(_domain: &str, args_json: &str) -> Result<String> {
     #[derive(serde::Deserialize)]
     struct Args {
         #[serde(default)]

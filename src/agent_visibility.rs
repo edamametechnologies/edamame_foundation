@@ -43,7 +43,10 @@ impl VisibilitySeverity {
     /// A finding is alertable (can trip a CI gate / score) only at HIGH or
     /// CRITICAL, mirroring `VulnerabilityReport::active_alertable_findings_count`.
     pub fn is_alertable(&self) -> bool {
-        matches!(self, VisibilitySeverity::High | VisibilitySeverity::Critical)
+        matches!(
+            self,
+            VisibilitySeverity::High | VisibilitySeverity::Critical
+        )
     }
 }
 
@@ -671,8 +674,10 @@ fn assess_host_privilege(home: &Path) -> HostPrivilege {
         }
     }
     if !sudoers_readable {
-        evidence
-            .push("sudoers not readable (run with elevated access to assess passwordless sudo)".to_string());
+        evidence.push(
+            "sudoers not readable (run with elevated access to assess passwordless sudo)"
+                .to_string(),
+        );
     }
 
     HostPrivilege {
@@ -964,7 +969,12 @@ pub fn discover_mcp_endpoints(home: &Path) -> Vec<McpEndpoint> {
                     .as_deref()
                     .map(|key| server.name == key)
                     .unwrap_or(false);
-                endpoints.push(build_endpoint(&def.agent_type, server, &path_str, is_edamame));
+                endpoints.push(build_endpoint(
+                    &def.agent_type,
+                    server,
+                    &path_str,
+                    is_edamame,
+                ));
             }
         }
     }
@@ -1307,7 +1317,11 @@ fn extract_host(url: &str) -> Option<String> {
         .unwrap_or(after_scheme);
     // Strip a trailing :port (but keep IPv6 brackets intact).
     let host = if authority.starts_with('[') {
-        authority.split(']').next().unwrap_or(authority).trim_start_matches('[')
+        authority
+            .split(']')
+            .next()
+            .unwrap_or(authority)
+            .trim_start_matches('[')
     } else {
         authority.split(':').next().unwrap_or(authority)
     };
@@ -1571,28 +1585,69 @@ fn classify_tool_privileges(server: &RawMcpServer) -> Vec<ToolPrivilegeClass> {
 
     let contains_any = |needles: &[&str]| needles.iter().any(|n| haystack.contains(n));
 
-    if contains_any(&["shell", "bash", "terminal", "exec", "command", "subprocess", "run-command"]) {
+    if contains_any(&[
+        "shell",
+        "bash",
+        "terminal",
+        "exec",
+        "command",
+        "subprocess",
+        "run-command",
+    ]) {
         add(ToolPrivilegeClass::Shell, &mut classes);
     }
-    if contains_any(&["filesystem", "file-write", "write-file", "fs-write", "edit", "editor"]) {
+    if contains_any(&[
+        "filesystem",
+        "file-write",
+        "write-file",
+        "fs-write",
+        "edit",
+        "editor",
+    ]) {
         add(ToolPrivilegeClass::FilesystemWrite, &mut classes);
     }
     if contains_any(&["read-file", "fs-read", "filesystem", "files", "fetch-file"]) {
         add(ToolPrivilegeClass::FilesystemRead, &mut classes);
     }
-    if contains_any(&["browser", "puppeteer", "playwright", "chrome", "webdriver", "selenium"]) {
+    if contains_any(&[
+        "browser",
+        "puppeteer",
+        "playwright",
+        "chrome",
+        "webdriver",
+        "selenium",
+    ]) {
         add(ToolPrivilegeClass::Browser, &mut classes);
     }
     if contains_any(&["git", "github", "gitlab", "bitbucket"]) {
         add(ToolPrivilegeClass::Git, &mut classes);
     }
-    if contains_any(&["postgres", "mysql", "sqlite", "mongo", "database", "db-", "sql", "redis"]) {
+    if contains_any(&[
+        "postgres", "mysql", "sqlite", "mongo", "database", "db-", "sql", "redis",
+    ]) {
         add(ToolPrivilegeClass::Database, &mut classes);
     }
-    if contains_any(&["secret", "vault", "credential", "keychain", "1password", "keyring", "aws-secrets"]) {
+    if contains_any(&[
+        "secret",
+        "vault",
+        "credential",
+        "keychain",
+        "1password",
+        "keyring",
+        "aws-secrets",
+    ]) {
         add(ToolPrivilegeClass::SecretAccess, &mut classes);
     }
-    if contains_any(&["fetch", "http", "web-search", "websearch", "brave", "search", "scrape", "request"]) {
+    if contains_any(&[
+        "fetch",
+        "http",
+        "web-search",
+        "websearch",
+        "brave",
+        "search",
+        "scrape",
+        "request",
+    ]) {
         add(ToolPrivilegeClass::Network, &mut classes);
     }
 
@@ -1851,7 +1906,10 @@ pub fn build_agent_sboms_from_endpoints_with_home(
                 "edamame:exposure".to_string(),
                 format!("{:?}", ep.exposure_scope),
             );
-            props.insert("edamame:auth".to_string(), format!("{:?}", ep.auth_strength));
+            props.insert(
+                "edamame:auth".to_string(),
+                format!("{:?}", ep.auth_strength),
+            );
             props.insert(
                 "edamame:privilege_classes".to_string(),
                 ep.tool_privilege_classes
@@ -2027,8 +2085,8 @@ const INSTRUCTION_EXTS: &[&str] = &["md", "mdc", "txt", "json", "toml", "yaml", 
 fn classify_toplevel_instruction(name: &str) -> Option<&'static str> {
     let lower = name.to_ascii_lowercase();
     match lower.as_str() {
-        "claude.md" | "agents.md" | "gemini.md" | "codex.md" | "rules.md"
-        | "instructions.md" | "memory.md" | ".cursorrules" => Some("instruction"),
+        "claude.md" | "agents.md" | "gemini.md" | "codex.md" | "rules.md" | "instructions.md"
+        | "memory.md" | ".cursorrules" => Some("instruction"),
         _ if lower.ends_with(".mdc") => Some("rule"),
         _ => None,
     }
@@ -2270,8 +2328,14 @@ const MODEL_FIELD_KEYS: &[&str] = &["model", "modelId", "model_id"];
 /// authoritative model field. Bounded on purpose -- never a blind whole-tree
 /// walk that could mistake an unrelated `model` key (e.g. a device model) for
 /// an LLM identifier.
-const MODEL_CONTAINER_KEYS: &[&str] =
-    &["message", "request", "response", "metadata", "usage", "assistant"];
+const MODEL_CONTAINER_KEYS: &[&str] = &[
+    "message",
+    "request",
+    "response",
+    "metadata",
+    "usage",
+    "assistant",
+];
 
 /// Extract **authoritative** LLM model identifiers from a raw JSONL transcript.
 ///
@@ -2538,8 +2602,7 @@ pub fn diff_sboms(baseline: Option<&AgentSbom>, current: &AgentSbom) -> SbomDiff
         match base_by_ref.get(cref) {
             None => diff.added.push((*comp).clone()),
             Some(base_comp) => {
-                if base_comp.version != comp.version
-                    || base_comp.content_hash != comp.content_hash
+                if base_comp.version != comp.version || base_comp.content_hash != comp.content_hash
                 {
                     diff.changed.push(cref.to_string());
                 }
@@ -3376,7 +3439,12 @@ fn tool_use_spawn(item: &serde_json::Value) -> Option<(Option<String>, String)> 
 }
 
 fn extract_marker_reason(lower: &str) -> Option<String> {
-    for key in ["subagent_type", "delegate_to", "spawn_agent", "dispatch_agent"] {
+    for key in [
+        "subagent_type",
+        "delegate_to",
+        "spawn_agent",
+        "dispatch_agent",
+    ] {
         if let Some(idx) = lower.find(key) {
             let tail = &lower[idx + key.len()..];
             let val: String = tail
@@ -3862,7 +3930,11 @@ bob ALL=(ALL) NOPASSWD: ALL
         // Stored URL is redacted -- never the raw secret (I5).
         let url = ep.url.as_deref().unwrap_or_default();
         assert!(url.contains("secret=REDACTED"), "url not redacted: {}", url);
-        assert!(!url.contains("topsecretvalue"), "raw secret leaked: {}", url);
+        assert!(
+            !url.contains("topsecretvalue"),
+            "raw secret leaked: {}",
+            url
+        );
         // A TLS remote with shared-secret auth is LOW informational.
         let findings = assess_mcp_risk(&[ep]);
         let saas = findings
@@ -3898,7 +3970,9 @@ bob ALL=(ALL) NOPASSWD: ALL
         assert_eq!(ep.auth_strength, AuthStrength::OAuth);
         // OAuth -> not flagged by the no-strong-auth rule.
         let findings = assess_mcp_risk(&[ep]);
-        assert!(!findings.iter().any(|f| f.rule_id == "mcp_public_no_strong_auth"));
+        assert!(!findings
+            .iter()
+            .any(|f| f.rule_id == "mcp_public_no_strong_auth"));
     }
 
     #[test]
@@ -3952,8 +4026,14 @@ command = "uvx"
         assert_eq!(sbom.agent_type, "cursor");
         // app + one service.
         assert_eq!(sbom.components.len(), 2);
-        assert!(sbom.components.iter().any(|c| c.component_type == "application"));
-        assert!(sbom.components.iter().any(|c| c.component_type == "service"));
+        assert!(sbom
+            .components
+            .iter()
+            .any(|c| c.component_type == "application"));
+        assert!(sbom
+            .components
+            .iter()
+            .any(|c| c.component_type == "service"));
         // CycloneDX projection is well-formed.
         let cdx = sbom_to_cyclonedx(sbom);
         assert_eq!(cdx["bomFormat"], "CycloneDX");
@@ -3986,7 +4066,9 @@ command = "uvx"
         let edges = build_capability_graph_from_endpoints(&[ep]);
         assert!(edges.iter().any(|e| e.edge_type == "declares"));
         assert!(edges.iter().any(|e| e.edge_type == "exposes"));
-        assert!(edges.iter().all(|e| e.confidence == EdgeConfidence::Declared));
+        assert!(edges
+            .iter()
+            .all(|e| e.confidence == EdgeConfidence::Declared));
     }
 
     #[test]
@@ -4036,7 +4118,9 @@ some normal line
 "#;
         let spawns = extract_spawn_markers(transcript);
         assert_eq!(spawns.len(), 2);
-        assert!(spawns.iter().any(|s| s.spawn_reason.as_deref() == Some("explore")));
+        assert!(spawns
+            .iter()
+            .any(|s| s.spawn_reason.as_deref() == Some("explore")));
     }
 
     #[test]
@@ -4054,7 +4138,10 @@ some normal line
         );
         let spawns = extract_spawn_markers(transcript);
         assert_eq!(spawns.len(), 2, "two Task spawns expected");
-        assert!(spawns.iter().any(|s| s.depth == 1), "top-level spawn is depth 1");
+        assert!(
+            spawns.iter().any(|s| s.depth == 1),
+            "top-level spawn is depth 1"
+        );
         assert!(
             spawns.iter().any(|s| s.depth == 2),
             "sidechain-nested spawn is depth 2, got {:?}",
@@ -4141,7 +4228,9 @@ some normal line
         let tool = sbom
             .components
             .iter()
-            .find(|c| c.properties.get("edamame:kind").map(|k| k.as_str()) == Some("tool_capability"))
+            .find(|c| {
+                c.properties.get("edamame:kind").map(|k| k.as_str()) == Some("tool_capability")
+            })
             .expect("tool_capability component present");
         assert_eq!(tool.name, "Shell");
         assert_eq!(tool.component_type, "data");
@@ -4149,7 +4238,9 @@ some normal line
         let secret = sbom
             .components
             .iter()
-            .find(|c| c.properties.get("edamame:kind").map(|k| k.as_str()) == Some("secret_binding"))
+            .find(|c| {
+                c.properties.get("edamame:kind").map(|k| k.as_str()) == Some("secret_binding")
+            })
             .expect("secret_binding component present");
         // I5: the key name is captured, never the value.
         assert_eq!(secret.name, "OPENAI_API_KEY");
@@ -4161,8 +4252,14 @@ some normal line
             .iter()
             .find(|d| d.bom_ref.starts_with("mcp:"))
             .expect("service dependency present");
-        assert!(svc_dep.depends_on.iter().any(|r| r.starts_with("tool:cursor:shell")));
-        assert!(svc_dep.depends_on.iter().any(|r| r.starts_with("env:cursor:OPENAI_API_KEY")));
+        assert!(svc_dep
+            .depends_on
+            .iter()
+            .any(|r| r.starts_with("tool:cursor:shell")));
+        assert!(svc_dep
+            .depends_on
+            .iter()
+            .any(|r| r.starts_with("env:cursor:OPENAI_API_KEY")));
     }
 
     #[test]
@@ -4251,7 +4348,10 @@ some normal line
             .iter()
             .find(|d| d.bom_ref == "agent:cursor")
             .unwrap();
-        assert!(app_dep.depends_on.iter().any(|r| r == "model:cursor:claude-opus-4"));
+        assert!(app_dep
+            .depends_on
+            .iter()
+            .any(|r| r == "model:cursor:claude-opus-4"));
 
         // Re-merging the same model is a no-op (dedup).
         let second = merge_models_into_sbom(&mut sbom, &["claude-opus-4".to_string()]);
@@ -4406,7 +4506,10 @@ User: please refactor this function
         let app_ref = "agent:cursor".to_string();
 
         // Merging authoritative models marks the app root as `recorded`.
-        assert!(merge_models_into_sbom(&mut sbom, &["claude-opus-4".to_string()]));
+        assert!(merge_models_into_sbom(
+            &mut sbom,
+            &["claude-opus-4".to_string()]
+        ));
         let app = sbom
             .components
             .iter()
@@ -4446,10 +4549,8 @@ User: please refactor this function
         let home_a = std::path::Path::new("/tmp/edamame-test-home-a");
         let home_b = std::path::Path::new("/tmp/edamame-test-home-b");
 
-        let sbom_a =
-            build_agent_sboms_from_endpoints_with_home(&[ep_a], Some(home_a)).remove(0);
-        let sbom_b =
-            build_agent_sboms_from_endpoints_with_home(&[ep_b], Some(home_b)).remove(0);
+        let sbom_a = build_agent_sboms_from_endpoints_with_home(&[ep_a], Some(home_a)).remove(0);
+        let sbom_b = build_agent_sboms_from_endpoints_with_home(&[ep_b], Some(home_b)).remove(0);
 
         // Same agent_type, two homes -> two DISTINCT instance ids, so the
         // Agents tab keys them separately instead of collapsing into one.
@@ -4502,8 +4603,8 @@ User: please refactor this function
         let current = build_agent_sboms_from_endpoints(&[new_ep]).remove(0);
 
         let diff = diff_sboms(Some(&baseline), &current);
-        let alarm = sbom_drift_alarm("cursor", "cursor-inst", &diff)
-            .expect("structural drift -> alarm");
+        let alarm =
+            sbom_drift_alarm("cursor", "cursor-inst", &diff).expect("structural drift -> alarm");
         assert_eq!(alarm.finding.severity, VisibilitySeverity::High);
         assert!(alarm.finding.severity.is_alertable());
         assert_eq!(alarm.finding.rule_id, "sbom_baseline_drift");
@@ -4535,8 +4636,8 @@ User: please refactor this function
         let diff = diff_sboms(Some(&baseline), &current);
         assert!(diff.added.iter().all(|c| !is_structural_component(c)));
         assert!(diff.removed.iter().any(is_structural_component));
-        let alarm = sbom_drift_alarm("cursor", "cursor-inst", &diff)
-            .expect("removal is still drift");
+        let alarm =
+            sbom_drift_alarm("cursor", "cursor-inst", &diff).expect("removal is still drift");
         assert_eq!(alarm.finding.severity, VisibilitySeverity::Medium);
         assert!(!alarm.finding.severity.is_alertable());
 
@@ -4546,8 +4647,7 @@ User: please refactor this function
         let add_remove_base = build_agent_sboms_from_endpoints(&[only_fs_base]).remove(0);
         let add_remove_cur = build_agent_sboms_from_endpoints(&[new_ep]).remove(0);
         let add_remove_diff = diff_sboms(Some(&add_remove_base), &add_remove_cur);
-        let add_remove_alarm =
-            sbom_drift_alarm("cursor", "cursor-inst", &add_remove_diff).unwrap();
+        let add_remove_alarm = sbom_drift_alarm("cursor", "cursor-inst", &add_remove_diff).unwrap();
         assert_ne!(alarm.signature, add_remove_alarm.signature);
     }
 

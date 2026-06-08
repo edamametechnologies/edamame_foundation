@@ -126,7 +126,11 @@ const MEMORY_KEYWORDS: &[(&str, &str, MemoryStoreKind)] = &[
     ("letta", "letta", MemoryStoreKind::MemoryService),
     ("zep", "zep", MemoryStoreKind::MemoryService),
     ("opensearch", "opensearch", MemoryStoreKind::SearchEngine),
-    ("elasticsearch", "elasticsearch", MemoryStoreKind::SearchEngine),
+    (
+        "elasticsearch",
+        "elasticsearch",
+        MemoryStoreKind::SearchEngine,
+    ),
     ("elastic", "elastic", MemoryStoreKind::SearchEngine),
     ("redis", "redis", MemoryStoreKind::KeyValue),
     // Generic catch-alls last.
@@ -159,7 +163,10 @@ fn cross_boundary(exposure: &str) -> bool {
 }
 
 fn weak_auth(auth: &str) -> bool {
-    matches!(auth.trim().to_ascii_lowercase().as_str(), "none" | "unknown")
+    matches!(
+        auth.trim().to_ascii_lowercase().as_str(),
+        "none" | "unknown"
+    )
 }
 
 /// Poisoning / exfiltration surface severity for a memory store. A store the
@@ -196,7 +203,12 @@ pub fn build_memory_inventory(endpoints: &[RawMemoryEndpoint]) -> MemoryInventor
         let severity = store_severity(&ep.exposure, &ep.auth);
         let store_id = format!(
             "mem-{}",
-            short_hash(&format!("{}:{}:{}", ep.agent_type, ep.server_name, kind.as_str()))
+            short_hash(&format!(
+                "{}:{}:{}",
+                ep.agent_type,
+                ep.server_name,
+                kind.as_str()
+            ))
         );
         let summary = format!(
             "{} ({}) reachable {} with {} auth",
@@ -320,7 +332,12 @@ mod tests {
 
     #[test]
     fn non_memory_servers_are_skipped() {
-        let endpoints = vec![ep("github", Some("https://api.github.com"), "remote", "oauth")];
+        let endpoints = vec![ep(
+            "github",
+            Some("https://api.github.com"),
+            "remote",
+            "oauth",
+        )];
         let inv = build_memory_inventory(&endpoints);
         assert!(inv.stores.is_empty());
     }

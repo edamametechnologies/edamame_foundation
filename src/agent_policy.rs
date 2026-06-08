@@ -123,9 +123,8 @@ pub fn default_policy_pack() -> PolicyPack {
         pack_id: "edamame-baseline".to_string(),
         version: "1".to_string(),
         name: "EDAMAME Baseline".to_string(),
-        description:
-            "Conservative governance baseline for monitored coding-agent fleets (INC-13)."
-                .to_string(),
+        description: "Conservative governance baseline for monitored coding-agent fleets (INC-13)."
+            .to_string(),
         rules: vec![
             PolicyRule {
                 rule_id: "fw-recommend".to_string(),
@@ -342,8 +341,11 @@ fn evaluate_rule(rule: &PolicyRule, inputs: &PolicyInputs) -> PolicyRuleResult {
 /// report. `compliant` is true iff every rule is satisfied. Pure apart from the
 /// clock stamp.
 pub fn evaluate_policy_pack(pack: &PolicyPack, inputs: &PolicyInputs) -> PolicyEvaluation {
-    let results: Vec<PolicyRuleResult> =
-        pack.rules.iter().map(|r| evaluate_rule(r, inputs)).collect();
+    let results: Vec<PolicyRuleResult> = pack
+        .rules
+        .iter()
+        .map(|r| evaluate_rule(r, inputs))
+        .collect();
     let total_rules = results.len() as u32;
     let satisfied_rules = results.iter().filter(|r| r.satisfied).count() as u32;
     let violated_rules = total_rules - satisfied_rules;
@@ -470,7 +472,10 @@ pub fn attest_sbom(agent_type: &str, cyclonedx_json: &str) -> Attestation {
         agent_type,
         cyclonedx_json,
         None,
-        format!("attestation of the CycloneDX SBOM for agent '{}'", agent_type),
+        format!(
+            "attestation of the CycloneDX SBOM for agent '{}'",
+            agent_type
+        ),
     )
 }
 
@@ -526,7 +531,11 @@ pub struct ZonePromotionRecord {
 }
 
 /// Build a new `Requested` cross-zone promotion record.
-pub fn build_zone_promotion(agent_type: &str, target_zone: &str, reason: &str) -> ZonePromotionRecord {
+pub fn build_zone_promotion(
+    agent_type: &str,
+    target_zone: &str,
+    reason: &str,
+) -> ZonePromotionRecord {
     let requested_at = chrono::Utc::now();
     let promotion_id = format!(
         "zp-{}",
@@ -610,22 +619,25 @@ mod tests {
         let pack = default_policy_pack();
         // recommend satisfies "at least recommend".
         let eval = evaluate_policy_pack(&pack, &clean_inputs());
-        assert!(eval
-            .results
-            .iter()
-            .find(|r| r.rule_id == "fw-recommend")
-            .unwrap()
-            .satisfied);
+        assert!(
+            eval.results
+                .iter()
+                .find(|r| r.rule_id == "fw-recommend")
+                .unwrap()
+                .satisfied
+        );
         // An unknown/invalid mode (rank -1) fails the >= recommend (rank 0) check.
         let mut inp = clean_inputs();
         inp.firewall_mode = "off".to_string();
         let eval2 = evaluate_policy_pack(&pack, &inp);
-        assert!(!eval2
-            .results
-            .iter()
-            .find(|r| r.rule_id == "fw-recommend")
-            .unwrap()
-            .satisfied);
+        assert!(
+            !eval2
+                .results
+                .iter()
+                .find(|r| r.rule_id == "fw-recommend")
+                .unwrap()
+                .satisfied
+        );
     }
 
     #[test]

@@ -472,7 +472,13 @@ fn round2(v: f64) -> f64 {
 mod tests {
     use super::*;
 
-    fn input(privs: &[&str], taint: Option<&str>, sink: &str, origin: &str, ap: bool) -> ToolCallRiskInput {
+    fn input(
+        privs: &[&str],
+        taint: Option<&str>,
+        sink: &str,
+        origin: &str,
+        ap: bool,
+    ) -> ToolCallRiskInput {
         ToolCallRiskInput {
             agent_type: "cursor".to_string(),
             tool_name: "http_post".to_string(),
@@ -487,7 +493,13 @@ mod tests {
     #[test]
     fn recommend_mode_never_gates() {
         // A secret->remote shape is catastrophic, but recommend mode caps at recommend.
-        let inp = input(&["network", "secret_access"], Some("secret"), "trust2_remote", "trust2", true);
+        let inp = input(
+            &["network", "secret_access"],
+            Some("secret"),
+            "trust2_remote",
+            "trust2",
+            true,
+        );
         let r = build_tool_call_risk(&inp, FirewallMode::Recommend);
         assert!(r.catastrophic);
         assert_eq!(r.verdict, ToolCallVerdict::Recommend);
@@ -496,7 +508,13 @@ mod tests {
 
     #[test]
     fn block_mode_blocks_catastrophic_only() {
-        let cata = input(&["network"], Some("secret"), "trust2_remote", "trust1", false);
+        let cata = input(
+            &["network"],
+            Some("secret"),
+            "trust2_remote",
+            "trust1",
+            false,
+        );
         let r = build_tool_call_risk(&cata, FirewallMode::Block);
         assert!(r.catastrophic);
         assert_eq!(r.verdict, ToolCallVerdict::Block);
@@ -510,7 +528,13 @@ mod tests {
 
     #[test]
     fn confirm_mode_confirms_catastrophic() {
-        let inp = input(&["network"], Some("database"), "trust2_public", "trust1", false);
+        let inp = input(
+            &["network"],
+            Some("database"),
+            "trust2_public",
+            "trust1",
+            false,
+        );
         let r = build_tool_call_risk(&inp, FirewallMode::Confirm);
         assert!(r.catastrophic);
         assert_eq!(r.verdict, ToolCallVerdict::Confirm);
@@ -526,7 +550,13 @@ mod tests {
 
     #[test]
     fn receipt_chain_is_tamper_evident() {
-        let inp = input(&["network"], Some("secret"), "trust2_remote", "trust2", true);
+        let inp = input(
+            &["network"],
+            Some("secret"),
+            "trust2_remote",
+            "trust2",
+            true,
+        );
         let s = build_tool_call_risk(&inp, FirewallMode::Recommend);
         let r1 = build_action_receipt(&s, "");
         let r2 = build_action_receipt(&s, &r1.receipt_hash);
@@ -540,7 +570,13 @@ mod tests {
 
     #[test]
     fn gating_verdict_receipt_starts_unresolved() {
-        let inp = input(&["network"], Some("secret"), "trust2_remote", "trust1", false);
+        let inp = input(
+            &["network"],
+            Some("secret"),
+            "trust2_remote",
+            "trust1",
+            false,
+        );
         let s = build_tool_call_risk(&inp, FirewallMode::Block);
         assert_eq!(s.verdict, ToolCallVerdict::Block);
         let r = build_action_receipt(&s, "");

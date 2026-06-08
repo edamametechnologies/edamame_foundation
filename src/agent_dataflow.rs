@@ -192,11 +192,19 @@ fn is_sink_endpoint(ep: &RawFlowEndpoint) -> bool {
 }
 
 fn weak_auth(auth: &str) -> bool {
-    matches!(auth.trim().to_ascii_lowercase().as_str(), "none" | "unknown")
+    matches!(
+        auth.trim().to_ascii_lowercase().as_str(),
+        "none" | "unknown"
+    )
 }
 
 /// Severity for a latent edge from taint class + sink zone + sink auth.
-fn edge_severity(taint: TaintClass, zone: SinkZone, auth: &str, observed: bool) -> VisibilitySeverity {
+fn edge_severity(
+    taint: TaintClass,
+    zone: SinkZone,
+    auth: &str,
+    observed: bool,
+) -> VisibilitySeverity {
     if taint == TaintClass::Unknown {
         return VisibilitySeverity::Info;
     }
@@ -349,7 +357,10 @@ fn derive_findings(agent_type: &str, edges: &[DataFlowEdge]) -> Vec<VisibilityFi
                 "dataflow_sensitive_egress",
                 top.severity,
                 &top.edge_id,
-                format!("sensitive data-flow to cross-boundary sink on {}", agent_type),
+                format!(
+                    "sensitive data-flow to cross-boundary sink on {}",
+                    agent_type
+                ),
                 format!(
                     "{} ({} potential sensitive flow{} on this agent)",
                     top.summary,
@@ -376,13 +387,7 @@ fn derive_findings(agent_type: &str, edges: &[DataFlowEdge]) -> Vec<VisibilityFi
 mod tests {
     use super::*;
 
-    fn ep(
-        id: &str,
-        label: &str,
-        privs: &[&str],
-        exposure: &str,
-        auth: &str,
-    ) -> RawFlowEndpoint {
+    fn ep(id: &str, label: &str, privs: &[&str], exposure: &str, auth: &str) -> RawFlowEndpoint {
         RawFlowEndpoint {
             agent_type: "cursor".to_string(),
             id: id.to_string(),

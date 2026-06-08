@@ -319,10 +319,19 @@ mod tests {
             ResponseValidation::IrreversibleRequiresSimulateFirst
         );
         // With a prior simulate -> ok.
-        assert_eq!(validate_response_request(&req, true), ResponseValidation::Ok);
+        assert_eq!(
+            validate_response_request(&req, true),
+            ResponseValidation::Ok
+        );
         // Simulated run itself -> ok.
-        let sim = ResponseActionRequest { simulated: true, ..req.clone() };
-        assert_eq!(validate_response_request(&sim, false), ResponseValidation::Ok);
+        let sim = ResponseActionRequest {
+            simulated: true,
+            ..req.clone()
+        };
+        assert_eq!(
+            validate_response_request(&sim, false),
+            ResponseValidation::Ok
+        );
     }
 
     #[test]
@@ -333,7 +342,10 @@ mod tests {
             reason: "drift spike".to_string(),
             simulated: false,
         };
-        assert_eq!(validate_response_request(&req, false), ResponseValidation::Ok);
+        assert_eq!(
+            validate_response_request(&req, false),
+            ResponseValidation::Ok
+        );
     }
 
     #[test]
@@ -344,7 +356,10 @@ mod tests {
             reason: "".to_string(),
             simulated: false,
         };
-        assert_eq!(validate_response_request(&bad, false), ResponseValidation::UnknownKind);
+        assert_eq!(
+            validate_response_request(&bad, false),
+            ResponseValidation::UnknownKind
+        );
 
         let empty = ResponseActionRequest {
             kind: "pause_agent".to_string(),
@@ -352,7 +367,10 @@ mod tests {
             reason: "".to_string(),
             simulated: false,
         };
-        assert_eq!(validate_response_request(&empty, false), ResponseValidation::EmptyTarget);
+        assert_eq!(
+            validate_response_request(&empty, false),
+            ResponseValidation::EmptyTarget
+        );
     }
 
     #[test]

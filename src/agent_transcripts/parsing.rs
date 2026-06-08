@@ -1025,11 +1025,7 @@ pub fn parse_session_economics(
             .get("payload")
             .and_then(|p| p.get("info"))
             .and_then(|i| i.get("total_token_usage"))
-            .or_else(|| {
-                value
-                    .get("info")
-                    .and_then(|i| i.get("total_token_usage"))
-            })
+            .or_else(|| value.get("info").and_then(|i| i.get("total_token_usage")))
             .or_else(|| value.get("total_token_usage"));
         if let Some(usage) = cumulative_usage {
             if usage.is_object() {
@@ -1140,10 +1136,14 @@ mod economics_tests {
     #[test]
     fn parses_claude_per_turn_usage_and_tools() {
         let jsonl = concat!(
-            r#"{"type":"user","timestamp":"2026-05-06T18:15:00.000Z","message":{"role":"user","content":[{"type":"text","text":"hi"}]}}"#, "\n",
-            r#"{"type":"assistant","timestamp":"2026-05-06T18:15:10.000Z","message":{"role":"assistant","model":"claude-sonnet-4-6","content":[{"type":"text","text":"ok"},{"type":"tool_use","name":"Read"}],"usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":10,"cache_read_input_tokens":200}}}"#, "\n",
-            r#"{"type":"user","timestamp":"2026-05-06T18:15:20.000Z","message":{"role":"user","content":[{"type":"tool_result","is_error":true,"content":"boom"}]}}"#, "\n",
-            r#"{"type":"assistant","timestamp":"2026-05-06T18:16:00.000Z","message":{"role":"assistant","model":"claude-sonnet-4-6","content":[{"type":"text","text":"done"}],"usage":{"input_tokens":300,"output_tokens":80,"cache_creation_input_tokens":0,"cache_read_input_tokens":210}}}"#, "\n",
+            r#"{"type":"user","timestamp":"2026-05-06T18:15:00.000Z","message":{"role":"user","content":[{"type":"text","text":"hi"}]}}"#,
+            "\n",
+            r#"{"type":"assistant","timestamp":"2026-05-06T18:15:10.000Z","message":{"role":"assistant","model":"claude-sonnet-4-6","content":[{"type":"text","text":"ok"},{"type":"tool_use","name":"Read"}],"usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":10,"cache_read_input_tokens":200}}}"#,
+            "\n",
+            r#"{"type":"user","timestamp":"2026-05-06T18:15:20.000Z","message":{"role":"user","content":[{"type":"tool_result","is_error":true,"content":"boom"}]}}"#,
+            "\n",
+            r#"{"type":"assistant","timestamp":"2026-05-06T18:16:00.000Z","message":{"role":"assistant","model":"claude-sonnet-4-6","content":[{"type":"text","text":"done"}],"usage":{"input_tokens":300,"output_tokens":80,"cache_creation_input_tokens":0,"cache_read_input_tokens":210}}}"#,
+            "\n",
         );
         let econ = parse_session_economics("sess-1", "/tmp/sess-1.jsonl", jsonl);
         assert!(econ.has_token_data);
@@ -1163,8 +1163,10 @@ mod economics_tests {
     #[test]
     fn cumulative_codex_total_token_usage_wins() {
         let jsonl = concat!(
-            r#"{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"output_tokens":20,"total_tokens":120}}}}"#, "\n",
-            r#"{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":500,"output_tokens":90,"total_tokens":590}}}}"#, "\n",
+            r#"{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"output_tokens":20,"total_tokens":120}}}}"#,
+            "\n",
+            r#"{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":500,"output_tokens":90,"total_tokens":590}}}}"#,
+            "\n",
         );
         let econ = parse_session_economics("c1", "/tmp/c1.jsonl", jsonl);
         assert!(econ.has_token_data);

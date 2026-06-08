@@ -245,7 +245,8 @@ impl RunProvenance {
             for edge in self.edges.iter().filter(|e| e.dst_event_id == node) {
                 path_edges.push(edge.clone());
                 if seen.insert(edge.src_event_id.clone()) {
-                    if let Some(src) = self.events.iter().find(|e| e.event_id == edge.src_event_id) {
+                    if let Some(src) = self.events.iter().find(|e| e.event_id == edge.src_event_id)
+                    {
                         ancestors.push(src.clone());
                     }
                     frontier.push(edge.src_event_id.clone());
@@ -260,7 +261,8 @@ impl RunProvenance {
         while let Some(node) = dfrontier.pop() {
             for edge in self.edges.iter().filter(|e| e.src_event_id == node) {
                 if dseen.insert(edge.dst_event_id.clone()) {
-                    if let Some(dst) = self.events.iter().find(|e| e.event_id == edge.dst_event_id) {
+                    if let Some(dst) = self.events.iter().find(|e| e.event_id == edge.dst_event_id)
+                    {
                         descendants.push(dst.clone());
                     }
                     dfrontier.push(edge.dst_event_id.clone());
@@ -590,7 +592,11 @@ mod tests {
         let id2 = make_run_id("codex", "inst", "a::b::c");
         assert_eq!(
             parse_run_id(&id2),
-            Some(("codex".to_string(), "inst".to_string(), "a::b::c".to_string()))
+            Some((
+                "codex".to_string(),
+                "inst".to_string(),
+                "a::b::c".to_string()
+            ))
         );
         assert_eq!(parse_run_id("garbage"), None);
     }
@@ -602,9 +608,27 @@ mod tests {
         let t2 = t0 + chrono::Duration::seconds(10);
         // Intentionally out of order to exercise sorting.
         let raws = vec![
-            ev(t2, ProvenancePlane::System, ProvenanceEventKind::DivergenceEvidence, "egress to evil.example:443", Some("HIGH")),
-            ev(t0, ProvenancePlane::Reasoning, ProvenanceEventKind::SessionStart, "session start", None),
-            ev(t1, ProvenancePlane::Reasoning, ProvenanceEventKind::ToolCall, "run_terminal_cmd", None),
+            ev(
+                t2,
+                ProvenancePlane::System,
+                ProvenanceEventKind::DivergenceEvidence,
+                "egress to evil.example:443",
+                Some("HIGH"),
+            ),
+            ev(
+                t0,
+                ProvenancePlane::Reasoning,
+                ProvenanceEventKind::SessionStart,
+                "session start",
+                None,
+            ),
+            ev(
+                t1,
+                ProvenancePlane::Reasoning,
+                ProvenanceEventKind::ToolCall,
+                "run_terminal_cmd",
+                None,
+            ),
         ];
         let run = build_run_provenance("cursor::inst::s1", "cursor", "inst", "title", raws, vec![]);
         assert_eq!(run.events.len(), 3);
@@ -625,8 +649,20 @@ mod tests {
     fn tampering_breaks_the_chain() {
         let t0 = Utc::now();
         let raws = vec![
-            ev(t0, ProvenancePlane::Reasoning, ProvenanceEventKind::SessionStart, "session start", None),
-            ev(t0 + chrono::Duration::seconds(1), ProvenancePlane::System, ProvenanceEventKind::DivergenceEvidence, "leak", Some("CRITICAL")),
+            ev(
+                t0,
+                ProvenancePlane::Reasoning,
+                ProvenanceEventKind::SessionStart,
+                "session start",
+                None,
+            ),
+            ev(
+                t0 + chrono::Duration::seconds(1),
+                ProvenancePlane::System,
+                ProvenanceEventKind::DivergenceEvidence,
+                "leak",
+                Some("CRITICAL"),
+            ),
         ];
         let mut run = build_run_provenance("a::b::c", "a", "b", "t", raws, vec![]);
         assert!(verify_run_chain(&run));
@@ -639,14 +675,42 @@ mod tests {
     fn backtrace_recovers_proximate_causes() {
         let t0 = Utc::now();
         let raws = vec![
-            ev(t0, ProvenancePlane::Reasoning, ProvenanceEventKind::SessionStart, "start", None),
-            ev(t0 + chrono::Duration::seconds(2), ProvenancePlane::Reasoning, ProvenanceEventKind::ToolCall, "curl", None),
-            ev(t0 + chrono::Duration::seconds(4), ProvenancePlane::System, ProvenanceEventKind::DivergenceEvidence, "egress", Some("HIGH")),
+            ev(
+                t0,
+                ProvenancePlane::Reasoning,
+                ProvenanceEventKind::SessionStart,
+                "start",
+                None,
+            ),
+            ev(
+                t0 + chrono::Duration::seconds(2),
+                ProvenancePlane::Reasoning,
+                ProvenanceEventKind::ToolCall,
+                "curl",
+                None,
+            ),
+            ev(
+                t0 + chrono::Duration::seconds(4),
+                ProvenancePlane::System,
+                ProvenanceEventKind::DivergenceEvidence,
+                "egress",
+                Some("HIGH"),
+            ),
         ];
         // 0 -> 1 (caused), 1 -> 2 (prompted_then_egressed).
         let hints = vec![
-            RawCausalEdgeHint { src_index: 0, dst_index: 1, relation: CausalRelation::Caused, rationale: "session enabled tool".into() },
-            RawCausalEdgeHint { src_index: 1, dst_index: 2, relation: CausalRelation::PromptedThenEgressed, rationale: "tool preceded egress".into() },
+            RawCausalEdgeHint {
+                src_index: 0,
+                dst_index: 1,
+                relation: CausalRelation::Caused,
+                rationale: "session enabled tool".into(),
+            },
+            RawCausalEdgeHint {
+                src_index: 1,
+                dst_index: 2,
+                relation: CausalRelation::PromptedThenEgressed,
+                rationale: "tool preceded egress".into(),
+            },
         ];
         let run = build_run_provenance("a::b::c", "a", "b", "t", raws, hints);
         assert_eq!(run.edges.len(), 2);
@@ -681,8 +745,18 @@ mod tests {
             None,
         )];
         let hints = vec![
-            RawCausalEdgeHint { src_index: 0, dst_index: 0, relation: CausalRelation::Caused, rationale: "self".into() },
-            RawCausalEdgeHint { src_index: 0, dst_index: 9, relation: CausalRelation::Caused, rationale: "dangling".into() },
+            RawCausalEdgeHint {
+                src_index: 0,
+                dst_index: 0,
+                relation: CausalRelation::Caused,
+                rationale: "self".into(),
+            },
+            RawCausalEdgeHint {
+                src_index: 0,
+                dst_index: 9,
+                relation: CausalRelation::Caused,
+                rationale: "dangling".into(),
+            },
         ];
         let run = build_run_provenance("a::b::c", "a", "b", "t", raws, hints);
         assert!(run.edges.is_empty());

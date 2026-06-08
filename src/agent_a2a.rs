@@ -141,7 +141,10 @@ fn classify_peer(ep: &RawA2aEndpoint) -> Option<(A2aPeerKind, String)> {
     let cmd = ep.command.as_deref().unwrap_or("").to_ascii_lowercase();
 
     if url.contains(".well-known/agent.json") || url.contains("/agent-card") {
-        return Some((A2aPeerKind::WellKnownCard, ".well-known/agent.json".to_string()));
+        return Some((
+            A2aPeerKind::WellKnownCard,
+            ".well-known/agent.json".to_string(),
+        ));
     }
     for kw in FRAMEWORK_KEYWORDS {
         if name.contains(kw) || url.contains(kw) || cmd.contains(kw) {
@@ -159,7 +162,10 @@ fn cross_boundary(exposure: &str) -> bool {
 }
 
 fn weak_auth(auth: &str) -> bool {
-    matches!(auth.trim().to_ascii_lowercase().as_str(), "none" | "unknown")
+    matches!(
+        auth.trim().to_ascii_lowercase().as_str(),
+        "none" | "unknown"
+    )
 }
 
 fn peer_severity(kind: A2aPeerKind, exposure: &str, auth: &str) -> VisibilitySeverity {
@@ -210,7 +216,12 @@ pub fn build_a2a_graph(endpoints: &[RawA2aEndpoint], edges: &[RawA2aEdge]) -> A2
         let severity = peer_severity(kind, &ep.exposure, &ep.auth);
         let peer_id = format!(
             "a2a-{}",
-            short_hash(&format!("{}:{}:{}", ep.agent_type, ep.server_name, kind.as_str()))
+            short_hash(&format!(
+                "{}:{}:{}",
+                ep.agent_type,
+                ep.server_name,
+                kind.as_str()
+            ))
         );
         let summary = format!(
             "{} peer ({}) reachable {} with {} auth",
@@ -397,7 +408,10 @@ mod tests {
         }];
         let g = build_a2a_graph(&[], &edges);
         assert_eq!(g.cross_zone_edges.len(), 1);
-        assert!(g.findings.iter().any(|f| f.rule_id == "a2a_confused_deputy"));
+        assert!(g
+            .findings
+            .iter()
+            .any(|f| f.rule_id == "a2a_confused_deputy"));
     }
 
     #[test]
@@ -416,7 +430,12 @@ mod tests {
 
     #[test]
     fn non_a2a_servers_skipped() {
-        let endpoints = vec![ep("github", Some("https://api.github.com"), "remote", "oauth")];
+        let endpoints = vec![ep(
+            "github",
+            Some("https://api.github.com"),
+            "remote",
+            "oauth",
+        )];
         let g = build_a2a_graph(&endpoints, &[]);
         assert!(g.peers.is_empty());
     }

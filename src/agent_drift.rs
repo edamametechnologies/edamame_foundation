@@ -233,8 +233,7 @@ pub fn build_drift_timeline(
 
     for v in &sorted {
         let kind = v.verdict_kind.trim().to_ascii_uppercase();
-        let active: Vec<&RawDriftEvidence> =
-            v.evidence.iter().filter(|e| !e.dismissed).collect();
+        let active: Vec<&RawDriftEvidence> = v.evidence.iter().filter(|e| !e.dismissed).collect();
 
         let (mut score, category, base_title) = match kind.as_str() {
             "DIVERGENCE" => {
@@ -278,8 +277,10 @@ pub fn build_drift_timeline(
         // first-ever observation (prev = None) is NOT treated as onset -- we
         // have no evidence the prior state was clean, so it could be ongoing
         // divergence we only just started observing.
-        let onset = matches!(prev_kind.as_deref(), Some("CLEAN") | Some("CLEAN_HEARTBEAT"))
-            && kind == "DIVERGENCE";
+        let onset = matches!(
+            prev_kind.as_deref(),
+            Some("CLEAN") | Some("CLEAN_HEARTBEAT")
+        ) && kind == "DIVERGENCE";
         if onset {
             score += 0.1;
         }
@@ -423,7 +424,8 @@ impl AgentDriftTimeline {
         } else {
             verdict_kind_of(&self.events[idx - 1]).unwrap_or_default()
         };
-        let cur_kind = verdict_kind_of(&event).unwrap_or_else(|| event.category.as_str().to_string());
+        let cur_kind =
+            verdict_kind_of(&event).unwrap_or_else(|| event.category.as_str().to_string());
         let transition = if prior_verdict_kind.is_empty() {
             format!("(first) -> {}", cur_kind)
         } else {
@@ -630,7 +632,11 @@ mod tests {
         }
     }
 
-    fn verdict(ts_offset_secs: i64, kind: &str, evidence: Vec<RawDriftEvidence>) -> RawDriftVerdict {
+    fn verdict(
+        ts_offset_secs: i64,
+        kind: &str,
+        evidence: Vec<RawDriftEvidence>,
+    ) -> RawDriftVerdict {
         RawDriftVerdict {
             ts: Utc::now() - Duration::seconds(600 - ts_offset_secs),
             verdict_kind: kind.to_string(),
@@ -667,7 +673,10 @@ mod tests {
         assert!(e.drift_score >= 0.8);
         assert!(e.refs.iter().any(|r| r == "onset=true"));
         assert_eq!(t.alertable_event_count, 1);
-        assert!(t.findings.iter().any(|f| f.rule_id == "drift_goal_divergence"));
+        assert!(t
+            .findings
+            .iter()
+            .any(|f| f.rule_id == "drift_goal_divergence"));
     }
 
     #[test]
