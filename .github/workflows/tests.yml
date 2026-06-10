@@ -311,6 +311,30 @@ jobs:
           "CXX_x86_64_pc_windows_msvc=$clang" >> $env:GITHUB_ENV
           "AR_x86_64_pc_windows_msvc=$llvmLib" >> $env:GITHUB_ENV
 
+      - name: Pause daemon FIM + detector during cargo test
+        if: always()
+        shell: bash
+        env:
+          EDAMAME_POSTURE_CMD: ${{ env.EDAMAME_POSTURE_CMD }}
+        run: |
+          # agent_plugin.rs unit tests create + delete temp MCP fixtures
+          # ($TMPDIR/edamame-test-mcp-*/.cursor/mcp.json[.bak]). The daemon FIM
+          # watcher races those delete events into its ring and the detector
+          # flags the agent-instruction-file delete as CRITICAL
+          # file_system_tampering; even after the post-test cleanup the findings
+          # re-emerge between the clear call and the next tick. Stop the FIM
+          # watcher + detector for the duration of cargo test so no test-induced
+          # /tmp activity lands in the ring. The resume step brings them back
+          # before the gate. Mirrors edamame_core/tests.yml (FP-CI-13 v2.1).
+          set +e
+          POSTURE_CMD="${EDAMAME_POSTURE_CMD:-edamame_posture}"
+          if command -v "$POSTURE_CMD" >/dev/null 2>&1 || [ -x "$POSTURE_CMD" ]; then
+            "$POSTURE_CMD" background-vulnerability-stop >/dev/null 2>&1 || true
+            "$POSTURE_CMD" background-stop-file-monitor >/dev/null 2>&1 || true
+            echo "Daemon FIM + vulnerability detector paused for cargo test."
+          fi
+          set -e
+
       - name: Run tests
         id: tests
         shell: bash
@@ -334,6 +358,24 @@ jobs:
             find /var/log/edamame -name "edamame_*.2*-*-*" -exec echo "--- {} ---" \; -exec $SUDO cat {} \; || echo "No logs found in /var/log/edamame"
           fi
           echo "--- Native Log Dump Complete ---"
+
+      - name: Resume daemon FIM + detector after cargo test
+        if: always()
+        shell: bash
+        env:
+          EDAMAME_POSTURE_CMD: ${{ env.EDAMAME_POSTURE_CMD }}
+        run: |
+          # Restart what the pause step stopped so the trailing gate sees a live
+          # detection pipeline; the next tick after restart fires from a clean
+          # state once the cleanup step has drained any pre-pause findings.
+          set +e
+          POSTURE_CMD="${EDAMAME_POSTURE_CMD:-edamame_posture}"
+          if command -v "$POSTURE_CMD" >/dev/null 2>&1 || [ -x "$POSTURE_CMD" ]; then
+            "$POSTURE_CMD" background-start-file-monitor >/dev/null 2>&1 || true
+            "$POSTURE_CMD" background-vulnerability-start 60 >/dev/null 2>&1 || true
+            echo "Daemon FIM + vulnerability detector resumed."
+          fi
+          set -e
 
       - name: Clear runtime vulnerability state (test fixtures)
         if: always()
@@ -625,6 +667,27 @@ jobs:
           # Use nightly by default so that build.rs picks it up automatically
           #echo "RUSTUP_TOOLCHAIN=nightly" >> $HOME/.cargo/env
           
+      - name: Pause daemon FIM + detector during cargo test
+        if: always()
+        shell: bash
+        env:
+          EDAMAME_POSTURE_CMD: ${{ env.EDAMAME_POSTURE_CMD }}
+        run: |
+          # See native job: agent_plugin.rs MCP-fixture deletes
+          # ($TMPDIR/edamame-test-mcp-*/.cursor/mcp.json[.bak]) race into the
+          # daemon FIM ring and trip CRITICAL file_system_tampering. Stop the FIM
+          # watcher + detector for cargo test so no test-induced /tmp activity is
+          # observed; the resume step restores them before the gate. Mirrors
+          # edamame_core/tests.yml (FP-CI-13 v2.1).
+          set +e
+          POSTURE_CMD="${EDAMAME_POSTURE_CMD:-edamame_posture}"
+          if command -v "$POSTURE_CMD" >/dev/null 2>&1 || [ -x "$POSTURE_CMD" ]; then
+            "$POSTURE_CMD" background-vulnerability-stop >/dev/null 2>&1 || true
+            "$POSTURE_CMD" background-stop-file-monitor >/dev/null 2>&1 || true
+            echo "Daemon FIM + vulnerability detector paused for cargo test."
+          fi
+          set -e
+
       - name: Run tests
         id: tests
         shell: bash
@@ -645,6 +708,24 @@ jobs:
             find /var/log/edamame -name "edamame_*.2*-*-*" -exec echo "--- {} ---" \; -exec sudo cat {} \; || echo "No logs found in /var/log/edamame"
           fi
           echo "--- Container Log Dump Complete ---"
+
+      - name: Resume daemon FIM + detector after cargo test
+        if: always()
+        shell: bash
+        env:
+          EDAMAME_POSTURE_CMD: ${{ env.EDAMAME_POSTURE_CMD }}
+        run: |
+          # Restart what the pause step stopped so the trailing gate sees a live
+          # detection pipeline; the next tick after restart fires from a clean
+          # state once the cleanup step has drained any pre-pause findings.
+          set +e
+          POSTURE_CMD="${EDAMAME_POSTURE_CMD:-edamame_posture}"
+          if command -v "$POSTURE_CMD" >/dev/null 2>&1 || [ -x "$POSTURE_CMD" ]; then
+            "$POSTURE_CMD" background-start-file-monitor >/dev/null 2>&1 || true
+            "$POSTURE_CMD" background-vulnerability-start 60 >/dev/null 2>&1 || true
+            echo "Daemon FIM + vulnerability detector resumed."
+          fi
+          set -e
 
       - name: Clear runtime vulnerability state (test fixtures)
         if: always()
