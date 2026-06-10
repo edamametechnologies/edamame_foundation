@@ -4220,8 +4220,13 @@ bob ALL=(ALL) NOPASSWD: ALL
         // %APPDATA%\{slug} == ~/AppData/Roaming/{slug}. The marker scan is
         // unconditional across platforms, so this resolves on any host (the
         // Windows config gap this guards against would otherwise be missed).
-        std::fs::create_dir_all(tmp.path().join("AppData").join("Roaming").join("rippletide"))
-            .unwrap();
+        std::fs::create_dir_all(
+            tmp.path()
+                .join("AppData")
+                .join("Roaming")
+                .join("rippletide"),
+        )
+        .unwrap();
         let harnesses = detect_agent_harnesses_with(tmp.path(), &[]);
         let rt = harnesses.iter().find(|h| h.slug == "rippletide").unwrap();
         assert!(rt.detected);
