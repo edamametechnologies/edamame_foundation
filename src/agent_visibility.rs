@@ -634,8 +634,9 @@ pub struct AgentHarness {
 /// Known agent harnesses with a detectable, cross-platform per-user footprint.
 /// Each row is `(slug, display_name, extra_markers, binaries)`:
 /// - `slug` also drives the standard per-user config locations checked
-///   automatically: `~/.{slug}`, `~/.config/{slug}`, and (macOS)
-///   `~/Library/Application Support/{slug}`.
+///   automatically: `~/.{slug}`, `~/.config/{slug}`, (macOS)
+///   `~/Library/Application Support/{slug}`, and (Windows)
+///   `~/AppData/Roaming/{slug}` + `~/AppData/Local/{slug}`.
 /// - `extra_markers` are additional `$HOME`-relative files/dirs to check.
 /// - `binaries` are CLI names looked up in the standard per-user bin dirs (so
 ///   the helper-as-root path finds a user-installed binary) and on `$PATH`.
@@ -661,7 +662,9 @@ const KNOWN_AGENT_HARNESSES: &[(&str, &str, &[&str], &[&str])] = &[
 /// Standard per-user "bin" directories (relative to `$HOME`) where a harness
 /// CLI may live without being on the privileged process's `$PATH` -- so the
 /// helper running as root can still find a binary the user installed under
-/// their own home.
+/// their own home. The list is checked unconditionally on every OS; `/` is a
+/// valid path separator on Windows for `Path::join`, so the Windows-relative
+/// entries resolve there and are harmless no-ops on Unix.
 const HARNESS_HOME_BIN_DIRS: &[&str] = &[
     ".local/bin",
     "bin",
@@ -670,6 +673,11 @@ const HARNESS_HOME_BIN_DIRS: &[&str] = &[
     ".npm-global/bin",
     ".bun/bin",
     ".deno/bin",
+    // Windows-native per-user bin locations: npm's global prefix is
+    // %APPDATA%\npm (the shims sit directly there, no `bin` subdir); winget /
+    // Store execution aliases live under %LOCALAPPDATA%\Microsoft\WindowsApps.
+    "AppData/Roaming/npm",
+    "AppData/Local/Microsoft/WindowsApps",
 ];
 
 /// Render a path for evidence relative to `home` when possible (`~/...`) so the
@@ -749,6 +757,11 @@ fn detect_agent_harnesses_with(home: &Path, path_dirs: &[PathBuf]) -> Vec<AgentH
                 home.join(format!(".{slug}")),
                 home.join(".config").join(slug),
                 home.join("Library").join("Application Support").join(slug),
+                // Windows-native per-user config dirs (%APPDATA% / %LOCALAPPDATA%).
+                // Checked unconditionally like the macOS path above; harmless
+                // no-ops on Unix where these directories do not exist.
+                home.join("AppData").join("Roaming").join(slug),
+                home.join("AppData").join("Local").join(slug),
             ];
             for m in *extra {
                 markers.push(home.join(m));
@@ -4199,6 +4212,54 @@ bob ALL=(ALL) NOPASSWD: ALL
         let af = harnesses.iter().find(|h| h.slug == "agentfield").unwrap();
         assert!(af.detected);
         assert!(af.evidence.iter().any(|e| e.contains("on PATH")));
+    }
+
+    #[test]
+    fn detect_agent_harnesses_finds_windows_appdata_config_dir() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        // %APPDATA%\{slug} == ~/AppData/Roaming/{slug}. The marker scan is
+        // unconditional across platforms, so this resolves on any host (the
+        // Windows config gap this guards against would otherwise be missed).
+        std::fs::create_dir_all(tmp.path().join("AppData").join("Roaming").join("rippletide"))
+            .unwrap();
+        let harnesses = detect_agent_harnesses_with(tmp.path(), &[]);
+        let rt = harnesses.iter().find(|h| h.slug == "rippletide").unwrap();
+        assert!(rt.detected);
+        assert!(rt.evidence.iter().any(|e| e.contains("rippletide")));
+        // The sibling harness stays undetected.
+        let af = harnesses.iter().find(|h| h.slug == "agentfield").unwrap();
+        assert!(!af.detected);
+    }
+
+    #[test]
+    fn detect_agent_harnesses_finds_windows_localappdata_config_dir() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        // %LOCALAPPDATA%\{slug} == ~/AppData/Local/{slug}.
+        std::fs::create_dir_all(tmp.path().join("AppData").join("Local").join("agentfield"))
+            .unwrap();
+        let harnesses = detect_agent_harnesses_with(tmp.path(), &[]);
+        let af = harnesses.iter().find(|h| h.slug == "agentfield").unwrap();
+        assert!(af.detected);
+        assert!(af.evidence.iter().any(|e| e.contains("agentfield")));
+    }
+
+    #[test]
+    fn detect_agent_harnesses_finds_windows_npm_global_bin() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        // npm's Windows global prefix (%APPDATA%\npm) is a home bin dir, so the
+        // helper-as-root path resolves a user-installed CLI shim there.
+        let bin_dir = tmp.path().join("AppData").join("Roaming").join("npm");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        let bin_name = if cfg!(target_os = "windows") {
+            "agentfield.cmd"
+        } else {
+            "agentfield"
+        };
+        std::fs::write(bin_dir.join(bin_name), b"#!/bin/sh\n").unwrap();
+        let harnesses = detect_agent_harnesses_with(tmp.path(), &[]);
+        let af = harnesses.iter().find(|h| h.slug == "agentfield").unwrap();
+        assert!(af.detected);
+        assert!(af.evidence.iter().any(|e| e.contains("agentfield")));
     }
 
     fn endpoint_from_json(agent: &str, name: &str, entry: &str) -> McpEndpoint {
