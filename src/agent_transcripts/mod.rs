@@ -187,6 +187,28 @@ pub struct SessionEconomics {
     pub has_token_data: bool,
 }
 
+/// One tool result the transcript flagged as an error
+/// (`tool_result.is_error == true` / `function_call_output` carrying an
+/// `error`). This is the structured, LLM-free drill-down behind the
+/// `tool_errors` count: it names the failing tool (correlated by
+/// `tool_use_id` / `call_id` back to its `tool_use` / `function_call`) and a
+/// truncated, body-free error snippet so the Agents-tab flight recorder can
+/// surface "Read failed: permission denied" instead of just "1 tool error".
+///
+/// Metadata only -- the message is truncated and carries no file/transcript
+/// body. Parsed deterministically from `CollectedRawSession.raw_text`; never
+/// sent to the LLM behavioral-model path.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct ToolErrorDetail {
+    /// Best-effort tool name from the matching `tool_use` / `function_call`.
+    /// Empty when the result could not be correlated back to its invocation.
+    pub tool_name: String,
+    /// Truncated, single-line error snippet (no bodies).
+    pub message: String,
+    /// In-transcript timestamp of the erroring result, when present.
+    pub at: Option<DateTime<Utc>>,
+}
+
 /// Dispatch to the per-agent adapter.
 ///
 /// `agent_type` MUST be one of `cursor`, `claude_code`, `claude_desktop`,

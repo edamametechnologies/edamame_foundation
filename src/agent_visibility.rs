@@ -529,6 +529,268 @@ fn build_agent_sandbox(
     }
 }
 
+/// One present, OS-unconfined agent whose compromise would carry outsized host
+/// blast radius. INC-7 aggregate signal feeding the `agents_with_blast_radius`
+/// internal threat. An agent qualifies when it runs unsandboxed AND at least
+/// one privilege amplifier applies:
+/// - the host grants the agent's user passwordless root (a `NOPASSWD` sudoers
+///   rule), so a compromised agent can become root with no prompt; and/or
+/// - the agent has already been observed spawning a `Critical` subprocess
+///   (ssh/scp/nc/socat/docker/...), i.e. it can reach off-box or open a shell.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlastRadiusAgent {
+    pub agent_type: String,
+    /// The agent is OS-unconfined (`AgentSandbox.sandboxed == Some(false)`).
+    pub unsandboxed: bool,
+    /// The host grants the agent's user passwordless root.
+    pub passwordless_root: bool,
+    /// The agent has been observed spawning a `Critical` subprocess.
+    pub critical_subprocess: bool,
+    /// Short human-readable reasons (for the UI / threat description).
+    pub reasons: Vec<String>,
+}
+
+/// Pure host blast-radius rule (INC-7). Given the host privilege assessment,
+/// the per-agent OS-confinement rows (already filtered to agents actually
+/// present on the host by the caller), and a map of `agent_type -> Critical
+/// subprocess observation count`, return the agents whose compromise would have
+/// outsized host reach: unsandboxed AND (passwordless root OR an observed
+/// `Critical` subprocess). Deterministic, sorted by `agent_type`.
+///
+/// The host-level `passwordless_root` applies to every agent on the host (they
+/// all inherit the launching user's session), so it is the same amplifier for
+/// each candidate; the per-agent `Critical` subprocess count is the
+/// agent-specific amplifier. A positively OS-confined (or unassessed) agent
+/// never qualifies regardless of host privilege, because the OS sandbox bounds
+/// its reach.
+pub fn agents_with_blast_radius(
+    host_privilege: &HostPrivilege,
+    agent_sandboxes: &[AgentSandbox],
+    critical_subprocess_by_agent: &BTreeMap<String, u32>,
+) -> Vec<BlastRadiusAgent> {
+    // Only a positively-assessed passwordless-root host counts as the amplifier
+    // (an unassessed host must not be treated as privileged).
+    let passwordless_root = host_privilege.assessed && host_privilege.passwordless_root;
+    let mut out: Vec<BlastRadiusAgent> = Vec::new();
+    for sandbox in agent_sandboxes {
+        // Only OS-unconfined agents have host blast radius; a positively
+        // confined (`Some(true)`) or unassessed (`None`) agent is bounded by
+        // its sandbox / not a claim.
+        if sandbox.sandboxed != Some(false) {
+            continue;
+        }
+        let critical_subprocess = critical_subprocess_by_agent
+            .get(&sandbox.agent_type)
+            .copied()
+            .unwrap_or(0)
+            > 0;
+        if !passwordless_root && !critical_subprocess {
+            continue;
+        }
+        let mut reasons: Vec<String> = vec!["unsandboxed (full user-file access)".to_string()];
+        if passwordless_root {
+            reasons.push("passwordless root on host".to_string());
+        }
+        if critical_subprocess {
+            reasons.push("observed critical subprocess (ssh/nc/docker/...)".to_string());
+        }
+        out.push(BlastRadiusAgent {
+            agent_type: sandbox.agent_type.clone(),
+            unsandboxed: true,
+            passwordless_root,
+            critical_subprocess,
+            reasons,
+        });
+    }
+    out.sort_by(|a, b| a.agent_type.cmp(&b.agent_type));
+    out
+}
+
+// ---------------------------------------------------------------------------
+// Agent governance harness presence (AI-SDLC posture)
+// ---------------------------------------------------------------------------
+
+/// A known agent-governance "harness" / control-plane product and whether its
+/// per-user footprint is present on this host. A harness is the AI-SDLC control
+/// layer that wraps coding agents with policy enforcement, cryptographic
+/// identity, guardrails (budgets / turn caps / tool allow-lists), and an audit
+/// trail -- so a redirected or compromised agent is bounded and provable rather
+/// than running bare. Detection is a cross-platform *presence* signal (the
+/// product's standard per-user config directory and/or CLI binary), not a deep
+/// configuration assessment.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentHarness {
+    /// Stable lowercase product slug (`agentfield`, `rippletide`, ...).
+    pub slug: String,
+    /// Human-readable product name for the UI.
+    pub display_name: String,
+    /// Whether the product's footprint was found on this host for this user.
+    pub detected: bool,
+    /// The on-disk markers / binaries that matched (display paths / names),
+    /// for the UI and threat evidence. Empty when `detected` is false.
+    pub evidence: Vec<String>,
+}
+
+/// Known agent harnesses with a detectable, cross-platform per-user footprint.
+/// Each row is `(slug, display_name, extra_markers, binaries)`:
+/// - `slug` also drives the standard per-user config locations checked
+///   automatically: `~/.{slug}`, `~/.config/{slug}`, and (macOS)
+///   `~/Library/Application Support/{slug}`.
+/// - `extra_markers` are additional `$HOME`-relative files/dirs to check.
+/// - `binaries` are CLI names looked up in the standard per-user bin dirs (so
+///   the helper-as-root path finds a user-installed binary) and on `$PATH`.
+///
+/// Kept deliberately small and limited to products we can actually detect on
+/// macOS/Windows/Linux from a per-user on-disk footprint. Extend by adding a
+/// row. Cloud-only control planes with no local footprint (a pure SaaS
+/// dashboard) are intentionally out of scope: there is nothing on the host to
+/// detect, so claiming detection would be dishonest.
+const KNOWN_AGENT_HARNESSES: &[(&str, &str, &[&str], &[&str])] = &[
+    // AgentField (agentfield.ai): open-source agent control plane / harness.
+    // The `af` CLI scaffolds projects; `app.harness(...)` dispatches governed
+    // multi-turn coding tasks to Claude Code / Codex / Gemini CLI / OpenCode
+    // with budgets, turn caps, tool allow-lists, W3C-DID identity, and audit
+    // trails.
+    ("agentfield", "AgentField", &[".af"], &["agentfield", "af"]),
+    // Rippletide (rippletide.com): decision-runtime / policy-enforcement layer
+    // that validates every proposed agent action against business rules before
+    // it executes (local SDK + CLI footprint).
+    ("rippletide", "Rippletide", &[], &["rippletide"]),
+];
+
+/// Standard per-user "bin" directories (relative to `$HOME`) where a harness
+/// CLI may live without being on the privileged process's `$PATH` -- so the
+/// helper running as root can still find a binary the user installed under
+/// their own home.
+const HARNESS_HOME_BIN_DIRS: &[&str] = &[
+    ".local/bin",
+    "bin",
+    ".cargo/bin",
+    "go/bin",
+    ".npm-global/bin",
+    ".bun/bin",
+    ".deno/bin",
+];
+
+/// Render a path for evidence relative to `home` when possible (`~/...`) so the
+/// UI / threat text is compact and does not leak the absolute home prefix.
+fn harness_display_path(home: &Path, p: &Path) -> String {
+    match p.strip_prefix(home) {
+        Ok(rest) => format!("~/{}", rest.to_string_lossy()),
+        Err(_) => p.to_string_lossy().to_string(),
+    }
+}
+
+/// Directories on the process `$PATH` (best-effort; mainly helps the standalone
+/// posture-as-user path -- the helper-as-root path relies on the home bin dirs).
+fn harness_path_dirs() -> Vec<PathBuf> {
+    std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).collect())
+        .unwrap_or_default()
+}
+
+/// Candidate executable file names for `bin` on this OS (Windows adds the common
+/// executable extensions).
+fn harness_binary_names(bin: &str) -> Vec<String> {
+    if cfg!(target_os = "windows") {
+        vec![
+            format!("{bin}.exe"),
+            format!("{bin}.cmd"),
+            format!("{bin}.bat"),
+            bin.to_string(),
+        ]
+    } else {
+        vec![bin.to_string()]
+    }
+}
+
+/// Look for harness CLI `bin` in the per-user home bin dirs and on `$PATH`.
+/// Returns a display string for the first match (for evidence).
+fn find_harness_binary(home: &Path, path_dirs: &[PathBuf], bin: &str) -> Option<String> {
+    let names = harness_binary_names(bin);
+    for rel in HARNESS_HOME_BIN_DIRS {
+        let dir = home.join(rel);
+        for name in &names {
+            let candidate = dir.join(name);
+            if candidate.is_file() {
+                return Some(harness_display_path(home, &candidate));
+            }
+        }
+    }
+    for dir in path_dirs {
+        for name in &names {
+            if dir.join(name).is_file() {
+                return Some(format!("{bin} (on PATH)"));
+            }
+        }
+    }
+    None
+}
+
+/// Detect which known agent harnesses are present for the given user `home`.
+/// Cross-platform and read-only (filesystem existence + `$PATH` probing). Both
+/// the standalone core and the helper converge here (the helper passes the
+/// target user's home so a root-side scan still resolves the user's footprint).
+/// Returns one entry per known harness (detected or not), sorted by slug.
+pub fn detect_agent_harnesses(home: &Path) -> Vec<AgentHarness> {
+    detect_agent_harnesses_with(home, &harness_path_dirs())
+}
+
+/// `detect_agent_harnesses` with an explicit `$PATH` directory list so unit
+/// tests are deterministic regardless of the host's real `$PATH`.
+fn detect_agent_harnesses_with(home: &Path, path_dirs: &[PathBuf]) -> Vec<AgentHarness> {
+    let mut out: Vec<AgentHarness> = KNOWN_AGENT_HARNESSES
+        .iter()
+        .map(|(slug, display, extra, binaries)| {
+            let mut evidence: Vec<String> = Vec::new();
+
+            // Standard per-user config locations for this slug.
+            let mut markers: Vec<PathBuf> = vec![
+                home.join(format!(".{slug}")),
+                home.join(".config").join(slug),
+                home.join("Library").join("Application Support").join(slug),
+            ];
+            for m in *extra {
+                markers.push(home.join(m));
+            }
+            for m in &markers {
+                if m.exists() {
+                    evidence.push(harness_display_path(home, m));
+                }
+            }
+
+            // CLI binary (home bin dirs first for the helper-as-root case).
+            for bin in *binaries {
+                if let Some(found) = find_harness_binary(home, path_dirs, bin) {
+                    evidence.push(found);
+                }
+            }
+
+            evidence.sort();
+            evidence.dedup();
+            AgentHarness {
+                slug: (*slug).to_string(),
+                display_name: (*display).to_string(),
+                detected: !evidence.is_empty(),
+                evidence,
+            }
+        })
+        .collect();
+    out.sort_by(|a, b| a.slug.cmp(&b.slug));
+    out
+}
+
+/// AI-SDLC posture rule: the host is "running AI agents without a
+/// governance harness" when at least one agent is present/discovered on the host
+/// AND no known harness is detected. This is a posture *gap* signal -- the
+/// common workstation default is no harness, which is exactly the gap to
+/// surface -- and it clears as soon as any recognized harness (AgentField,
+/// Rippletide, ...) is installed for the user. Deterministic and pure so it is
+/// unit-testable without touching disk.
+pub fn agents_without_harness(discovered_agent_count: usize, harnesses: &[AgentHarness]) -> bool {
+    discovered_agent_count > 0 && !harnesses.iter().any(|h| h.detected)
+}
+
 /// Derive the target username from a home directory path
 /// (`/Users/alice` -> `alice`, `/home/bob` -> `bob`, `C:\\Users\\carol` ->
 /// `carol`). Robust regardless of which user the privileged process runs as.
@@ -917,6 +1179,10 @@ pub struct VisibilityBundle {
     pub host_privilege: HostPrivilege,
     /// Per-agent OS confinement (INC-7), one entry per supported agent type.
     pub agent_sandboxes: Vec<AgentSandbox>,
+    /// Agent governance harnesses (AI-SDLC control plane) detected on this host,
+    /// one entry per known harness. All-undetected means agents here
+    /// run without a harness (the `agents_without_harness` gap).
+    pub harnesses: Vec<AgentHarness>,
 }
 
 /// Build the full structural visibility bundle for a host in a single
@@ -930,6 +1196,7 @@ pub fn build_visibility_bundle(home: &Path) -> VisibilityBundle {
     let graph_edges = build_capability_graph_from_endpoints(&endpoints);
     let host_privilege = assess_host_privilege(home);
     let agent_sandboxes = assess_agent_sandboxes(home);
+    let harnesses = detect_agent_harnesses(home);
     let inventory = McpInventory {
         generated_at: now,
         endpoints,
@@ -942,6 +1209,7 @@ pub fn build_visibility_bundle(home: &Path) -> VisibilityBundle {
         graph_edges,
         host_privilege,
         agent_sandboxes,
+        harnesses,
     }
 }
 
@@ -3718,6 +3986,219 @@ bob ALL=(ALL) NOPASSWD: ALL
             scan_sudoers_nopasswd(text, "bob", &group_principals),
             vec!["bob".to_string()]
         );
+    }
+
+    fn host_privilege_fixture(assessed: bool, passwordless_root: bool) -> HostPrivilege {
+        HostPrivilege {
+            elevated_session: false,
+            admin_user: passwordless_root,
+            passwordless_root,
+            evidence: Vec::new(),
+            platform: "test".to_string(),
+            user: "alice".to_string(),
+            assessed,
+        }
+    }
+
+    fn agent_sandbox_fixture(agent_type: &str, sandboxed: Option<bool>) -> AgentSandbox {
+        AgentSandbox {
+            agent_type: agent_type.to_string(),
+            sandboxed,
+            mechanism: "none".to_string(),
+            detail: String::new(),
+            file_access_scope: "user_files".to_string(),
+            file_access_detail: String::new(),
+            can_launch_arbitrary_commands: Some(true),
+            command_execution_detail: String::new(),
+        }
+    }
+
+    #[test]
+    fn blast_radius_fires_on_unsandboxed_plus_passwordless_root() {
+        let host = host_privilege_fixture(true, true);
+        let sandboxes = vec![agent_sandbox_fixture("cursor", Some(false))];
+        let out = agents_with_blast_radius(&host, &sandboxes, &BTreeMap::new());
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].agent_type, "cursor");
+        assert!(out[0].unsandboxed);
+        assert!(out[0].passwordless_root);
+        assert!(!out[0].critical_subprocess);
+    }
+
+    #[test]
+    fn blast_radius_fires_on_unsandboxed_plus_critical_subprocess() {
+        // No passwordless root, but the agent has spawned a critical subprocess.
+        let host = host_privilege_fixture(true, false);
+        let sandboxes = vec![agent_sandbox_fixture("claude_code", Some(false))];
+        let mut critical = BTreeMap::new();
+        critical.insert("claude_code".to_string(), 2u32);
+        let out = agents_with_blast_radius(&host, &sandboxes, &critical);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].agent_type, "claude_code");
+        assert!(out[0].critical_subprocess);
+        assert!(!out[0].passwordless_root);
+    }
+
+    #[test]
+    fn blast_radius_quiet_when_unsandboxed_but_no_amplifier() {
+        // Unsandboxed alone is not enough -- it is the common workstation case.
+        let host = host_privilege_fixture(true, false);
+        let sandboxes = vec![agent_sandbox_fixture("cursor", Some(false))];
+        let out = agents_with_blast_radius(&host, &sandboxes, &BTreeMap::new());
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn blast_radius_quiet_when_os_confined_even_with_amplifiers() {
+        // A positively OS-confined agent is bounded by its sandbox regardless of
+        // host passwordless root or its own critical subprocess usage.
+        let host = host_privilege_fixture(true, true);
+        let sandboxes = vec![agent_sandbox_fixture("sandboxed_agent", Some(true))];
+        let mut critical = BTreeMap::new();
+        critical.insert("sandboxed_agent".to_string(), 5u32);
+        let out = agents_with_blast_radius(&host, &sandboxes, &critical);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn blast_radius_quiet_when_sandbox_unassessed() {
+        // `None` is "could not determine" -- not a claim, so never qualifies.
+        let host = host_privilege_fixture(true, true);
+        let sandboxes = vec![agent_sandbox_fixture("unknown_agent", None)];
+        let out = agents_with_blast_radius(&host, &sandboxes, &BTreeMap::new());
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn blast_radius_ignores_unassessed_host_passwordless_root() {
+        // An unassessed host must not be treated as privileged; only the
+        // per-agent critical subprocess amplifier can fire here.
+        let host = host_privilege_fixture(false, true);
+        let sandboxes = vec![
+            agent_sandbox_fixture("cursor", Some(false)),
+            agent_sandbox_fixture("claude_code", Some(false)),
+        ];
+        let mut critical = BTreeMap::new();
+        critical.insert("claude_code".to_string(), 1u32);
+        let out = agents_with_blast_radius(&host, &sandboxes, &critical);
+        // cursor has no amplifier (host unassessed, no critical subprocess);
+        // claude_code fires on its critical subprocess only.
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].agent_type, "claude_code");
+        assert!(!out[0].passwordless_root);
+        assert!(out[0].critical_subprocess);
+    }
+
+    #[test]
+    fn blast_radius_is_sorted_by_agent_type() {
+        let host = host_privilege_fixture(true, true);
+        let sandboxes = vec![
+            agent_sandbox_fixture("openclaw", Some(false)),
+            agent_sandbox_fixture("cursor", Some(false)),
+            agent_sandbox_fixture("claude_code", Some(false)),
+        ];
+        let out = agents_with_blast_radius(&host, &sandboxes, &BTreeMap::new());
+        let names: Vec<&str> = out.iter().map(|a| a.agent_type.as_str()).collect();
+        assert_eq!(names, vec!["claude_code", "cursor", "openclaw"]);
+    }
+
+    // --- Agent governance harness presence (AI-SDLC posture) -----------------
+
+    fn harness_fixture(slug: &str, detected: bool) -> AgentHarness {
+        AgentHarness {
+            slug: slug.to_string(),
+            display_name: slug.to_string(),
+            detected,
+            evidence: if detected {
+                vec![format!("~/.config/{slug}")]
+            } else {
+                Vec::new()
+            },
+        }
+    }
+
+    #[test]
+    fn agents_without_harness_fires_when_agents_present_and_no_harness() {
+        let harnesses = vec![
+            harness_fixture("agentfield", false),
+            harness_fixture("rippletide", false),
+        ];
+        // Agents present + no harness detected -> the AI-SDLC gap fires.
+        assert!(agents_without_harness(2, &harnesses));
+        // No agents present -> nothing to govern, so it never fires.
+        assert!(!agents_without_harness(0, &harnesses));
+    }
+
+    #[test]
+    fn agents_without_harness_clears_when_any_harness_detected() {
+        let harnesses = vec![
+            harness_fixture("agentfield", true),
+            harness_fixture("rippletide", false),
+        ];
+        // A single detected harness clears the gap even with agents present.
+        assert!(!agents_without_harness(3, &harnesses));
+    }
+
+    #[test]
+    fn detect_agent_harnesses_all_undetected_on_empty_home() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        // Empty PATH so the host's real PATH cannot flake the result.
+        let harnesses = detect_agent_harnesses_with(tmp.path(), &[]);
+        assert_eq!(harnesses.len(), KNOWN_AGENT_HARNESSES.len());
+        assert!(harnesses
+            .iter()
+            .all(|h| !h.detected && h.evidence.is_empty()));
+        // Stable, sorted slugs.
+        let slugs: Vec<&str> = harnesses.iter().map(|h| h.slug.as_str()).collect();
+        assert_eq!(slugs, vec!["agentfield", "rippletide"]);
+    }
+
+    #[test]
+    fn detect_agent_harnesses_finds_xdg_config_dir() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".config").join("agentfield")).unwrap();
+        let harnesses = detect_agent_harnesses_with(tmp.path(), &[]);
+        let af = harnesses.iter().find(|h| h.slug == "agentfield").unwrap();
+        assert!(af.detected);
+        assert!(af.evidence.iter().any(|e| e.contains("agentfield")));
+        // The sibling harness stays undetected.
+        let rt = harnesses.iter().find(|h| h.slug == "rippletide").unwrap();
+        assert!(!rt.detected);
+    }
+
+    #[test]
+    fn detect_agent_harnesses_finds_home_bin_cli() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let bin_dir = tmp.path().join(".local").join("bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        let bin_name = if cfg!(target_os = "windows") {
+            "rippletide.exe"
+        } else {
+            "rippletide"
+        };
+        std::fs::write(bin_dir.join(bin_name), b"#!/bin/sh\n").unwrap();
+        let harnesses = detect_agent_harnesses_with(tmp.path(), &[]);
+        let rt = harnesses.iter().find(|h| h.slug == "rippletide").unwrap();
+        assert!(rt.detected);
+        assert!(rt.evidence.iter().any(|e| e.contains("rippletide")));
+    }
+
+    #[test]
+    fn detect_agent_harnesses_finds_binary_on_path() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path_dir = tmp.path().join("opt-bin");
+        std::fs::create_dir_all(&path_dir).unwrap();
+        let bin_name = if cfg!(target_os = "windows") {
+            "agentfield.exe"
+        } else {
+            "agentfield"
+        };
+        std::fs::write(path_dir.join(bin_name), b"#!/bin/sh\n").unwrap();
+        // Home is empty; the binary is only reachable via the injected PATH.
+        let harnesses = detect_agent_harnesses_with(tmp.path(), &[path_dir]);
+        let af = harnesses.iter().find(|h| h.slug == "agentfield").unwrap();
+        assert!(af.detected);
+        assert!(af.evidence.iter().any(|e| e.contains("on PATH")));
     }
 
     fn endpoint_from_json(agent: &str, name: &str, entry: &str) -> McpEndpoint {

@@ -57,6 +57,9 @@ pub enum ProvenanceEventKind {
     SessionStart,
     /// Reasoning: a tool was invoked in the transcript.
     ToolCall,
+    /// Reasoning: a tool result came back flagged as an error (developer
+    /// observability; LLM-free, never carries a security severity).
+    ToolError,
     /// Reasoning: a shell command was issued in the transcript.
     Command,
     /// Reasoning: the session declared an expected outbound egress (intent).
@@ -74,6 +77,7 @@ impl ProvenanceEventKind {
         match self {
             ProvenanceEventKind::SessionStart => "session_start",
             ProvenanceEventKind::ToolCall => "tool_call",
+            ProvenanceEventKind::ToolError => "tool_error",
             ProvenanceEventKind::Command => "command",
             ProvenanceEventKind::ExpectedEgress => "expected_egress",
             ProvenanceEventKind::DivergenceVerdict => "divergence_verdict",
@@ -89,11 +93,12 @@ impl ProvenanceEventKind {
         match self {
             ProvenanceEventKind::SessionStart => 0,
             ProvenanceEventKind::ToolCall => 1,
-            ProvenanceEventKind::Command => 2,
-            ProvenanceEventKind::ExpectedEgress => 3,
-            ProvenanceEventKind::DivergenceVerdict => 4,
-            ProvenanceEventKind::DivergenceEvidence => 5,
-            ProvenanceEventKind::SessionEnd => 6,
+            ProvenanceEventKind::ToolError => 2,
+            ProvenanceEventKind::Command => 3,
+            ProvenanceEventKind::ExpectedEgress => 4,
+            ProvenanceEventKind::DivergenceVerdict => 5,
+            ProvenanceEventKind::DivergenceEvidence => 6,
+            ProvenanceEventKind::SessionEnd => 7,
         }
     }
 }

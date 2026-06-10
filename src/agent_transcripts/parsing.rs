@@ -1129,6 +1129,170 @@ pub fn parse_session_economics(
     }
 }
 
+/// Deterministically extract per-tool error details from a transcript's raw
+/// JSONL text. Companion to [`parse_session_economics`] (which only *counts*
+/// `tool_errors`): this names the failing tool and a truncated error snippet so
+/// the LLM-free flight recorder can offer a drill-down ("Read failed:
+/// permission denied" instead of just "1 tool error"). Returns at most
+/// `MAX_TOOL_ERROR_DETAILS` entries, in transcript order.
+///
+/// Correlation: `tool_use` blocks carry `id` + `name` (Anthropic / Claude
+/// Code) and `function_call` blocks carry `call_id` + `name` (Codex). An
+/// erroring `tool_result` references its invocation via `tool_use_id`, and a
+/// `function_call_output` via `call_id`; the tool name is resolved through that
+/// id when present, else left empty. Metadata only -- the message is truncated
+/// to a single line and carries no file/transcript body.
+pub fn parse_tool_error_details(raw_text: &str) -> Vec<super::ToolErrorDetail> {
+    const MAX_TOOL_ERROR_DETAILS: usize = 50;
+    const MAX_MESSAGE_LEN: usize = 200;
+
+    let mut id_to_name: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    let mut details: Vec<super::ToolErrorDetail> = Vec::new();
+
+    for line in raw_text.split('\n') {
+        if details.len() >= MAX_TOOL_ERROR_DETAILS {
+            break;
+        }
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let value: serde_json::Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        let ts = [
+            value.get("timestamp"),
+            value.get("payload").and_then(|p| p.get("timestamp")),
+            value.get("ts"),
+        ]
+        .into_iter()
+        .flatten()
+        .find_map(parse_ts);
+
+        // Candidate items for this line. Anthropic / Claude Code carry a
+        // `content` array of typed blocks; Codex rollouts carry one
+        // `response_item` per line whose `payload` IS the block (or a bare
+        // top-level block). Cover all three so correlation works regardless of
+        // the agent's transcript shape.
+        let content = value
+            .get("message")
+            .and_then(|m| m.get("content"))
+            .and_then(|c| c.as_array())
+            .or_else(|| value.get("content").and_then(|c| c.as_array()));
+        let mut candidates: Vec<&serde_json::Value> = Vec::new();
+        if let Some(items) = content {
+            candidates.extend(items.iter());
+        } else if let Some(payload) = value.get("payload") {
+            candidates.push(payload);
+        } else {
+            candidates.push(&value);
+        }
+
+        for item in candidates {
+            let kind = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            match kind {
+                // Record id -> tool name for later result correlation.
+                "tool_use" | "function_call" => {
+                    let id = item
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .or_else(|| item.get("call_id").and_then(|v| v.as_str()));
+                    let name = item
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .trim();
+                    if let Some(id) = id {
+                        if !id.is_empty() && !name.is_empty() {
+                            id_to_name.insert(id.to_string(), name.to_string());
+                        }
+                    }
+                }
+                "tool_result" | "function_call_output" => {
+                    let is_err = item
+                        .get("is_error")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false)
+                        || item.get("error").map(|e| !e.is_null()).unwrap_or(false);
+                    if !is_err {
+                        continue;
+                    }
+                    let ref_id = item
+                        .get("tool_use_id")
+                        .and_then(|v| v.as_str())
+                        .or_else(|| item.get("call_id").and_then(|v| v.as_str()))
+                        .unwrap_or("");
+                    let tool_name = id_to_name.get(ref_id).cloned().unwrap_or_default();
+                    let message = truncate_one_line(&extract_error_message(item), MAX_MESSAGE_LEN);
+                    details.push(super::ToolErrorDetail {
+                        tool_name,
+                        message,
+                        at: ts,
+                    });
+                    if details.len() >= MAX_TOOL_ERROR_DETAILS {
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    details
+}
+
+/// Pull a human-readable error snippet from a `tool_result` /
+/// `function_call_output` item: prefer an explicit `error` field, else fall
+/// back to the result `content` (string, or concatenated `text` blocks).
+fn extract_error_message(item: &serde_json::Value) -> String {
+    if let Some(err) = item.get("error") {
+        if let Some(s) = err.as_str() {
+            return s.to_string();
+        }
+        if let Some(obj) = err.as_object() {
+            for key in ["message", "error", "detail", "description"] {
+                if let Some(s) = obj.get(key).and_then(|v| v.as_str()) {
+                    return s.to_string();
+                }
+            }
+        }
+        if !err.is_null() {
+            return err.to_string();
+        }
+    }
+    match item.get("content") {
+        Some(serde_json::Value::String(s)) => s.clone(),
+        Some(serde_json::Value::Array(arr)) => {
+            let mut parts = Vec::new();
+            for c in arr {
+                if let Some(s) = c.get("text").and_then(|v| v.as_str()) {
+                    parts.push(s.to_string());
+                } else if let Some(s) = c.as_str() {
+                    parts.push(s.to_string());
+                }
+            }
+            parts.join(" ")
+        }
+        Some(other) => other.to_string(),
+        None => String::new(),
+    }
+}
+
+/// Collapse whitespace to a single line and cap at `max` chars (char-safe,
+/// appends an ASCII ellipsis on truncation).
+fn truncate_one_line(s: &str, max: usize) -> String {
+    let one_line = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    if one_line.chars().count() > max {
+        let truncated: String = one_line.chars().take(max).collect();
+        format!("{}...", truncated)
+    } else {
+        one_line
+    }
+}
+
 #[cfg(test)]
 mod economics_tests {
     use super::*;
@@ -1184,5 +1348,45 @@ mod economics_tests {
         assert_eq!(econ.total_tokens, 0);
         assert_eq!(econ.est_cost_usd, 0.0);
         assert_eq!(econ.duration_secs, 0);
+    }
+
+    #[test]
+    fn tool_error_details_correlate_anthropic_tool_use_id() {
+        let jsonl = concat!(
+            r#"{"type":"assistant","timestamp":"2026-05-06T18:15:10.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"tu_1","name":"Read"}]}}"#,
+            "\n",
+            r#"{"type":"user","timestamp":"2026-05-06T18:15:20.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu_1","is_error":true,"content":"permission denied: /etc/shadow"}]}}"#,
+            "\n",
+        );
+        let details = parse_tool_error_details(jsonl);
+        assert_eq!(details.len(), 1);
+        assert_eq!(details[0].tool_name, "Read");
+        assert_eq!(details[0].message, "permission denied: /etc/shadow");
+        assert!(details[0].at.is_some());
+    }
+
+    #[test]
+    fn tool_error_details_correlate_codex_call_id_and_error_object() {
+        let jsonl = concat!(
+            r#"{"type":"response_item","payload":{"type":"function_call","call_id":"call_9","name":"shell"}}"#,
+            "\n",
+            r#"{"type":"response_item","payload":{"type":"function_call_output","call_id":"call_9","error":{"message":"exit code 1: command not found"}}}"#,
+            "\n",
+        );
+        let details = parse_tool_error_details(jsonl);
+        assert_eq!(details.len(), 1);
+        assert_eq!(details[0].tool_name, "shell");
+        assert_eq!(details[0].message, "exit code 1: command not found");
+    }
+
+    #[test]
+    fn tool_error_details_ignore_successful_results() {
+        let jsonl = concat!(
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"tu_ok","name":"Write"}]}}"#,
+            "\n",
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu_ok","content":"ok"}]}}"#,
+            "\n",
+        );
+        assert!(parse_tool_error_details(jsonl).is_empty());
     }
 }
