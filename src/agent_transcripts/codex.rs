@@ -196,7 +196,7 @@ pub(crate) fn build_payload(
     let mut sessions: Vec<CollectedRawSession> = Vec::new();
 
     for candidate in candidates.into_iter().take(options.limit.max(1)) {
-        let raw_text = match std::fs::read_to_string(&candidate.path) {
+        let raw_text = match super::read_transcript_capped(&candidate.path) {
             Ok(text) => text,
             Err(_) => continue,
         };
@@ -637,7 +637,7 @@ fn thread_row_to_session(
     let (mut user_text, mut assistant_text, mut raw_text, source_path) = rollout_path
         .as_deref()
         .and_then(|rp| resolve_rollout_path(codex_home, rp))
-        .and_then(|path| std::fs::read_to_string(&path).ok().map(|text| (path, text)))
+        .and_then(|path| super::read_transcript_capped(&path).ok().map(|text| (path, text)))
         .map(|(path, text)| {
             let parsed = parse_jsonl_transcript(&text);
             (

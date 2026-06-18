@@ -78,53 +78,18 @@ fn looks_like_edamame_powershell_probe_stub(basename: &str, normalized: &str) ->
         return false;
     }
 
-    let has_read_probe = [
-        "get-itemproperty",
-        "get-ciminstance",
-        "get-wmiobject",
-        "get-bitlockervolume",
-        "get-netfirewallprofile",
-        "get-service",
-        "get-localuser",
-        "get-executionpolicy",
-    ]
-    .iter()
-    .any(|needle| normalized.contains(needle));
+    let has_read_probe = vuln_detector_params::secret_content_powershell_probe_read_verbs()
+        .iter()
+        .any(|needle| normalized.contains(needle.as_str()));
     if !has_read_probe {
         return false;
     }
 
     // Only attest read-only assessment probes. Remediation scripts and
     // downloader/execution payloads remain ordinary script-like temp files.
-    ![
-        "invoke-webrequest",
-        "invoke-restmethod",
-        "downloadstring",
-        "downloadfile",
-        "start-process",
-        "encodedcommand",
-        "frombase64string",
-        "set-itemproperty",
-        "new-itemproperty",
-        "remove-itemproperty",
-        "set-netfirewall",
-        "new-netfirewall",
-        "remove-netfirewall",
-        "set-executionpolicy",
-        "disable-localuser",
-        "enable-localuser",
-        "start-service",
-        "stop-service",
-        "reg add ",
-        "reg delete ",
-        "sc.exe config",
-        "curl ",
-        "wget ",
-        " nc ",
-        "netcat",
-    ]
-    .iter()
-    .any(|needle| normalized.contains(needle))
+    !vuln_detector_params::secret_content_powershell_dangerous_verbs()
+        .iter()
+        .any(|needle| normalized.contains(needle.as_str()))
 }
 
 pub fn inspect_secret_like_file(path: &str) -> Option<SecretContentFileMatch> {
@@ -146,52 +111,39 @@ pub fn inspect_secret_like_file(path: &str) -> Option<SecretContentFileMatch> {
     let mut labels = BTreeSet::new();
     let mut secret_hits = 0usize;
 
-    if normalized.contains("-----begin openssh private key-----")
-        || normalized.contains("-----begin rsa private key-----")
-        || normalized.contains("-----begin ec private key-----")
-        || normalized.contains("-----begin private key-----")
-    {
-        labels.insert("ssh".to_string());
-        secret_hits += 2;
-    }
-
-    if normalized.contains("aws_access_key_id")
-        || normalized.contains("aws_secret_access_key")
-        || normalized.contains("[default]")
-    {
-        labels.insert("aws".to_string());
-        secret_hits += 2;
-    }
-
-    if normalized.contains("apiversion:")
-        && normalized.contains("clusters:")
-        && normalized.contains("server:")
-    {
-        labels.insert("kube".to_string());
-        secret_hits += 2;
-    }
-
-    if normalized.contains("ghp_")
-        || normalized.contains("github_pat_")
-        || normalized.contains("github_token")
-    {
-        labels.insert("git".to_string());
-        secret_hits += 2;
-    }
-
-    for marker in [
-        "api_token=",
-        "access_token=",
-        "secret=",
-        "password=",
-        "private_key=",
-        "ssh_private_key=",
-        "database_password=",
-        "token=",
-    ] {
-        if normalized.contains(marker) {
-            labels.insert("env".to_string());
-            secret_hits += 1;
+    // CloudModel-tunable secret-marker signatures. `mode` controls whether
+    // any one marker (`any`) or every marker (`all`) is required; `per_marker`
+    // controls whether the `hits` weight is added once on match or once per
+    // present marker (the legacy `env`-block shape). Markers and mode are
+    // already lowercased by `CveDetectionParams::new_from_json`.
+    for signature in vuln_detector_params::secret_content_signatures() {
+        if signature.markers.is_empty() {
+            continue;
+        }
+        let matched = if signature.mode == "all" {
+            signature
+                .markers
+                .iter()
+                .all(|marker| normalized.contains(marker.as_str()))
+        } else {
+            signature
+                .markers
+                .iter()
+                .any(|marker| normalized.contains(marker.as_str()))
+        };
+        if !matched {
+            continue;
+        }
+        if signature.per_marker {
+            for marker in &signature.markers {
+                if normalized.contains(marker.as_str()) {
+                    labels.insert(signature.label.clone());
+                    secret_hits += signature.hits;
+                }
+            }
+        } else {
+            labels.insert(signature.label.clone());
+            secret_hits += signature.hits;
         }
     }
 

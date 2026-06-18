@@ -363,6 +363,37 @@ fn walk_files_with_suffix_inner(
     }
 }
 
+/// Maximum number of bytes read from a single transcript file.
+///
+/// Transcript files are normally a few hundred KB. A multi-MB file is already
+/// an outlier (a very long multi-hour agent session) and a hundreds-of-MB file
+/// is either corruption or an adversarial attempt to exhaust memory through the
+/// observer / divergence / delegation pipeline -- the body flows into the
+/// combined-transcript buffer in core, the LLM behavioral-model payload, the
+/// derived-signal extraction, and the delegation-depth reconstruction. Capping
+/// the per-file read bounds every one of those downstream consumers. With the
+/// default `CollectOptions.limit` of 6 sessions, the combined buffer is bounded
+/// at `6 * MAX_TRANSCRIPT_BYTES`.
+pub(crate) const MAX_TRANSCRIPT_BYTES: u64 = 16 * 1024 * 1024;
+
+/// Read a transcript file, capping the read at [`MAX_TRANSCRIPT_BYTES`].
+///
+/// Reads from the START of the file (where the session header and the earliest
+/// turns / parent-linkage records live, keeping the JSONL parent/child graph
+/// internally consistent) and returns the UTF-8 lossy contents. Truncation
+/// lands on a raw byte boundary; `String::from_utf8_lossy` repairs any split
+/// multibyte sequence at the cut. Drop-in for the adapters' previous
+/// `std::fs::read_to_string(path)` calls: same `io::Result<String>` shape, so
+/// the existing `match ... { Ok(text) => ..., Err(_) => continue }` arms are
+/// unchanged.
+pub(crate) fn read_transcript_capped(path: &Path) -> std::io::Result<String> {
+    use std::io::Read;
+    let file = std::fs::File::open(path)?;
+    let mut buf = Vec::new();
+    file.take(MAX_TRANSCRIPT_BYTES).read_to_end(&mut buf)?;
+    Ok(String::from_utf8_lossy(&buf).into_owned())
+}
+
 /// File mtime in seconds since unix epoch. Returns 0 on error.
 pub(crate) fn mtime_secs(path: &Path) -> u64 {
     use std::time::UNIX_EPOCH;

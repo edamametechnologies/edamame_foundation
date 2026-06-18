@@ -19,6 +19,7 @@
 //! collectors simply find nothing on disk).
 
 use crate::supported_agents;
+use crate::vuln_detector_params;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -1226,26 +1227,62 @@ pub fn build_visibility_bundle(home: &Path) -> VisibilityBundle {
     }
 }
 
+/// Maximum bytes read from a single MCP config file. Config files
+/// (`~/.cursor/mcp.json`, `~/.claude.json`, Claude Desktop config, Codex TOML,
+/// Hermes YAML) are at most a few KB in practice; a multi-MB one is malformed
+/// or an adversarial attempt to exhaust memory through the parser. Capping the
+/// read bounds the parser input and the resulting endpoint list.
+const MAX_MCP_CONFIG_BYTES: u64 = 4 * 1024 * 1024;
+
+/// Maximum number of MCP endpoints retained across all agents and config
+/// files. Each endpoint seeds A2A peers, capability-graph nodes, data-flow
+/// edges, SBOM components, and confused-deputy analysis, so an unbounded
+/// endpoint list would propagate unbounded growth across the entire visibility
+/// surface. Far above any realistic per-host MCP server count.
+const MAX_MCP_ENDPOINTS: usize = 512;
+
+/// Read a file, capping the read at `max_bytes`. Returns the UTF-8 lossy
+/// contents (truncation lands on a byte boundary; lossy decoding repairs any
+/// split multibyte sequence). Used for user/agent-writable config files whose
+/// size is not otherwise bounded.
+fn read_capped(path: &Path, max_bytes: u64) -> std::io::Result<String> {
+    use std::io::Read;
+    let file = std::fs::File::open(path)?;
+    let mut buf = Vec::new();
+    file.take(max_bytes).read_to_end(&mut buf)?;
+    Ok(String::from_utf8_lossy(&buf).into_owned())
+}
+
 /// Discover MCP endpoints declared by every supported agent's config targets
 /// plus EDAMAME's own server key. JSON config formats (Cursor `mcp.json`,
 /// Claude `.claude.json`, Claude Desktop config) are parsed fully; TOML
 /// (Codex) and YAML (Hermes) configs are parsed with a tolerant line scan so
 /// at least server names/commands surface without pulling in toml/yaml deps.
+///
+/// Bounded on two axes: each config read is capped at `MAX_MCP_CONFIG_BYTES`
+/// and the total endpoint count at `MAX_MCP_ENDPOINTS`, so the entire
+/// downstream visibility surface seeded from these endpoints stays bounded.
 pub fn discover_mcp_endpoints(home: &Path) -> Vec<McpEndpoint> {
     let mut endpoints = Vec::new();
-    for def in supported_agents::ordered_supported_agents() {
+    'agents: for def in supported_agents::ordered_supported_agents() {
         let server_key = def.mcp_server_key().map(|s| s.to_string());
         for config_path in def.resolve_global_mcp_configs(home) {
+            if endpoints.len() >= MAX_MCP_ENDPOINTS {
+                break 'agents;
+            }
             if !config_path.exists() {
                 continue;
             }
-            let raw = match std::fs::read_to_string(&config_path) {
+            let raw = match read_capped(&config_path, MAX_MCP_CONFIG_BYTES) {
                 Ok(text) => text,
                 Err(_) => continue,
             };
             let path_str = config_path.to_string_lossy().to_string();
             let servers = parse_mcp_config(&raw, &path_str);
             for server in servers {
+                if endpoints.len() >= MAX_MCP_ENDPOINTS {
+                    break 'agents;
+                }
                 let is_edamame = server_key
                     .as_deref()
                     .map(|key| server.name == key)
@@ -1864,71 +1901,33 @@ fn classify_tool_privileges(server: &RawMcpServer) -> Vec<ToolPrivilegeClass> {
         }
     };
 
-    let contains_any = |needles: &[&str]| needles.iter().any(|n| haystack.contains(n));
+    // CloudModel-tunable per-class keyword lists (lowercased by
+    // `CveDetectionParams::new_from_json`).
+    let keywords = vuln_detector_params::agent_tool_privilege_keywords();
+    let contains_any = |needles: &[String]| needles.iter().any(|n| haystack.contains(n.as_str()));
 
-    if contains_any(&[
-        "shell",
-        "bash",
-        "terminal",
-        "exec",
-        "command",
-        "subprocess",
-        "run-command",
-    ]) {
+    if contains_any(&keywords.shell) {
         add(ToolPrivilegeClass::Shell, &mut classes);
     }
-    if contains_any(&[
-        "filesystem",
-        "file-write",
-        "write-file",
-        "fs-write",
-        "edit",
-        "editor",
-    ]) {
+    if contains_any(&keywords.filesystem_write) {
         add(ToolPrivilegeClass::FilesystemWrite, &mut classes);
     }
-    if contains_any(&["read-file", "fs-read", "filesystem", "files", "fetch-file"]) {
+    if contains_any(&keywords.filesystem_read) {
         add(ToolPrivilegeClass::FilesystemRead, &mut classes);
     }
-    if contains_any(&[
-        "browser",
-        "puppeteer",
-        "playwright",
-        "chrome",
-        "webdriver",
-        "selenium",
-    ]) {
+    if contains_any(&keywords.browser) {
         add(ToolPrivilegeClass::Browser, &mut classes);
     }
-    if contains_any(&["git", "github", "gitlab", "bitbucket"]) {
+    if contains_any(&keywords.git) {
         add(ToolPrivilegeClass::Git, &mut classes);
     }
-    if contains_any(&[
-        "postgres", "mysql", "sqlite", "mongo", "database", "db-", "sql", "redis",
-    ]) {
+    if contains_any(&keywords.database) {
         add(ToolPrivilegeClass::Database, &mut classes);
     }
-    if contains_any(&[
-        "secret",
-        "vault",
-        "credential",
-        "keychain",
-        "1password",
-        "keyring",
-        "aws-secrets",
-    ]) {
+    if contains_any(&keywords.secret_access) {
         add(ToolPrivilegeClass::SecretAccess, &mut classes);
     }
-    if contains_any(&[
-        "fetch",
-        "http",
-        "web-search",
-        "websearch",
-        "brave",
-        "search",
-        "scrape",
-        "request",
-    ]) {
+    if contains_any(&keywords.network) {
         add(ToolPrivilegeClass::Network, &mut classes);
     }
 
@@ -2320,24 +2319,10 @@ pub fn build_agent_sboms_from_endpoints_with_home(
 /// project secret bindings into the SBOM (names only, invariant I5).
 fn is_secret_env_key(key: &str) -> bool {
     let upper = key.to_ascii_uppercase();
-    const NEEDLES: &[&str] = &[
-        "TOKEN",
-        "KEY",
-        "SECRET",
-        "PASSWORD",
-        "PASSWD",
-        "CREDENTIAL",
-        "API_KEY",
-        "APIKEY",
-        "AUTH",
-        "BEARER",
-        "ACCESS_KEY",
-        "PRIVATE",
-        "PAT",
-        "SESSION",
-        "COOKIE",
-    ];
-    NEEDLES.iter().any(|n| upper.contains(n))
+    // CloudModel-tunable needles (uppercased by `CveDetectionParams::new_from_json`).
+    vuln_detector_params::agent_secret_env_key_needles()
+        .iter()
+        .any(|n| upper.contains(n.as_str()))
 }
 
 /// Subdirectories within an agent's config dir that carry agent instructions /
@@ -2399,9 +2384,14 @@ fn discover_agent_instruction_components(home: &Path, agent_type: &str) -> Vec<S
     // Collect (path, kind) pairs, then sort by path for deterministic output.
     let mut found: Vec<(PathBuf, &'static str)> = Vec::new();
 
-    // Top-level instruction files directly under the config dir.
+    // Top-level instruction files directly under the config dir. Capped at
+    // MAX_FILES so a config dir stuffed with `*.mdc` files cannot grow `found`
+    // without bound before the trailing `.take(MAX_FILES)`.
     if let Ok(entries) = std::fs::read_dir(&config_dir) {
         for entry in entries.flatten() {
+            if found.len() >= MAX_FILES {
+                break;
+            }
             let path = entry.path();
             if !entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
                 continue;
@@ -2520,29 +2510,6 @@ fn instruction_file_component(
     })
 }
 
-/// Known LLM model-family prefixes used to recognize model identifiers in
-/// agent transcripts. Conservative on purpose: a token is only treated as a
-/// model when it begins with one of these AND carries a version digit, so
-/// arbitrary prose never produces a `machine-learning-model` component.
-const MODEL_FAMILY_PREFIXES: &[&str] = &[
-    "claude-",
-    "gpt-",
-    "gemini-",
-    "gemma-",
-    "llama-",
-    "mistral-",
-    "mixtral-",
-    "codestral-",
-    "deepseek-",
-    "qwen",
-    "command-r",
-    "grok-",
-    "phi-",
-    "o1-",
-    "o3-",
-    "o4-",
-];
-
 /// Cap on the number of distinct models projected per agent SBOM.
 const MAX_MODELS_PER_AGENT: usize = 24;
 
@@ -2581,9 +2548,13 @@ fn normalize_model_token(raw: &str) -> Option<String> {
     if candidate.len() < 3 || candidate.len() > 64 {
         return None;
     }
-    let starts_with_family = MODEL_FAMILY_PREFIXES
+    // CloudModel-tunable family prefixes (lowercased by
+    // `CveDetectionParams::new_from_json`). Conservative on purpose: a token is
+    // only treated as a model when it begins with one of these AND carries a
+    // version digit, so arbitrary prose never produces a model component.
+    let starts_with_family = vuln_detector_params::agent_model_family_prefixes()
         .iter()
-        .any(|p| candidate.starts_with(p));
+        .any(|p| candidate.starts_with(p.as_str()));
     if !starts_with_family {
         return None;
     }
@@ -2600,23 +2571,6 @@ fn normalize_model_token(raw: &str) -> Option<String> {
 /// field at all, e.g. Cursor). Lets the UI show "models not recorded by this
 /// agent" instead of guessing model names from conversational prose.
 pub const MODELS_SOURCE_PROP: &str = "edamame:models_source";
-
-/// Field names that carry an authoritative model identifier in agent
-/// transcript JSON (checked top-level and one level inside a known container).
-const MODEL_FIELD_KEYS: &[&str] = &["model", "modelId", "model_id"];
-
-/// Container objects descended into exactly one level when scanning for an
-/// authoritative model field. Bounded on purpose -- never a blind whole-tree
-/// walk that could mistake an unrelated `model` key (e.g. a device model) for
-/// an LLM identifier.
-const MODEL_CONTAINER_KEYS: &[&str] = &[
-    "message",
-    "request",
-    "response",
-    "metadata",
-    "usage",
-    "assistant",
-];
 
 /// Extract **authoritative** LLM model identifiers from a raw JSONL transcript.
 ///
@@ -2667,15 +2621,21 @@ fn collect_authoritative_models(
             }
         }
     };
-    for key in MODEL_FIELD_KEYS {
-        if let Some(v) = obj.get(*key) {
+    // CloudModel-tunable: the field names that carry an authoritative model id,
+    // and the container objects descended into exactly one level. Bounded on
+    // purpose -- never a blind whole-tree walk that could mistake an unrelated
+    // `model` key (e.g. a device model) for an LLM identifier.
+    let field_keys = vuln_detector_params::agent_model_field_keys();
+    let container_keys = vuln_detector_params::agent_model_container_keys();
+    for key in &field_keys {
+        if let Some(v) = obj.get(key.as_str()) {
             pull(v);
         }
     }
-    for key in MODEL_CONTAINER_KEYS {
-        if let Some(child) = obj.get(*key).and_then(|c| c.as_object()) {
-            for fk in MODEL_FIELD_KEYS {
-                if let Some(v) = child.get(*fk) {
+    for key in &container_keys {
+        if let Some(child) = obj.get(key.as_str()).and_then(|c| c.as_object()) {
+            for fk in &field_keys {
+                if let Some(v) = child.get(fk.as_str()) {
                     pull(v);
                 }
             }
@@ -3451,23 +3411,21 @@ pub struct RawSpawn {
     pub goal_text: String,
 }
 
-/// Threshold beyond which delegation depth is itself a finding, regardless of
-/// loop detection. Sub-agent fan-out deeper than this is unusual on a
-/// workstation and worth surfacing.
-const RECURSION_DEPTH_HIGH: u32 = 4;
+/// Hard cap on the number of sub-agent spawn markers extracted from a single
+/// transcript body. Bounds the delegation-tree node count, the goal-hash maps
+/// in `analyze_delegation`, and the serialized payload sent to the UI, so a
+/// pathologically large or adversarial transcript cannot exhaust memory. Far
+/// above every CloudModel recursion threshold (`fanout_high` default 8), so the
+/// cap only saturates the *reported* fan-out count -- it never suppresses a
+/// recursion finding, which fires well before this ceiling.
+const MAX_SPAWN_MARKERS: usize = 4096;
 
-/// The same goal re-delegated at least this many times in one session is a
-/// same-purpose loop even when every spawn reads at the same depth. This is the
-/// common shape on a single-transcript workstation, where nested sub-agent
-/// turns are not inlined into the parent transcript so depth-only detection
-/// collapses to 1. Depth-based detection (a repeated hash at *increasing*
-/// depth) still applies on top of this.
-const RECURSION_LOOP_MIN_REPEATS: u32 = 3;
-
-/// Sub-agent fan-out at or above this count in a single session is itself worth
-/// surfacing even without a detected loop or deep nesting -- a parent agent
-/// dispatching this many sub-agents is an unusual control pattern.
-const RECURSION_FANOUT_HIGH: u32 = 8;
+/// Hard cap on the number of JSON object records retained for structured
+/// delegation-depth reconstruction. Bounds the `records` vec and the `by_uuid`
+/// index built by `extract_spawn_markers_structured` independently of the
+/// per-file byte cap, so a transcript that is entirely compact JSONL cannot
+/// build an unbounded parent-linkage graph.
+const MAX_TRANSCRIPT_RECORDS: usize = 100_000;
 
 /// Extract sub-agent spawn markers from a raw transcript body. Generic across
 /// agents.
@@ -3493,6 +3451,9 @@ pub fn extract_spawn_markers(transcript: &str) -> Vec<RawSpawn> {
 fn extract_spawn_markers_textual(transcript: &str) -> Vec<RawSpawn> {
     let mut spawns = Vec::new();
     for line in transcript.lines() {
+        if spawns.len() >= MAX_SPAWN_MARKERS {
+            break;
+        }
         let lower = line.to_ascii_lowercase();
         let is_spawn = lower.contains("\"name\":\"task\"")
             || lower.contains("\"name\": \"task\"")
@@ -3554,6 +3515,14 @@ fn extract_spawn_markers_structured(transcript: &str) -> Option<Vec<RawSpawn>> {
             _ => continue,
         };
         saw_object = true;
+        // Bound the parent-linkage graph independently of the per-file byte cap:
+        // a transcript that is entirely compact JSONL objects would otherwise
+        // grow `records`/`by_uuid` without limit. `saw_object` is already set, so
+        // the structured path is still chosen (we never fall back to the text
+        // scan just because the record cap was hit).
+        if records.len() >= MAX_TRANSCRIPT_RECORDS {
+            break;
+        }
 
         let uuid = value
             .get("uuid")
@@ -3588,6 +3557,9 @@ fn extract_spawn_markers_structured(transcript: &str) -> Option<Vec<RawSpawn>> {
 
     let mut spawns = Vec::new();
     for rec in &records {
+        if spawns.len() >= MAX_SPAWN_MARKERS {
+            break;
+        }
         let Some((reason, goal_text)) = &rec.spawn else {
             continue;
         };
@@ -3757,18 +3729,27 @@ fn goal_loop_hash(goal_text: &str) -> String {
 /// findings. Three independent signals can fire:
 ///
 /// * **Same-purpose loop** -- the same goal hash recurs either at increasing
-///   delegation depth (nested transcripts) or at least `RECURSION_LOOP_MIN_REPEATS`
+///   delegation depth (nested transcripts) or at least `loop_min_repeats`
 ///   times overall (flat transcripts where nested sub-agent turns are not
 ///   inlined and every spawn reads at depth 1).
-/// * **Excessive depth** -- `max_depth >= RECURSION_DEPTH_HIGH`.
-/// * **Excessive fan-out** -- a single session dispatches
-///   `>= RECURSION_FANOUT_HIGH` sub-agents.
+/// * **Excessive depth** -- `max_depth >= depth_high`.
+/// * **Excessive fan-out** -- a single session dispatches `>= fanout_high`
+///   sub-agents.
+///
+/// All three thresholds are CloudModel-tunable via
+/// `vuln_detector_params::agent_recursion_thresholds()`.
 pub fn analyze_delegation(
     agent_type: &str,
     agent_instance_id: &str,
     spawns: &[RawSpawn],
 ) -> DelegationTree {
     let now = chrono::Utc::now();
+    // CloudModel-tunable recursion thresholds:
+    // * `depth_high` -- delegation depth at/above which depth alone is a finding.
+    // * `loop_min_repeats` -- same-goal re-delegations at/above which a
+    //   same-purpose loop is flagged even when every spawn reads at depth 1.
+    // * `fanout_high` -- sub-agent fan-out at/above which fan-out alone fires.
+    let thresholds = vuln_detector_params::agent_recursion_thresholds();
     let root = DelegationNode {
         node_id: short_hash(&format!("{}|{}|root", agent_type, agent_instance_id)),
         agent_type: agent_type.to_string(),
@@ -3801,7 +3782,11 @@ pub fn analyze_delegation(
 
     // Flat children attached to root for the MVP (the depth field preserves
     // the nesting signal without a full reconstruction of the call tree).
-    for spawn in spawns {
+    // `.take(MAX_SPAWN_MARKERS)` keeps this self-bounding even for direct
+    // callers that did not go through the capped extractors -- the fan-out
+    // threshold (default 8) fires long before this ceiling, so the cap only
+    // saturates the reported node count.
+    for spawn in spawns.iter().take(MAX_SPAWN_MARKERS) {
         let depth = spawn.depth.max(1);
         max_depth = max_depth.max(depth);
         let loop_hash = goal_loop_hash(&spawn.goal_text);
@@ -3823,7 +3808,7 @@ pub fn analyze_delegation(
         let count = hash_counts.entry(loop_hash.clone()).or_insert(0);
         *count += 1;
         max_repeat = max_repeat.max(*count);
-        if *count >= RECURSION_LOOP_MIN_REPEATS {
+        if *count >= thresholds.loop_min_repeats {
             repeated_goal_loop = true;
         }
 
@@ -3853,7 +3838,7 @@ pub fn analyze_delegation(
         } else {
             format!(
                 "Agent '{}' re-delegated the same goal {} times in one session (>= {}).",
-                agent_type, max_repeat, RECURSION_LOOP_MIN_REPEATS
+                agent_type, max_repeat, thresholds.loop_min_repeats
             )
         };
         tree.findings.push(
@@ -3871,7 +3856,7 @@ pub fn analyze_delegation(
             .with_evidence("total_nodes", tree.total_nodes.to_string())
             .with_owasp(),
         );
-    } else if tree.max_depth >= RECURSION_DEPTH_HIGH {
+    } else if tree.max_depth >= thresholds.depth_high {
         tree.findings.push(
             VisibilityFinding::new(
                 "recursion",
@@ -3881,14 +3866,14 @@ pub fn analyze_delegation(
                 "Excessive delegation depth",
                 format!(
                     "Agent '{}' reached delegation depth {} (>= {}).",
-                    agent_type, tree.max_depth, RECURSION_DEPTH_HIGH
+                    agent_type, tree.max_depth, thresholds.depth_high
                 ),
             )
             .with_evidence("agent_type", agent_type.to_string())
             .with_evidence("max_depth", tree.max_depth.to_string())
             .with_owasp(),
         );
-    } else if fan_out >= RECURSION_FANOUT_HIGH {
+    } else if fan_out >= thresholds.fanout_high {
         tree.findings.push(
             VisibilityFinding::new(
                 "recursion",
@@ -3898,7 +3883,7 @@ pub fn analyze_delegation(
                 "High sub-agent fan-out",
                 format!(
                     "Agent '{}' spawned {} sub-agents in one session (>= {}).",
-                    agent_type, fan_out, RECURSION_FANOUT_HIGH
+                    agent_type, fan_out, thresholds.fanout_high
                 ),
             )
             .with_evidence("agent_type", agent_type.to_string())
@@ -4758,6 +4743,109 @@ some normal line
             .findings
             .iter()
             .any(|f| f.rule_id == "recursion_excessive_fanout"));
+    }
+
+    #[test]
+    fn delegation_node_count_bounded_by_cap() {
+        // A transcript (or a direct caller) that produces more spawn markers
+        // than MAX_SPAWN_MARKERS must not grow the delegation tree without
+        // limit: the node count saturates at the cap (+1 for the synthetic
+        // root) and the children vec is bounded identically.
+        let spawns: Vec<RawSpawn> = (0..(MAX_SPAWN_MARKERS + 50))
+            .map(|i| RawSpawn {
+                depth: 1,
+                spawn_reason: None,
+                goal_text: format!("distinct sub-agent goal number {i}"),
+            })
+            .collect();
+        let tree = analyze_delegation("cursor", "host", &spawns);
+        assert_eq!(
+            tree.total_nodes,
+            MAX_SPAWN_MARKERS as u32 + 1,
+            "node count must saturate at MAX_SPAWN_MARKERS + root"
+        );
+        assert_eq!(
+            tree.root.children.len(),
+            MAX_SPAWN_MARKERS,
+            "children vec must be bounded at MAX_SPAWN_MARKERS"
+        );
+    }
+
+    #[test]
+    fn sidechain_depth_cycle_guard_terminates() {
+        // A malformed/adversarial transcript whose parentUuid links form a
+        // cycle (a <- b <- a) must NOT hang the depth walk. The visited-set
+        // cycle guard breaks the loop; extraction returns with a bounded,
+        // finite depth.
+        let transcript = concat!(
+            r#"{"uuid":"a","parentUuid":"b","isSidechain":true,"type":"tool_use","name":"Task","input":{"subagent_type":"x","prompt":"cyclic spawn"}}"#,
+            "\n",
+            r#"{"uuid":"b","parentUuid":"a","isSidechain":true,"type":"text","text":"cyclic parent"}"#,
+            "\n",
+        );
+        let spawns = extract_spawn_markers(transcript);
+        assert!(!spawns.is_empty(), "the cyclic spawn is still extracted");
+        assert!(
+            spawns.iter().all(|s| s.depth <= 16),
+            "cycle guard keeps depth bounded, got {:?}",
+            spawns.iter().map(|s| s.depth).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn sidechain_depth_capped_at_16() {
+        // A sidechain lineage deeper than the 16-level ceiling: a non-sidechain
+        // root followed by 19 sidechain turns, the deepest of which spawns a
+        // sub-agent. Raw depth would be 20 (1 + 19 sidechain ancestors); the
+        // reconstructed depth must saturate at 16.
+        let mut transcript = String::new();
+        transcript.push_str(
+            r#"{"uuid":"n0","parentUuid":null,"isSidechain":false,"type":"text","text":"root"}"#,
+        );
+        transcript.push('\n');
+        for i in 1..=19 {
+            if i == 19 {
+                transcript.push_str(&format!(
+                    r#"{{"uuid":"n{i}","parentUuid":"n{}","isSidechain":true,"type":"tool_use","name":"Task","input":{{"subagent_type":"deep","prompt":"deep spawn"}}}}"#,
+                    i - 1
+                ));
+            } else {
+                transcript.push_str(&format!(
+                    r#"{{"uuid":"n{i}","parentUuid":"n{}","isSidechain":true,"type":"text","text":"turn"}}"#,
+                    i - 1
+                ));
+            }
+            transcript.push('\n');
+        }
+        let spawns = extract_spawn_markers(&transcript);
+        assert_eq!(spawns.len(), 1, "exactly one Task spawn expected");
+        assert_eq!(
+            spawns[0].depth, 16,
+            "depth must saturate at the 16-level ceiling"
+        );
+    }
+
+    #[test]
+    fn structured_spawns_bounded_by_cap() {
+        // A compact-JSONL transcript with more spawn records than
+        // MAX_SPAWN_MARKERS must not return an unbounded spawn list: the
+        // structured extractor stops collecting at the cap. (The separate
+        // MAX_TRANSCRIPT_RECORDS cap bounds the internal record/parent-linkage
+        // graph used for depth reconstruction; the returned list is bounded by
+        // MAX_SPAWN_MARKERS, which is the bound an upstream caller observes.)
+        let mut transcript = String::with_capacity((MAX_SPAWN_MARKERS + 100) * 96);
+        for i in 0..(MAX_SPAWN_MARKERS + 100) {
+            transcript.push_str(&format!(
+                r#"{{"uuid":"u{i}","parentUuid":null,"isSidechain":false,"type":"tool_use","name":"Task","input":{{"subagent_type":"x"}}}}"#,
+            ));
+            transcript.push('\n');
+        }
+        let spawns = extract_spawn_markers(&transcript);
+        assert_eq!(
+            spawns.len(),
+            MAX_SPAWN_MARKERS,
+            "returned spawn list must saturate at MAX_SPAWN_MARKERS"
+        );
     }
 
     #[test]

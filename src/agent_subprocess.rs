@@ -26,6 +26,7 @@
 //! - Pure: no I/O, no clock except `generated_at` via `chrono::Utc::now()`.
 
 use crate::agent_visibility::{VisibilityFinding, VisibilitySeverity};
+use crate::vuln_detector_params::{self, CriticalSubprocessClassJSON};
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -55,6 +56,17 @@ impl SubprocessCriticality {
         }
     }
 
+    /// Map a CloudModel criticality label (already lowercased by
+    /// `CveDetectionParams::new_from_json`) to the enum. Unknown labels fall
+    /// back to `Routine` (the least-severe, reveal-only bucket).
+    pub fn from_label(label: &str) -> Self {
+        match label {
+            "critical" => SubprocessCriticality::Critical,
+            "elevated" => SubprocessCriticality::Elevated,
+            _ => SubprocessCriticality::Routine,
+        }
+    }
+
     fn rank(&self) -> u8 {
         match self {
             SubprocessCriticality::Critical => 3,
@@ -78,100 +90,27 @@ impl SubprocessCriticality {
 // Static catalog of critical subprocess binaries
 // ---------------------------------------------------------------------------
 
-/// One catalog entry: the binary basenames it matches, a category slug, the
-/// inherent criticality, and the OWASP GenAI crosswalk tags.
+/// One classified subprocess class: the category slug, inherent criticality,
+/// and the OWASP GenAI crosswalk tags. Built from the CloudModel-tunable
+/// `agent_critical_subprocess_catalog` entry that matched the binary basename.
+///
+/// Owned (not `&'static`) because the catalog is loaded from the CloudModel
+/// snapshot at runtime and can be refreshed without a release.
 pub struct CriticalSubprocessClass {
-    pub names: &'static [&'static str],
-    pub category: &'static str,
+    pub category: String,
     pub criticality: SubprocessCriticality,
-    pub owasp_refs: &'static str,
+    pub owasp_refs: String,
 }
 
-use SubprocessCriticality::{Critical, Elevated, Routine};
-
-/// Critical-subprocess catalog. Names are matched case-insensitively against
-/// the basename of the subprocess (with a trailing `.exe` stripped on Windows).
-const CRITICAL_SUBPROCESS_CATALOG: &[CriticalSubprocessClass] = &[
-    // Remote access / data movement off the host.
-    CriticalSubprocessClass {
-        names: &["ssh", "scp", "sftp", "rsync", "telnet"],
-        category: "remote_access",
-        criticality: Critical,
-        owasp_refs: "OWASP-ASI02,OWASP-ASI05,OWASP-LLM06",
-    },
-    // Raw network / reverse-shell capable.
-    CriticalSubprocessClass {
-        names: &["nc", "ncat", "netcat", "socat"],
-        category: "raw_network",
-        criticality: Critical,
-        owasp_refs: "OWASP-ASI02,OWASP-ASI05,OWASP-LLM06",
-    },
-    // HTTP(S) fetchers -- download/exfil capable.
-    CriticalSubprocessClass {
-        names: &["curl", "wget"],
-        category: "http_fetch",
-        criticality: Elevated,
-        owasp_refs: "OWASP-ASI02,OWASP-LLM06",
-    },
-    // Shells.
-    CriticalSubprocessClass {
-        names: &[
-            "bash",
-            "sh",
-            "zsh",
-            "fish",
-            "dash",
-            "ksh",
-            "pwsh",
-            "powershell",
-            "cmd",
-        ],
-        category: "shell",
-        criticality: Elevated,
-        owasp_refs: "OWASP-ASI05,OWASP-LLM06",
-    },
-    // Interpreters.
-    CriticalSubprocessClass {
-        names: &[
-            "python",
-            "python3",
-            "node",
-            "deno",
-            "bun",
-            "ruby",
-            "perl",
-            "php",
-            "osascript",
-        ],
-        category: "interpreter",
-        criticality: Elevated,
-        owasp_refs: "OWASP-ASI05,OWASP-LLM06",
-    },
-    // Version control -- can push code / secrets off-box.
-    CriticalSubprocessClass {
-        names: &["git", "gh"],
-        category: "vcs",
-        criticality: Routine,
-        owasp_refs: "OWASP-ASI02,OWASP-LLM06",
-    },
-    // Package managers -- supply-chain surface.
-    CriticalSubprocessClass {
-        names: &[
-            "pip", "pip3", "npm", "npx", "pnpm", "yarn", "cargo", "gem", "brew", "apt", "apt-get",
-            "uv", "poetry",
-        ],
-        category: "package_manager",
-        criticality: Routine,
-        owasp_refs: "OWASP-ASI04,OWASP-LLM03",
-    },
-    // Container / orchestration CLIs -- privilege & RCE surface.
-    CriticalSubprocessClass {
-        names: &["docker", "podman", "kubectl", "nerdctl"],
-        category: "container",
-        criticality: Critical,
-        owasp_refs: "OWASP-ASI03,OWASP-ASI05,OWASP-LLM06",
-    },
-];
+impl CriticalSubprocessClass {
+    fn from_json(json: &CriticalSubprocessClassJSON) -> Self {
+        Self {
+            category: json.category.clone(),
+            criticality: SubprocessCriticality::from_label(&json.criticality),
+            owasp_refs: json.owasp_refs.clone(),
+        }
+    }
+}
 
 /// Normalize a process name to a lowercase basename with a trailing `.exe`
 /// stripped (Windows). `"/usr/bin/SSH"` and `"ssh.exe"` both become `"ssh"`.
@@ -189,16 +128,20 @@ pub fn normalize_process_basename(raw: &str) -> String {
         .unwrap_or(lower)
 }
 
-/// Classify a subprocess by name. Returns the catalog entry when the (basename,
-/// case-insensitive) name is a known critical subprocess, else `None`.
-pub fn classify_subprocess(process_name: &str) -> Option<&'static CriticalSubprocessClass> {
+/// Classify a subprocess by name. Returns the matching class when the
+/// (basename, case-insensitive) name is a known critical subprocess, else
+/// `None`. The catalog is the CloudModel-tunable
+/// `agent_critical_subprocess_catalog` (names are pre-lowercased by
+/// `CveDetectionParams::new_from_json`).
+pub fn classify_subprocess(process_name: &str) -> Option<CriticalSubprocessClass> {
     let base = normalize_process_basename(process_name);
     if base.is_empty() {
         return None;
     }
-    CRITICAL_SUBPROCESS_CATALOG
+    vuln_detector_params::agent_critical_subprocess_catalog()
         .iter()
-        .find(|c| c.names.iter().any(|n| *n == base))
+        .find(|c| c.names.iter().any(|n| n.as_str() == base))
+        .map(CriticalSubprocessClass::from_json)
 }
 
 // ---------------------------------------------------------------------------
@@ -382,6 +325,19 @@ pub struct AgentSubprocessUsage {
 
 const MAX_COMMAND_CHARS: usize = 256;
 
+/// Maximum number of distinct deduplicated subprocess observations retained.
+///
+/// The dedup key is `agent_type | process_basename | dest_host | source`. The
+/// agent, process basename (catalog-bounded), and source ("session"/"fim")
+/// dimensions are all bounded, but `dest_host` is attacker-influenceable -- an
+/// agent can reach arbitrarily many distinct hosts -- so the distinct-key count
+/// is otherwise unbounded. Capping the dedup map bounds `observations` and the
+/// one-finding-per-observation `findings` vec that flow into `CoreVisibility`
+/// and the serialized UI payload. Existing keys keep accumulating their counts;
+/// only brand-new keys past the cap are dropped. Far above any realistic count
+/// of distinct critical-subprocess destinations a host legitimately produces.
+const MAX_SUBPROCESS_OBSERVATIONS: usize = 512;
+
 fn join_command(cmd: &[String]) -> String {
     let joined = cmd.join(" ");
     if joined.chars().count() > MAX_COMMAND_CHARS {
@@ -406,16 +362,27 @@ pub fn build_agent_subprocess_usage(inputs: &[SubprocessInput]) -> AgentSubproce
     // dedup key -> accumulating observation
     let mut acc: BTreeMap<String, AgentSubprocessObservation> = BTreeMap::new();
 
+    // Load the CloudModel catalog once for the whole batch (names are
+    // pre-lowercased by `CveDetectionParams::new_from_json`).
+    let catalog = vuln_detector_params::agent_critical_subprocess_catalog();
+
     for input in inputs {
-        let class = match classify_subprocess(&input.process_name) {
+        let proc_base = normalize_process_basename(&input.process_name);
+        if proc_base.is_empty() {
+            continue;
+        }
+        let class = match catalog
+            .iter()
+            .find(|c| c.names.iter().any(|n| n.as_str() == proc_base))
+        {
             Some(c) => c,
             None => continue,
         };
+        let criticality = SubprocessCriticality::from_label(&class.criticality);
         let agent_type = match agent_type_for_identity(&input.identity_lower()) {
             Some(a) => a.to_string(),
             None => continue,
         };
-        let proc_base = normalize_process_basename(&input.process_name);
         let dest_host = input.dest_host();
         let key = format!(
             "{}|{}|{}|{}",
@@ -424,6 +391,13 @@ pub fn build_agent_subprocess_usage(inputs: &[SubprocessInput]) -> AgentSubproce
 
         let subject_id = format!("{}:{}:{}", agent_type, proc_base, dest_host);
         let finding_key = format!("subprocess:subprocess_{}:{}", class.category, subject_id);
+
+        // Bound the dedup map on its only attacker-influenceable dimension
+        // (dest_host). A brand-new key past the cap is dropped; existing keys
+        // keep accumulating so occurrence counts stay accurate.
+        if acc.len() >= MAX_SUBPROCESS_OBSERVATIONS && !acc.contains_key(&key) {
+            continue;
+        }
 
         acc.entry(key)
             .and_modify(|o| {
@@ -439,7 +413,7 @@ pub fn build_agent_subprocess_usage(inputs: &[SubprocessInput]) -> AgentSubproce
                 agent_type: agent_type.clone(),
                 process_name: proc_base.clone(),
                 category: class.category.to_string(),
-                criticality: class.criticality,
+                criticality,
                 process_path: input.process_path.clone(),
                 parent_process_name: input.parent_process_name.clone(),
                 parent_process_path: input.parent_process_path.clone(),
@@ -640,8 +614,14 @@ mod tests {
             classify_subprocess("ssh.exe").unwrap().category,
             "remote_access"
         );
-        assert_eq!(classify_subprocess("curl").unwrap().criticality, Elevated);
-        assert_eq!(classify_subprocess("git").unwrap().criticality, Routine);
+        assert_eq!(
+            classify_subprocess("curl").unwrap().criticality,
+            SubprocessCriticality::Elevated
+        );
+        assert_eq!(
+            classify_subprocess("git").unwrap().criticality,
+            SubprocessCriticality::Routine
+        );
         assert!(classify_subprocess("ls").is_none());
         assert!(classify_subprocess("").is_none());
     }
@@ -705,7 +685,7 @@ mod tests {
         assert_eq!(ssh.process_name, "ssh");
         assert_eq!(ssh.agent_type, "cursor");
         assert_eq!(ssh.count, 2);
-        assert_eq!(ssh.criticality, Critical);
+        assert_eq!(ssh.criticality, SubprocessCriticality::Critical);
         assert!(ssh.owasp_refs.contains("OWASP-ASI05"));
 
         // findings are non-alertable (capped at Medium).
@@ -724,5 +704,53 @@ mod tests {
         assert_eq!(usage.critical_observations, 0);
         assert_eq!(usage.agents_with_usage, 0);
         assert!(usage.findings.is_empty());
+    }
+
+    #[test]
+    fn build_bounds_observations_at_cap() {
+        // Distinct destination hosts are the only attacker-influenceable
+        // dimension of the dedup key, so a flood of distinct ssh destinations
+        // must not grow the observation set without limit. Feed
+        // MAX_SUBPROCESS_OBSERVATIONS + 50 distinct destinations, then one
+        // duplicate of the FIRST (already-inserted) destination to prove that
+        // existing keys keep accumulating even after the cap is reached.
+        let mut inputs: Vec<SubprocessInput> = (0..(MAX_SUBPROCESS_OBSERVATIONS + 50))
+            .map(|i| {
+                input(
+                    "ssh",
+                    "/home/me/.cursor/x",
+                    Some(&format!("host-{i}.example.com:22")),
+                )
+            })
+            .collect();
+        // Duplicate of the first destination (host-0) -- its key is already in
+        // the map, so it must NOT be dropped by the cap; its count increments.
+        inputs.push(input(
+            "ssh",
+            "/home/me/.cursor/x",
+            Some("host-0.example.com:22"),
+        ));
+
+        let usage = build_agent_subprocess_usage(&inputs);
+        assert_eq!(
+            usage.total_observations,
+            MAX_SUBPROCESS_OBSERVATIONS as u32,
+            "observation set must saturate at MAX_SUBPROCESS_OBSERVATIONS"
+        );
+        assert_eq!(
+            usage.observations.len(),
+            MAX_SUBPROCESS_OBSERVATIONS,
+            "observations vec must be bounded at MAX_SUBPROCESS_OBSERVATIONS"
+        );
+        // host-0 was seen twice; it sorts first (count desc) and proves
+        // existing keys keep accumulating past the cap.
+        assert_eq!(
+            usage.observations[0].count, 2,
+            "an already-tracked key keeps accumulating after the cap is hit"
+        );
+        assert_eq!(
+            usage.observations[0].destination.as_deref(),
+            Some("host-0.example.com:22")
+        );
     }
 }

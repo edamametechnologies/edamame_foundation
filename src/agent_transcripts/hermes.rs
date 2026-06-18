@@ -106,7 +106,7 @@ pub fn collect(home: &Path, options: &CollectOptions) -> anyhow::Result<CollectR
 
     let mut sessions: Vec<CollectedRawSession> = Vec::new();
     for candidate in candidates.into_iter().take(limit) {
-        let raw_text = match std::fs::read_to_string(&candidate.path) {
+        let raw_text = match super::read_transcript_capped(&candidate.path) {
             Ok(text) => text,
             Err(_) => continue,
         };
@@ -320,7 +320,10 @@ fn sessions_from_manifest(
     if remaining == 0 {
         return Vec::new();
     }
-    let Ok(raw) = std::fs::read_to_string(manifest_path) else {
+    // Capped read: a malformed / adversarial manifest cannot exhaust memory.
+    // A real Hermes manifest is well under the cap; a truncated oversized one
+    // fails the JSON parse below and is skipped gracefully.
+    let Ok(raw) = super::read_transcript_capped(manifest_path) else {
         return Vec::new();
     };
     let Ok(value) = serde_json::from_str::<Value>(&raw) else {

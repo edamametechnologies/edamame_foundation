@@ -529,6 +529,388 @@ fn default_evidence_weights() -> EvidenceWeightsJSON {
     EvidenceWeightsJSON::default()
 }
 
+/// One secret-marker signature consumed by the secret-content scanner. When
+/// the (lowercased) file body matches, the signature contributes its `label`
+/// and `hits` weight to the scan result.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct SecretContentSignatureJSON {
+    /// Label inserted into the match's `secret_labels` set (e.g. `ssh`, `aws`).
+    pub label: String,
+    /// `"any"` => match if any marker is present; `"all"` => match only when
+    /// every marker is present.
+    pub mode: String,
+    /// Hit weight added when the signature matches. With `per_marker`, this is
+    /// added once per present marker.
+    pub hits: usize,
+    /// When true, each present marker independently adds `hits` (the legacy
+    /// `env`-block shape). When false, the signature adds `hits` once on match.
+    pub per_marker: bool,
+    /// Lowercased substrings searched for in the file body.
+    pub markers: Vec<String>,
+}
+
+/// One critical-subprocess class for the agent subprocess visibility surface.
+/// Maps a set of binary basenames to a category slug, inherent criticality,
+/// and the OWASP GenAI crosswalk tags.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct CriticalSubprocessClassJSON {
+    /// Lowercased binary basenames this class matches (e.g. `ssh`, `kubectl`).
+    pub names: Vec<String>,
+    /// Category slug (e.g. `remote_access`, `shell`, `container`).
+    pub category: String,
+    /// Inherent criticality: `"routine"`, `"elevated"`, or `"critical"`.
+    pub criticality: String,
+    /// Comma-separated OWASP GenAI crosswalk references (metadata only).
+    pub owasp_refs: String,
+}
+
+/// Per-class keyword lists used to classify MCP tool privileges from a tool's
+/// name / description / URL. Each list is matched (substring) against a
+/// lowercased haystack.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct AgentToolPrivilegeKeywordsJSON {
+    pub shell: Vec<String>,
+    pub filesystem_write: Vec<String>,
+    pub filesystem_read: Vec<String>,
+    pub browser: Vec<String>,
+    pub git: Vec<String>,
+    pub database: Vec<String>,
+    pub secret_access: Vec<String>,
+    pub network: Vec<String>,
+}
+
+/// Thresholds for the agent recursion / delegation visibility finding.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct AgentRecursionThresholdsJSON {
+    /// Delegation depth at/above which depth alone is a finding.
+    pub depth_high: u32,
+    /// Sub-agent fan-out at/above which fan-out alone is a finding.
+    pub fanout_high: u32,
+    /// Same-goal re-delegations at/above which a same-purpose loop is flagged.
+    pub loop_min_repeats: u32,
+}
+
+fn default_secret_content_powershell_probe_read_verbs() -> Vec<String> {
+    strings(&[
+        "get-itemproperty",
+        "get-ciminstance",
+        "get-wmiobject",
+        "get-bitlockervolume",
+        "get-netfirewallprofile",
+        "get-service",
+        "get-localuser",
+        "get-executionpolicy",
+    ])
+}
+
+fn default_secret_content_powershell_dangerous_verbs() -> Vec<String> {
+    strings(&[
+        "invoke-webrequest",
+        "invoke-restmethod",
+        "downloadstring",
+        "downloadfile",
+        "start-process",
+        "encodedcommand",
+        "frombase64string",
+        "set-itemproperty",
+        "new-itemproperty",
+        "remove-itemproperty",
+        "set-netfirewall",
+        "new-netfirewall",
+        "remove-netfirewall",
+        "set-executionpolicy",
+        "disable-localuser",
+        "enable-localuser",
+        "start-service",
+        "stop-service",
+        "reg add ",
+        "reg delete ",
+        "sc.exe config",
+        "curl ",
+        "wget ",
+        " nc ",
+        "netcat",
+    ])
+}
+
+fn secret_content_signature(
+    label: &str,
+    mode: &str,
+    hits: usize,
+    per_marker: bool,
+    markers: &[&str],
+) -> SecretContentSignatureJSON {
+    SecretContentSignatureJSON {
+        label: label.to_string(),
+        mode: mode.to_string(),
+        hits,
+        per_marker,
+        markers: strings(markers),
+    }
+}
+
+fn default_secret_content_signatures() -> Vec<SecretContentSignatureJSON> {
+    vec![
+        secret_content_signature(
+            "ssh",
+            "any",
+            2,
+            false,
+            &[
+                "-----begin openssh private key-----",
+                "-----begin rsa private key-----",
+                "-----begin ec private key-----",
+                "-----begin private key-----",
+            ],
+        ),
+        secret_content_signature(
+            "aws",
+            "any",
+            2,
+            false,
+            &["aws_access_key_id", "aws_secret_access_key", "[default]"],
+        ),
+        secret_content_signature(
+            "kube",
+            "all",
+            2,
+            false,
+            &["apiversion:", "clusters:", "server:"],
+        ),
+        secret_content_signature(
+            "git",
+            "any",
+            2,
+            false,
+            &["ghp_", "github_pat_", "github_token"],
+        ),
+        secret_content_signature(
+            "env",
+            "any",
+            1,
+            true,
+            &[
+                "api_token=",
+                "access_token=",
+                "secret=",
+                "password=",
+                "private_key=",
+                "ssh_private_key=",
+                "database_password=",
+                "token=",
+            ],
+        ),
+    ]
+}
+
+fn critical_subprocess_class(
+    names: &[&str],
+    category: &str,
+    criticality: &str,
+    owasp_refs: &str,
+) -> CriticalSubprocessClassJSON {
+    CriticalSubprocessClassJSON {
+        names: strings(names),
+        category: category.to_string(),
+        criticality: criticality.to_string(),
+        owasp_refs: owasp_refs.to_string(),
+    }
+}
+
+fn default_agent_critical_subprocess_catalog() -> Vec<CriticalSubprocessClassJSON> {
+    vec![
+        critical_subprocess_class(
+            &["ssh", "scp", "sftp", "rsync", "telnet"],
+            "remote_access",
+            "critical",
+            "OWASP-ASI02,OWASP-ASI05,OWASP-LLM06",
+        ),
+        critical_subprocess_class(
+            &["nc", "ncat", "netcat", "socat"],
+            "raw_network",
+            "critical",
+            "OWASP-ASI02,OWASP-ASI05,OWASP-LLM06",
+        ),
+        critical_subprocess_class(
+            &["curl", "wget"],
+            "http_fetch",
+            "elevated",
+            "OWASP-ASI02,OWASP-LLM06",
+        ),
+        critical_subprocess_class(
+            &[
+                "bash",
+                "sh",
+                "zsh",
+                "fish",
+                "dash",
+                "ksh",
+                "pwsh",
+                "powershell",
+                "cmd",
+            ],
+            "shell",
+            "elevated",
+            "OWASP-ASI05,OWASP-LLM06",
+        ),
+        critical_subprocess_class(
+            &[
+                "python",
+                "python3",
+                "node",
+                "deno",
+                "bun",
+                "ruby",
+                "perl",
+                "php",
+                "osascript",
+            ],
+            "interpreter",
+            "elevated",
+            "OWASP-ASI05,OWASP-LLM06",
+        ),
+        critical_subprocess_class(
+            &["git", "gh"],
+            "vcs",
+            "routine",
+            "OWASP-ASI02,OWASP-LLM06",
+        ),
+        critical_subprocess_class(
+            &[
+                "pip", "pip3", "npm", "npx", "pnpm", "yarn", "cargo", "gem", "brew", "apt",
+                "apt-get", "uv", "poetry",
+            ],
+            "package_manager",
+            "routine",
+            "OWASP-ASI04,OWASP-LLM03",
+        ),
+        critical_subprocess_class(
+            &["docker", "podman", "kubectl", "nerdctl"],
+            "container",
+            "critical",
+            "OWASP-ASI03,OWASP-ASI05,OWASP-LLM06",
+        ),
+    ]
+}
+
+fn default_agent_secret_env_key_needles() -> Vec<String> {
+    strings(&[
+        "TOKEN",
+        "KEY",
+        "SECRET",
+        "PASSWORD",
+        "PASSWD",
+        "CREDENTIAL",
+        "API_KEY",
+        "APIKEY",
+        "AUTH",
+        "BEARER",
+        "ACCESS_KEY",
+        "PRIVATE",
+        "PAT",
+        "SESSION",
+        "COOKIE",
+    ])
+}
+
+fn default_agent_model_family_prefixes() -> Vec<String> {
+    strings(&[
+        "claude-",
+        "gpt-",
+        "gemini-",
+        "gemma-",
+        "llama-",
+        "mistral-",
+        "mixtral-",
+        "codestral-",
+        "deepseek-",
+        "qwen",
+        "command-r",
+        "grok-",
+        "phi-",
+        "o1-",
+        "o3-",
+        "o4-",
+    ])
+}
+
+fn default_agent_model_field_keys() -> Vec<String> {
+    strings(&["model", "modelId", "model_id"])
+}
+
+fn default_agent_model_container_keys() -> Vec<String> {
+    strings(&[
+        "message",
+        "request",
+        "response",
+        "metadata",
+        "usage",
+        "assistant",
+    ])
+}
+
+fn default_agent_tool_privilege_keywords() -> AgentToolPrivilegeKeywordsJSON {
+    AgentToolPrivilegeKeywordsJSON {
+        shell: strings(&[
+            "shell",
+            "bash",
+            "terminal",
+            "exec",
+            "command",
+            "subprocess",
+            "run-command",
+        ]),
+        filesystem_write: strings(&[
+            "filesystem",
+            "file-write",
+            "write-file",
+            "fs-write",
+            "edit",
+            "editor",
+        ]),
+        filesystem_read: strings(&["read-file", "fs-read", "filesystem", "files", "fetch-file"]),
+        browser: strings(&[
+            "browser",
+            "puppeteer",
+            "playwright",
+            "chrome",
+            "webdriver",
+            "selenium",
+        ]),
+        git: strings(&["git", "github", "gitlab", "bitbucket"]),
+        database: strings(&[
+            "postgres", "mysql", "sqlite", "mongo", "database", "db-", "sql", "redis",
+        ]),
+        secret_access: strings(&[
+            "secret",
+            "vault",
+            "credential",
+            "keychain",
+            "1password",
+            "keyring",
+            "aws-secrets",
+        ]),
+        network: strings(&[
+            "fetch",
+            "http",
+            "web-search",
+            "websearch",
+            "brave",
+            "search",
+            "scrape",
+            "request",
+        ]),
+    }
+}
+
+fn default_agent_recursion_thresholds() -> AgentRecursionThresholdsJSON {
+    AgentRecursionThresholdsJSON {
+        depth_high: 4,
+        fanout_high: 8,
+        loop_min_repeats: 3,
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct CveDetectionParamsJSON {
     pub date: String,
@@ -663,6 +1045,48 @@ pub struct CveDetectionParamsJSON {
     /// back to the embedded snapshot.
     #[serde(default = "default_evidence_weights")]
     pub evidence_weights: EvidenceWeightsJSON,
+    /// PowerShell read-only probe verbs. Their presence in a script body
+    /// marks the file as a system-probe (recon) script for the
+    /// secret-content scanner.
+    #[serde(default = "default_secret_content_powershell_probe_read_verbs")]
+    pub secret_content_powershell_probe_read_verbs: Vec<String>,
+    /// PowerShell / shell verbs that disqualify a script from the benign
+    /// read-only-probe classification (download, exec, registry/firewall
+    /// mutation, base64 decode, raw netcat, ...).
+    #[serde(default = "default_secret_content_powershell_dangerous_verbs")]
+    pub secret_content_powershell_dangerous_verbs: Vec<String>,
+    /// Secret-marker signatures (SSH/AWS/kube/git PEM headers, env
+    /// `token=`/`secret=` markers) the secret-content scanner searches for.
+    #[serde(default = "default_secret_content_signatures")]
+    pub secret_content_signatures: Vec<SecretContentSignatureJSON>,
+    /// Critical-subprocess catalog for the agent subprocess visibility
+    /// surface (blast-radius computation). Maps binary basenames to a
+    /// category, criticality, and OWASP crosswalk tags.
+    #[serde(default = "default_agent_critical_subprocess_catalog")]
+    pub agent_critical_subprocess_catalog: Vec<CriticalSubprocessClassJSON>,
+    /// Uppercased needles that mark an agent environment-variable key as
+    /// secret-bearing (`TOKEN`, `KEY`, `SECRET`, ...).
+    #[serde(default = "default_agent_secret_env_key_needles")]
+    pub agent_secret_env_key_needles: Vec<String>,
+    /// Lowercased model-id prefixes used to recognize an LLM model family
+    /// in agent transcripts (`claude-`, `gpt-`, `gemini-`, ...).
+    #[serde(default = "default_agent_model_family_prefixes")]
+    pub agent_model_family_prefixes: Vec<String>,
+    /// JSON field keys (case-sensitive) under which an agent transcript
+    /// carries the model identifier (`model`, `modelId`, `model_id`).
+    #[serde(default = "default_agent_model_field_keys")]
+    pub agent_model_field_keys: Vec<String>,
+    /// JSON container keys (case-sensitive) the model-id extractor descends
+    /// into when looking for a model field (`message`, `request`, ...).
+    #[serde(default = "default_agent_model_container_keys")]
+    pub agent_model_container_keys: Vec<String>,
+    /// Per-class keyword lists used to classify MCP tool privileges from a
+    /// tool's name/description/URL.
+    #[serde(default = "default_agent_tool_privilege_keywords")]
+    pub agent_tool_privilege_keywords: AgentToolPrivilegeKeywordsJSON,
+    /// Thresholds for the agent recursion / delegation visibility finding.
+    #[serde(default = "default_agent_recursion_thresholds")]
+    pub agent_recursion_thresholds: AgentRecursionThresholdsJSON,
 }
 
 fn strings(values: &[&str]) -> Vec<String> {
@@ -2280,6 +2704,16 @@ pub struct CveDetectionParams {
     pub fim_hash_size_threshold: u64,
     pub fim_temp_executable_patterns: Vec<String>,
     pub evidence_weights: EvidenceWeightsJSON,
+    pub secret_content_powershell_probe_read_verbs: Vec<String>,
+    pub secret_content_powershell_dangerous_verbs: Vec<String>,
+    pub secret_content_signatures: Vec<SecretContentSignatureJSON>,
+    pub agent_critical_subprocess_catalog: Vec<CriticalSubprocessClassJSON>,
+    pub agent_secret_env_key_needles: Vec<String>,
+    pub agent_model_family_prefixes: Vec<String>,
+    pub agent_model_field_keys: Vec<String>,
+    pub agent_model_container_keys: Vec<String>,
+    pub agent_tool_privilege_keywords: AgentToolPrivilegeKeywordsJSON,
+    pub agent_recursion_thresholds: AgentRecursionThresholdsJSON,
 }
 
 impl CloudSignature for CveDetectionParams {
@@ -2372,6 +2806,24 @@ fn normalize_app_self_temp_staging(patterns: &AppSelfTempStagingJSON) -> AppSelf
             .iter()
             .map(normalize_app_self_temp_staging_entry)
             .collect(),
+    }
+}
+
+fn normalize_agent_tool_privilege_keywords(
+    keywords: &AgentToolPrivilegeKeywordsJSON,
+) -> AgentToolPrivilegeKeywordsJSON {
+    let lower = |xs: &[String]| -> Vec<String> {
+        xs.iter().map(|x| x.to_ascii_lowercase()).collect()
+    };
+    AgentToolPrivilegeKeywordsJSON {
+        shell: lower(&keywords.shell),
+        filesystem_write: lower(&keywords.filesystem_write),
+        filesystem_read: lower(&keywords.filesystem_read),
+        browser: lower(&keywords.browser),
+        git: lower(&keywords.git),
+        database: lower(&keywords.database),
+        secret_access: lower(&keywords.secret_access),
+        network: lower(&keywords.network),
     }
 }
 
@@ -2885,6 +3337,59 @@ impl CveDetectionParams {
             fim_hash_size_threshold: json.fim_hash_size_threshold,
             fim_temp_executable_patterns: json.fim_temp_executable_patterns.clone(),
             evidence_weights: json.evidence_weights.clone(),
+            secret_content_powershell_probe_read_verbs: json
+                .secret_content_powershell_probe_read_verbs
+                .iter()
+                .map(|v| v.to_ascii_lowercase())
+                .collect(),
+            secret_content_powershell_dangerous_verbs: json
+                .secret_content_powershell_dangerous_verbs
+                .iter()
+                .map(|v| v.to_ascii_lowercase())
+                .collect(),
+            secret_content_signatures: json
+                .secret_content_signatures
+                .iter()
+                .map(|sig| SecretContentSignatureJSON {
+                    label: sig.label.clone(),
+                    mode: sig.mode.to_ascii_lowercase(),
+                    hits: sig.hits,
+                    per_marker: sig.per_marker,
+                    markers: sig
+                        .markers
+                        .iter()
+                        .map(|m| m.to_ascii_lowercase())
+                        .collect(),
+                })
+                .collect(),
+            agent_critical_subprocess_catalog: json
+                .agent_critical_subprocess_catalog
+                .iter()
+                .map(|class| CriticalSubprocessClassJSON {
+                    names: class.names.iter().map(|n| n.to_ascii_lowercase()).collect(),
+                    category: class.category.clone(),
+                    criticality: class.criticality.to_ascii_lowercase(),
+                    owasp_refs: class.owasp_refs.clone(),
+                })
+                .collect(),
+            agent_secret_env_key_needles: json
+                .agent_secret_env_key_needles
+                .iter()
+                .map(|n| n.to_ascii_uppercase())
+                .collect(),
+            agent_model_family_prefixes: json
+                .agent_model_family_prefixes
+                .iter()
+                .map(|p| p.to_ascii_lowercase())
+                .collect(),
+            // Field/container keys are matched case-sensitively against raw
+            // JSON keys (`modelId`), so they are NOT normalized.
+            agent_model_field_keys: json.agent_model_field_keys.clone(),
+            agent_model_container_keys: json.agent_model_container_keys.clone(),
+            agent_tool_privilege_keywords: normalize_agent_tool_privilege_keywords(
+                &json.agent_tool_privilege_keywords,
+            ),
+            agent_recursion_thresholds: json.agent_recursion_thresholds.clone(),
         }
     }
 
@@ -4189,6 +4694,73 @@ pub fn secret_content_network_command_tokens() -> Vec<String> {
         .load()
         .secret_content_network_command_tokens
         .clone()
+}
+
+/// Lowercased PowerShell read-only probe verbs. Their presence marks a
+/// script body as a system-probe (recon) script for the secret-content
+/// scanner. Returned owned because the snapshot is swapped atomically.
+pub fn secret_content_powershell_probe_read_verbs() -> Vec<String> {
+    PARAMS_SNAPSHOT
+        .load()
+        .secret_content_powershell_probe_read_verbs
+        .clone()
+}
+
+/// Lowercased PowerShell / shell verbs that disqualify a script from the
+/// benign read-only-probe classification (download, exec, registry /
+/// firewall mutation, base64 decode, raw netcat, ...).
+pub fn secret_content_powershell_dangerous_verbs() -> Vec<String> {
+    PARAMS_SNAPSHOT
+        .load()
+        .secret_content_powershell_dangerous_verbs
+        .clone()
+}
+
+/// Normalized secret-marker signatures (markers and mode lowercased)
+/// searched for in file bodies by the secret-content scanner.
+pub fn secret_content_signatures() -> Vec<SecretContentSignatureJSON> {
+    PARAMS_SNAPSHOT.load().secret_content_signatures.clone()
+}
+
+/// Critical-subprocess catalog (names + criticality lowercased) for the
+/// agent subprocess visibility surface (blast-radius computation).
+pub fn agent_critical_subprocess_catalog() -> Vec<CriticalSubprocessClassJSON> {
+    PARAMS_SNAPSHOT
+        .load()
+        .agent_critical_subprocess_catalog
+        .clone()
+}
+
+/// Uppercased needles that mark an agent environment-variable key as
+/// secret-bearing.
+pub fn agent_secret_env_key_needles() -> Vec<String> {
+    PARAMS_SNAPSHOT.load().agent_secret_env_key_needles.clone()
+}
+
+/// Lowercased model-id prefixes used to recognize an LLM model family.
+pub fn agent_model_family_prefixes() -> Vec<String> {
+    PARAMS_SNAPSHOT.load().agent_model_family_prefixes.clone()
+}
+
+/// Case-sensitive JSON field keys carrying the model identifier.
+pub fn agent_model_field_keys() -> Vec<String> {
+    PARAMS_SNAPSHOT.load().agent_model_field_keys.clone()
+}
+
+/// Case-sensitive JSON container keys the model-id extractor descends into.
+pub fn agent_model_container_keys() -> Vec<String> {
+    PARAMS_SNAPSHOT.load().agent_model_container_keys.clone()
+}
+
+/// Per-class keyword lists (lowercased) used to classify MCP tool
+/// privileges from a tool's name/description/URL.
+pub fn agent_tool_privilege_keywords() -> AgentToolPrivilegeKeywordsJSON {
+    PARAMS_SNAPSHOT.load().agent_tool_privilege_keywords.clone()
+}
+
+/// Thresholds for the agent recursion / delegation visibility finding.
+pub fn agent_recursion_thresholds() -> AgentRecursionThresholdsJSON {
+    PARAMS_SNAPSHOT.load().agent_recursion_thresholds.clone()
 }
 
 /// Lowercased, slash-normalized path substrings that mark a path as

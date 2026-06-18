@@ -124,7 +124,7 @@ pub(crate) fn build_payload(
     let mut sessions: Vec<CollectedRawSession> = Vec::new();
 
     for candidate in candidates.into_iter().take(options.limit.max(1)) {
-        let raw_text = match std::fs::read_to_string(&candidate.path) {
+        let raw_text = match super::read_transcript_capped(&candidate.path) {
             Ok(text) => text,
             Err(_) => continue,
         };

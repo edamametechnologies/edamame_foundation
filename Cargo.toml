@@ -12,6 +12,11 @@ default = []
 tokio-console = []
 packetcapture = [ "flodbadd/packetcapture" ]
 fim = [ "flodbadd/fim" ]
+# App Store eligibility ONLY -- forwards to flodbadd's `appstore` feature so the
+# macOS/iOS app build restricts sysinfo to stay App Store eligible. NEVER enable
+# this for the privileged helper or standalone posture CLI (it disables process
+# lineage enumeration). See flodbadd's `appstore` feature for details.
+appstore = [ "flodbadd/appstore" ]
 
 [lib]
 # Dynamic lib version is not used on apple platforms as it's painful, but we must use it on Windows, Linux and Android
