@@ -733,8 +733,7 @@ mod tests {
 
         let usage = build_agent_subprocess_usage(&inputs);
         assert_eq!(
-            usage.total_observations,
-            MAX_SUBPROCESS_OBSERVATIONS as u32,
+            usage.total_observations, MAX_SUBPROCESS_OBSERVATIONS as u32,
             "observation set must saturate at MAX_SUBPROCESS_OBSERVATIONS"
         );
         assert_eq!(

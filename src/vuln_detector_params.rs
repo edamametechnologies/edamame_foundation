@@ -769,12 +769,7 @@ fn default_agent_critical_subprocess_catalog() -> Vec<CriticalSubprocessClassJSO
             "elevated",
             "OWASP-ASI05,OWASP-LLM06",
         ),
-        critical_subprocess_class(
-            &["git", "gh"],
-            "vcs",
-            "routine",
-            "OWASP-ASI02,OWASP-LLM06",
-        ),
+        critical_subprocess_class(&["git", "gh"], "vcs", "routine", "OWASP-ASI02,OWASP-LLM06"),
         critical_subprocess_class(
             &[
                 "pip", "pip3", "npm", "npx", "pnpm", "yarn", "cargo", "gem", "brew", "apt",
@@ -2812,9 +2807,8 @@ fn normalize_app_self_temp_staging(patterns: &AppSelfTempStagingJSON) -> AppSelf
 fn normalize_agent_tool_privilege_keywords(
     keywords: &AgentToolPrivilegeKeywordsJSON,
 ) -> AgentToolPrivilegeKeywordsJSON {
-    let lower = |xs: &[String]| -> Vec<String> {
-        xs.iter().map(|x| x.to_ascii_lowercase()).collect()
-    };
+    let lower =
+        |xs: &[String]| -> Vec<String> { xs.iter().map(|x| x.to_ascii_lowercase()).collect() };
     AgentToolPrivilegeKeywordsJSON {
         shell: lower(&keywords.shell),
         filesystem_write: lower(&keywords.filesystem_write),
@@ -3355,11 +3349,7 @@ impl CveDetectionParams {
                     mode: sig.mode.to_ascii_lowercase(),
                     hits: sig.hits,
                     per_marker: sig.per_marker,
-                    markers: sig
-                        .markers
-                        .iter()
-                        .map(|m| m.to_ascii_lowercase())
-                        .collect(),
+                    markers: sig.markers.iter().map(|m| m.to_ascii_lowercase()).collect(),
                 })
                 .collect(),
             agent_critical_subprocess_catalog: json
