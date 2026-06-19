@@ -314,6 +314,11 @@ pub struct AgentSubprocessAgentSummary {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentSubprocessUsage {
     pub generated_at: chrono::DateTime<chrono::Utc>,
+    /// Rolling capture window (seconds) these observations are drawn from --
+    /// the session-retention horizon supplied by the caller. `0` means the
+    /// window is unknown (capture pipeline compiled out). The UI renders it as
+    /// "critical commands launched in the past N minutes".
+    pub window_seconds: u32,
     pub total_observations: u32,
     /// Observations whose binary is `Critical` criticality (ssh/nc/docker/...).
     pub critical_observations: u32,
@@ -356,7 +361,15 @@ fn join_command(cmd: &[String]) -> String {
 /// only inputs that classify as a critical subprocess AND attribute to a known
 /// agent, dedups them, rolls up per-agent counts, and synthesizes one
 /// `VisibilityFinding` per deduped observation (severity capped at `Medium`).
-pub fn build_agent_subprocess_usage(inputs: &[SubprocessInput]) -> AgentSubprocessUsage {
+///
+/// `window_seconds` is the rolling capture-retention horizon the `inputs` were
+/// drawn from (the caller's session-retention bound). It is carried through to
+/// [`AgentSubprocessUsage::window_seconds`] so the UI can state the time window
+/// explicitly; pass `0` when no capture window applies.
+pub fn build_agent_subprocess_usage(
+    inputs: &[SubprocessInput],
+    window_seconds: u32,
+) -> AgentSubprocessUsage {
     use std::collections::BTreeMap;
 
     // dedup key -> accumulating observation
@@ -551,6 +564,7 @@ pub fn build_agent_subprocess_usage(inputs: &[SubprocessInput]) -> AgentSubproce
 
     AgentSubprocessUsage {
         generated_at: chrono::Utc::now(),
+        window_seconds,
         total_observations,
         critical_observations,
         agents_with_usage,
@@ -674,11 +688,13 @@ mod tests {
             // Attributable but NOT critical (ls) -- dropped.
             input("ls", "/home/me/.cursor/x", None),
         ];
-        let usage = build_agent_subprocess_usage(&inputs);
+        let usage = build_agent_subprocess_usage(&inputs, 7200);
         assert_eq!(usage.total_observations, 2);
         assert_eq!(usage.critical_observations, 1); // only ssh
         assert_eq!(usage.findings.len(), 2);
         assert_eq!(usage.agents_with_usage, 2);
+        // The caller-supplied capture window is carried through verbatim.
+        assert_eq!(usage.window_seconds, 7200);
 
         // ssh observation deduped to count 2, sorted first (Critical).
         let ssh = &usage.observations[0];
@@ -699,7 +715,7 @@ mod tests {
 
     #[test]
     fn empty_inputs_yield_empty_usage() {
-        let usage = build_agent_subprocess_usage(&[]);
+        let usage = build_agent_subprocess_usage(&[], 0);
         assert_eq!(usage.total_observations, 0);
         assert_eq!(usage.critical_observations, 0);
         assert_eq!(usage.agents_with_usage, 0);
@@ -731,7 +747,7 @@ mod tests {
             Some("host-0.example.com:22"),
         ));
 
-        let usage = build_agent_subprocess_usage(&inputs);
+        let usage = build_agent_subprocess_usage(&inputs, 7200);
         assert_eq!(
             usage.total_observations, MAX_SUBPROCESS_OBSERVATIONS as u32,
             "observation set must saturate at MAX_SUBPROCESS_OBSERVATIONS"
