@@ -630,6 +630,15 @@ pub struct AgentHarness {
     /// The on-disk markers / binaries that matched (display paths / names),
     /// for the UI and threat evidence. Empty when `detected` is false.
     pub evidence: Vec<String>,
+    /// Best-effort governed-agent identity token read from the harness's own
+    /// on-disk footprint (e.g. AgentField's W3C-DID / project id), so EDAMAME
+    /// evidence can be joined back to the harness audit trail (governed-identity
+    /// binding). Honest best-effort: `None` when the harness is absent OR no
+    /// recognizable identity-bearing file is present -- never fabricated. The
+    /// exact per-product identity file/key is not yet pinned, so today this is
+    /// populated only when a clearly identity-named file (`did` / `identity`)
+    /// exists and yields a plausible token.
+    pub identity: Option<String>,
 }
 
 /// Known agent harnesses with a detectable, cross-platform per-user footprint.
@@ -736,6 +745,95 @@ fn find_harness_binary(home: &Path, path_dirs: &[PathBuf], bin: &str) -> Option<
     None
 }
 
+/// Best-effort read of a governed-agent identity token from a harness's own
+/// on-disk footprint, so EDAMAME evidence can be joined to the harness audit
+/// trail (governed-identity binding). Read-only and honest: returns `None`
+/// unless a clearly identity-bearing file exists and yields a plausible token.
+/// The exact identity file/key per product is not yet confirmed, so the
+/// candidate set is deliberately conservative and never lifts a token out of an
+/// arbitrary/general config blob.
+fn read_harness_identity(home: &Path, slug: &str) -> Option<String> {
+    // Per-slug candidate identity files (relative to `$HOME`). Only files whose
+    // *name* signals identity (`did` / `identity`) are probed, so we never lift
+    // an unrelated value out of a general config file.
+    let rels: &[&str] = match slug {
+        // AgentField issues a W3C-DID per governed agent/project. The exact
+        // on-disk location is unconfirmed; these are the plausible per-user
+        // spots under its standard config roots.
+        "agentfield" => &[
+            ".af/did",
+            ".af/identity",
+            ".af/identity.json",
+            ".config/agentfield/did",
+            ".config/agentfield/identity",
+            ".config/agentfield/identity.json",
+        ],
+        // No confirmed local identity file for other harnesses yet.
+        _ => &[],
+    };
+    for rel in rels {
+        let path = home.join(rel);
+        if !path.is_file() {
+            continue;
+        }
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        if let Some(token) = extract_identity_token(&raw) {
+            return Some(token);
+        }
+    }
+    None
+}
+
+/// Extract a plausible identity token from a candidate file body. Accepts
+/// either a JSON object carrying a recognized identity key, or a short
+/// single-line token. Returns `None` for anything that does not look like an
+/// identity so the field stays honestly empty rather than fabricated.
+fn extract_identity_token(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed.len() > 4096 {
+        return None;
+    }
+    // JSON object: pull the first recognized identity key.
+    if let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(trimmed) {
+        for key in [
+            "did",
+            "identity",
+            "agent_did",
+            "agent_id",
+            "project_id",
+            "id",
+        ] {
+            if let Some(serde_json::Value::String(s)) = map.get(key) {
+                let s = s.trim();
+                if is_plausible_identity(s) {
+                    return Some(s.to_string());
+                }
+            }
+        }
+        return None;
+    }
+    // Plain token: accept a single short line that looks like an id / DID.
+    let first = trimmed.lines().next().unwrap_or("").trim();
+    if is_plausible_identity(first) {
+        return Some(first.to_string());
+    }
+    None
+}
+
+/// A token is a plausible identity if it is non-empty, bounded in length, has
+/// no whitespace, and is made of identity-ish characters (DID / UUID / slug
+/// shapes). Deliberately strict to avoid lifting prose or secrets into the
+/// identity field.
+fn is_plausible_identity(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 512
+        && !s.chars().any(|c| c.is_whitespace())
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, ':' | '-' | '_' | '.' | '/' | '#'))
+}
+
 /// Detect which known agent harnesses are present for the given user `home`.
 /// Cross-platform and read-only (filesystem existence + `$PATH` probing). Both
 /// the standalone core and the helper converge here (the helper passes the
@@ -782,11 +880,23 @@ fn detect_agent_harnesses_with(home: &Path, path_dirs: &[PathBuf]) -> Vec<AgentH
 
             evidence.sort();
             evidence.dedup();
+
+            // Best-effort governed-agent identity (governed-identity binding):
+            // only when the harness footprint is actually present, and only from
+            // a clearly identity-bearing file. `None` otherwise (honest, never
+            // fabricated).
+            let identity = if evidence.is_empty() {
+                None
+            } else {
+                read_harness_identity(home, slug)
+            };
+
             AgentHarness {
                 slug: (*slug).to_string(),
                 display_name: (*display).to_string(),
                 detected: !evidence.is_empty(),
                 evidence,
+                identity,
             }
         })
         .collect();
@@ -803,6 +913,42 @@ fn detect_agent_harnesses_with(home: &Path, path_dirs: &[PathBuf]) -> Vec<AgentH
 /// unit-testable without touching disk.
 pub fn agents_without_harness(discovered_agent_count: usize, harnesses: &[AgentHarness]) -> bool {
     discovered_agent_count > 0 && !harnesses.iter().any(|h| h.detected)
+}
+
+/// AI-SDLC posture rule: "a governance harness is installed on this host, yet a
+/// discovered agent still shows host blast-radius escape" -- i.e. the control
+/// plane is present but is not actually confining the agent. This is the
+/// complement of `agents_without_harness`: that rule fires when NO harness wraps
+/// the agents (the common workstation default gap); this one fires when a
+/// harness IS detected (AgentField, Rippletide, ...) but an agent on the box can
+/// still reach off-host / become root / open a shell, which is strictly worse --
+/// a deployed control failed to bound the agent.
+///
+/// Inputs are the detected harnesses (`detect_agent_harnesses`) and the
+/// already-computed host blast-radius agents (`agents_with_blast_radius`, whose
+/// caller has already filtered to agents actually present on the host). Returns
+/// the diverging agent types, sorted and de-duplicated. Returns empty when no
+/// harness is detected (so `agents_without_harness` owns that case and the two
+/// signals never double-count) and empty when no agent breaches its boundary
+/// (the harness is doing its job). Deterministic and pure so it is unit-testable
+/// without touching disk.
+pub fn agents_with_harness_divergence(
+    harnesses: &[AgentHarness],
+    blast_radius_agents: &[BlastRadiusAgent],
+) -> Vec<String> {
+    // Only meaningful when a governance harness IS present: the divergence is
+    // "a control exists yet the agent still escapes". With no harness detected,
+    // `agents_without_harness` is the right signal, so stay silent here.
+    if !harnesses.iter().any(|h| h.detected) {
+        return Vec::new();
+    }
+    let mut out: Vec<String> = blast_radius_agents
+        .iter()
+        .map(|a| a.agent_type.clone())
+        .collect();
+    out.sort();
+    out.dedup();
+    out
 }
 
 /// Derive the target username from a home directory path
@@ -4112,6 +4258,7 @@ bob ALL=(ALL) NOPASSWD: ALL
             } else {
                 Vec::new()
             },
+            identity: None,
         }
     }
 
@@ -4219,6 +4366,109 @@ bob ALL=(ALL) NOPASSWD: ALL
         // The sibling harness stays undetected.
         let af = harnesses.iter().find(|h| h.slug == "agentfield").unwrap();
         assert!(!af.detected);
+    }
+
+    fn blast_radius_fixture(agent_type: &str) -> BlastRadiusAgent {
+        BlastRadiusAgent {
+            agent_type: agent_type.to_string(),
+            unsandboxed: true,
+            passwordless_root: true,
+            critical_subprocess: false,
+            reasons: vec!["unsandboxed (full user-file access)".to_string()],
+        }
+    }
+
+    #[test]
+    fn agents_with_harness_divergence_fires_when_harness_present_and_breach() {
+        let harnesses = vec![
+            harness_fixture("agentfield", true),
+            harness_fixture("rippletide", false),
+        ];
+        let blast = vec![
+            blast_radius_fixture("cursor"),
+            blast_radius_fixture("claude_code"),
+        ];
+        // A harness IS installed yet two agents still escape their boundary ->
+        // the control is present but not confining them. Sorted, de-duplicated.
+        let diverging = agents_with_harness_divergence(&harnesses, &blast);
+        assert_eq!(
+            diverging,
+            vec!["claude_code".to_string(), "cursor".to_string()]
+        );
+    }
+
+    #[test]
+    fn agents_with_harness_divergence_clears_when_no_harness() {
+        let harnesses = vec![
+            harness_fixture("agentfield", false),
+            harness_fixture("rippletide", false),
+        ];
+        let blast = vec![blast_radius_fixture("cursor")];
+        // No harness detected -> this is the `agents_without_harness` gap, not
+        // a divergence, so this rule stays silent (no double-counting).
+        assert!(agents_with_harness_divergence(&harnesses, &blast).is_empty());
+    }
+
+    #[test]
+    fn agents_with_harness_divergence_clears_when_no_breach() {
+        let harnesses = vec![harness_fixture("agentfield", true)];
+        // A harness is present and no agent breaches its boundary -> the harness
+        // is doing its job, so the divergence threat does not fire.
+        assert!(agents_with_harness_divergence(&harnesses, &[]).is_empty());
+    }
+
+    // --- Governed-agent identity binding (best-effort, honest) ---------------
+
+    #[test]
+    fn extract_identity_token_reads_plain_did() {
+        assert_eq!(
+            extract_identity_token("did:web:agentfield.ai:projects:acme\n"),
+            Some("did:web:agentfield.ai:projects:acme".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_identity_token_reads_json_did_key() {
+        assert_eq!(
+            extract_identity_token(r#"{"did": "did:key:z6Mk-acme", "other": 1}"#),
+            Some("did:key:z6Mk-acme".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_identity_token_rejects_prose_and_empty() {
+        // Whitespace-bearing prose is not an identity (no fabrication).
+        assert_eq!(extract_identity_token("this is a config file"), None);
+        assert_eq!(extract_identity_token("   \n  "), None);
+        // JSON object without a recognized identity key yields nothing.
+        assert_eq!(extract_identity_token(r#"{"theme": "dark"}"#), None);
+    }
+
+    #[test]
+    fn detect_agent_harnesses_reads_identity_when_did_file_present() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let af = tmp.path().join(".af");
+        std::fs::create_dir_all(&af).unwrap();
+        std::fs::write(af.join("did"), "did:web:agentfield.ai:projects:acme\n").unwrap();
+        let harnesses = detect_agent_harnesses_with(tmp.path(), &[]);
+        let af = harnesses.iter().find(|h| h.slug == "agentfield").unwrap();
+        assert!(af.detected);
+        assert_eq!(
+            af.identity.as_deref(),
+            Some("did:web:agentfield.ai:projects:acme")
+        );
+    }
+
+    #[test]
+    fn detect_agent_harnesses_identity_is_none_without_identity_file() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        // Footprint present (config dir) but NO identity-bearing file -> honest
+        // `None`, never fabricated from the directory's mere existence.
+        std::fs::create_dir_all(tmp.path().join(".config").join("agentfield")).unwrap();
+        let harnesses = detect_agent_harnesses_with(tmp.path(), &[]);
+        let af = harnesses.iter().find(|h| h.slug == "agentfield").unwrap();
+        assert!(af.detected);
+        assert_eq!(af.identity, None);
     }
 
     #[test]
