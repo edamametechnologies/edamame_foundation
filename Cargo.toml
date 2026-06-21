@@ -1,6 +1,6 @@
 [package]
 name = "edamame_foundation"
-version = "1.4.2"
+version = "1.4.3"
 edition = "2021"
 license = "Apache-2.0"
 
