@@ -293,15 +293,15 @@ fn build_session(
         derived_expected_parent_paths: inferred.parent_paths,
         derived_expected_grandparent_paths: Vec::new(),
         derived_scope_process_paths: Vec::new(),
-            derived_scope_parent_paths: HERMES_SCOPE_PARENT_PATHS
-                .iter()
-                .map(|s| (*s).to_string())
-                .collect(),
-            derived_scope_grandparent_paths: Vec::new(),
-            derived_scope_any_lineage_paths: super::agent_identity_lineage_paths(
-                "hermes",
-                HERMES_SCOPE_PARENT_PATHS,
-            ),
+        derived_scope_parent_paths: HERMES_SCOPE_PARENT_PATHS
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect(),
+        derived_scope_grandparent_paths: Vec::new(),
+        derived_scope_any_lineage_paths: super::agent_identity_lineage_paths(
+            "hermes",
+            HERMES_SCOPE_PARENT_PATHS,
+        ),
         derived_expected_open_files: expected_open,
         source_path: inputs.source_path,
         started_at: inputs.started_at,

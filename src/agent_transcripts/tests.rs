@@ -537,7 +537,8 @@ fn agent_identity_lineage_paths_keeps_identity_drops_generic() {
     ];
     let kept = super::agent_identity_lineage_paths("claude_code", &mixed);
     assert!(
-        kept.iter().all(|p| p.to_ascii_lowercase().contains("claude")),
+        kept.iter()
+            .all(|p| p.to_ascii_lowercase().contains("claude")),
         "every kept entry must carry the agent identity token, got: {:?}",
         kept
     );
