@@ -18,7 +18,8 @@ use tracing::{info, warn};
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 use crate::agent_plugin_icons::{
-    CLAUDE_CODE_ICON_BASE64, CLAUDE_DESKTOP_ICON_BASE64, CURSOR_ICON_BASE64, OPENCLAW_ICON_BASE64,
+    CLAUDE_CODE_ICON_BASE64, CLAUDE_DESKTOP_ICON_BASE64, CODEX_ICON_SVG_BASE64, CURSOR_ICON_BASE64,
+    HERMES_ICON_SVG_BASE64, OPENCLAW_ICON_BASE64,
 };
 use crate::supported_agents::{self, SupportedAgentDefinition};
 
@@ -804,14 +805,21 @@ fn empty_plugin_status(agent_type: &str) -> AgentPluginStatus {
 }
 
 fn embedded_icon_payload(agent_type: &str) -> Option<(String, String)> {
-    let base64 = match agent_type {
-        "cursor" => CURSOR_ICON_BASE64,
-        "claude_code" => CLAUDE_CODE_ICON_BASE64,
-        "claude_desktop" => CLAUDE_DESKTOP_ICON_BASE64,
-        "openclaw" => OPENCLAW_ICON_BASE64,
+    // The mime MUST match the embedded bytes' actual format: cursor/openclaw
+    // are PNG, claude_code/claude_desktop are JPEG, codex/hermes are SVG
+    // source. The app's AgentPluginIcon only branches on `image/svg+xml`
+    // (SvgPicture vs Image.memory), but an accurate mime keeps the API
+    // contract honest for any future consumer.
+    let (base64, mime) = match agent_type {
+        "cursor" => (CURSOR_ICON_BASE64, "image/png"),
+        "claude_code" => (CLAUDE_CODE_ICON_BASE64, "image/jpeg"),
+        "claude_desktop" => (CLAUDE_DESKTOP_ICON_BASE64, "image/jpeg"),
+        "openclaw" => (OPENCLAW_ICON_BASE64, "image/png"),
+        "codex" => (CODEX_ICON_SVG_BASE64, "image/svg+xml"),
+        "hermes" => (HERMES_ICON_SVG_BASE64, "image/svg+xml"),
         _ => return None,
     };
-    Some((base64.to_string(), "image/png".to_string()))
+    Some((base64.to_string(), mime.to_string()))
 }
 
 fn encode_icon_file(path: &Path) -> Option<(String, String)> {
@@ -1399,6 +1407,53 @@ mod tests {
         let parsed: AgentPluginStatus = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.agent_type, "cursor");
         assert!(parsed.installed);
+    }
+
+    /// Every supported agent type MUST have an embedded icon payload so the UI
+    /// never renders a blank/fallback glyph when the registry SVG file is
+    /// absent in production (the regression that left codex/hermes iconless).
+    /// PNG agents declare `image/png` with the PNG magic; codex/hermes declare
+    /// `image/svg+xml` and decode to SVG source.
+    #[test]
+    fn test_embedded_icon_payload_present_for_all_agents() {
+        for agent in ["cursor", "openclaw"] {
+            let (b64, mime) =
+                embedded_icon_payload(agent).unwrap_or_else(|| panic!("{agent} icon missing"));
+            assert_eq!(mime, "image/png", "{agent} must be png");
+            let bytes = BASE64_STANDARD
+                .decode(&b64)
+                .unwrap_or_else(|_| panic!("{agent} icon must base64-decode"));
+            assert!(
+                bytes.starts_with(&[0x89, b'P', b'N', b'G']),
+                "{agent} payload must be a PNG"
+            );
+        }
+        for agent in ["claude_code", "claude_desktop"] {
+            let (b64, mime) =
+                embedded_icon_payload(agent).unwrap_or_else(|| panic!("{agent} icon missing"));
+            assert_eq!(mime, "image/jpeg", "{agent} must be jpeg");
+            let bytes = BASE64_STANDARD
+                .decode(&b64)
+                .unwrap_or_else(|_| panic!("{agent} icon must base64-decode"));
+            assert!(
+                bytes.starts_with(&[0xFF, 0xD8, 0xFF]),
+                "{agent} payload must be a JPEG"
+            );
+        }
+        for agent in ["codex", "hermes"] {
+            let (b64, mime) =
+                embedded_icon_payload(agent).unwrap_or_else(|| panic!("{agent} icon missing"));
+            assert_eq!(mime, "image/svg+xml", "{agent} must be svg");
+            let bytes = BASE64_STANDARD
+                .decode(&b64)
+                .unwrap_or_else(|_| panic!("{agent} icon must base64-decode"));
+            let svg = String::from_utf8(bytes).expect("svg payload must be utf-8");
+            assert!(svg.contains("<svg"), "{agent} payload must be SVG source");
+        }
+        assert!(
+            embedded_icon_payload("not_an_agent").is_none(),
+            "unknown agent must have no embedded payload"
+        );
     }
 
     #[test]

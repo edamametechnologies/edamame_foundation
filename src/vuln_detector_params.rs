@@ -1460,6 +1460,7 @@ fn default_non_sensitive_browser_data_subtrees() -> BrowserDataSubtreesJSON {
             "/service worker/scriptcache/",
             "/cache/cache_data/",
             "/local storage/leveldb/",
+            "/indexeddb/",
             "/sessionstorage/",
             "/file system/",
             "/blob_storage/",
@@ -5313,6 +5314,43 @@ mod tests {
         ));
         assert!(!is_non_sensitive_browser_data(
             "C:/Users/frank/AppData/Local/Microsoft/Edge/User Data/Default/Web Data"
+        ));
+    }
+
+    #[test]
+    fn test_fp_win_18_iter3_indexeddb_leveldb_housekeeping_suppressed() {
+        // FP-WIN-18 iter-3: Chrome's IndexedDB leveldb store under a
+        // Chromium user-data root churns MANIFEST-*/*.ldb/CURRENT/LOG
+        // files during routine compaction with null process
+        // attribution. iter-2 carved out only LOG/LOG.old; the data /
+        // manifest files stayed sensitive because /indexeddb/ was
+        // missing from chromium_family. They are the same browser-
+        // managed web-storage leveldb class as /local storage/leveldb/.
+        assert!(is_non_sensitive_browser_data(
+            "C:/Users/frank/AppData/Local/Google/Chrome/User Data/Profile 1/IndexedDB/chrome-extension_aeblfdkhhhdcdjpifhhbdiojplfjncoa_0.indexeddb.leveldb/MANIFEST-000001"
+        ));
+        assert!(is_non_sensitive_browser_data(
+            "C:/Users/frank/AppData/Local/Google/Chrome/User Data/Profile 1/IndexedDB/chrome-extension_aeblfdkhhhdcdjpifhhbdiojplfjncoa_0.indexeddb.leveldb/000066.ldb"
+        ));
+        assert!(is_non_sensitive_browser_data(
+            "C:/Users/frank/AppData/Local/Google/Chrome/User Data/Default/IndexedDB/https_example.com_0.indexeddb.leveldb/CURRENT"
+        ));
+        assert!(is_non_sensitive_browser_data(
+            "C:/Users/frank/AppData/Local/Microsoft/Edge/User Data/Default/IndexedDB/https_example.com_0.indexeddb.leveldb/000003.log"
+        ));
+    }
+
+    #[test]
+    fn test_fp_win_18_iter3_indexeddb_outside_browser_root_not_suppressed() {
+        // Defense-in-depth: an IndexedDB/*.leveldb directory OUTSIDE a
+        // Chromium user-data root MUST NOT be suppressed -- the
+        // double-gate (in_chromium_root + subtree match) is what keeps
+        // the /indexeddb/ carve-out safe against attacker staging.
+        assert!(!is_non_sensitive_browser_data(
+            "/tmp/sandbox/IndexedDB/evil_0.indexeddb.leveldb/MANIFEST-000001"
+        ));
+        assert!(!is_non_sensitive_browser_data(
+            "C:/AttackerStaging/IndexedDB/evil_0.indexeddb.leveldb/000066.ldb"
         ));
     }
 
