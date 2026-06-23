@@ -111,6 +111,50 @@ pub struct CollectedRawSession {
     pub modified_at: DateTime<Utc>,
 }
 
+/// Derive `derived_scope_any_lineage_paths` for an agent from its
+/// `derived_scope_parent_paths`, keeping ONLY the agent-identity-specific
+/// entries (the launcher/binary patterns carrying the agent's own product
+/// name) and dropping the generic runtime/sandbox patterns (`*/node`,
+/// `*\node.exe`, `*/python`, `*/.nvm/`, `*/.volta/`, `*/flatpak/`,
+/// `*/nix/store/`, `*/WindowsApps/`, ...).
+///
+/// The divergence engine's `session_matches_scope_filter` checks
+/// `any_lineage_paths` against the process, parent, AND grandparent of an
+/// egressing session. On Windows the agent launcher (`claude.exe`,
+/// `codex.exe`, `hermes.exe`, ...) double-execs through Git Bash, so the
+/// egressing `bash.exe`'s real owner is its GRANDPARENT, not its parent.
+/// Scoping the agent identity at any-lineage depth keeps divergence
+/// attributed (and the multiplatform divergence test hard-gated) on Windows
+/// without weakening the parent-only scope on Unix.
+///
+/// Identity tokens are intentionally the agent's own product name, never a
+/// generic interpreter -- a `node` / `python` grandparent must NOT silently
+/// own an egress just because some agent happens to run on that runtime. The
+/// returned entries are kept verbatim (mixed slashes intact); the engine
+/// normalizes both the stored rule and the candidate value at match time.
+pub(crate) fn agent_identity_lineage_paths(agent_type: &str, parent_paths: &[&str]) -> Vec<String> {
+    let tokens: &[&str] = match agent_type {
+        "claude_code" => &["claude"],
+        "claude_desktop" => &["claude", "anthropic"],
+        "cursor" => &["cursor"],
+        "codex" => &["codex"],
+        "hermes" => &["hermes"],
+        "openclaw" => &["openclaw"],
+        _ => &[],
+    };
+    if tokens.is_empty() {
+        return Vec::new();
+    }
+    parent_paths
+        .iter()
+        .filter(|p| {
+            let lower = p.to_ascii_lowercase();
+            tokens.iter().any(|t| lower.contains(t))
+        })
+        .map(|p| (*p).to_string())
+        .collect()
+}
+
 /// JSON-shape twin of `edamame_core::agentic::divergence::RawReasoningSessionPayload`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CollectedPayload {

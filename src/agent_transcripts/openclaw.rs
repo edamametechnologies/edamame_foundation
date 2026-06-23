@@ -138,7 +138,10 @@ pub fn collect(home: &Path, options: &CollectOptions) -> anyhow::Result<CollectR
                 .map(|s| (*s).to_string())
                 .collect(),
             derived_scope_grandparent_paths: Vec::new(),
-            derived_scope_any_lineage_paths: Vec::new(),
+            derived_scope_any_lineage_paths: super::agent_identity_lineage_paths(
+                "openclaw",
+                OPENCLAW_SCOPE_PARENT_PATHS,
+            ),
             derived_expected_open_files: expected_open,
             source_path: candidate.path.to_string_lossy().to_string(),
             started_at,

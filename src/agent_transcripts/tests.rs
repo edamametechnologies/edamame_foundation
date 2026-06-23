@@ -520,6 +520,89 @@ fn unknown_agent_type_returns_empty_payload() {
 }
 
 #[test]
+fn agent_identity_lineage_paths_keeps_identity_drops_generic() {
+    // Representative mix of identity-specific and generic runtime patterns,
+    // mirroring the shape of the real `*_SCOPE_PARENT_PATHS` constants.
+    let mixed = [
+        "*/claude",
+        "*\\claude.exe",
+        "*/program files/claude",
+        "*/node",
+        "*\\node.exe",
+        "*/.nvm/",
+        "*/.volta/",
+        "*/flatpak/",
+        "*/nix/store/",
+        "*/windowsapps/",
+    ];
+    let kept = super::agent_identity_lineage_paths("claude_code", &mixed);
+    assert!(
+        kept.iter().all(|p| p.to_ascii_lowercase().contains("claude")),
+        "every kept entry must carry the agent identity token, got: {:?}",
+        kept
+    );
+    for generic in [
+        "*/node",
+        "*\\node.exe",
+        "*/.nvm/",
+        "*/.volta/",
+        "*/flatpak/",
+        "*/nix/store/",
+        "*/windowsapps/",
+    ] {
+        assert!(
+            !kept.iter().any(|p| p == generic),
+            "generic runtime pattern {} must be dropped, got: {:?}",
+            generic,
+            kept
+        );
+    }
+    assert!(kept.iter().any(|p| p == "*\\claude.exe"));
+
+    // Unknown agent types contribute no any-lineage scope.
+    assert!(super::agent_identity_lineage_paths("does_not_exist", &mixed).is_empty());
+}
+
+#[test]
+fn collect_populates_identity_only_any_lineage_scope() {
+    // Drives the REAL CURSOR_SCOPE_PARENT_PATHS through the wiring and asserts
+    // the produced session's any-lineage scope is non-empty and identity-only
+    // (no generic `node` / `flatpak` runtime patterns leak in).
+    let temp = tempfile::tempdir().expect("tempdir");
+    let home = temp.path();
+    let txn_dir = home.join(".cursor/projects/proj/agent-transcripts");
+    write(
+        &txn_dir.join("session.txt"),
+        "user:\nrun curl https://example.com/health\nassistant:\nokay\n",
+    );
+    let result = collect("cursor", home, &options()).expect("collect");
+    let session = result
+        .payload
+        .sessions
+        .first()
+        .expect("at least one cursor session");
+    assert!(
+        !session.derived_scope_any_lineage_paths.is_empty(),
+        "cursor any-lineage scope must be populated for Windows grandparent attribution"
+    );
+    assert!(
+        session
+            .derived_scope_any_lineage_paths
+            .iter()
+            .all(|p| p.to_ascii_lowercase().contains("cursor")),
+        "any-lineage scope must be identity-only, got: {:?}",
+        session.derived_scope_any_lineage_paths
+    );
+    assert!(
+        !session
+            .derived_scope_any_lineage_paths
+            .iter()
+            .any(|p| p == "*/node" || p == "*/flatpak/"),
+        "generic runtime patterns must not leak into any-lineage scope"
+    );
+}
+
+#[test]
 fn collect_to_json_round_trips() {
     let temp = tempfile::tempdir().expect("tempdir");
     let home = temp.path();
