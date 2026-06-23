@@ -83,6 +83,7 @@ ignore = [
     { id = "RUSTSEC-2025-0040", reason = "vulnerability: PENDING TRIAGE. Confirm crate / version / exposure surface." },
     { id = "RUSTSEC-2026-0118", reason = "vulnerability: PENDING TRIAGE (recent advisory). Confirm crate / version / exposure surface." },
     { id = "RUSTSEC-2026-0119", reason = "vulnerability: PENDING TRIAGE (recent advisory). Confirm crate / version / exposure surface." },
+    { id = "RUSTSEC-2026-0185", reason = "vulnerability: quinn-proto remote memory exhaustion via unbounded out-of-order stream reassembly (DoS). NOT APPLICABLE: edamame_core enables the libp2p `quic` feature (Cargo.toml) so quinn-proto compiles, but the only libp2p swarm (src/community_lan.rs) is built TCP-only (.with_tcp(...), .with_quic() commented out) and listens solely on /ip4/0.0.0.0/tcp/0 (the /quic-v1 listener is commented out). No QUIC transport is ever instantiated and no QUIC stream is ever reassembled, so the vulnerable path is unreachable. TODO: drop the dead `quic` libp2p feature to remove the quinn stack entirely." },
 ]
 
 [licenses]
