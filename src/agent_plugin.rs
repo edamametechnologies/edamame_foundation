@@ -804,7 +804,12 @@ fn empty_plugin_status(agent_type: &str) -> AgentPluginStatus {
     }
 }
 
-fn embedded_icon_payload(agent_type: &str) -> Option<(String, String)> {
+/// Embedded brand icon payload (base64, mime) for a supported agent type, or
+/// `None` for an unknown type. This is the compiled-in fallback the real
+/// status path uses when an installed bundle icon is absent, and it is also the
+/// single source of truth for the demo-mode plugin list so screenshots render
+/// the same brand glyphs as the live app.
+pub fn embedded_icon_payload(agent_type: &str) -> Option<(String, String)> {
     // The mime MUST match the embedded bytes' actual format: cursor/openclaw
     // are PNG, claude_code/claude_desktop are JPEG, codex/hermes are SVG
     // source. The app's AgentPluginIcon only branches on `image/svg+xml`
