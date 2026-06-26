@@ -970,6 +970,18 @@ pub struct CveDetectionParamsJSON {
     pub edamame_daemon_self_telemetry_install_prefixes: PlatformStringLists,
     #[serde(default = "default_cloud_provider_sdk_destinations")]
     pub cloud_provider_sdk_destinations: CloudProviderSdkDestinationsJSON,
+    /// Software-distribution / self-update / CDN backends that packaged
+    /// desktop applications legitimately reach to fetch updates, plugin
+    /// manifests, and config (FP-MAC-14). Single org-identity list:
+    /// `asn_owners` (case-insensitive substring on `dst_asn.owner`),
+    /// `domain_suffixes` (case-insensitive suffix), `ip_prefixes`
+    /// (case-insensitive prefix). It is intentionally ONE gate of the
+    /// `software_distribution_self_update` demotion conjunction (packaged
+    /// app + OS-init parent + non-credential material + zero corroboration
+    /// + recognized backend); recognizing a broad CDN here is safe because
+    /// it never demotes on its own.
+    #[serde(default = "default_software_distribution_backends")]
+    pub software_distribution_backends: CloudProviderSdkDestinationListJSON,
     #[serde(default = "default_platform_credential_helper_routine_destinations")]
     pub platform_credential_helper_routine_destinations:
         PlatformCredentialHelperRoutineDestinationsJSON,
@@ -2052,6 +2064,47 @@ fn default_cloud_provider_sdk_destinations() -> CloudProviderSdkDestinationsJSON
     }
 }
 
+/// Embedded fallback for `software_distribution_backends` (FP-MAC-14).
+/// Major CDN / update / package-distribution organizations that packaged
+/// desktop apps legitimately reach for self-update and config fetch.
+/// Org-identity matching (ASN owner substring + domain suffix), never a
+/// brittle single-IP allowlist. MUST mirror
+/// `threatmodels/cve-detection-params-db.json::software_distribution_backends`.
+fn default_software_distribution_backends() -> CloudProviderSdkDestinationListJSON {
+    CloudProviderSdkDestinationListJSON {
+        asn_owners: strings(&[
+            "FASTLY",
+            "GITHUB",
+            "CLOUDFLARENET",
+            "CLOUDFLARE",
+            "MICROSOFT",
+            "APPLE",
+            "AKAMAI",
+            "GOOGLE",
+            "AMAZON",
+            "CLOUDFRONT",
+        ]),
+        domain_suffixes: strings(&[
+            ".github.com",
+            ".githubusercontent.com",
+            ".github.io",
+            ".githubassets.com",
+            ".fastly.net",
+            ".cloudflare.com",
+            ".microsoft.com",
+            ".windowsupdate.com",
+            ".msftconnecttest.com",
+            ".apple.com",
+            ".mzstatic.com",
+            ".akamai.net",
+            ".akamaiedge.net",
+            ".gstatic.com",
+            ".cloudfront.net",
+        ]),
+        ip_prefixes: Vec::new(),
+    }
+}
+
 /// Lowercase every entry of a cloud-provider SDK destination list for
 /// the snapshot (matching is done against lowercased session fields).
 fn lowercase_cloud_provider_sdk_destination_list(
@@ -2689,6 +2742,7 @@ pub struct CveDetectionParams {
     pub platform_credential_helper_routine_destinations:
         PlatformCredentialHelperRoutineDestinationsJSON,
     pub cloud_provider_sdk_destinations: CloudProviderSdkDestinationsJSON,
+    pub software_distribution_backends: CloudProviderSdkDestinationListJSON,
     pub platform_metadata_endpoints: PlatformStringLists,
     pub platform_runtime_probe_filename_patterns: PlatformStringLists,
     pub platform_self_state_directories: PlatformStringLists,
@@ -3166,6 +3220,9 @@ impl CveDetectionParams {
                     &json.cloud_provider_sdk_destinations.gcp,
                 ),
             },
+            software_distribution_backends: lowercase_cloud_provider_sdk_destination_list(
+                &json.software_distribution_backends,
+            ),
             platform_metadata_endpoints: PlatformStringLists {
                 macos: json
                     .platform_metadata_endpoints
@@ -3889,6 +3946,73 @@ pub fn cloud_provider_sdk_destination_matches(
     ) else {
         return false;
     };
+
+    if let Some(domain) = domain_lower.as_deref() {
+        for suffix in &list.domain_suffixes {
+            if suffix.is_empty() {
+                continue;
+            }
+            let bare = suffix.strip_prefix('.').unwrap_or(suffix.as_str());
+            if domain == bare || domain.ends_with(suffix.as_str()) {
+                return true;
+            }
+        }
+    }
+    if let Some(asn) = asn_lower.as_deref() {
+        for owner in &list.asn_owners {
+            if !owner.is_empty() && asn.contains(owner) {
+                return true;
+            }
+        }
+    }
+    if let Some(ip) = ip_lower.as_deref() {
+        for prefix in &list.ip_prefixes {
+            if !prefix.is_empty() && ip.starts_with(prefix) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// True when the egress destination belongs to a recognized
+/// software-distribution / self-update / CDN backend (FP-MAC-14).
+///
+/// Matching mirrors `cloud_provider_sdk_destination_matches` but against
+/// the single (non-provider-keyed) `software_distribution_backends` list:
+/// - `domain_suffixes`: each configured entry begins with `.`; a host
+///   matches when it equals the suffix without the leading dot OR ends
+///   with the suffix.
+/// - `asn_owners`: case-insensitive substring (so a domainless Fastly /
+///   GitHub IPv6 anycast egress whose `dst_asn.owner` is `FASTLY` still
+///   matches even with no reverse DNS -- the exact FP-MAC-14 shape).
+/// - `ip_prefixes`: case-insensitive prefix (for ranges without
+///   DNS/ASN enrichment).
+///
+/// This is ONE gate of the `software_distribution_self_update` demotion
+/// conjunction in `edamame_core`; it never demotes a finding on its own.
+/// Returns false when every destination field is empty/absent or the
+/// configured list is empty.
+pub fn is_software_distribution_backend(
+    egress_destination_domain: Option<&str>,
+    egress_destination_ip: Option<&str>,
+    egress_destination_asn_owner: Option<&str>,
+) -> bool {
+    let domain_lower = egress_destination_domain
+        .map(|d| d.to_ascii_lowercase())
+        .filter(|d| !d.is_empty());
+    let ip_lower = egress_destination_ip
+        .map(|ip| ip.to_ascii_lowercase())
+        .filter(|ip| !ip.is_empty());
+    let asn_lower = egress_destination_asn_owner
+        .map(|a| a.to_ascii_lowercase())
+        .filter(|a| !a.is_empty());
+    if domain_lower.is_none() && ip_lower.is_none() && asn_lower.is_none() {
+        return false;
+    }
+
+    let snapshot = PARAMS_SNAPSHOT.load();
+    let list = &snapshot.software_distribution_backends;
 
     if let Some(domain) = domain_lower.as_deref() {
         for suffix in &list.domain_suffixes {
@@ -5496,6 +5620,37 @@ mod tests {
             Some("2001:db8::1"),
             None,
         ));
+    }
+
+    #[test]
+    fn test_software_distribution_backend_lookup() {
+        // FP-MAC-14 exact shape: domainless Fastly IPv6 anycast egress
+        // (GitHub release CDN) with no reverse DNS, matched on ASN owner.
+        assert!(is_software_distribution_backend(
+            None,
+            Some("2606:50c0:8000::153"),
+            Some("FASTLY"),
+        ));
+        // Domain-suffix match (raw.githubusercontent.com release fetch).
+        assert!(is_software_distribution_backend(
+            Some("objects.githubusercontent.com"),
+            None,
+            None,
+        ));
+        // GitHub ASN owner substring (e.g. "GITHUB, INC.").
+        assert!(is_software_distribution_backend(
+            None,
+            None,
+            Some("GitHub, Inc."),
+        ));
+        // Non-distribution destination: no domain suffix / ASN / IP match.
+        assert!(!is_software_distribution_backend(
+            Some("evil.example.com"),
+            Some("203.0.113.5"),
+            Some("DIGITALOCEAN-ASN"),
+        ));
+        // All destination fields empty/absent -> never matches.
+        assert!(!is_software_distribution_backend(None, None, None));
     }
 
     #[test]

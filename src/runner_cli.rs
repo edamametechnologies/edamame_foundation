@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Result};
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use std::process::Stdio;
 use std::{env, path::PathBuf};
 use tokio::io::AsyncReadExt;
@@ -103,25 +104,58 @@ async fn run_windows_ps(
         }
         script.push_str(cmd);
 
-        // Write the script to a temporary file. Passing complex multi-line scripts via
-        // -Command leads to subtle quoting/escaping issues; -File is the robust path.
-        let mut tmp = tempfile::Builder::new()
-            .suffix(".ps1")
-            .tempfile()
-            .map_err(|e| anyhow!("Failed to create temp PS script: {}", e))?;
-        tmp.write_all(script.as_bytes())
-            .map_err(|e| anyhow!("Failed to write PS script: {}", e))?;
-        // Keep the temp file alive until the command completes by holding the path here.
-        let tmp_path = tmp.into_temp_path();
+        // Prefer PowerShell's -EncodedCommand over writing a temporary .ps1 file.
+        //
+        // Writing a `.tmp*.ps1` into %TEMP% on every threat-check tick creates a
+        // short-lived script artifact that EDAMAME's own file-integrity monitor
+        // observes as a `file_system_tampering` event. Because the file is deleted
+        // almost immediately (TOCTOU), the detector frequently cannot attribute
+        // the writer process, and a null-attribution script-like temp write cannot
+        // be demoted -- producing a self-inflicted HIGH false positive (FP-WIN-18b).
+        // -EncodedCommand passes the script inline as a Base64 (UTF-16LE) argument,
+        // so no file ever touches disk and the FP disappears at the source. It is
+        // also immune to the command-line quoting/escaping issues that made plain
+        // -Command fragile, because PowerShell Base64-decodes the argument rather
+        // than parsing it as a command line.
+        let encoded = encode_powershell_command(&script);
 
         let mut command = Command::new("powershell.exe");
-        command
-            .arg("-NoProfile")
-            .arg("-NonInteractive")
-            .arg("-ExecutionPolicy")
-            .arg("Bypass")
-            .arg("-File")
-            .arg(&*tmp_path);
+        // Windows caps a process command line at 32767 chars (CreateProcessW). The
+        // longest real threat-model script encodes to ~15k Base64 chars, far under
+        // the limit, but keep a temp-file fallback for any pathologically large
+        // caller so we never silently truncate a command.
+        let tmp_path_guard = if encoded.len() <= MAX_ENCODED_COMMAND_LEN {
+            command
+                .arg("-NoProfile")
+                .arg("-NonInteractive")
+                .arg("-ExecutionPolicy")
+                .arg("Bypass")
+                .arg("-EncodedCommand")
+                .arg(&encoded);
+            None
+        } else {
+            warn!(
+                "PowerShell script too large for -EncodedCommand ({} Base64 chars); \
+                 falling back to a temporary .ps1 file",
+                encoded.len()
+            );
+            let mut tmp = tempfile::Builder::new()
+                .suffix(".ps1")
+                .tempfile()
+                .map_err(|e| anyhow!("Failed to create temp PS script: {}", e))?;
+            tmp.write_all(script.as_bytes())
+                .map_err(|e| anyhow!("Failed to write PS script: {}", e))?;
+            // Keep the temp file alive until the command completes by holding the path here.
+            let tmp_path = tmp.into_temp_path();
+            command
+                .arg("-NoProfile")
+                .arg("-NonInteractive")
+                .arg("-ExecutionPolicy")
+                .arg("Bypass")
+                .arg("-File")
+                .arg(&*tmp_path);
+            Some(tmp_path)
+        };
 
         // CREATE_NO_WINDOW (0x08000000) prevents the PowerShell host from
         // allocating a console, so threat-metric checks running from the
@@ -133,8 +167,9 @@ async fn run_windows_ps(
 
         debug!("Executing powershell command: {}", script);
         let result = run_command_with_timeout(command, cmd, timeout_opt).await;
-        // tmp_path drop closes/removes the temp file after the command has been waited on
-        drop(tmp_path);
+        // tmp_path drop closes/removes the temp file (if any) after the command
+        // has been waited on.
+        drop(tmp_path_guard);
         result
     }
     #[cfg(not(target_os = "windows"))]
@@ -145,6 +180,30 @@ async fn run_windows_ps(
             std::env::consts::OS
         ))
     }
+}
+
+// Upper bound on the Base64 `-EncodedCommand` length before we fall back to a
+// temporary .ps1 file. Windows caps a process command line at 32767 chars
+// (CreateProcessW); leaving generous headroom for the fixed argument prefix and
+// any inherited environment, anything under this stays comfortably inside the
+// limit. The longest real threat-model script encodes to ~15k chars.
+//
+// Kept compiling on every platform (only consumed in the Windows path of
+// `run_windows_ps`) so the unit tests can exercise the encoder on the
+// developers' macOS/Linux machines.
+#[allow(dead_code)]
+const MAX_ENCODED_COMMAND_LEN: usize = 30000;
+
+// Encode a PowerShell script for `powershell.exe -EncodedCommand`: Base64 of the
+// script's UTF-16LE bytes. This is the documented contract for -EncodedCommand
+// and lets us run multi-line scripts inline without ever staging a temp file.
+#[allow(dead_code)]
+fn encode_powershell_command(script: &str) -> String {
+    let utf16le: Vec<u8> = script
+        .encode_utf16()
+        .flat_map(|unit| unit.to_le_bytes())
+        .collect();
+    BASE64_STANDARD.encode(utf16le)
 }
 
 // Spawn a child via the provided builder, drain stdout/stderr concurrently with waiting,
@@ -667,6 +726,46 @@ mod tests {
             }
         }
         None
+    }
+
+    /// `encode_powershell_command` must produce a Base64 string that PowerShell's
+    /// -EncodedCommand can decode: Base64 of the script's UTF-16LE bytes. We verify
+    /// the round-trip (Base64-decode -> UTF-16LE -> original script) here so the
+    /// FP-WIN-18b fix (no more transient `.tmp*.ps1` files written by every
+    /// threat-check tick) stays correct on every platform, not just Windows CI.
+    #[test]
+    fn test_encode_powershell_command_round_trips_utf16le() {
+        let script = "Write-Output 'h\u{e9}llo'\n$x = 1 + 2\nexit 0";
+        let encoded = encode_powershell_command(script);
+
+        let bytes = BASE64_STANDARD
+            .decode(encoded.as_bytes())
+            .expect("encoded command must be valid Base64");
+        // UTF-16 code units are 2 bytes each.
+        assert_eq!(bytes.len() % 2, 0, "UTF-16LE byte length must be even");
+
+        let units: Vec<u16> = bytes
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        let decoded = String::from_utf16(&units).expect("must decode as UTF-16");
+        assert_eq!(decoded, script);
+    }
+
+    /// The longest real Windows threat-model script (~5.4 KB) plus a personation
+    /// env block (~2 KB) encodes well within the inline -EncodedCommand budget, so
+    /// the temp-file fallback never triggers for production threat checks.
+    #[test]
+    fn test_encode_powershell_command_within_inline_budget() {
+        // ~8.4 KB script, larger than the realistic worst case (script + env block).
+        let script = "Get-Item 'X'; ".repeat(600);
+        let encoded = encode_powershell_command(&script);
+        assert!(
+            encoded.len() <= MAX_ENCODED_COMMAND_LEN,
+            "encoded length {} exceeded inline budget {}",
+            encoded.len(),
+            MAX_ENCODED_COMMAND_LEN
+        );
     }
 
     #[tokio::test]
