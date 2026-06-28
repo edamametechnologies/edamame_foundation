@@ -155,6 +155,8 @@ pub fn collect(home: &Path, options: &CollectOptions) -> anyhow::Result<CollectR
             source_path: candidate.preferred_source.to_string_lossy().to_string(),
             started_at,
             modified_at,
+            economics_raw_text: String::new(),
+            economics_truncated: false,
         });
     }
 

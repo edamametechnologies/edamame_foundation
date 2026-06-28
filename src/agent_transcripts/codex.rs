@@ -251,6 +251,8 @@ pub(crate) fn build_payload(
             source_path: candidate.path.to_string_lossy().to_string(),
             started_at,
             modified_at,
+            economics_raw_text: String::new(),
+            economics_truncated: false,
         });
     }
 
@@ -749,6 +751,8 @@ fn thread_row_to_session(
         source_path,
         started_at,
         modified_at,
+        economics_raw_text: String::new(),
+        economics_truncated: false,
     })
 }
 

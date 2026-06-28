@@ -306,6 +306,8 @@ fn build_session(
         source_path: inputs.source_path,
         started_at: inputs.started_at,
         modified_at: inputs.modified_at,
+        economics_raw_text: String::new(),
+        economics_truncated: false,
     }
 }
 

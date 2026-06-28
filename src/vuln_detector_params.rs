@@ -590,6 +590,51 @@ pub struct AgentRecursionThresholdsJSON {
     pub loop_min_repeats: u32,
 }
 
+/// One per-model price row used by the agent-transcript economics parser.
+/// All four rates are USD per 1M tokens. `match_substring` is a lowercased
+/// substring tested against the lowercased model id; among all matching
+/// entries the one with the LONGEST `match_substring` wins (most-specific
+/// match). The `default` entry's `match_substring` is structurally present
+/// but ignored at runtime -- the default is the fallback applied only when
+/// no entry matched.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct ModelPriceEntryJSON {
+    /// USD per 1M input (prompt) tokens.
+    pub input: f64,
+    /// USD per 1M output (completion) tokens.
+    pub output: f64,
+    /// USD per 1M tokens written to the prompt cache (Anthropic
+    /// cache-creation). Providers without a cache-write surcharge set 0.
+    pub cache_write: f64,
+    /// USD per 1M tokens served from the prompt cache (cache read / hit).
+    pub cache_read: f64,
+    /// Lowercased substring matched against the lowercased model id.
+    pub match_substring: String,
+}
+
+/// Per-model USD-per-1M-token price table. Resolution is by longest
+/// matching `match_substring`; `default` is the fallback for unrecognized
+/// model ids. Sourced from `cve-detection-params-db.json` so prices can be
+/// refreshed via CloudModel without a release.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct ModelPricingJSON {
+    pub default: ModelPriceEntryJSON,
+    pub entries: Vec<ModelPriceEntryJSON>,
+}
+
+/// Resolved per-model price (USD per 1M tokens) plus provenance. Returned by
+/// [`resolve_model_price`]. `is_fallback` is true when no `match_substring`
+/// entry matched and the `default` rate was used -- the model family was not
+/// recognized, so the derived cost is a coarse estimate (G3).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ResolvedModelPrice {
+    pub input: f64,
+    pub output: f64,
+    pub cache_write: f64,
+    pub cache_read: f64,
+    pub is_fallback: bool,
+}
+
 fn default_secret_content_powershell_probe_read_verbs() -> Vec<String> {
     strings(&[
         "get-itemproperty",
@@ -906,6 +951,54 @@ fn default_agent_recursion_thresholds() -> AgentRecursionThresholdsJSON {
     }
 }
 
+fn model_price_entry(
+    input: f64,
+    output: f64,
+    cache_write: f64,
+    cache_read: f64,
+    match_substring: &str,
+) -> ModelPriceEntryJSON {
+    ModelPriceEntryJSON {
+        input,
+        output,
+        cache_write,
+        cache_read,
+        match_substring: match_substring.to_string(),
+    }
+}
+
+/// Embedded fallback price table. Mirrors the `model_pricing` block in
+/// `cve-detection-params-db.json`; used only when a parsed snapshot is
+/// missing the field entirely (pre-`model_pricing` embedded snapshot or a
+/// remote publish that dropped the key). The published JSON is the source
+/// of truth -- keep this in rough sync but the snapshot regen is what
+/// drives runtime values.
+fn default_model_pricing() -> ModelPricingJSON {
+    ModelPricingJSON {
+        // Sonnet-class fallback: the most common mid-tier rate, used when a
+        // model id matches no entry below.
+        default: model_price_entry(3.0, 15.0, 3.75, 0.30, ""),
+        entries: vec![
+            // Anthropic
+            model_price_entry(15.0, 75.0, 18.75, 1.5, "opus"),
+            model_price_entry(0.8, 4.0, 1.0, 0.08, "haiku"),
+            model_price_entry(3.0, 15.0, 3.75, 0.30, "sonnet"),
+            // OpenAI (no cache-write surcharge)
+            model_price_entry(1.25, 10.0, 0.0, 0.125, "gpt-5"),
+            model_price_entry(1.25, 10.0, 0.0, 0.125, "gpt5"),
+            model_price_entry(1.25, 10.0, 0.0, 0.125, "codex"),
+            model_price_entry(2.5, 10.0, 0.0, 1.25, "gpt-4o"),
+            model_price_entry(2.5, 10.0, 0.0, 1.25, "gpt4o"),
+            model_price_entry(2.0, 8.0, 0.0, 0.5, "gpt-4.1"),
+            model_price_entry(2.0, 8.0, 0.0, 0.5, "gpt-4-1"),
+            model_price_entry(2.0, 8.0, 0.0, 0.5, "o3"),
+            model_price_entry(2.0, 8.0, 0.0, 0.5, "o4-mini"),
+            // Google
+            model_price_entry(1.25, 5.0, 0.0, 0.31, "gemini"),
+        ],
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct CveDetectionParamsJSON {
     pub date: String,
@@ -1094,6 +1187,11 @@ pub struct CveDetectionParamsJSON {
     /// Thresholds for the agent recursion / delegation visibility finding.
     #[serde(default = "default_agent_recursion_thresholds")]
     pub agent_recursion_thresholds: AgentRecursionThresholdsJSON,
+    /// Per-model USD-per-1M-token price table for the agent-transcript
+    /// economics parser. Longest `match_substring` wins; `default` is the
+    /// fallback for unrecognized models.
+    #[serde(default = "default_model_pricing")]
+    pub model_pricing: ModelPricingJSON,
 }
 
 fn strings(values: &[&str]) -> Vec<String> {
@@ -2764,6 +2862,8 @@ pub struct CveDetectionParams {
     pub agent_model_container_keys: Vec<String>,
     pub agent_tool_privilege_keywords: AgentToolPrivilegeKeywordsJSON,
     pub agent_recursion_thresholds: AgentRecursionThresholdsJSON,
+    /// Per-model price table with `match_substring` lowercased for matching.
+    pub model_pricing: ModelPricingJSON,
 }
 
 impl CloudSignature for CveDetectionParams {
@@ -2873,6 +2973,24 @@ fn normalize_agent_tool_privilege_keywords(
         database: lower(&keywords.database),
         secret_access: lower(&keywords.secret_access),
         network: lower(&keywords.network),
+    }
+}
+
+/// Lowercases every entry's `match_substring` so resolution against a
+/// lowercased model id is consistent regardless of how the JSON was cased.
+/// The `default` entry's `match_substring` is ignored at runtime but is
+/// lowercased too for uniformity.
+fn normalize_model_pricing(pricing: &ModelPricingJSON) -> ModelPricingJSON {
+    let lower_entry = |e: &ModelPriceEntryJSON| ModelPriceEntryJSON {
+        input: e.input,
+        output: e.output,
+        cache_write: e.cache_write,
+        cache_read: e.cache_read,
+        match_substring: e.match_substring.to_ascii_lowercase(),
+    };
+    ModelPricingJSON {
+        default: lower_entry(&pricing.default),
+        entries: pricing.entries.iter().map(lower_entry).collect(),
     }
 }
 
@@ -3438,6 +3556,7 @@ impl CveDetectionParams {
                 &json.agent_tool_privilege_keywords,
             ),
             agent_recursion_thresholds: json.agent_recursion_thresholds.clone(),
+            model_pricing: normalize_model_pricing(&json.model_pricing),
         }
     }
 
@@ -4878,6 +4997,62 @@ pub fn agent_recursion_thresholds() -> AgentRecursionThresholdsJSON {
     PARAMS_SNAPSHOT.load().agent_recursion_thresholds.clone()
 }
 
+/// The full per-model price table (match substrings already lowercased).
+pub fn model_pricing() -> ModelPricingJSON {
+    PARAMS_SNAPSHOT.load().model_pricing.clone()
+}
+
+/// Resolve the USD-per-1M-token price for a model id using longest /
+/// most-specific `match_substring` matching against the lowercased id.
+///
+/// Among all entries whose lowercased `match_substring` is a substring of
+/// the lowercased model id, the entry with the LONGEST `match_substring`
+/// wins (so `gpt-4o` beats a hypothetical `gpt`); ties keep the
+/// earlier-declared entry. When nothing matches, the `default` rate is
+/// returned with `is_fallback = true` so the caller can flag the derived
+/// cost as a coarse estimate for an unrecognized model (G3).
+pub fn resolve_model_price(model: &str) -> ResolvedModelPrice {
+    let snapshot = PARAMS_SNAPSHOT.load();
+    let pricing = &snapshot.model_pricing;
+    let m = model.to_ascii_lowercase();
+
+    let mut best: Option<&ModelPriceEntryJSON> = None;
+    for entry in &pricing.entries {
+        if entry.match_substring.is_empty() {
+            continue;
+        }
+        if m.contains(entry.match_substring.as_str()) {
+            let longer_than_best = match best {
+                Some(b) => entry.match_substring.len() > b.match_substring.len(),
+                None => true,
+            };
+            if longer_than_best {
+                best = Some(entry);
+            }
+        }
+    }
+
+    match best {
+        Some(e) => ResolvedModelPrice {
+            input: e.input,
+            output: e.output,
+            cache_write: e.cache_write,
+            cache_read: e.cache_read,
+            is_fallback: false,
+        },
+        None => {
+            let d = &pricing.default;
+            ResolvedModelPrice {
+                input: d.input,
+                output: d.output,
+                cache_write: d.cache_write,
+                cache_read: d.cache_read,
+                is_fallback: true,
+            }
+        }
+    }
+}
+
 /// Lowercased, slash-normalized path substrings that mark a path as
 /// "transient build-artifact, do not content-scan". See
 /// [`default_secret_content_scan_excluded_path_patterns`] for the
@@ -6083,6 +6258,103 @@ mod tests {
         assert!(!is_platform_self_state_process_name("python3"));
         assert!(!is_platform_self_state_process_name("bash"));
         assert!(!is_platform_self_state_process_name(""));
+    }
+
+    // --- Model pricing (agent-transcript economics) ---------------------
+
+    /// The embedded snapshot MUST ship a usable price table: a non-empty
+    /// `entries` list and a positive default input/output rate. A bad regen
+    /// that drops `model_pricing` falls back to `default_model_pricing()`
+    /// (via `#[serde(default)]`), which this also exercises.
+    #[test]
+    #[serial]
+    fn test_model_pricing_table_is_populated() {
+        let pricing = model_pricing();
+        assert!(
+            !pricing.entries.is_empty(),
+            "model pricing entries must be non-empty"
+        );
+        assert!(pricing.default.input > 0.0 && pricing.default.output > 0.0);
+        // Every entry except the (ignored) default must carry a non-empty
+        // match substring, already lowercased by normalize_model_pricing.
+        for e in &pricing.entries {
+            assert!(!e.match_substring.is_empty());
+            assert_eq!(e.match_substring, e.match_substring.to_ascii_lowercase());
+            assert!(e.input >= 0.0 && e.output >= 0.0);
+        }
+    }
+
+    /// Longest / most-specific match wins: `claude-opus-4` must resolve to the
+    /// `opus` row (75.0 output), not the generic Sonnet-class default, and is
+    /// not flagged as a fallback.
+    #[test]
+    #[serial]
+    fn test_resolve_model_price_anthropic_specific() {
+        let opus = resolve_model_price("claude-opus-4-20250514");
+        assert!(!opus.is_fallback);
+        assert_eq!(opus.input, 15.0);
+        assert_eq!(opus.output, 75.0);
+        // Anthropic four-bucket: cache_write and cache_read are distinct rates.
+        assert!(opus.cache_write > 0.0);
+        assert!(opus.cache_read > 0.0);
+
+        let sonnet = resolve_model_price("claude-3-5-sonnet-20241022");
+        assert!(!sonnet.is_fallback);
+        assert_eq!(sonnet.output, 15.0);
+
+        let haiku = resolve_model_price("claude-3-5-haiku-latest");
+        assert!(!haiku.is_fallback);
+        assert_eq!(haiku.output, 4.0);
+    }
+
+    /// OpenAI / Codex rows carry no cache-write surcharge (cache_write == 0)
+    /// and resolve case-insensitively.
+    #[test]
+    #[serial]
+    fn test_resolve_model_price_openai_no_cache_write() {
+        let gpt5 = resolve_model_price("gpt-5-codex");
+        assert!(!gpt5.is_fallback);
+        assert_eq!(gpt5.cache_write, 0.0);
+        assert!(gpt5.cache_read > 0.0);
+
+        // Case-insensitive: uppercased id resolves identically.
+        let gpt5_upper = resolve_model_price("GPT-5-CODEX");
+        assert_eq!(gpt5_upper.input, gpt5.input);
+        assert_eq!(gpt5_upper.output, gpt5.output);
+    }
+
+    /// Unrecognized models fall back to the default rate and are flagged so the
+    /// caller can present the derived cost as a coarse estimate (G3).
+    #[test]
+    #[serial]
+    fn test_resolve_model_price_unknown_is_fallback() {
+        let unknown = resolve_model_price("some-future-model-v9");
+        assert!(unknown.is_fallback);
+        let d = model_pricing().default;
+        assert_eq!(unknown.input, d.input);
+        assert_eq!(unknown.output, d.output);
+
+        // Empty model id also falls back rather than panicking.
+        let empty = resolve_model_price("");
+        assert!(empty.is_fallback);
+    }
+
+    /// `normalize_model_pricing` lowercases every match substring (including
+    /// the ignored default) so resolution against a lowercased id is stable
+    /// regardless of source-JSON casing.
+    #[test]
+    fn test_normalize_model_pricing_lowercases_substrings() {
+        let raw = ModelPricingJSON {
+            default: model_price_entry(3.0, 15.0, 3.75, 0.30, "DEFAULT"),
+            entries: vec![
+                model_price_entry(15.0, 75.0, 18.75, 1.5, "OPUS"),
+                model_price_entry(1.25, 10.0, 0.0, 0.125, "GPT-5"),
+            ],
+        };
+        let norm = normalize_model_pricing(&raw);
+        assert_eq!(norm.default.match_substring, "default");
+        assert_eq!(norm.entries[0].match_substring, "opus");
+        assert_eq!(norm.entries[1].match_substring, "gpt-5");
     }
 
     #[tokio::test]

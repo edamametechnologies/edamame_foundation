@@ -109,6 +109,31 @@ pub struct CollectedRawSession {
     pub source_path: String,
     pub started_at: DateTime<Utc>,
     pub modified_at: DateTime<Utc>,
+    /// Optional usage-bearing transcript text for the deterministic economics
+    /// parser, used ONLY when it cannot recover exact token usage from
+    /// `raw_text`. Two cases populate it (see [`economics_override_text`]):
+    ///   * Cursor's preferred divergence source is the usage-free `.txt`
+    ///     export while a usage-bearing `.jsonl` sibling exists (G4).
+    ///   * A transcript exceeds [`MAX_TRANSCRIPT_BYTES`], so `raw_text` is the
+    ///     head-only capped read and the cumulative end-of-file usage snapshot
+    ///     (Codex `total_token_usage`) was truncated away (G5). The override
+    ///     carries a head+tail read so both early per-turn usage and the final
+    ///     cumulative snapshot survive.
+    /// Empty means "raw_text already carries complete usage"; the economics
+    /// parser then reads `raw_text` directly. `#[serde(default)]` keeps an
+    /// older helper's JSON (which omits this field) deserializable in a newer
+    /// core, so the shared divergence collection path never breaks on a
+    /// rolling helper/core update.
+    #[serde(default)]
+    pub economics_raw_text: String,
+    /// True when [`economics_raw_text`] is a head+tail read of a transcript that
+    /// exceeded [`MAX_TRANSCRIPT_BYTES`] (the middle was dropped). Per-turn
+    /// summation over such a transcript can undercount, so downstream economics
+    /// surface the session's cost as a partial estimate (`truncated = true`).
+    /// `#[serde(default)]` for the same rolling helper/core compatibility reason
+    /// as [`economics_raw_text`].
+    #[serde(default)]
+    pub economics_truncated: bool,
 }
 
 /// Derive `derived_scope_any_lineage_paths` for an agent from its
@@ -197,12 +222,13 @@ pub struct CollectResult {
 /// computed locally in core from `CollectedRawSession.raw_text`, never added
 /// to the `RawReasoningSession` payload).
 ///
-/// `est_cost_usd` is an ESTIMATE derived from an embedded per-model price
-/// table (`parsing::model_price`). The token counts themselves are EXACT when
-/// the transcript carries usage metadata. Plain `.txt` transcripts (Cursor's
-/// text export) carry no usage, so `has_token_data` is false and the
-/// token/cost fields stay zero -- the UI shows "token data not available"
-/// rather than a misleading $0.00.
+/// `est_cost_usd` is an ESTIMATE derived from the CloudModel-refreshable
+/// per-model price table in `cve-detection-params-db.json`, resolved via
+/// `crate::vuln_detector_params::resolve_model_price`. The token counts
+/// themselves are EXACT when the transcript carries usage metadata. Plain
+/// `.txt` transcripts (Cursor's text export) carry no usage, so
+/// `has_token_data` is false and the token/cost fields stay zero -- the UI
+/// shows "token data not available" rather than a misleading $0.00.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct SessionEconomics {
     pub session_key: String,
@@ -215,7 +241,11 @@ pub struct SessionEconomics {
     pub output_tokens: u64,
     pub cache_creation_input_tokens: u64,
     pub cache_read_input_tokens: u64,
-    /// input + output + cache_creation + cache_read.
+    /// Total tokens, counted once each. The provider's authoritative
+    /// `total_tokens` when reported (Codex); otherwise the disjoint
+    /// four-bucket sum for Anthropic, or `input + output + cache_creation`
+    /// for cache-inclusive providers (OpenAI / Codex) where the cached subset
+    /// is already inside `input`.
     pub total_tokens: u64,
     /// Number of tool invocations (`tool_use` / `function_call` blocks).
     pub tool_calls: u64,
@@ -229,6 +259,62 @@ pub struct SessionEconomics {
     pub duration_secs: u64,
     /// True when the transcript carried real `usage` token metadata.
     pub has_token_data: bool,
+    /// True when `est_cost_usd` was computed with the fallback price because the
+    /// model id was not found in the CloudModel price table (G3). The token
+    /// counts stay exact; only the dollar conversion is a rougher estimate, so
+    /// consumers can flag the cost as lower-confidence for unknown models.
+    pub price_is_fallback: bool,
+
+    // ---- Derived, APPROXIMATE per-turn responsiveness (Workstream C) --------
+    //
+    // These are passive, transcript-derived signals for external agents whose
+    // provider latency EDAMAME cannot measure directly (unlike its own
+    // `LLMClient` calls, which are measured precisely by `llm_telemetry`). They
+    // are computed as `assistant_ts - preceding-trigger_ts` per turn, so they
+    // INCLUDE the model's think-time and any tool round-trip, and are absent
+    // entirely for transcript shapes without per-turn timestamps (Cursor's
+    // `.txt` export). Consumers MUST treat them as low-confidence and tag them
+    // as transcript-derived, never as a precise provider SLA.
+    //
+    // Raw components (not pre-divided) so they re-aggregate correctly when the
+    // model-usage summary unions sessions per normalized model across agents:
+    //   avg_turn_latency_ms        = turn_latency_ms_total / turn_latency_samples
+    //   derived_tokens_per_second  = turn_output_tokens_total * 1000
+    //                                  / turn_throughput_ms_total
+    /// Sum of measured per-turn latencies (ms) over turns where both the
+    /// assistant timestamp and a preceding trigger timestamp were present.
+    pub turn_latency_ms_total: u64,
+    /// Number of turns that contributed to `turn_latency_ms_total` (the divisor
+    /// for the average; 0 when the transcript carried no usable timestamps).
+    pub turn_latency_samples: u64,
+    /// Slowest single measured turn latency (ms); the responsiveness tail.
+    pub turn_latency_ms_max: u64,
+    /// Output tokens summed over the subset of measured turns that had BOTH a
+    /// positive latency AND output tokens (numerator for tokens/sec).
+    pub turn_output_tokens_total: u64,
+    /// Latency (ms) summed over that same throughput subset (denominator for
+    /// tokens/sec); kept separate from `turn_latency_ms_total` because a turn
+    /// can have a measurable latency yet zero output tokens.
+    pub turn_throughput_ms_total: u64,
+    /// Count of transcript lines carrying a canonical provider-error marker
+    /// (`rate_limit` / `overloaded_error` / `server_error` /
+    /// `service_unavailable` / `insufficient_quota` / `too_many_requests`).
+    /// An inferred outage/throttle signal for the external agent's provider;
+    /// distinct from `tool_errors` (which are local tool failures).
+    pub inferred_provider_errors: u64,
+
+    // ---- Per-MCP-server tool-call attribution (Workstream C Phase 2) --------
+    //
+    // Counts of tool invocations attributed to each MCP server, derived purely
+    // from the tool name's `mcp__<server>__<tool>` convention (the standard MCP
+    // namespacing used by Claude Code / Cursor / Codex when they expose an MCP
+    // server's tools). Native agent tools (`Read`, `Edit`, `Bash`, ...) carry no
+    // `mcp__` prefix and are NOT counted here -- only `tool_calls` (the
+    // aggregate) includes them. This needs no MCP config file read: the server
+    // identity is already encoded in the tool name the transcript records, which
+    // is more robust than parsing a possibly-stale `~/.cursor/mcp.json` /
+    // `~/.claude.json`. Empty when the session invoked no MCP-namespaced tool.
+    pub mcp_calls_by_server: std::collections::BTreeMap<String, u64>,
 }
 
 /// One tool result the transcript flagged as an error
@@ -264,22 +350,35 @@ pub fn collect(
     home: &Path,
     options: &CollectOptions,
 ) -> anyhow::Result<CollectResult> {
-    match agent_type {
-        "cursor" => cursor::collect(home, options),
-        "claude_code" => claude_code::collect(home, options),
-        "claude_desktop" => claude_desktop::collect(home, options),
-        "codex" => codex::collect(home, options),
-        "hermes" => hermes::collect(home, options),
-        "openclaw" => openclaw::collect(home, options),
-        other => Ok(CollectResult {
+    let mut result = match agent_type {
+        "cursor" => cursor::collect(home, options)?,
+        "claude_code" => claude_code::collect(home, options)?,
+        "claude_desktop" => claude_desktop::collect(home, options)?,
+        "codex" => codex::collect(home, options)?,
+        "hermes" => hermes::collect(home, options)?,
+        "openclaw" => openclaw::collect(home, options)?,
+        other => CollectResult {
             payload: empty_payload(other, home),
             diagnostics: CollectDiagnostics {
                 transcripts_root_accessible: false,
                 transcripts_roots: Vec::new(),
                 hostname: hostname_string(),
             },
-        }),
+        },
+    };
+
+    // Populate the economics override (usage-bearing text the divergence
+    // `raw_text` cannot carry) once, centrally, for every adapter. Runs on the
+    // collection side where transcript files are reachable; the result (text +
+    // truncation flag) rides to core in `CollectedRawSession::economics_raw_text`
+    // / `economics_truncated`.
+    for session in &mut result.payload.sessions {
+        let resolved = economics_override_text(&session.source_path);
+        session.economics_raw_text = resolved.text;
+        session.economics_truncated = resolved.truncated;
     }
+
+    Ok(result)
 }
 
 /// JSON convenience wrapper used by the helper utility order.
@@ -436,6 +535,129 @@ pub(crate) fn read_transcript_capped(path: &Path) -> std::io::Result<String> {
     let mut buf = Vec::new();
     file.take(MAX_TRANSCRIPT_BYTES).read_to_end(&mut buf)?;
     Ok(String::from_utf8_lossy(&buf).into_owned())
+}
+
+/// Bytes read from the START of an oversized transcript for the economics
+/// override (early per-turn usage and the model/timestamp header).
+const ECONOMICS_HEAD_BYTES: u64 = 10 * 1024 * 1024;
+/// Bytes read from the END of an oversized transcript for the economics
+/// override (the cumulative end-of-file usage snapshot, e.g. Codex
+/// `total_token_usage`). HEAD + TAIL stays at the same `MAX_TRANSCRIPT_BYTES`
+/// memory bound as the head-only read.
+const ECONOMICS_TAIL_BYTES: u64 = 6 * 1024 * 1024;
+
+/// True when the file is larger than the head-only transcript cap, i.e. a plain
+/// [`read_transcript_capped`] would lose its end-of-file usage snapshot.
+fn transcript_exceeds_cap(path: &Path) -> bool {
+    std::fs::metadata(path)
+        .map(|m| m.len() > MAX_TRANSCRIPT_BYTES)
+        .unwrap_or(false)
+}
+
+/// Read a transcript for the economics parser, head+tail when it exceeds the
+/// cap.
+///
+/// Within the cap this is identical to [`read_transcript_capped`]. Beyond it,
+/// the head ([`ECONOMICS_HEAD_BYTES`]) preserves the session header and the
+/// earliest per-turn usage records (Anthropic-style summation), and the tail
+/// ([`ECONOMICS_TAIL_BYTES`]) preserves the final cumulative usage snapshot
+/// (Codex `total_token_usage`, which only appears at EOF). The dropped middle
+/// can split a JSON line at either seam; the economics parser skips
+/// unparseable lines, and `from_utf8_lossy` repairs split multibyte sequences.
+fn read_transcript_capped_tailed(path: &Path) -> std::io::Result<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(path)?;
+    let len = file.metadata().map(|m| m.len()).unwrap_or(0);
+    if len <= MAX_TRANSCRIPT_BYTES {
+        let mut buf = Vec::new();
+        (&mut file)
+            .take(MAX_TRANSCRIPT_BYTES)
+            .read_to_end(&mut buf)?;
+        return Ok(String::from_utf8_lossy(&buf).into_owned());
+    }
+
+    let mut head = Vec::new();
+    (&mut file)
+        .take(ECONOMICS_HEAD_BYTES)
+        .read_to_end(&mut head)?;
+
+    let tail_start = len.saturating_sub(ECONOMICS_TAIL_BYTES);
+    file.seek(SeekFrom::Start(tail_start))?;
+    let mut tail = Vec::new();
+    (&mut file)
+        .take(ECONOMICS_TAIL_BYTES)
+        .read_to_end(&mut tail)?;
+
+    let mut combined = String::from_utf8_lossy(&head).into_owned();
+    combined.push('\n');
+    combined.push_str(&String::from_utf8_lossy(&tail));
+    Ok(combined)
+}
+
+/// Resolved economics override for one session: the usage-bearing transcript
+/// text the economics parser should read instead of `raw_text`, plus whether
+/// that text was produced by a head+tail read of an oversized transcript (the
+/// middle was dropped, so per-turn summation may undercount).
+struct EconomicsOverride {
+    /// Usage-bearing text, or empty to mean "use `raw_text` directly".
+    text: String,
+    /// True when `text` came from a head+tail read of a transcript larger than
+    /// [`MAX_TRANSCRIPT_BYTES`].
+    truncated: bool,
+}
+
+/// Resolve the usage-bearing transcript text for the economics parser when
+/// `raw_text` cannot carry exact usage, else an empty string ("use raw_text").
+///
+/// Runs on the collection side (standalone in-process or helper daemon), where
+/// transcript files are reachable. The result is transported to core in
+/// [`CollectedRawSession::economics_raw_text`] /
+/// [`CollectedRawSession::economics_truncated`]. Two cases populate the text
+/// (see those fields):
+///   * G4 -- a `.txt` source (Cursor's divergence export) with a usage-bearing
+///     `.jsonl` sibling: read the sibling. `truncated` reflects whether that
+///     sibling itself exceeded the cap.
+///   * G5 -- a transcript larger than [`MAX_TRANSCRIPT_BYTES`]: re-read it
+///     head+tail so the cumulative EOF usage snapshot survives truncation, and
+///     flag `truncated = true` (the dropped middle can undercount per-turn sums).
+fn economics_override_text(source_path: &str) -> EconomicsOverride {
+    if source_path.is_empty() {
+        return EconomicsOverride {
+            text: String::new(),
+            truncated: false,
+        };
+    }
+    let path = Path::new(source_path);
+
+    if source_path.ends_with(".txt") {
+        let jsonl = path.with_extension("jsonl");
+        if jsonl.is_file() {
+            if let Ok(text) = read_transcript_capped_tailed(&jsonl) {
+                return EconomicsOverride {
+                    text,
+                    truncated: transcript_exceeds_cap(&jsonl),
+                };
+            }
+        }
+        // A `.txt`-only session carries no usage; raw_text is that same text.
+        return EconomicsOverride {
+            text: String::new(),
+            truncated: false,
+        };
+    }
+
+    if transcript_exceeds_cap(path) {
+        if let Ok(text) = read_transcript_capped_tailed(path) {
+            return EconomicsOverride {
+                text,
+                truncated: true,
+            };
+        }
+    }
+    EconomicsOverride {
+        text: String::new(),
+        truncated: false,
+    }
 }
 
 /// File mtime in seconds since unix epoch. Returns 0 on error.

@@ -746,99 +746,13 @@ pub fn classify_open_files_excluding_sensitive(paths: &[String], home: &str) -> 
 // Plain `.txt` transcripts carry no usage -> `has_token_data == false`.
 // ---------------------------------------------------------------------------
 
-/// Per-model price in USD per 1,000,000 tokens. Cost is an ESTIMATE: token
-/// counts are exact, the dollar conversion is approximate and drifts as
-/// providers change pricing. A future increment can move this to a
-/// CloudModel-refreshable table; an embedded table is sufficient for an
-/// at-a-glance "what did this run cost" figure.
-#[derive(Debug, Clone, Copy)]
-struct ModelPrice {
-    input: f64,
-    output: f64,
-    cache_write: f64,
-    cache_read: f64,
-}
-
-/// Resolve approximate pricing for a model identifier by lowercased substring.
-/// Falls back to a Sonnet-class rate for unknown models so the estimate is
-/// never wildly off for a mainstream coding model.
-fn model_price(model: &str) -> ModelPrice {
-    let m = model.to_ascii_lowercase();
-    // Anthropic.
-    if m.contains("opus") {
-        return ModelPrice {
-            input: 15.0,
-            output: 75.0,
-            cache_write: 18.75,
-            cache_read: 1.5,
-        };
-    }
-    if m.contains("haiku") {
-        return ModelPrice {
-            input: 0.80,
-            output: 4.0,
-            cache_write: 1.0,
-            cache_read: 0.08,
-        };
-    }
-    if m.contains("sonnet") {
-        return ModelPrice {
-            input: 3.0,
-            output: 15.0,
-            cache_write: 3.75,
-            cache_read: 0.30,
-        };
-    }
-    // OpenAI / Codex.
-    if m.contains("gpt-5") || m.contains("gpt5") || m.contains("codex") {
-        return ModelPrice {
-            input: 1.25,
-            output: 10.0,
-            cache_write: 0.0,
-            cache_read: 0.125,
-        };
-    }
-    if m.contains("gpt-4o") || m.contains("gpt4o") {
-        return ModelPrice {
-            input: 2.5,
-            output: 10.0,
-            cache_write: 0.0,
-            cache_read: 1.25,
-        };
-    }
-    if m.contains("gpt-4.1") || m.contains("gpt-4-1") {
-        return ModelPrice {
-            input: 2.0,
-            output: 8.0,
-            cache_write: 0.0,
-            cache_read: 0.5,
-        };
-    }
-    if m.contains("o3") || m.contains("o4-mini") || m.contains("o4 ") {
-        return ModelPrice {
-            input: 2.0,
-            output: 8.0,
-            cache_write: 0.0,
-            cache_read: 0.5,
-        };
-    }
-    // Google Gemini.
-    if m.contains("gemini") {
-        return ModelPrice {
-            input: 1.25,
-            output: 5.0,
-            cache_write: 0.0,
-            cache_read: 0.31,
-        };
-    }
-    // Fallback: Sonnet-class.
-    ModelPrice {
-        input: 3.0,
-        output: 15.0,
-        cache_write: 3.75,
-        cache_read: 0.30,
-    }
-}
+// Per-model pricing (USD per 1M tokens) lives in the CloudModel-refreshable
+// `model_pricing` table in `cve-detection-params-db.json`, resolved via
+// `crate::vuln_detector_params::resolve_model_price` with longest /
+// most-specific `match_substring` matching. Cost remains an ESTIMATE: token
+// counts are exact, but the dollar conversion is approximate (drifts with
+// provider pricing) and falls back to a Sonnet-class rate for unrecognized
+// model ids (`ResolvedModelPrice::is_fallback`).
 
 fn as_u64_any(v: &serde_json::Value) -> u64 {
     match v {
@@ -864,10 +778,77 @@ fn usage_field(usage: &serde_json::Value, keys: &[&str]) -> u64 {
     0
 }
 
-/// (input, output, cache_creation, cache_read, total) from a usage object,
-/// tolerating Anthropic and OpenAI key spellings.
-fn read_usage(usage: &serde_json::Value) -> (u64, u64, u64, u64, u64) {
-    let input = usage_field(usage, &["input_tokens", "prompt_tokens"]);
+/// Reads the input-token count and whether its source key implies OpenAI-style
+/// cache-INCLUSIVE accounting. Anthropic's `input_tokens` EXCLUDES cache (the
+/// four buckets are disjoint) -> `false`. OpenAI Chat's `prompt_tokens`
+/// INCLUDES the cached subset -> `true`. Codex's `total_token_usage` also uses
+/// the `input_tokens` spelling but with cache-inclusive semantics; that case
+/// is caught by the cache-read key spelling (see [`read_cache_read_with_shape`]).
+fn read_input_with_shape(usage: &serde_json::Value) -> (u64, bool) {
+    if let Some(v) = usage.get("input_tokens") {
+        let n = as_u64_any(v);
+        if n > 0 {
+            return (n, false);
+        }
+    }
+    if let Some(v) = usage.get("prompt_tokens") {
+        let n = as_u64_any(v);
+        if n > 0 {
+            return (n, true);
+        }
+    }
+    (0, false)
+}
+
+/// Reads the cache-read count and whether its source key is an OpenAI/Codex
+/// family key (`cached_input_tokens` / `cached_tokens`), which means the cached
+/// tokens are a SUBSET already counted in `input`. Anthropic's
+/// `cache_read_input_tokens` is DISJOINT from `input`. The ambiguous generic
+/// `cache_read_tokens` spelling defaults to disjoint (Anthropic-style) so we
+/// never wrongly subtract it from `input`.
+fn read_cache_read_with_shape(usage: &serde_json::Value) -> (u64, bool) {
+    if let Some(v) = usage.get("cache_read_input_tokens") {
+        let n = as_u64_any(v);
+        if n > 0 {
+            return (n, false);
+        }
+    }
+    for key in ["cached_input_tokens", "cached_tokens"] {
+        if let Some(v) = usage.get(key) {
+            let n = as_u64_any(v);
+            if n > 0 {
+                return (n, true);
+            }
+        }
+    }
+    if let Some(v) = usage.get("cache_read_tokens") {
+        let n = as_u64_any(v);
+        if n > 0 {
+            return (n, false);
+        }
+    }
+    (0, false)
+}
+
+/// Token usage parsed from one usage object, with the per-provider cache shape.
+#[derive(Debug, Clone, Copy, Default)]
+struct UsageRead {
+    input: u64,
+    output: u64,
+    cache_creation: u64,
+    cache_read: u64,
+    total: u64,
+    /// True when `input` already INCLUDES `cache_read` (OpenAI / Codex), so the
+    /// cached subset must be subtracted from `input` before billing it at the
+    /// (cheaper) cache-read rate. False for Anthropic, where the four buckets
+    /// are disjoint and the straight four-bucket sum is correct.
+    cache_inclusive: bool,
+}
+
+/// Parse a usage object, tolerating Anthropic, OpenAI Chat, and Codex key
+/// spellings, and recording the per-provider cache-accounting shape.
+fn read_usage(usage: &serde_json::Value) -> UsageRead {
+    let (input, input_inclusive) = read_input_with_shape(usage);
     let output = usage_field(usage, &["output_tokens", "completion_tokens"]);
     let cache_creation = usage_field(
         usage,
@@ -877,16 +858,16 @@ fn read_usage(usage: &serde_json::Value) -> (u64, u64, u64, u64, u64) {
             "cache_write_tokens",
         ],
     );
-    let cache_read = usage_field(
-        usage,
-        &[
-            "cache_read_input_tokens",
-            "cached_input_tokens",
-            "cache_read_tokens",
-        ],
-    );
+    let (cache_read, cache_read_openai) = read_cache_read_with_shape(usage);
     let total = usage_field(usage, &["total_tokens"]);
-    (input, output, cache_creation, cache_read, total)
+    UsageRead {
+        input,
+        output,
+        cache_creation,
+        cache_read,
+        total,
+        cache_inclusive: input_inclusive || cache_read_openai,
+    }
 }
 
 fn epoch_to_dt(n: i64) -> Option<chrono::DateTime<chrono::Utc>> {
@@ -917,6 +898,30 @@ fn parse_ts(v: &serde_json::Value) -> Option<chrono::DateTime<chrono::Utc>> {
     }
 }
 
+/// True when a raw transcript line carries a canonical provider error marker
+/// (the `type`/`code` tokens Anthropic and OpenAI emit on throttle/outage).
+///
+/// Deliberately conservative: the markers are provider-canonical lowercase
+/// tokens (`rate_limit_error`, `overloaded_error`, `server_error`,
+/// `service_unavailable`, `insufficient_quota`, `too_many_requests`) that are
+/// vanishingly unlikely to appear as benign assistant prose, so a plain
+/// case-sensitive substring test avoids both per-line allocation and the false
+/// positives a bare numeric `429`/`503` match would cause. This is an inferred
+/// signal for an EXTERNAL agent's provider health -- not a measured SLA.
+fn line_has_provider_error_marker(line: &str) -> bool {
+    const PROVIDER_ERROR_MARKERS: [&str; 6] = [
+        "rate_limit",
+        "overloaded_error",
+        "server_error",
+        "service_unavailable",
+        "insufficient_quota",
+        "too_many_requests",
+    ];
+    PROVIDER_ERROR_MARKERS
+        .iter()
+        .any(|marker| line.contains(marker))
+}
+
 /// Parse deterministic run economics from a single session's transcript text.
 /// See module-level economics comment for the supported on-disk shapes.
 pub fn parse_session_economics(
@@ -931,6 +936,7 @@ pub fn parse_session_economics(
     let mut summed_output = 0u64;
     let mut summed_cache_creation = 0u64;
     let mut summed_cache_read = 0u64;
+    let mut summed_cache_inclusive = false;
 
     // Cumulative snapshot (Codex `total_token_usage`): keep the object with the
     // largest total seen -- that is the session-final cumulative count.
@@ -940,6 +946,9 @@ pub fn parse_session_economics(
     let mut cum_output = 0u64;
     let mut cum_cache_creation = 0u64;
     let mut cum_cache_read = 0u64;
+    let mut cum_cache_inclusive = false;
+    // Provider-authoritative cumulative total (`total_tokens`), if reported.
+    let mut cum_authoritative_total = 0u64;
 
     let mut assistant_turns = 0u64;
     let mut tool_calls = 0u64;
@@ -948,6 +957,22 @@ pub fn parse_session_economics(
     let mut first_ts: Option<DateTime<Utc>> = None;
     let mut last_ts: Option<DateTime<Utc>> = None;
     let mut had_usage = false;
+
+    // Derived, APPROXIMATE per-turn responsiveness (Workstream C). `pending_trigger_ts`
+    // is the timestamp of the most recent non-assistant line (the user message or
+    // tool-result that prompted the next generation); when an assistant line that
+    // carries output-token usage appears after it, the gap is one turn's latency.
+    // Consumed (cleared) on use so back-to-back assistant lines never fabricate a
+    // bogus latency from a stale trigger.
+    let mut pending_trigger_ts: Option<DateTime<Utc>> = None;
+    let mut turn_latency_ms_total = 0u64;
+    let mut turn_latency_samples = 0u64;
+    let mut turn_latency_ms_max = 0u64;
+    let mut turn_output_tokens_total = 0u64;
+    let mut turn_throughput_ms_total = 0u64;
+    let mut inferred_provider_errors = 0u64;
+    let mut mcp_calls_by_server: std::collections::BTreeMap<String, u64> =
+        std::collections::BTreeMap::new();
 
     for line in raw_text.split('\n') {
         let line = line.trim();
@@ -982,7 +1007,9 @@ pub fn parse_session_economics(
             }
         }
 
-        // Timestamps (min/max for wall-clock duration).
+        // Timestamps (min/max for wall-clock duration). `line_ts` keeps this
+        // line's own timestamp (first parseable candidate) for per-turn latency.
+        let mut line_ts: Option<DateTime<Utc>> = None;
         for candidate in [
             value.get("timestamp"),
             value.get("payload").and_then(|p| p.get("timestamp")),
@@ -990,6 +1017,9 @@ pub fn parse_session_economics(
         ] {
             if let Some(v) = candidate {
                 if let Some(dt) = parse_ts(v) {
+                    if line_ts.is_none() {
+                        line_ts = Some(dt);
+                    }
                     if first_ts.map(|f| dt < f).unwrap_or(true) {
                         first_ts = Some(dt);
                     }
@@ -1000,7 +1030,11 @@ pub fn parse_session_economics(
             }
         }
 
-        // Per-turn usage (Anthropic message.usage / OpenAI usage).
+        // Per-turn usage (Anthropic message.usage / OpenAI usage). `this_line_output`
+        // is the output tokens generated by THIS line's turn (the tokens/sec
+        // numerator); it stays 0 for Codex, whose usage is cumulative and handled
+        // below, so Codex turns never contribute a throughput sample.
+        let mut this_line_output = 0u64;
         let per_turn_usage = value
             .get("message")
             .and_then(|m| m.get("usage"))
@@ -1009,13 +1043,16 @@ pub fn parse_session_economics(
             .or_else(|| value.get("payload").and_then(|p| p.get("usage")));
         if let Some(usage) = per_turn_usage {
             if usage.is_object() {
-                let (i, o, cc, cr, _t) = read_usage(usage);
-                if i > 0 || o > 0 || cc > 0 || cr > 0 {
-                    summed_input += i;
-                    summed_output += o;
-                    summed_cache_creation += cc;
-                    summed_cache_read += cr;
+                let u = read_usage(usage);
+                if u.input > 0 || u.output > 0 || u.cache_creation > 0 || u.cache_read > 0 {
+                    summed_input += u.input;
+                    summed_output += u.output;
+                    summed_cache_creation += u.cache_creation;
+                    summed_cache_read += u.cache_read;
+                    // All turns of one session share a provider; latch the shape.
+                    summed_cache_inclusive |= u.cache_inclusive;
                     had_usage = true;
+                    this_line_output = u.output;
                 }
             }
         }
@@ -1029,15 +1066,21 @@ pub fn parse_session_economics(
             .or_else(|| value.get("total_token_usage"));
         if let Some(usage) = cumulative_usage {
             if usage.is_object() {
-                let (i, o, cc, cr, t) = read_usage(usage);
-                let total = if t > 0 { t } else { i + o + cc + cr };
+                let u = read_usage(usage);
+                let total = if u.total > 0 {
+                    u.total
+                } else {
+                    u.input + u.output + u.cache_creation + u.cache_read
+                };
                 if total >= cum_total {
                     cum_seen = true;
                     cum_total = total;
-                    cum_input = i;
-                    cum_output = o;
-                    cum_cache_creation = cc;
-                    cum_cache_read = cr;
+                    cum_input = u.input;
+                    cum_output = u.output;
+                    cum_cache_creation = u.cache_creation;
+                    cum_cache_read = u.cache_read;
+                    cum_cache_inclusive = u.cache_inclusive;
+                    cum_authoritative_total = u.total;
                 }
                 if total > 0 {
                     had_usage = true;
@@ -1064,7 +1107,20 @@ pub fn parse_session_economics(
             for item in items {
                 let kind = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
                 match kind {
-                    "tool_use" | "function_call" => tool_calls += 1,
+                    "tool_use" | "function_call" => {
+                        tool_calls += 1;
+                        // Attribute MCP-namespaced tool calls to their server
+                        // (the `mcp__<server>__<tool>` convention). Native tools
+                        // carry no `mcp__` prefix and are not bucketed here.
+                        let tool_name = item
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .trim();
+                        if let Some(server) = mcp_server_from_tool_name(tool_name) {
+                            *mcp_calls_by_server.entry(server.to_string()).or_insert(0) += 1;
+                        }
+                    }
                     "tool_result" | "function_call_output" => {
                         let is_err = item
                             .get("is_error")
@@ -1079,27 +1135,94 @@ pub fn parse_session_economics(
                 }
             }
         }
+
+        // Per-turn latency (APPROXIMATE, Workstream C). A non-assistant line
+        // (user message or tool-result) arms the trigger timestamp; the next
+        // assistant line that carries output-token usage closes the turn and the
+        // gap is its latency. The trigger is consumed so consecutive assistant
+        // lines without an intervening trigger never reuse a stale timestamp.
+        if role == "assistant" {
+            if let (Some(assistant_ts), Some(trigger_ts)) = (line_ts, pending_trigger_ts) {
+                if this_line_output > 0 && assistant_ts > trigger_ts {
+                    let latency_ms = (assistant_ts - trigger_ts).num_milliseconds().max(0) as u64;
+                    turn_latency_ms_total = turn_latency_ms_total.saturating_add(latency_ms);
+                    turn_latency_samples += 1;
+                    turn_latency_ms_max = turn_latency_ms_max.max(latency_ms);
+                    if latency_ms > 0 {
+                        turn_output_tokens_total =
+                            turn_output_tokens_total.saturating_add(this_line_output);
+                        turn_throughput_ms_total =
+                            turn_throughput_ms_total.saturating_add(latency_ms);
+                    }
+                    pending_trigger_ts = None;
+                }
+            }
+        } else if let Some(ts) = line_ts {
+            // Any non-assistant line with a timestamp arms the next turn's trigger.
+            pending_trigger_ts = Some(ts);
+        }
+
+        // Inferred provider-error signal: a canonical provider error `type`/`code`
+        // token on this line (rate limit / overloaded / 5xx-class). Counted at
+        // most once per line; distinct from local `tool_errors`.
+        if line_has_provider_error_marker(line) {
+            inferred_provider_errors += 1;
+        }
     }
 
     // Prefer the cumulative snapshot when present (Codex), else the per-turn
     // sum (Claude).
-    let (input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens) =
-        if cum_seen && cum_total > 0 {
-            (cum_input, cum_output, cum_cache_creation, cum_cache_read)
-        } else {
-            (
-                summed_input,
-                summed_output,
-                summed_cache_creation,
-                summed_cache_read,
-            )
-        };
+    let (
+        input_tokens,
+        output_tokens,
+        cache_creation_input_tokens,
+        cache_read_input_tokens,
+        cache_inclusive,
+        authoritative_total,
+    ) = if cum_seen && cum_total > 0 {
+        (
+            cum_input,
+            cum_output,
+            cum_cache_creation,
+            cum_cache_read,
+            cum_cache_inclusive,
+            cum_authoritative_total,
+        )
+    } else {
+        (
+            summed_input,
+            summed_output,
+            summed_cache_creation,
+            summed_cache_read,
+            summed_cache_inclusive,
+            0,
+        )
+    };
 
-    let total_tokens =
-        input_tokens + output_tokens + cache_creation_input_tokens + cache_read_input_tokens;
+    // Total tokens, counting each token once. Prefer the provider's
+    // authoritative `total_tokens` when reported (Codex). Otherwise, for
+    // cache-inclusive providers (OpenAI / Codex) the cached subset is already
+    // inside `input`, so it is NOT re-added; for Anthropic the four buckets are
+    // disjoint and all are summed.
+    let total_tokens = if authoritative_total > 0 {
+        authoritative_total
+    } else if cache_inclusive {
+        input_tokens + output_tokens + cache_creation_input_tokens
+    } else {
+        input_tokens + output_tokens + cache_creation_input_tokens + cache_read_input_tokens
+    };
 
-    let price = model_price(&model);
-    let est_cost_usd = (input_tokens as f64) / 1_000_000.0 * price.input
+    // Per-provider cache cost semantics (G10/G11): Anthropic's `input_tokens`
+    // excludes cache, so all four buckets bill independently. OpenAI / Codex
+    // report a cache-INCLUSIVE input, so the cached subset is removed from the
+    // full-rate input bill and charged once at the cache-read rate.
+    let price = crate::vuln_detector_params::resolve_model_price(&model);
+    let billable_input = if cache_inclusive {
+        input_tokens.saturating_sub(cache_read_input_tokens)
+    } else {
+        input_tokens
+    };
+    let est_cost_usd = (billable_input as f64) / 1_000_000.0 * price.input
         + (output_tokens as f64) / 1_000_000.0 * price.output
         + (cache_creation_input_tokens as f64) / 1_000_000.0 * price.cache_write
         + (cache_read_input_tokens as f64) / 1_000_000.0 * price.cache_read;
@@ -1126,6 +1249,29 @@ pub fn parse_session_economics(
         last_event_at: last_ts,
         duration_secs,
         has_token_data: had_usage,
+        price_is_fallback: price.is_fallback,
+        turn_latency_ms_total,
+        turn_latency_samples,
+        turn_latency_ms_max,
+        turn_output_tokens_total,
+        turn_throughput_ms_total,
+        inferred_provider_errors,
+        mcp_calls_by_server,
+    }
+}
+
+/// Extract the MCP server name from a tool invocation name, using the standard
+/// `mcp__<server>__<tool>` namespacing that Claude Code / Cursor / Codex apply
+/// when surfacing an MCP server's tools to the model. Returns `None` for native
+/// agent tools (`Read`, `Edit`, `Bash`, `Grep`, ...) which carry no `mcp__`
+/// prefix, and for a malformed name with an empty server segment.
+fn mcp_server_from_tool_name(name: &str) -> Option<&str> {
+    let rest = name.strip_prefix("mcp__")?;
+    let server = rest.split("__").next().unwrap_or("");
+    if server.is_empty() {
+        None
+    } else {
+        Some(server)
     }
 }
 
@@ -1340,6 +1486,90 @@ mod economics_tests {
         assert_eq!(econ.total_tokens, 590);
     }
 
+    /// G11: Anthropic's four token buckets are DISJOINT -- `input_tokens`
+    /// excludes cache -- so the cost is the straight four-bucket sum with the
+    /// full input billed at the input rate.
+    #[test]
+    fn anthropic_disjoint_cache_billed_in_full() {
+        let jsonl = concat!(
+            r#"{"type":"assistant","timestamp":"2026-05-06T18:15:10.000Z","message":{"role":"assistant","model":"claude-3-5-sonnet","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":10,"cache_read_input_tokens":200}}}"#,
+            "\n",
+        );
+        let econ = parse_session_economics("an", "/tmp/an.jsonl", jsonl);
+        // Disjoint: all four buckets summed.
+        assert_eq!(econ.total_tokens, 360);
+        let price = crate::vuln_detector_params::resolve_model_price(&econ.model);
+        let expected = (100.0 / 1_000_000.0) * price.input
+            + (50.0 / 1_000_000.0) * price.output
+            + (10.0 / 1_000_000.0) * price.cache_write
+            + (200.0 / 1_000_000.0) * price.cache_read;
+        assert!((econ.est_cost_usd - expected).abs() < 1e-9);
+    }
+
+    /// G10: OpenAI / Codex report a cache-INCLUSIVE input (`cached_input_tokens`
+    /// is a subset already counted in `input_tokens`). The cached subset must
+    /// NOT be re-added to the token total and must be removed from the
+    /// full-rate input bill before being charged once at the cache-read rate.
+    #[test]
+    fn codex_cache_inclusive_input_not_double_counted() {
+        let jsonl = concat!(
+            r#"{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":500,"cached_input_tokens":200,"output_tokens":90}}}}"#,
+            "\n",
+        );
+        let econ = parse_session_economics("cx", "/tmp/cx.jsonl", jsonl);
+        assert!(econ.has_token_data);
+        assert_eq!(econ.input_tokens, 500);
+        assert_eq!(econ.output_tokens, 90);
+        assert_eq!(econ.cache_read_input_tokens, 200);
+        // Cache-inclusive: the cached subset is already inside input, so it is
+        // NOT re-added (590, not 790).
+        assert_eq!(econ.total_tokens, 590);
+        // Cost subtracts the cached subset from the full-rate input bill.
+        let price = crate::vuln_detector_params::resolve_model_price(&econ.model);
+        let expected = (300.0 / 1_000_000.0) * price.input
+            + (90.0 / 1_000_000.0) * price.output
+            + (200.0 / 1_000_000.0) * price.cache_read;
+        assert!((econ.est_cost_usd - expected).abs() < 1e-9);
+    }
+
+    /// G12: when the provider reports an authoritative `total_tokens`, it is
+    /// used verbatim regardless of the per-bucket cache shape.
+    #[test]
+    fn codex_authoritative_total_tokens_preferred() {
+        let jsonl = concat!(
+            r#"{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":500,"cached_input_tokens":200,"output_tokens":90,"total_tokens":600}}}}"#,
+            "\n",
+        );
+        let econ = parse_session_economics("cx2", "/tmp/cx2.jsonl", jsonl);
+        assert_eq!(econ.total_tokens, 600);
+    }
+
+    /// G3: a recognized model prices with a table entry (`price_is_fallback`
+    /// false); an unknown model falls back to the default rate and is flagged so
+    /// consumers can present its cost as a lower-confidence estimate.
+    #[test]
+    fn price_is_fallback_flags_unknown_models() {
+        let known = concat!(
+            r#"{"type":"assistant","timestamp":"2026-05-06T18:15:10.000Z","message":{"role":"assistant","model":"claude-sonnet-4-6","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":100,"output_tokens":50}}}"#,
+            "\n",
+        );
+        let econ_known = parse_session_economics("k", "/tmp/k.jsonl", known);
+        assert!(
+            !econ_known.price_is_fallback,
+            "a recognized model must not be priced from the fallback rate"
+        );
+
+        let unknown = concat!(
+            r#"{"type":"assistant","timestamp":"2026-05-06T18:15:10.000Z","message":{"role":"assistant","model":"zzz-nonexistent-model-9000","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":100,"output_tokens":50}}}"#,
+            "\n",
+        );
+        let econ_unknown = parse_session_economics("u", "/tmp/u.jsonl", unknown);
+        assert!(
+            econ_unknown.price_is_fallback,
+            "an unknown model must be flagged as fallback-priced"
+        );
+    }
+
     #[test]
     fn txt_transcript_has_no_token_data() {
         let txt = "user:\nhello\n\nassistant:\nhi there\n";
@@ -1388,5 +1618,52 @@ mod economics_tests {
             "\n",
         );
         assert!(parse_tool_error_details(jsonl).is_empty());
+    }
+
+    #[test]
+    fn mcp_server_name_extracted_from_namespaced_tool() {
+        assert_eq!(
+            mcp_server_from_tool_name("mcp__edamame__get_score"),
+            Some("edamame")
+        );
+        assert_eq!(
+            mcp_server_from_tool_name("mcp__github__create_issue"),
+            Some("github")
+        );
+        // Native tools carry no `mcp__` prefix.
+        assert_eq!(mcp_server_from_tool_name("Read"), None);
+        assert_eq!(mcp_server_from_tool_name("Bash"), None);
+        // Malformed (empty server segment) yields None.
+        assert_eq!(mcp_server_from_tool_name("mcp____tool"), None);
+        assert_eq!(mcp_server_from_tool_name("mcp__"), None);
+    }
+
+    #[test]
+    fn parse_session_economics_attributes_mcp_calls_by_server() {
+        let jsonl = concat!(
+            r#"{"type":"assistant","timestamp":"2026-05-06T18:15:10.000Z","message":{"role":"assistant","model":"claude-sonnet-4-6","content":[{"type":"tool_use","name":"mcp__edamame__get_score"},{"type":"tool_use","name":"Read"}]}}"#,
+            "\n",
+            r#"{"type":"assistant","timestamp":"2026-05-06T18:15:20.000Z","message":{"role":"assistant","model":"claude-sonnet-4-6","content":[{"type":"tool_use","name":"mcp__edamame__get_sessions"},{"type":"tool_use","name":"mcp__github__create_issue"}]}}"#,
+            "\n",
+        );
+        let econ = parse_session_economics("m1", "/tmp/m1.jsonl", jsonl);
+        // 4 tool calls total (2 edamame MCP, 1 github MCP, 1 native Read).
+        assert_eq!(econ.tool_calls, 4);
+        // Only MCP-namespaced calls are bucketed per server.
+        assert_eq!(econ.mcp_calls_by_server.get("edamame").copied(), Some(2));
+        assert_eq!(econ.mcp_calls_by_server.get("github").copied(), Some(1));
+        // Native tools are not attributed to any server.
+        assert_eq!(econ.mcp_calls_by_server.len(), 2);
+    }
+
+    #[test]
+    fn parse_session_economics_no_mcp_calls_yields_empty_map() {
+        let jsonl = concat!(
+            r#"{"type":"assistant","timestamp":"2026-05-06T18:15:10.000Z","message":{"role":"assistant","model":"claude-sonnet-4-6","content":[{"type":"tool_use","name":"Read"},{"type":"tool_use","name":"Edit"}]}}"#,
+            "\n",
+        );
+        let econ = parse_session_economics("m2", "/tmp/m2.jsonl", jsonl);
+        assert_eq!(econ.tool_calls, 2);
+        assert!(econ.mcp_calls_by_server.is_empty());
     }
 }

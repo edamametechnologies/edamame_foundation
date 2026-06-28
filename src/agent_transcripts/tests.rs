@@ -604,6 +604,206 @@ fn collect_populates_identity_only_any_lineage_scope() {
 }
 
 #[test]
+fn cursor_economics_prefers_jsonl_sibling_over_txt() {
+    // G4: Cursor's divergence text comes from the `.txt` export (newer mtime),
+    // which carries NO token usage. A usage-bearing `.jsonl` sibling exists.
+    // `collect` must populate `economics_raw_text` from that sibling so the
+    // economics parser recovers exact usage, while `raw_text` (the `.txt`) stays
+    // the usage-free divergence source.
+    let temp = tempfile::tempdir().expect("tempdir");
+    let home = temp.path();
+    let txn_dir = home.join(".cursor/projects/proj/agent-transcripts");
+    // jsonl first (older), then txt (newer) so divergence prefers the txt.
+    write(
+        &txn_dir.join("session-econ.jsonl"),
+        concat!(
+            r#"{"type":"assistant","timestamp":"2026-05-06T18:15:10.000Z","message":{"role":"assistant","model":"claude-sonnet-4-6","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":1200,"output_tokens":340,"cache_read_input_tokens":900}}}"#,
+            "\n",
+        ),
+    );
+    write(
+        &txn_dir.join("session-econ.txt"),
+        "user:\nplease run cargo build\n\nassistant:\nRunning `cargo build` now.\n",
+    );
+
+    let result = collect("cursor", home, &options()).expect("cursor collect");
+    let session = result
+        .payload
+        .sessions
+        .iter()
+        .find(|s| s.session_key == "session-econ")
+        .expect("session-econ present");
+
+    // Divergence text is the usage-free .txt: parsing it directly yields nothing.
+    let from_raw = super::parsing::parse_session_economics(
+        &session.session_key,
+        &session.source_path,
+        &session.raw_text,
+    );
+    assert!(
+        !from_raw.has_token_data,
+        "the .txt divergence source must carry no usage"
+    );
+
+    // The override carries the usage-bearing .jsonl sibling.
+    assert!(
+        !session.economics_raw_text.is_empty(),
+        "economics_raw_text must be populated from the .jsonl sibling"
+    );
+    // The tiny sibling is well within the cap, so it is not flagged truncated.
+    assert!(
+        !session.economics_truncated,
+        "a within-cap .jsonl sibling must not be flagged truncated"
+    );
+    let from_override = super::parsing::parse_session_economics(
+        &session.session_key,
+        &session.source_path,
+        &session.economics_raw_text,
+    );
+    assert!(from_override.has_token_data, "override must carry usage");
+    assert_eq!(from_override.input_tokens, 1200);
+    assert_eq!(from_override.output_tokens, 340);
+    assert_eq!(from_override.cache_read_input_tokens, 900);
+    assert!(from_override.est_cost_usd > 0.0);
+}
+
+#[test]
+fn economics_override_recovers_codex_eof_usage_past_cap() {
+    // G5: Codex writes the cumulative `total_token_usage` snapshot at EOF. A
+    // long session exceeds MAX_TRANSCRIPT_BYTES, so the head-only
+    // `read_transcript_capped` loses that EOF snapshot. The economics override
+    // re-reads head+tail so the final cumulative count survives.
+    use std::io::Write;
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = temp.path().join("codex-oversized.jsonl");
+
+    let head_snapshot = concat!(
+        r#"{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":"#,
+        r#"{"input_tokens":10,"output_tokens":5,"total_tokens":15}}}}"#,
+    );
+    let eof_snapshot = concat!(
+        r#"{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":"#,
+        r#"{"input_tokens":500000,"output_tokens":90000,"total_tokens":590000}}}}"#,
+    );
+
+    {
+        let file = File::create(&path).expect("create oversized transcript");
+        let mut writer = std::io::BufWriter::new(file);
+        writeln!(writer, "{}", head_snapshot).expect("write head");
+        // ~17 MiB of non-JSON filler so the file exceeds the 16 MiB cap and the
+        // EOF snapshot lands beyond the head-only read. Each filler line parses
+        // as an error and is skipped by the economics parser.
+        let filler = "x".repeat(1024 * 1024);
+        for _ in 0..17 {
+            writeln!(writer, "{}", filler).expect("write filler");
+        }
+        writeln!(writer, "{}", eof_snapshot).expect("write eof");
+        writer.flush().expect("flush");
+    }
+
+    assert!(
+        std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0) > super::MAX_TRANSCRIPT_BYTES,
+        "fixture must exceed the transcript cap"
+    );
+
+    // Head-only capped read sees only the small head snapshot -> undercount.
+    let capped = super::read_transcript_capped(&path).expect("capped read");
+    let from_capped =
+        super::parsing::parse_session_economics("codex-1", &path.to_string_lossy(), &capped);
+    assert_eq!(
+        from_capped.total_tokens, 15,
+        "head-only read must miss the EOF cumulative snapshot"
+    );
+
+    // Head+tail override recovers the final cumulative snapshot.
+    let override_econ = super::economics_override_text(&path.to_string_lossy());
+    assert!(
+        !override_econ.text.is_empty(),
+        "oversized transcript must trigger a head+tail override"
+    );
+    assert!(
+        override_econ.truncated,
+        "an oversized transcript override must be flagged truncated"
+    );
+    let from_override = super::parsing::parse_session_economics(
+        "codex-1",
+        &path.to_string_lossy(),
+        &override_econ.text,
+    );
+    assert_eq!(from_override.input_tokens, 500000);
+    assert_eq!(from_override.output_tokens, 90000);
+    assert_eq!(
+        from_override.total_tokens, 590000,
+        "override must recover the EOF cumulative usage"
+    );
+}
+
+#[test]
+fn economics_derives_per_turn_latency_throughput_and_provider_errors() {
+    // Workstream C (derived tier): a Claude-shape transcript with per-turn
+    // timestamps. Two user->assistant turns (2.0s and 1.5s) and one provider
+    // overload event. Latency, throughput, and the inferred-error signal must
+    // be derived from `assistant_ts - preceding-trigger_ts` per turn.
+    let raw = concat!(
+        r#"{"type":"user","timestamp":"2026-05-06T18:15:00.000Z","message":{"role":"user","content":[{"type":"text","text":"hi"}]}}"#,
+        "\n",
+        r#"{"type":"assistant","timestamp":"2026-05-06T18:15:02.000Z","message":{"role":"assistant","model":"claude-sonnet-4-6","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":1000,"output_tokens":340}}}"#,
+        "\n",
+        r#"{"type":"user","timestamp":"2026-05-06T18:15:05.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"x","content":"done"}]}}"#,
+        "\n",
+        r#"{"type":"assistant","timestamp":"2026-05-06T18:15:06.500Z","message":{"role":"assistant","model":"claude-sonnet-4-6","content":[{"type":"text","text":"done"}],"usage":{"input_tokens":1100,"output_tokens":150}}}"#,
+        "\n",
+        r#"{"type":"error","timestamp":"2026-05-06T18:15:07.000Z","error":{"type":"overloaded_error","message":"Overloaded"}}"#,
+        "\n",
+    );
+
+    let econ =
+        super::parsing::parse_session_economics("claude-turns", "/tmp/claude-turns.jsonl", raw);
+
+    assert_eq!(econ.turn_latency_samples, 2, "two measurable turns");
+    assert_eq!(
+        econ.turn_latency_ms_total, 3500,
+        "2000ms + 1500ms summed latency"
+    );
+    assert_eq!(econ.turn_latency_ms_max, 2000, "slowest turn was 2.0s");
+    assert_eq!(
+        econ.turn_output_tokens_total, 490,
+        "340 + 150 output tokens over the throughput subset"
+    );
+    assert_eq!(
+        econ.turn_throughput_ms_total, 3500,
+        "both turns had output and positive latency"
+    );
+    assert_eq!(
+        econ.inferred_provider_errors, 1,
+        "one overloaded_error event line"
+    );
+
+    // Derived convenience values consumers compute from the raw components.
+    let avg_latency_ms = econ.turn_latency_ms_total / econ.turn_latency_samples;
+    assert_eq!(avg_latency_ms, 1750);
+    let tokens_per_second =
+        econ.turn_output_tokens_total as f64 * 1000.0 / econ.turn_throughput_ms_total as f64;
+    assert!(
+        (tokens_per_second - 140.0).abs() < 1e-9,
+        "490 tok / 3.5s = 140 tok/s"
+    );
+}
+
+#[test]
+fn economics_per_turn_timing_absent_without_timestamps() {
+    // Cursor `.txt` and any usage-free / timestamp-free shape must yield zero
+    // per-turn responsiveness rather than fabricated samples.
+    let raw = "user:\nplease build\n\nassistant:\nbuilding now\n";
+    let econ = super::parsing::parse_session_economics("notxt", "/tmp/notxt.txt", raw);
+    assert_eq!(econ.turn_latency_samples, 0);
+    assert_eq!(econ.turn_latency_ms_total, 0);
+    assert_eq!(econ.turn_throughput_ms_total, 0);
+    assert_eq!(econ.inferred_provider_errors, 0);
+}
+
+#[test]
 fn collect_to_json_round_trips() {
     let temp = tempfile::tempdir().expect("tempdir");
     let home = temp.path();
