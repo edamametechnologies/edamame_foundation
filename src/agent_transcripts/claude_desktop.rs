@@ -153,6 +153,9 @@ pub fn collect(home: &Path, options: &CollectOptions) -> anyhow::Result<CollectR
             modified_at,
             economics_raw_text: String::new(),
             economics_truncated: false,
+            context_tokens_used: None,
+            context_token_limit: None,
+            context_usage_percent: None,
         });
     }
 

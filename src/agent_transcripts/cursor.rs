@@ -157,8 +157,22 @@ pub fn collect(home: &Path, options: &CollectOptions) -> anyhow::Result<CollectR
             modified_at,
             economics_raw_text: String::new(),
             economics_truncated: false,
+            // Populated below by attach_cursor_context_usage() on desktop.
+            context_tokens_used: None,
+            context_token_limit: None,
+            context_usage_percent: None,
         });
     }
+
+    // Cursor does not persist billed token usage or dollar cost on disk (both
+    // live server-side). Its Electron `state.vscdb` does, however, carry a
+    // per-conversation context-window occupancy snapshot keyed by exactly the
+    // UUID we use as `session_key`. Attach it (best-effort, desktop-only) so the
+    // economics UI can surface context-window pressure for Cursor where it
+    // cannot surface a cost. Any failure (no DB, unreadable, schema drift) is
+    // swallowed -- enrichment is purely additive.
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+    attach_cursor_context_usage(home, &mut sessions);
 
     let (window_start, window_end) = window_bounds(&sessions, now);
     diagnostics.transcripts_root_accessible = projects_root.is_dir();
@@ -325,4 +339,137 @@ fn window_bounds(
         .max()
         .unwrap_or(fallback);
     (start, end)
+}
+
+/// Resolve Cursor's Electron global-storage `state.vscdb` for `home`.
+///
+/// Cursor persists per-conversation context-window occupancy
+/// (`contextTokensUsed` / `contextTokenLimit` / `contextUsagePercent`) inside
+/// the `cursorDiskKV` table keyed by `composerData:<conversationId>`, where
+/// `<conversationId>` is exactly the transcript UUID we expose as
+/// `session_key`. Returns `None` when the file is absent.
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+fn cursor_state_vscdb_path(home: &Path) -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    let path = home
+        .join("Library")
+        .join("Application Support")
+        .join("Cursor")
+        .join("User")
+        .join("globalStorage")
+        .join("state.vscdb");
+    #[cfg(target_os = "linux")]
+    let path = home
+        .join(".config")
+        .join("Cursor")
+        .join("User")
+        .join("globalStorage")
+        .join("state.vscdb");
+    #[cfg(target_os = "windows")]
+    let path = home
+        .join("AppData")
+        .join("Roaming")
+        .join("Cursor")
+        .join("User")
+        .join("globalStorage")
+        .join("state.vscdb");
+    if path.is_file() {
+        Some(path)
+    } else {
+        None
+    }
+}
+
+/// Best-effort: enrich `sessions` in place with Cursor's per-conversation
+/// context-window snapshot from `state.vscdb`. Never fails the collection --
+/// logs at debug and returns on any error (no DB, locked, schema drift).
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+fn attach_cursor_context_usage(home: &Path, sessions: &mut [CollectedRawSession]) {
+    if sessions.is_empty() {
+        return;
+    }
+    let db_path = match cursor_state_vscdb_path(home) {
+        Some(p) => p,
+        None => return,
+    };
+    if let Err(e) = read_cursor_context_usage(&db_path, sessions) {
+        tracing::debug!(
+            target: "agent_transcripts::cursor",
+            error = %e,
+            "cursor context-usage enrichment skipped"
+        );
+    }
+}
+
+/// Point-lookup `composerData:<session_key>` for each collected session and
+/// attach the context-window numbers. Opens the (potentially large, live) DB
+/// read-only with no mutex -- the lookups are indexed unique-key reads so the
+/// concurrent-writer window is tiny, and a torn/locked read just propagates as
+/// an error the caller swallows.
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+fn read_cursor_context_usage(
+    db_path: &Path,
+    sessions: &mut [CollectedRawSession],
+) -> anyhow::Result<()> {
+    use rusqlite::types::ValueRef;
+    use rusqlite::{Connection, OpenFlags, OptionalExtension};
+
+    let conn = Connection::open_with_flags(
+        db_path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    let mut stmt = conn.prepare("SELECT value FROM cursorDiskKV WHERE key = ?1 LIMIT 1")?;
+
+    for session in sessions.iter_mut() {
+        let key = format!("composerData:{}", session.session_key);
+        // The value column may be TEXT or BLOB depending on Cursor build; read
+        // either into raw bytes and parse as JSON.
+        let raw: Option<Vec<u8>> = stmt
+            .query_row(rusqlite::params![key], |row| match row.get_ref(0)? {
+                ValueRef::Text(b) | ValueRef::Blob(b) => Ok(Some(b.to_vec())),
+                _ => Ok(None),
+            })
+            .optional()?
+            .flatten();
+        let bytes = match raw {
+            Some(b) => b,
+            None => continue,
+        };
+        let doc: serde_json::Value = match serde_json::from_slice(&bytes) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        let used = doc.get("contextTokensUsed").and_then(json_non_negative_u64);
+        let limit = doc.get("contextTokenLimit").and_then(json_non_negative_u64);
+        let pct = doc
+            .get("contextUsagePercent")
+            .and_then(serde_json::Value::as_f64)
+            .filter(|p| p.is_finite() && *p >= 0.0)
+            // Some builds store only used+limit; derive percent when missing.
+            .or_else(|| match (used, limit) {
+                (Some(u), Some(l)) if l > 0 => Some((u as f64 / l as f64) * 100.0),
+                _ => None,
+            });
+
+        // Only attach when at least one signal is present and sane.
+        if used.is_some() || limit.is_some() || pct.is_some() {
+            session.context_tokens_used = used;
+            session.context_token_limit = limit;
+            session.context_usage_percent = pct;
+        }
+    }
+    Ok(())
+}
+
+/// Read a JSON number as a non-negative `u64`, accepting both integer and
+/// float encodings (some Cursor builds store these as floats).
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+fn json_non_negative_u64(v: &serde_json::Value) -> Option<u64> {
+    if let Some(u) = v.as_u64() {
+        return Some(u);
+    }
+    v.as_f64()
+        .filter(|f| f.is_finite() && *f >= 0.0)
+        .map(|f| f as u64)
 }

@@ -253,6 +253,9 @@ pub(crate) fn build_payload(
             modified_at,
             economics_raw_text: String::new(),
             economics_truncated: false,
+            context_tokens_used: None,
+            context_token_limit: None,
+            context_usage_percent: None,
         });
     }
 
@@ -753,6 +756,9 @@ fn thread_row_to_session(
         modified_at,
         economics_raw_text: String::new(),
         economics_truncated: false,
+        context_tokens_used: None,
+        context_token_limit: None,
+        context_usage_percent: None,
     })
 }
 

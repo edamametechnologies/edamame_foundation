@@ -847,6 +847,85 @@ pub async fn utility_collect_agent_visibility(_domain: &str, args_json: &str) ->
         .map_err(|e| anyhow::anyhow!("Failed to serialize visibility bundle: {}", e))
 }
 
+/// Read a single instruction artifact body (skill / command / rule) on demand,
+/// honoring the privacy tier (invariant I5). Crosses the macOS sandbox boundary
+/// on behalf of the sandboxed app so files under the user's real home
+/// (`~/.cursor/skills/...`, `~/.claude/...`) are readable.
+///
+/// `arg1` is the privacy tier selector (`metadata_only` | `redacted_excerpt` |
+/// `forensic_full_content`). `arg2` is a JSON object `{"path": "...",
+/// "home": "..."}`. The shared foundation reader enforces both guards
+/// (instruction-artifact shape + confinement under `home`), so an arbitrary
+/// file cannot be exfiltrated through this order.
+pub async fn utility_read_instruction_content(tier: &str, args_json: &str) -> Result<String> {
+    #[derive(serde::Deserialize)]
+    struct Args {
+        #[serde(default)]
+        path: String,
+        #[serde(default)]
+        home: String,
+    }
+
+    let args: Args = serde_json::from_str(args_json)
+        .map_err(|e| anyhow::anyhow!("Failed to parse read_instruction_content args: {}", e))?;
+
+    if args.path.trim().is_empty() {
+        return Err(anyhow::anyhow!("read_instruction_content: empty path"));
+    }
+
+    let home_path = if args.home.is_empty() {
+        crate::agent_plugin::real_home_dir().ok_or_else(|| {
+            anyhow::anyhow!("Unable to resolve real_home_dir for instruction content read")
+        })?
+    } else {
+        std::path::PathBuf::from(args.home)
+    };
+
+    let result = crate::agent_visibility::read_instruction_content(
+        std::path::Path::new(&args.path),
+        &home_path,
+        tier,
+    );
+    serde_json::to_string(&result)
+        .map_err(|e| anyhow::anyhow!("Failed to serialize instruction content result: {}", e))
+}
+
+/// Resolve the distinct workspace roots referenced by a set of transcript
+/// `source_paths` and collect each root's project-scoped instruction inventory
+/// (`.cursor/rules`, `.claude/skills`, top-level `AGENTS.md`, ...). Like
+/// `utility_collect_agent_visibility`, this crosses the macOS sandbox boundary
+/// on behalf of the (sandboxed) app so the user's actual project directories are
+/// readable.
+///
+/// `arg1` is reserved (unused). `arg2` is a JSON object carrying the transcript
+/// source paths: `{"source_paths": ["/Users/.../projects/<slug>/.../x.jsonl"]}`.
+/// The helper resolves each slug back to an on-disk directory itself (the app
+/// cannot), so only the raw transcript paths cross the boundary.
+pub async fn utility_collect_workspace_inventory(
+    _reserved: &str,
+    args_json: &str,
+) -> Result<String> {
+    #[derive(serde::Deserialize)]
+    struct Args {
+        #[serde(default)]
+        source_paths: Vec<String>,
+    }
+
+    let args: Args = if args_json.trim().is_empty() {
+        Args {
+            source_paths: Vec::new(),
+        }
+    } else {
+        serde_json::from_str(args_json).map_err(|e| {
+            anyhow::anyhow!("Failed to parse collect_workspace_inventory args: {}", e)
+        })?
+    };
+
+    let inventories = crate::agent_visibility::collect_workspace_inventories(&args.source_paths);
+    serde_json::to_string(&inventories)
+        .map_err(|e| anyhow::anyhow!("Failed to serialize workspace inventories: {}", e))
+}
+
 #[cfg(all(
     any(target_os = "macos", target_os = "linux", target_os = "windows"),
     feature = "fim"

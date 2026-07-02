@@ -751,6 +751,8 @@ pub async fn rpc_run(
             "test_agent_plugin" => utility_test_agent_plugin(arg1, arg2).await,
             "collect_agent_transcripts" => utility_collect_agent_transcripts(arg1, arg2).await,
             "collect_agent_visibility" => utility_collect_agent_visibility(arg1, arg2).await,
+            "read_instruction_content" => utility_read_instruction_content(arg1, arg2).await,
+            "collect_workspace_inventory" => utility_collect_workspace_inventory(arg1, arg2).await,
             _ => order_error(
                 &format!("unknown or unimplemented utilityorder {}", subordertype),
                 false,

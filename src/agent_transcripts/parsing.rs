@@ -922,6 +922,95 @@ fn line_has_provider_error_marker(line: &str) -> bool {
         .any(|marker| line.contains(marker))
 }
 
+/// Priority-ordered argument keys that identify a tool call's *target* -- the
+/// file, command, pattern, query, or URL the call operates on. First match
+/// wins, so `Read(/etc/passwd)` and `Read(/tmp/x)` are distinct signatures but
+/// two `Read`s of the same file collapse into a repeat. Mirrors the arg names
+/// the major agents emit (Anthropic tools, Codex `shell`, Cursor tools).
+const TOOL_TARGET_KEYS: &[&str] = &[
+    "file_path",
+    "filePath",
+    "path",
+    "target_file",
+    "notebook_path",
+    "absolute_path",
+    "abspath",
+    "command",
+    "cmd",
+    "pattern",
+    "query",
+    "url",
+    "glob_pattern",
+    "glob",
+    "search",
+];
+
+/// The raw args object for a tool-call block. Anthropic / Claude Code carry a
+/// structured `input` object; Codex `function_call` carries `arguments` as a
+/// JSON *string* (parsed here). Returns `None` when neither is present or
+/// parseable.
+fn tool_call_input(item: &serde_json::Value) -> Option<serde_json::Value> {
+    if let Some(input) = item.get("input") {
+        if input.is_object() {
+            return Some(input.clone());
+        }
+    }
+    if let Some(args) = item.get("arguments") {
+        if let Some(s) = args.as_str() {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(s) {
+                if v.is_object() {
+                    return Some(v);
+                }
+            }
+        } else if args.is_object() {
+            return Some(args.clone());
+        }
+    }
+    None
+}
+
+/// Build a stable `(tool, target)` signature used for redundant-call and
+/// retry-after-error detection. The target is the first recognized
+/// target-key string in the args, else the whole args object serialized
+/// (deterministic key order under serde_json's default map), else empty.
+/// Path-like targets are slash-normalized and every target is length-capped so
+/// one giant inline argument cannot dominate. Pure (allocating only).
+fn tool_target_signature(name: &str, input: Option<&serde_json::Value>) -> String {
+    const MAX_TARGET_LEN: usize = 160;
+    let name = name.trim();
+    let target = match input {
+        Some(obj) => {
+            let mut found: Option<String> = None;
+            for key in TOOL_TARGET_KEYS {
+                if let Some(v) = obj.get(*key) {
+                    let s = match v {
+                        serde_json::Value::String(s) => s.trim().to_string(),
+                        other => other.to_string(),
+                    };
+                    if !s.is_empty() {
+                        found = Some(s);
+                        break;
+                    }
+                }
+            }
+            found.unwrap_or_else(|| {
+                // No recognized target key: serialize the whole args object so
+                // distinct argument sets still separate. An empty object yields
+                // an empty target (a bare-name signature).
+                if obj.as_object().map(|m| m.is_empty()).unwrap_or(true) {
+                    String::new()
+                } else {
+                    obj.to_string()
+                }
+            })
+        }
+        None => String::new(),
+    };
+    let target = target.replace('\\', "/");
+    let target: String = target.chars().take(MAX_TARGET_LEN).collect();
+    format!("{name}\u{1}{target}")
+}
+
 /// Parse deterministic run economics from a single session's transcript text.
 /// See module-level economics comment for the supported on-disk shapes.
 pub fn parse_session_economics(
@@ -972,6 +1061,24 @@ pub fn parse_session_economics(
     let mut turn_throughput_ms_total = 0u64;
     let mut inferred_provider_errors = 0u64;
     let mut mcp_calls_by_server: std::collections::BTreeMap<String, u64> =
+        std::collections::BTreeMap::new();
+
+    // Deterministic path-directness / friction accumulators. Signatures are
+    // `(tool, target)`; a signature seen twice is rework, a signature that
+    // previously errored and reappears is a retry-after-error. `sig_by_call_id`
+    // correlates a tool_use/function_call to the erroring result that
+    // references it (Anthropic `tool_use_id`, Codex `call_id`).
+    let mut repeated_tool_calls = 0u64;
+    let mut retried_after_error_calls = 0u64;
+    let mut seen_tool_sigs: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut errored_tool_sigs: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut sig_by_call_id: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    let mut last_tool_result_error: Option<bool> = None;
+    // Self-Augmentation: per-skill and per-tool-name usage attribution.
+    let mut skill_invocations_by_name: std::collections::BTreeMap<String, u64> =
+        std::collections::BTreeMap::new();
+    let mut tool_calls_by_name: std::collections::BTreeMap<String, u64> =
         std::collections::BTreeMap::new();
 
     for line in raw_text.split('\n') {
@@ -1097,42 +1204,109 @@ pub fn parse_session_economics(
             .unwrap_or("");
         if role == "assistant" {
             assistant_turns += 1;
+        } else if role == "user" {
+            // Leading `/command` (or Claude Code's `<command-name>` marker) in a
+            // user turn -> command invocation. A universal signal that works
+            // even when the agent exposes no structured SlashCommand tool.
+            if let Some(cmd) = user_turn_slash_command(&value) {
+                *skill_invocations_by_name
+                    .entry(format!("command:{cmd}"))
+                    .or_insert(0) += 1;
+            }
         }
+        // Candidate blocks for this line. Anthropic / Claude Code carry a
+        // `content` array of typed blocks; Codex rollouts carry one
+        // `response_item` per line whose `payload` IS the block; a few shapes
+        // put the block at top level. Mirror `parse_tool_error_details` so tool
+        // counting + friction signatures work regardless of transcript shape.
         let content = value
             .get("message")
             .and_then(|m| m.get("content"))
             .and_then(|c| c.as_array())
             .or_else(|| value.get("content").and_then(|c| c.as_array()));
+        let mut candidates: Vec<&serde_json::Value> = Vec::new();
         if let Some(items) = content {
-            for item in items {
-                let kind = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                match kind {
-                    "tool_use" | "function_call" => {
-                        tool_calls += 1;
-                        // Attribute MCP-namespaced tool calls to their server
-                        // (the `mcp__<server>__<tool>` convention). Native tools
-                        // carry no `mcp__` prefix and are not bucketed here.
-                        let tool_name = item
-                            .get("name")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .trim();
-                        if let Some(server) = mcp_server_from_tool_name(tool_name) {
-                            *mcp_calls_by_server.entry(server.to_string()).or_insert(0) += 1;
+            candidates.extend(items.iter());
+        } else if let Some(payload) = value.get("payload") {
+            candidates.push(payload);
+        } else {
+            candidates.push(&value);
+        }
+        for item in candidates {
+            let kind = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            match kind {
+                "tool_use" | "function_call" => {
+                    tool_calls += 1;
+                    // Attribute MCP-namespaced tool calls to their server
+                    // (the `mcp__<server>__<tool>` convention). Native tools
+                    // carry no `mcp__` prefix and are not bucketed here.
+                    let tool_name = item
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .trim();
+                    if let Some(server) = mcp_server_from_tool_name(tool_name) {
+                        *mcp_calls_by_server.entry(server.to_string()).or_insert(0) += 1;
+                    }
+                    // Per-tool-name breakdown (native + MCP) for the most/least
+                    // used tools histogram. Length-capped so a malformed name
+                    // cannot bloat the map key.
+                    if !tool_name.is_empty() {
+                        let key: String = tool_name.chars().take(120).collect();
+                        *tool_calls_by_name.entry(key).or_insert(0) += 1;
+                    }
+                    // Path-directness: repeated `(tool, target)` = rework; a
+                    // signature that previously errored = retry-after-error.
+                    // Correlate this call's id -> signature so the erroring
+                    // result can mark the signature as failed.
+                    let input = tool_call_input(item);
+                    // Skill / command / rule / subagent attribution from the
+                    // structured call (explicit dispatch tool or a file-read of a
+                    // skill/command/rule artifact).
+                    if let Some(skill_id) = skill_from_tool_call(tool_name, input.as_ref()) {
+                        *skill_invocations_by_name.entry(skill_id).or_insert(0) += 1;
+                    }
+                    let sig = tool_target_signature(tool_name, input.as_ref());
+                    if !seen_tool_sigs.insert(sig.clone()) {
+                        repeated_tool_calls += 1;
+                    }
+                    if errored_tool_sigs.contains(&sig) {
+                        retried_after_error_calls += 1;
+                    }
+                    if let Some(id) = item
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .or_else(|| item.get("call_id").and_then(|v| v.as_str()))
+                    {
+                        if !id.is_empty() {
+                            sig_by_call_id.insert(id.to_string(), sig);
                         }
                     }
-                    "tool_result" | "function_call_output" => {
-                        let is_err = item
-                            .get("is_error")
-                            .and_then(|v| v.as_bool())
-                            .unwrap_or(false)
-                            || item.get("error").map(|e| !e.is_null()).unwrap_or(false);
-                        if is_err {
-                            tool_errors += 1;
-                        }
-                    }
-                    _ => {}
                 }
+                "tool_result" | "function_call_output" => {
+                    let is_err = item
+                        .get("is_error")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false)
+                        || item.get("error").map(|e| !e.is_null()).unwrap_or(false);
+                    // Track the LAST result's error state for the clean-finish
+                    // proxy (updated on every result; final value wins).
+                    last_tool_result_error = Some(is_err);
+                    if is_err {
+                        tool_errors += 1;
+                        // Mark this call's signature as errored so a later
+                        // reissue of the same `(tool, target)` counts as a retry.
+                        let ref_id = item
+                            .get("tool_use_id")
+                            .and_then(|v| v.as_str())
+                            .or_else(|| item.get("call_id").and_then(|v| v.as_str()))
+                            .unwrap_or("");
+                        if let Some(sig) = sig_by_call_id.get(ref_id) {
+                            errored_tool_sigs.insert(sig.clone());
+                        }
+                    }
+                }
+                _ => {}
             }
         }
 
@@ -1257,6 +1431,11 @@ pub fn parse_session_economics(
         turn_throughput_ms_total,
         inferred_provider_errors,
         mcp_calls_by_server,
+        skill_invocations_by_name,
+        tool_calls_by_name,
+        repeated_tool_calls,
+        retried_after_error_calls,
+        ended_with_tool_error: last_tool_result_error.unwrap_or(false),
     }
 }
 
@@ -1273,6 +1452,252 @@ fn mcp_server_from_tool_name(name: &str) -> Option<&str> {
     } else {
         Some(server)
     }
+}
+
+/// Native/agent file-read tool names whose target may be a skill/command/rule
+/// artifact (a progressive-disclosure load). Lowercased comparison. Covers the
+/// major agents: Claude Code `Read`, Cursor `read_file`, and common shell/open
+/// spellings.
+fn is_instruction_read_tool(lower_name: &str) -> bool {
+    matches!(
+        lower_name,
+        "read" | "read_file" | "readfile" | "cat" | "open" | "open_file" | "view" | "view_file"
+    )
+}
+
+/// Normalize a skill / command / rule name (or a path fragment) to a stable
+/// slug: take the last path segment, strip a `.md` / `.mdc` extension,
+/// lowercase, keep `[a-z0-9._-]`, collapse any other run to a single `-`, and
+/// length-cap. Pure (allocating only).
+fn normalize_skill_slug(s: &str) -> String {
+    const MAX: usize = 80;
+    let s = s.trim().trim_matches('/');
+    let seg = s.rsplit('/').next().unwrap_or(s);
+    let seg = seg
+        .strip_suffix(".mdc")
+        .or_else(|| seg.strip_suffix(".md"))
+        .unwrap_or(seg);
+    let mut out = String::new();
+    for ch in seg.chars() {
+        let c = ch.to_ascii_lowercase();
+        if c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-' {
+            out.push(c);
+        } else if !out.ends_with('-') {
+            out.push('-');
+        }
+        if out.len() >= MAX {
+            break;
+        }
+    }
+    out.trim_matches('-').to_string()
+}
+
+/// Extract a leading slash-command name from a user message string, e.g.
+/// `"/healthcheck run now"` -> `Some("healthcheck")`. Returns `None` when the
+/// text does not start with a slash-command word. Rejects file paths such as
+/// `"/Users/foo"` by requiring the first token to be followed by whitespace or
+/// end-of-string (not another path segment).
+fn slash_command_name(text: &str) -> Option<String> {
+    let rest = text.trim_start().strip_prefix('/')?;
+    let token: String = rest
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+        .collect();
+    if token.is_empty() {
+        return None;
+    }
+    let after = &rest[token.len()..];
+    if after.is_empty() || after.starts_with(char::is_whitespace) {
+        let slug = normalize_skill_slug(&token);
+        if slug.is_empty() {
+            None
+        } else {
+            Some(slug)
+        }
+    } else {
+        None
+    }
+}
+
+/// Classify a file path as a skill / command / rule artifact and return the
+/// normalized skill id (`skill:<name>`, `command:<name>`, `rule:<name>`), else
+/// `None`. Slash-normalized so Windows-style paths also match. A read of such a
+/// file is treated as a progressive-disclosure load of that instruction.
+fn skill_from_path(path: &str) -> Option<String> {
+    let p = path.trim().replace('\\', "/");
+    if p.is_empty() {
+        return None;
+    }
+    let segs: Vec<&str> = p.split('/').filter(|s| !s.is_empty()).collect();
+    for (dir, prefix) in [
+        ("skills", "skill"),
+        ("commands", "command"),
+        ("rules", "rule"),
+    ] {
+        if let Some(idx) = segs.iter().position(|s| s.eq_ignore_ascii_case(dir)) {
+            if let Some(next) = segs.get(idx + 1) {
+                let name = normalize_skill_slug(next);
+                if !name.is_empty() {
+                    return Some(format!("{prefix}:{name}"));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Canonical join id (`<kind>:<slug>`) for an on-disk instruction artifact,
+/// matching the ids emitted into `skill_invocations_by_name`. `kind` is the
+/// SBOM `edamame:kind` (`skill` | `command` | `rule` | `subagent`); `relpath`
+/// is the artifact path relative to its config dir.
+///
+/// The slug rules mirror how usage ids are minted from transcripts:
+/// - `skill`: the slug is the *containing directory* (`skills/<slug>/SKILL.md`
+///   -> `skill:<slug>`), matching a file-read of `**/skills/<slug>/SKILL.md`
+///   and an explicit `Skill{name}` dispatch.
+/// - `command` / `rule` / `subagent`: the slug is the file stem
+///   (`commands/<slug>.md` -> `command:<slug>`).
+///
+/// Returns `None` for kinds that are not usage-trackable (`memory`, `prompt`,
+/// `instruction`, `hook`) so the self-augmentation join only spans artifacts a
+/// transcript can actually attribute a use to.
+pub fn instruction_join_id(kind: &str, relpath: &str) -> Option<String> {
+    let p = relpath.trim().replace('\\', "/");
+    let segs: Vec<&str> = p.split('/').filter(|s| !s.is_empty()).collect();
+    if segs.is_empty() {
+        return None;
+    }
+    match kind {
+        "skill" => {
+            // Prefer the segment right after a `skills` dir (the skill folder).
+            if let Some(idx) = segs.iter().position(|s| s.eq_ignore_ascii_case("skills")) {
+                if let Some(next) = segs.get(idx + 1) {
+                    let slug = normalize_skill_slug(next);
+                    if !slug.is_empty() {
+                        return Some(format!("skill:{slug}"));
+                    }
+                }
+            }
+            // Fallback: a bare `<slug>/SKILL.md` uses the parent dir; otherwise
+            // the file stem.
+            let last = *segs.last().unwrap();
+            let slug = if last.eq_ignore_ascii_case("SKILL.md") && segs.len() >= 2 {
+                normalize_skill_slug(segs[segs.len() - 2])
+            } else {
+                normalize_skill_slug(last)
+            };
+            (!slug.is_empty()).then(|| format!("skill:{slug}"))
+        }
+        "command" => {
+            let slug = normalize_skill_slug(segs.last().unwrap());
+            (!slug.is_empty()).then(|| format!("command:{slug}"))
+        }
+        "rule" => {
+            let slug = normalize_skill_slug(segs.last().unwrap());
+            (!slug.is_empty()).then(|| format!("rule:{slug}"))
+        }
+        "subagent" => {
+            let slug = normalize_skill_slug(segs.last().unwrap());
+            (!slug.is_empty()).then(|| format!("subagent:{slug}"))
+        }
+        _ => None,
+    }
+}
+
+/// Recognize a skill / command / rule / subagent invocation from a structured
+/// tool call and return a normalized skill id, else `None`. Covers explicit
+/// dispatch tools (`Skill`, `SlashCommand`, `Task`) and file-reads of
+/// skill/command/rule artifacts. Deterministic.
+fn skill_from_tool_call(tool_name: &str, input: Option<&serde_json::Value>) -> Option<String> {
+    let lower = tool_name.trim().to_ascii_lowercase();
+    match lower.as_str() {
+        "skill" => {
+            let obj = input?;
+            for key in ["command", "name", "skill", "skill_name"] {
+                if let Some(s) = obj.get(key).and_then(|v| v.as_str()) {
+                    let slug = normalize_skill_slug(s);
+                    if !slug.is_empty() {
+                        return Some(format!("skill:{slug}"));
+                    }
+                }
+            }
+            None
+        }
+        "slashcommand" => {
+            let obj = input?;
+            let s = obj.get("command").and_then(|v| v.as_str())?;
+            let cmd = slash_command_name(s).or_else(|| {
+                let slug = normalize_skill_slug(s);
+                if slug.is_empty() {
+                    None
+                } else {
+                    Some(slug)
+                }
+            })?;
+            Some(format!("command:{cmd}"))
+        }
+        "task" => {
+            let obj = input?;
+            let s = obj.get("subagent_type").and_then(|v| v.as_str())?;
+            let slug = normalize_skill_slug(s);
+            if slug.is_empty() {
+                None
+            } else {
+                Some(format!("subagent:{slug}"))
+            }
+        }
+        other if is_instruction_read_tool(other) => {
+            let obj = input?;
+            for key in TOOL_TARGET_KEYS {
+                if let Some(p) = obj.get(*key).and_then(|v| v.as_str()) {
+                    if let Some(id) = skill_from_path(p) {
+                        return Some(id);
+                    }
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+/// Extract a leading slash-command from a user-role transcript line, if any.
+/// Prefers Claude Code's explicit `<command-name>...</command-name>` marker,
+/// then falls back to a literal leading `/command` in the concatenated user
+/// text. Returns the normalized command slug (without the `command:` prefix).
+fn user_turn_slash_command(value: &serde_json::Value) -> Option<String> {
+    let content = value
+        .get("message")
+        .and_then(|m| m.get("content"))
+        .or_else(|| value.get("content"));
+    let text = match content {
+        Some(serde_json::Value::String(s)) => s.clone(),
+        Some(serde_json::Value::Array(items)) => {
+            let mut buf = String::new();
+            for it in items {
+                if let Some(t) = it.get("text").and_then(|v| v.as_str()) {
+                    buf.push_str(t);
+                    buf.push('\n');
+                    if buf.len() > 512 {
+                        break;
+                    }
+                }
+            }
+            buf
+        }
+        _ => return None,
+    };
+    if let Some(start) = text.find("<command-name>") {
+        let after = &text[start + "<command-name>".len()..];
+        if let Some(end) = after.find("</command-name>") {
+            let raw = after[..end].trim().trim_start_matches('/');
+            let slug = normalize_skill_slug(raw);
+            if !slug.is_empty() {
+                return Some(slug);
+            }
+        }
+    }
+    slash_command_name(&text)
 }
 
 /// Deterministically extract per-tool error details from a transcript's raw
@@ -1665,5 +2090,202 @@ mod economics_tests {
         let econ = parse_session_economics("m2", "/tmp/m2.jsonl", jsonl);
         assert_eq!(econ.tool_calls, 2);
         assert!(econ.mcp_calls_by_server.is_empty());
+    }
+
+    #[test]
+    fn skill_slug_and_path_helpers() {
+        assert_eq!(normalize_skill_slug("Security-Posture"), "security-posture");
+        assert_eq!(normalize_skill_slug("a/b/SKILL.md"), "skill");
+        assert_eq!(
+            normalize_skill_slug(".cursor/rules/invariants.mdc"),
+            "invariants"
+        );
+        assert_eq!(normalize_skill_slug("  Fancy Name!  "), "fancy-name");
+
+        assert_eq!(
+            skill_from_path("/home/u/.cursor/skills/dogfood-status/SKILL.md"),
+            Some("skill:dogfood-status".to_string())
+        );
+        assert_eq!(
+            skill_from_path("C:\\Users\\u\\.claude\\commands\\healthcheck.md"),
+            Some("command:healthcheck".to_string())
+        );
+        assert_eq!(
+            skill_from_path("/repo/.cursor/rules/invariants.mdc"),
+            Some("rule:invariants".to_string())
+        );
+        assert_eq!(skill_from_path("/repo/src/lib.rs"), None);
+
+        // Slash-command extraction rejects file paths, accepts command words.
+        assert_eq!(
+            slash_command_name("/healthcheck now"),
+            Some("healthcheck".to_string())
+        );
+        assert_eq!(
+            slash_command_name("/fp-version-release"),
+            Some("fp-version-release".to_string())
+        );
+        assert_eq!(slash_command_name("/Users/foo/bar"), None);
+        assert_eq!(slash_command_name("no command here"), None);
+    }
+
+    #[test]
+    fn parse_session_economics_attributes_skills_and_tool_names() {
+        let jsonl = concat!(
+            // Explicit Skill tool + a native Read of a SKILL.md (progressive load).
+            r#"{"type":"assistant","message":{"role":"assistant","model":"claude-sonnet-4-6","content":[{"type":"tool_use","name":"Skill","input":{"command":"security-posture"}},{"type":"tool_use","name":"Read","input":{"file_path":"/repo/.cursor/skills/dogfood-status/SKILL.md"}}]}}"#,
+            "\n",
+            // Task subagent + a rule read + an ordinary Edit.
+            r#"{"type":"assistant","message":{"role":"assistant","model":"claude-sonnet-4-6","content":[{"type":"tool_use","name":"Task","input":{"subagent_type":"explore"}},{"type":"tool_use","name":"Read","input":{"file_path":"/repo/.cursor/rules/invariants.mdc"}},{"type":"tool_use","name":"Edit","input":{"file_path":"/repo/src/a.rs"}}]}}"#,
+            "\n",
+            // User turn invoking a slash command.
+            r#"{"type":"user","message":{"role":"user","content":"/fp-version-release please"}}"#,
+            "\n",
+        );
+        let econ = parse_session_economics("s1", "/tmp/s1.jsonl", jsonl);
+
+        // Skills: explicit Skill, SKILL.md read, subagent, rule read, slash cmd.
+        assert_eq!(
+            econ.skill_invocations_by_name
+                .get("skill:security-posture")
+                .copied(),
+            Some(1)
+        );
+        assert_eq!(
+            econ.skill_invocations_by_name
+                .get("skill:dogfood-status")
+                .copied(),
+            Some(1)
+        );
+        assert_eq!(
+            econ.skill_invocations_by_name
+                .get("subagent:explore")
+                .copied(),
+            Some(1)
+        );
+        assert_eq!(
+            econ.skill_invocations_by_name
+                .get("rule:invariants")
+                .copied(),
+            Some(1)
+        );
+        assert_eq!(
+            econ.skill_invocations_by_name
+                .get("command:fp-version-release")
+                .copied(),
+            Some(1)
+        );
+
+        // Per-tool-name breakdown counts every tool_use (native + dispatch).
+        assert_eq!(econ.tool_calls_by_name.get("Read").copied(), Some(2));
+        assert_eq!(econ.tool_calls_by_name.get("Skill").copied(), Some(1));
+        assert_eq!(econ.tool_calls_by_name.get("Task").copied(), Some(1));
+        assert_eq!(econ.tool_calls_by_name.get("Edit").copied(), Some(1));
+        // 5 structured tool calls total across the two assistant turns
+        // (turn 1: Skill+Read; turn 2: Task+Read+Edit).
+        assert_eq!(econ.tool_calls, 5);
+    }
+
+    #[test]
+    fn instruction_join_id_matches_transcript_usage_ids() {
+        // Skill: slug is the containing folder, not the SKILL.md filename.
+        assert_eq!(
+            instruction_join_id("skill", "skills/dogfood-status/SKILL.md").as_deref(),
+            Some("skill:dogfood-status")
+        );
+        // A bare `<slug>/SKILL.md` (no `skills` dir) falls back to the parent.
+        assert_eq!(
+            instruction_join_id("skill", "dogfood-status/SKILL.md").as_deref(),
+            Some("skill:dogfood-status")
+        );
+        // Command / rule / subagent slugs are the file stem (ext stripped).
+        assert_eq!(
+            instruction_join_id("command", "commands/fp-version-release.md").as_deref(),
+            Some("command:fp-version-release")
+        );
+        assert_eq!(
+            instruction_join_id("rule", "rules/invariants.mdc").as_deref(),
+            Some("rule:invariants")
+        );
+        assert_eq!(
+            instruction_join_id("subagent", "agents/explore.md").as_deref(),
+            Some("subagent:explore")
+        );
+        // Non-usage-trackable kinds and empty paths yield no join id.
+        assert_eq!(instruction_join_id("instruction", "AGENTS.md"), None);
+        assert_eq!(instruction_join_id("memory", "memories/x.md"), None);
+        assert_eq!(instruction_join_id("skill", ""), None);
+    }
+
+    #[test]
+    fn parse_session_economics_no_skill_activity_yields_empty_maps() {
+        let jsonl = concat!(
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Read","input":{"file_path":"/repo/src/lib.rs"}}]}}"#,
+            "\n",
+            r#"{"type":"user","message":{"role":"user","content":"just a normal message"}}"#,
+            "\n",
+        );
+        let econ = parse_session_economics("s2", "/tmp/s2.jsonl", jsonl);
+        assert!(econ.skill_invocations_by_name.is_empty());
+        assert_eq!(econ.tool_calls_by_name.get("Read").copied(), Some(1));
+    }
+
+    #[test]
+    fn friction_repeated_tool_calls_counts_same_target_only() {
+        let jsonl = concat!(
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"a","name":"Read","input":{"file_path":"/repo/src/lib.rs"}}]}}"#,
+            "\n",
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"b","name":"Read","input":{"file_path":"/repo/src/lib.rs"}}]}}"#,
+            "\n",
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"c","name":"Read","input":{"file_path":"/repo/src/other.rs"}}]}}"#,
+            "\n",
+        );
+        let econ = parse_session_economics("f1", "/tmp/f1.jsonl", jsonl);
+        assert_eq!(econ.tool_calls, 3);
+        // The 2nd Read of lib.rs is a repeat; other.rs is a distinct target.
+        assert_eq!(econ.repeated_tool_calls, 1);
+        assert_eq!(econ.retried_after_error_calls, 0);
+        assert!(!econ.ended_with_tool_error);
+    }
+
+    #[test]
+    fn friction_retry_after_error_and_unclean_finish() {
+        let jsonl = concat!(
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Shell","input":{"command":"cargo build"}}]}}"#,
+            "\n",
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","is_error":true,"content":"error[E0432]"}]}}"#,
+            "\n",
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t2","name":"Shell","input":{"command":"cargo build"}}]}}"#,
+            "\n",
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t2","is_error":true,"content":"error[E0432]"}]}}"#,
+            "\n",
+        );
+        let econ = parse_session_economics("f2", "/tmp/f2.jsonl", jsonl);
+        assert_eq!(econ.tool_calls, 2);
+        assert_eq!(econ.tool_errors, 2);
+        // Same command reissued after it errored -> repeat AND retry-after-error.
+        assert_eq!(econ.repeated_tool_calls, 1);
+        assert_eq!(econ.retried_after_error_calls, 1);
+        // The final tool result was an error -> unclean finish.
+        assert!(econ.ended_with_tool_error);
+    }
+
+    #[test]
+    fn friction_codex_payload_function_calls_counted_and_clean_finish() {
+        let jsonl = concat!(
+            r#"{"type":"response_item","payload":{"type":"function_call","call_id":"c1","name":"shell","arguments":"{\"command\":\"ls\"}"}}"#,
+            "\n",
+            r#"{"type":"response_item","payload":{"type":"function_call_output","call_id":"c1","content":"ok"}}"#,
+            "\n",
+        );
+        let econ = parse_session_economics("f3", "/tmp/f3.jsonl", jsonl);
+        // Codex payload-wrapped function_call is now counted (candidate resolution
+        // falls back to `payload` when there is no `content` array).
+        assert_eq!(econ.tool_calls, 1);
+        assert_eq!(econ.tool_errors, 0);
+        assert_eq!(econ.repeated_tool_calls, 0);
+        assert_eq!(econ.retried_after_error_calls, 0);
+        // Final result succeeded -> clean finish.
+        assert!(!econ.ended_with_tool_error);
     }
 }

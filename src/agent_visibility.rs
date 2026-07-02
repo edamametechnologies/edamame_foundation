@@ -21,7 +21,7 @@
 use crate::supported_agents;
 use crate::vuln_detector_params;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 // ---------------------------------------------------------------------------
@@ -2504,6 +2504,379 @@ fn classify_toplevel_instruction(name: &str) -> Option<&'static str> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// On-demand instruction content reads (invariant I5, privacy-tiered).
+//
+// The augmentation / visibility UI can drill into a specific skill / command /
+// rule and view its body. Because EDAMAME monitors developer workstations, this
+// read honors the three privacy tiers (metadata-only / redacted-excerpt /
+// forensic-full-content). The read is the single source of truth shared by the
+// standalone core path and the helper path, mirroring `build_visibility_bundle`.
+// ---------------------------------------------------------------------------
+
+/// Excerpt ceiling for the `redacted_excerpt` tier (bytes of the head returned).
+pub const INSTRUCTION_CONTENT_EXCERPT_BYTES: usize = 8 * 1024;
+/// Hard ceiling for the `forensic_full_content` tier (bytes returned).
+pub const INSTRUCTION_CONTENT_MAX_BYTES: usize = 256 * 1024;
+
+/// Result of an on-demand instruction content read. Output-only over the RPC
+/// boundary (serialized to JSON by the core RPC / helper utility).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstructionContentResult {
+    /// Absolute path that was read (echoed back for the UI).
+    pub path: String,
+    /// True when the path resolved to a readable instruction artifact.
+    pub found: bool,
+    /// Effective tier applied: `metadata_only` | `redacted_excerpt` |
+    /// `forensic_full_content`.
+    pub tier: String,
+    /// On-disk size of the file in bytes (0 when not found).
+    pub size_bytes: u64,
+    /// Number of bytes actually returned in `content`.
+    pub returned_bytes: usize,
+    /// True when `content` is a head slice of a larger file.
+    pub truncated: bool,
+    /// True when one or more secret-like spans were masked in `content`.
+    pub redacted: bool,
+    /// Number of lines that had a secret-like value masked.
+    pub redacted_lines: usize,
+    /// The body per the effective tier. Empty at `metadata_only`.
+    pub content: String,
+    /// Human-readable reason when `found` is false or the read was refused.
+    pub error: Option<String>,
+}
+
+impl InstructionContentResult {
+    /// Build a "read refused / not found" result carrying a human-readable
+    /// reason. Public so the core dispatch layer can produce the same shape for
+    /// its own pre-flight failures (no home dir, helper transport error,
+    /// unsupported platform) without duplicating the field list.
+    pub fn refused(path: &str, tier: &str, error: impl Into<String>) -> Self {
+        Self {
+            path: path.to_string(),
+            found: false,
+            tier: tier.to_string(),
+            size_bytes: 0,
+            returned_bytes: 0,
+            truncated: false,
+            redacted: false,
+            redacted_lines: 0,
+            content: String::new(),
+            error: Some(error.into()),
+        }
+    }
+}
+
+/// Normalize a caller-supplied tier string to one of the three known tiers.
+/// Unknown values collapse to the safest tier (`metadata_only`) so a typo can
+/// never accidentally widen disclosure.
+fn normalize_content_tier(tier: &str) -> &'static str {
+    match tier.trim().to_ascii_lowercase().as_str() {
+        "forensic_full_content" | "forensic" | "full" => "forensic_full_content",
+        "redacted_excerpt" | "redacted" | "excerpt" => "redacted_excerpt",
+        _ => "metadata_only",
+    }
+}
+
+/// True when `path` has the shape of a recognized instruction artifact: either a
+/// top-level instruction file (`CLAUDE.md`, `.cursorrules`, ...) or a file with
+/// an instruction extension living under an `INSTRUCTION_SUBDIRS` segment
+/// (`skills/`, `rules/`, `commands/`, ...). This is the allowlist that prevents
+/// the privileged (root/helper) side from being coerced into reading an
+/// arbitrary file such as `/etc/shadow`.
+fn path_is_instruction_artifact(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    if classify_toplevel_instruction(name).is_some() {
+        return true;
+    }
+    let ext_ok = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| INSTRUCTION_EXTS.contains(&e.to_ascii_lowercase().as_str()))
+        .unwrap_or(false);
+    if !ext_ok {
+        return false;
+    }
+    // At least one ancestor directory segment must be an instruction subdir.
+    path.components().any(|c| {
+        c.as_os_str()
+            .to_str()
+            .map(|seg| {
+                let seg = seg.to_ascii_lowercase();
+                INSTRUCTION_SUBDIRS.iter().any(|(dir, _)| *dir == seg)
+            })
+            .unwrap_or(false)
+    })
+}
+
+/// Key-name hints that mark a `key = value` / `key: value` line as carrying a
+/// secret value to mask at the `redacted_excerpt` tier.
+const SECRET_KEY_HINTS: &[&str] = &[
+    "secret",
+    "token",
+    "password",
+    "passwd",
+    "pwd",
+    "api_key",
+    "apikey",
+    "api-key",
+    "access_key",
+    "private_key",
+    "client_secret",
+    "auth",
+    "bearer",
+    "credential",
+    "session_key",
+];
+
+/// Standalone token prefixes that are masked wherever they appear, regardless
+/// of the surrounding line shape.
+const SECRET_TOKEN_PREFIXES: &[&str] = &[
+    "sk-",
+    "ghp_",
+    "gho_",
+    "ghs_",
+    "github_pat_",
+    "xox",
+    "akia",
+    "asia",
+    "aiza",
+    "ya29.",
+    "eyj",
+];
+
+fn char_is_token(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '_' | '-' | '=' | '.')
+}
+
+/// True when `tok` looks like a high-entropy secret: a known secret prefix, or a
+/// long mixed alphanumeric run (>= 28 chars with at least one digit and one
+/// letter). Conservative on purpose -- this is defense in depth behind the tier
+/// gate, not the primary control.
+fn token_looks_secret(tok: &str) -> bool {
+    let lower = tok.to_ascii_lowercase();
+    if SECRET_TOKEN_PREFIXES
+        .iter()
+        .any(|p| lower.starts_with(p) && tok.len() >= p.len() + 6)
+    {
+        return true;
+    }
+    if tok.len() < 28 {
+        return false;
+    }
+    let has_digit = tok.chars().any(|c| c.is_ascii_digit());
+    let has_alpha = tok.chars().any(|c| c.is_ascii_alphabetic());
+    let all_token = tok.chars().all(char_is_token);
+    has_digit && has_alpha && all_token
+}
+
+/// Mask secret-like spans in `line`. Returns the (possibly rewritten) line and
+/// whether anything was masked.
+fn redact_secret_line(line: &str) -> (String, bool) {
+    let mut masked = false;
+
+    // 1. `key <sep> value` where the key name hints at a secret.
+    if let Some(sep_idx) = line.find([':', '=']) {
+        let (key, rest) = line.split_at(sep_idx);
+        let key_lower = key.to_ascii_lowercase();
+        if SECRET_KEY_HINTS.iter().any(|h| key_lower.contains(h)) {
+            let sep = &rest[..1];
+            let value = &rest[1..];
+            if !value.trim().is_empty() {
+                let leading_ws: String = value.chars().take_while(|c| c.is_whitespace()).collect();
+                return (format!("{key}{sep}{leading_ws}REDACTED"), true);
+            }
+        }
+    }
+
+    // 2. Standalone high-entropy tokens anywhere in the line.
+    let mut out = String::with_capacity(line.len());
+    let mut cur = String::new();
+    let flush = |cur: &mut String, out: &mut String, masked: &mut bool| {
+        if !cur.is_empty() {
+            if token_looks_secret(cur) {
+                out.push_str("REDACTED");
+                *masked = true;
+            } else {
+                out.push_str(cur);
+            }
+            cur.clear();
+        }
+    };
+    for c in line.chars() {
+        if char_is_token(c) {
+            cur.push(c);
+        } else {
+            flush(&mut cur, &mut out, &mut masked);
+            out.push(c);
+        }
+    }
+    flush(&mut cur, &mut out, &mut masked);
+    (out, masked)
+}
+
+/// Apply line-level secret redaction to `text`. Returns the redacted text and
+/// the number of lines that had a value masked.
+fn redact_secret_like_text(text: &str) -> (String, usize) {
+    let mut redacted_lines = 0usize;
+    let mut out = String::with_capacity(text.len());
+    for segment in text.split_inclusive('\n') {
+        let (body, nl) = match segment.strip_suffix('\n') {
+            Some(b) => (b, "\n"),
+            None => (segment, ""),
+        };
+        let (line, masked) = redact_secret_line(body);
+        if masked {
+            redacted_lines += 1;
+        }
+        out.push_str(&line);
+        out.push_str(nl);
+    }
+    (out, redacted_lines)
+}
+
+/// Truncate `bytes` to at most `max` bytes on a UTF-8 char boundary, returning
+/// the lossy string and whether truncation occurred.
+fn head_str_lossy(bytes: &[u8], max: usize) -> (String, bool) {
+    if bytes.len() <= max {
+        return (String::from_utf8_lossy(bytes).into_owned(), false);
+    }
+    let mut end = max;
+    // Back up to a char boundary so from_utf8_lossy does not split a codepoint
+    // mid-sequence at the cut (cheap: at most 3 bytes).
+    while end > 0 && (bytes[end] & 0xC0) == 0x80 {
+        end -= 1;
+    }
+    (String::from_utf8_lossy(&bytes[..end]).into_owned(), true)
+}
+
+/// Read an instruction artifact body on demand, honoring the privacy tier
+/// (invariant I5). Single source of truth shared by the standalone core path
+/// (direct call) and the helper path (`utility_read_instruction_content`).
+///
+/// - `path`: absolute path of the artifact to read (as discovered by the SBOM).
+/// - `home`: the user's real home dir; the read is refused unless `path`
+///   canonicalizes to a location under `home` (no reads outside the user's home).
+/// - `tier`: one of `metadata_only` | `redacted_excerpt` | `forensic_full_content`.
+///
+/// Two independent guards prevent arbitrary file disclosure regardless of tier:
+/// the path must (1) be a recognized instruction artifact shape and (2) resolve
+/// under the user's home directory.
+pub fn read_instruction_content(path: &Path, home: &Path, tier: &str) -> InstructionContentResult {
+    let tier = normalize_content_tier(tier);
+    let path_str = path.to_string_lossy().to_string();
+
+    // Guard 1: instruction-artifact shape (uses the raw path so a symlink whose
+    // name is not instruction-shaped is rejected before any canonicalization).
+    if !path_is_instruction_artifact(path) {
+        return InstructionContentResult::refused(
+            &path_str,
+            tier,
+            "path is not a recognized instruction artifact",
+        );
+    }
+
+    // Guard 2: resolve and confine to the user's home directory.
+    let canonical = match path.canonicalize() {
+        Ok(c) => c,
+        Err(e) => {
+            return InstructionContentResult::refused(
+                &path_str,
+                tier,
+                format!("cannot resolve path: {e}"),
+            )
+        }
+    };
+    let home_canonical = home.canonicalize().unwrap_or_else(|_| home.to_path_buf());
+    if !canonical.starts_with(&home_canonical) {
+        return InstructionContentResult::refused(
+            &path_str,
+            tier,
+            "path is outside the user home directory",
+        );
+    }
+    // Re-check the shape post-canonicalization (defends against a symlink under
+    // an instruction dir pointing at a non-instruction file).
+    if !path_is_instruction_artifact(&canonical) {
+        return InstructionContentResult::refused(
+            &path_str,
+            tier,
+            "resolved path is not a recognized instruction artifact",
+        );
+    }
+
+    let metadata = match std::fs::metadata(&canonical) {
+        Ok(m) if m.is_file() => m,
+        Ok(_) => {
+            return InstructionContentResult::refused(&path_str, tier, "path is not a file");
+        }
+        Err(e) => {
+            return InstructionContentResult::refused(
+                &path_str,
+                tier,
+                format!("cannot stat file: {e}"),
+            );
+        }
+    };
+    let size_bytes = metadata.len();
+
+    // Metadata-only: never touch the body.
+    if tier == "metadata_only" {
+        return InstructionContentResult {
+            path: path_str,
+            found: true,
+            tier: tier.to_string(),
+            size_bytes,
+            returned_bytes: 0,
+            truncated: size_bytes > 0,
+            redacted: false,
+            redacted_lines: 0,
+            content: String::new(),
+            error: None,
+        };
+    }
+
+    let read_cap = if tier == "forensic_full_content" {
+        INSTRUCTION_CONTENT_MAX_BYTES
+    } else {
+        INSTRUCTION_CONTENT_EXCERPT_BYTES
+    };
+
+    let bytes = match std::fs::read(&canonical) {
+        Ok(b) => b,
+        Err(e) => {
+            return InstructionContentResult::refused(
+                &path_str,
+                tier,
+                format!("cannot read file: {e}"),
+            );
+        }
+    };
+
+    let (mut content, truncated) = head_str_lossy(&bytes, read_cap);
+    let mut redacted_lines = 0usize;
+    if tier == "redacted_excerpt" {
+        let (red, n) = redact_secret_like_text(&content);
+        content = red;
+        redacted_lines = n;
+    }
+
+    InstructionContentResult {
+        path: path_str,
+        found: true,
+        tier: tier.to_string(),
+        size_bytes,
+        returned_bytes: content.len(),
+        truncated,
+        redacted: redacted_lines > 0,
+        redacted_lines,
+        content,
+        error: None,
+    }
+}
+
 /// Discover an agent's instruction / skill / rule / command / subagent files
 /// from its config dir and project them as content-hashed `file` SBOM
 /// components. Bounded (depth + count + size) and limited to the
@@ -2642,6 +3015,53 @@ fn instruction_file_component(
     let mut props = BTreeMap::new();
     props.insert("edamame:kind".to_string(), kind.to_string());
     props.insert("edamame:relpath".to_string(), rel_str.clone());
+    // Absolute on-disk path. This is the user's own path on their own machine,
+    // surfaced in their own app; the *body* is still never stored (I5). It lets
+    // the app offer "reveal in file manager" and a privacy-gated content read
+    // without re-deriving per-agent config dirs on the (sandboxed) app side.
+    props.insert(
+        "edamame:abspath".to_string(),
+        path.to_string_lossy().to_string(),
+    );
+    // Byte size (the body was already read to hash it) and the load class
+    // (always-in-context vs conditional / on-demand) drive the per-workspace
+    // prompt-weight ("context tax") accounting in the self-augmentation report.
+    props.insert("edamame:size_bytes".to_string(), bytes.len().to_string());
+    props.insert(
+        "edamame:load".to_string(),
+        classify_instruction_load(kind, &bytes).to_string(),
+    );
+    // Structural-quality signal (metadata-only, I5): does the artifact carry a
+    // YAML frontmatter block, does that frontmatter declare a title + a
+    // description (the progressive-disclosure contract for a skill/command), and
+    // how many Markdown headings structure the body. Feeds the per-skill
+    // "how well is this authored" hint in the self-augmentation report. Derived
+    // from the already-in-memory bytes; the body itself is never stored.
+    let structure = analyze_instruction_structure(&bytes);
+    props.insert(
+        "edamame:struct_frontmatter".to_string(),
+        structure.has_frontmatter.to_string(),
+    );
+    props.insert(
+        "edamame:struct_description".to_string(),
+        structure.has_description.to_string(),
+    );
+    props.insert(
+        "edamame:struct_headings".to_string(),
+        structure.heading_count.to_string(),
+    );
+    props.insert(
+        "edamame:struct_quality".to_string(),
+        structure.quality().to_string(),
+    );
+    // Metadata-only (I5) structural references to *other* instruction artifacts
+    // (markdown link targets, `@file` refs, bare instruction-file paths). The
+    // body is not stored -- only the extracted, deduped, bounded path-like
+    // tokens. These become the edges of the skill reference graph.
+    let refs = extract_instruction_refs(&bytes);
+    if !refs.is_empty() {
+        props.insert("edamame:refs".to_string(), refs.join("\n"));
+    }
     Some(SbomComponent {
         bom_ref: format!(
             "file:{}:{}",
@@ -2654,6 +3074,585 @@ fn instruction_file_component(
         content_hash: Some(hash),
         properties: props,
     })
+}
+
+/// Max instruction references extracted per artifact. Bounds both the stored
+/// `edamame:refs` property and, downstream, the skill reference graph.
+const MAX_INSTRUCTION_REFS: usize = 32;
+/// Max characters of a single extracted reference token (defends against a
+/// pathological one-line file being treated as one giant "path").
+const MAX_REF_LEN: usize = 256;
+
+/// Well-known top-level instruction filenames that qualify as references even
+/// without a recognizable directory segment (compared lowercased).
+const INSTRUCTION_REF_BASENAMES: &[&str] = &[
+    "skill.md",
+    "agents.md",
+    "claude.md",
+    "gemini.md",
+    "codex.md",
+    "rules.md",
+    "instructions.md",
+    "memory.md",
+    ".cursorrules",
+    "copilot-instructions.md",
+];
+
+/// Directory segments that mark a path token as an instruction reference.
+const INSTRUCTION_REF_DIR_SEGMENTS: &[&str] = &[
+    "skills/",
+    "commands/",
+    "rules/",
+    "agents/",
+    "subagents/",
+    "prompts/",
+];
+
+/// Extract path-like references to *other* instruction artifacts from an
+/// instruction file body. Pure and metadata-only (invariant I5): the body is
+/// NOT stored; only the extracted path-like tokens (markdown link targets,
+/// `@file` refs, and bare instruction-file paths) are returned. Output is
+/// deduped, sorted, and bounded by [`MAX_INSTRUCTION_REFS`].
+///
+/// A token qualifies as an instruction reference when, after trimming anchors /
+/// queries / surrounding punctuation, it is not a URL and it either
+/// (a) ends with a known instruction extension AND contains a `/` or a
+/// recognized instruction directory segment, (b) contains a known instruction
+/// directory segment, or (c) is a well-known top-level instruction filename.
+/// This is deliberately conservative: prose sentences, plain web links, and
+/// arbitrary code paths do not become edges.
+pub fn extract_instruction_refs(body: &[u8]) -> Vec<String> {
+    let text = String::from_utf8_lossy(body);
+    let mut refs: BTreeSet<String> = BTreeSet::new();
+    for raw in text.split(|c: char| {
+        c.is_whitespace()
+            || matches!(
+                c,
+                '(' | ')'
+                    | '['
+                    | ']'
+                    | '{'
+                    | '}'
+                    | '"'
+                    | '\''
+                    | '`'
+                    | '<'
+                    | '>'
+                    | '|'
+                    | ','
+                    | ';'
+                    | '='
+                    | '*'
+            )
+    }) {
+        if let Some(tok) = normalize_ref_token(raw) {
+            if looks_like_instruction_ref(&tok) {
+                refs.insert(tok);
+                if refs.len() >= MAX_INSTRUCTION_REFS * 4 {
+                    // Hard stop scanning a pathological file once we have far
+                    // more than we will keep; the take() below trims to the cap.
+                    break;
+                }
+            }
+        }
+    }
+    refs.into_iter().take(MAX_INSTRUCTION_REFS).collect()
+}
+
+/// Normalize a raw split token into a candidate path: strip a leading `@` / `./`,
+/// drop anchors (`#...`) and queries (`?...`), trim surrounding punctuation, and
+/// reject empties / over-long tokens.
+fn normalize_ref_token(raw: &str) -> Option<String> {
+    let mut t = raw.trim();
+    // Markdown reference-style link labels sometimes arrive as `]:` fragments;
+    // and colons appear in `mailto:` / URLs handled by the URL reject below.
+    t = t.trim_matches(|c: char| matches!(c, '.' | ':' | '!' | '?' | '#'));
+    let mut s = t.to_string();
+    if let Some(rest) = s.strip_prefix('@') {
+        s = rest.to_string();
+    }
+    if let Some(rest) = s.strip_prefix("./") {
+        s = rest.to_string();
+    }
+    if let Some(i) = s.find('#') {
+        s.truncate(i);
+    }
+    if let Some(i) = s.find('?') {
+        s.truncate(i);
+    }
+    let s = s
+        .trim()
+        .trim_matches(|c: char| matches!(c, '.' | ':' | '/'));
+    if s.is_empty() || s.len() > MAX_REF_LEN {
+        return None;
+    }
+    Some(s.to_string())
+}
+
+/// Decide whether a normalized token names an instruction artifact.
+fn looks_like_instruction_ref(tok: &str) -> bool {
+    if tok.contains("://") || tok.starts_with("mailto:") {
+        return false; // web link / email, not an instruction file
+    }
+    let lower = tok.to_ascii_lowercase();
+    let basename = lower.rsplit('/').next().unwrap_or(&lower);
+    if INSTRUCTION_REF_BASENAMES.contains(&basename) {
+        return true;
+    }
+    let has_instruction_dir = INSTRUCTION_REF_DIR_SEGMENTS
+        .iter()
+        .any(|seg| lower.contains(seg));
+    if has_instruction_dir {
+        return true;
+    }
+    // Otherwise require a recognized instruction extension AND that it looks
+    // like a path (contains a separator) so we don't pick up prose like
+    // "config.json" mentioned in passing.
+    let ext_ok = std::path::Path::new(&lower)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| INSTRUCTION_EXTS.iter().any(|x| x.eq_ignore_ascii_case(e)))
+        .unwrap_or(false);
+    ext_ok && lower.contains('/')
+}
+
+/// Classify whether an instruction artifact is *always* injected into the model
+/// context (a standing "context tax" paid on every prompt) or loaded
+/// *conditionally* / on demand (progressive disclosure, glob-scoped, or
+/// agent-requestable). Drives the per-workspace prompt-weight accounting.
+///
+/// - Top-level instruction files (`CLAUDE.md`, `AGENTS.md`, `.cursorrules`,
+///   `copilot-instructions.md`, ...) and memories are always loaded.
+/// - Cursor `.mdc` rules are classified from their YAML frontmatter (see
+///   [`classify_rule_load`]).
+/// - Skills, commands, subagents, prompts, hooks are progressive-disclosure
+///   artifacts, loaded only when invoked -> conditional.
+fn classify_instruction_load(kind: &str, body: &[u8]) -> &'static str {
+    match kind {
+        "instruction" | "memory" => "always",
+        "rule" => classify_rule_load(body),
+        _ => "conditional",
+    }
+}
+
+/// Lightweight structural-quality signal for an instruction artifact, derived
+/// from its (markdown) body: whether it carries a leading YAML frontmatter
+/// block, whether that frontmatter (or a body H1) supplies a title, whether it
+/// declares a non-empty `description`, and how many Markdown ATX headings
+/// structure the body. Metadata-only (invariant I5): computed from the
+/// already-in-memory bytes, never stored.
+#[derive(Debug, Clone, Copy, Default)]
+struct InstructionStructure {
+    has_frontmatter: bool,
+    has_title: bool,
+    has_description: bool,
+    heading_count: u32,
+}
+
+impl InstructionStructure {
+    /// Compact `0..=100` authoring-quality score: `description` (40) + `title`
+    /// (20) + heading structure (up to 40: 25 for `>=1`, `+15` for `>=3`). A
+    /// fully-authored skill (frontmatter name + description + `>=3` headings)
+    /// scores 100; a thin body-only stub scores low. Used as the per-skill
+    /// structural-quality hint in the self-augmentation report.
+    fn quality(&self) -> u8 {
+        let mut q = 0u32;
+        if self.has_description {
+            q += 40;
+        }
+        if self.has_title {
+            q += 20;
+        }
+        if self.heading_count >= 1 {
+            q += 25;
+        }
+        if self.heading_count >= 3 {
+            q += 15;
+        }
+        q.min(100) as u8
+    }
+}
+
+/// Analyze the structural quality of an instruction artifact body. Pure and
+/// metadata-only: parses a leading `---` YAML frontmatter block for
+/// `name`/`title`/`description` keys and counts Markdown ATX headings
+/// (`#`..`######`) in the body region. Fenced code blocks are skipped so `#`
+/// comments inside examples do not inflate the heading count. A body-level H1
+/// counts as a title when the frontmatter supplied none.
+fn analyze_instruction_structure(body: &[u8]) -> InstructionStructure {
+    let text = match std::str::from_utf8(body) {
+        Ok(t) => t,
+        Err(_) => return InstructionStructure::default(),
+    };
+    let mut out = InstructionStructure::default();
+    let trimmed = text.trim_start_matches(['\u{feff}', ' ', '\t', '\r', '\n']);
+
+    // Frontmatter block between the first two `---` fences.
+    let mut body_start = 0usize;
+    if trimmed.starts_with("---") {
+        let after = &trimmed[3..];
+        if let Some(end) = after.find("\n---") {
+            out.has_frontmatter = true;
+            let front = &after[..end];
+            for line in front.lines() {
+                let l = line.trim();
+                for key in ["name:", "title:"] {
+                    if let Some(rest) = l.strip_prefix(key) {
+                        if !rest.trim().trim_matches(['"', '\'']).is_empty() {
+                            out.has_title = true;
+                        }
+                    }
+                }
+                if let Some(rest) = l.strip_prefix("description:") {
+                    if !rest.trim().trim_matches(['"', '\'']).is_empty() {
+                        out.has_description = true;
+                    }
+                }
+            }
+            // Advance the heading scan past the closing fence: 3 for the leading
+            // `---`, `end` to the "\n---", plus 4 for the "\n---" itself.
+            body_start = 3 + end + 4;
+        }
+    }
+
+    // Count ATX headings in the body region, skipping fenced code blocks.
+    let scan = trimmed.get(body_start..).unwrap_or("");
+    let mut in_fence = false;
+    for line in scan.lines() {
+        let l = line.trim_start();
+        if l.starts_with("```") || l.starts_with("~~~") {
+            in_fence = !in_fence;
+            continue;
+        }
+        if in_fence {
+            continue;
+        }
+        // ATX heading: 1..=6 leading '#' (ASCII, so byte offset == count)
+        // followed by a space (CommonMark requires the space).
+        let hashes = l.chars().take_while(|&c| c == '#').count();
+        if (1..=6).contains(&hashes) && l[hashes..].starts_with(' ') {
+            out.heading_count = out.heading_count.saturating_add(1);
+            // A body H1 supplies a title when the frontmatter had none.
+            if hashes == 1 && !out.has_title {
+                out.has_title = true;
+            }
+        }
+    }
+    out
+}
+
+/// Classify a Cursor `.mdc` rule as `always` or `conditional` from its leading
+/// YAML frontmatter block. Only `alwaysApply: true` counts as always-loaded;
+/// glob-scoped (`globs:`) and description-only (agent-requestable) rules are
+/// conditional. A rule with no parseable frontmatter defaults to conditional so
+/// the context-tax estimate is not inflated by ambiguous artifacts.
+fn classify_rule_load(body: &[u8]) -> &'static str {
+    let text = match std::str::from_utf8(body) {
+        Ok(t) => t,
+        Err(_) => return "conditional",
+    };
+    let trimmed = text.trim_start_matches(['\u{feff}', ' ', '\t', '\r', '\n']);
+    if !trimmed.starts_with("---") {
+        return "conditional";
+    }
+    // Isolate the frontmatter block between the first two `---` fences.
+    let after = &trimmed[3..];
+    let front = match after.find("\n---") {
+        Some(i) => &after[..i],
+        None => after,
+    };
+    for line in front.lines() {
+        let l = line.trim();
+        if let Some(rest) = l.strip_prefix("alwaysApply:") {
+            if rest.trim().eq_ignore_ascii_case("true") {
+                return "always";
+            }
+        }
+    }
+    "conditional"
+}
+
+/// Workspace-root top-level instruction files (project-scoped, always loaded).
+const WORKSPACE_TOPLEVEL_INSTRUCTION_FILES: &[(&str, &str)] = &[
+    ("AGENTS.md", "instruction"),
+    ("CLAUDE.md", "instruction"),
+    ("GEMINI.md", "instruction"),
+    ("CODEX.md", "instruction"),
+    (".cursorrules", "instruction"),
+    (".github/copilot-instructions.md", "instruction"),
+];
+
+/// Workspace-root config directories walked for project-scoped instruction /
+/// skill / rule artifacts. Each is treated like a per-agent config dir: its
+/// top-level instruction files plus the [`INSTRUCTION_SUBDIRS`] allowlist.
+const WORKSPACE_CONFIG_DIRS: &[&str] = &[".cursor", ".claude"];
+
+/// Discover a *workspace repository's* instruction / skill / rule / command /
+/// subagent files and project them as content-hashed `file` SBOM components,
+/// tagged `edamame:scope=workspace`. Mirrors
+/// [`discover_agent_instruction_components`] but roots the walk at a project
+/// directory (`<root>/.cursor`, `<root>/.claude`, and top-level `AGENTS.md` /
+/// `CLAUDE.md` / `.github/copilot-instructions.md`). Bounded (depth + count +
+/// size) and limited to the same allowlist, so transcript / session stores are
+/// never scanned. Bodies are hashed, never stored (invariant I5).
+pub fn discover_workspace_instruction_components(workspace_root: &Path) -> Vec<SbomComponent> {
+    const MAX_FILES: usize = 256;
+    const MAX_DEPTH: usize = 4;
+    const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
+
+    if !workspace_root.is_dir() {
+        return Vec::new();
+    }
+    let ws_label = workspace_root
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "workspace".to_string());
+    let agent_scope = format!("workspace:{ws_label}");
+
+    let mut found: Vec<(PathBuf, &'static str)> = Vec::new();
+
+    // Top-level workspace instruction files.
+    for (rel, kind) in WORKSPACE_TOPLEVEL_INSTRUCTION_FILES {
+        if found.len() >= MAX_FILES {
+            break;
+        }
+        let p = workspace_root.join(rel);
+        if p.is_file() {
+            found.push((p, kind));
+        }
+    }
+
+    // `.cursor` / `.claude` config dirs at the workspace root: reuse the same
+    // top-level classification + INSTRUCTION_SUBDIRS allowlist as per-agent.
+    for cfg in WORKSPACE_CONFIG_DIRS {
+        if found.len() >= MAX_FILES {
+            break;
+        }
+        let cfg_dir = workspace_root.join(cfg);
+        if !cfg_dir.is_dir() {
+            continue;
+        }
+        if let Ok(entries) = std::fs::read_dir(&cfg_dir) {
+            for entry in entries.flatten() {
+                if found.len() >= MAX_FILES {
+                    break;
+                }
+                let path = entry.path();
+                if !entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
+                    continue;
+                }
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    if let Some(kind) = classify_toplevel_instruction(name) {
+                        found.push((path, kind));
+                    }
+                }
+            }
+        }
+        for (subdir, kind) in INSTRUCTION_SUBDIRS {
+            if found.len() >= MAX_FILES {
+                break;
+            }
+            let root = cfg_dir.join(subdir);
+            if root.is_dir() {
+                collect_instruction_files(&root, kind, MAX_DEPTH, &mut found, MAX_FILES);
+            }
+        }
+    }
+
+    found.sort_by(|a, b| a.0.cmp(&b.0));
+    found.dedup_by(|a, b| a.0 == b.0);
+
+    let mut out: Vec<SbomComponent> = Vec::new();
+    for (path, kind) in found.into_iter().take(MAX_FILES) {
+        if let Some(mut comp) =
+            instruction_file_component(workspace_root, &agent_scope, &path, kind, MAX_FILE_BYTES)
+        {
+            comp.properties
+                .insert("edamame:scope".to_string(), "workspace".to_string());
+            comp.properties
+                .insert("edamame:workspace".to_string(), ws_label.clone());
+            out.push(comp);
+        }
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
+// Workspace-root derivation + per-workspace instruction inventory
+// ---------------------------------------------------------------------------
+
+/// Maximum number of `-`-split tokens fused into a single path segment while
+/// disambiguating a project slug. Bounds the separator-combination search to
+/// `2^(MAX_SEGMENT_TOKENS - 1)` candidates per segment.
+const MAX_SEGMENT_TOKENS: usize = 6;
+
+/// Upper bound on the number of `-`-split tokens in a slug we will attempt to
+/// resolve. Guards against pathological `source_path` values.
+const MAX_SLUG_TOKENS: usize = 64;
+
+/// Cap on the number of distinct workspace roots resolved per inventory pass.
+const MAX_WORKSPACE_ROOTS: usize = 64;
+
+/// Extract the encoded project slug from a Cursor/Claude transcript
+/// `source_path`. Both encode the workspace as the path component immediately
+/// after a `projects` directory:
+///
+/// - Cursor: `~/.cursor/projects/<slug>/agent-transcripts/<uuid>.jsonl`
+/// - Claude: `~/.claude/projects/<slug>/<uuid>.jsonl`
+///
+/// Returns `None` for agents that do not use this scheme.
+pub fn project_slug_from_source_path(source_path: &str) -> Option<String> {
+    let comps: Vec<String> = Path::new(source_path)
+        .components()
+        .filter_map(|c| match c {
+            std::path::Component::Normal(s) => Some(s.to_string_lossy().to_string()),
+            _ => None,
+        })
+        .collect();
+    for i in 0..comps.len() {
+        if comps[i] == "projects" && i + 1 < comps.len() {
+            let slug = &comps[i + 1];
+            if !slug.is_empty() {
+                return Some(slug.clone());
+            }
+        }
+    }
+    None
+}
+
+/// Resolve a dash-encoded project slug back to an existing absolute directory,
+/// using the filesystem to disambiguate `-` (which the slug scheme uses for both
+/// path separators AND literal `-`/`_` characters in directory names). Greedy
+/// longest-segment match with an `is_dir()` check at each step. Returns `None`
+/// when no existing directory can be reconstructed.
+pub fn resolve_slug_to_existing_dir(slug: &str) -> Option<PathBuf> {
+    resolve_slug_under(Path::new(std::path::MAIN_SEPARATOR_STR), slug)
+}
+
+/// Filesystem-parameterized core of [`resolve_slug_to_existing_dir`]; walks the
+/// slug tokens under `base_root`. Split out so unit tests can drive it against a
+/// tempdir instead of the real root.
+pub fn resolve_slug_under(base_root: &Path, slug: &str) -> Option<PathBuf> {
+    // A leading '-' (Claude's `-Users-...`) encodes the root '/'; splitting on
+    // '-' and dropping empties normalizes that away.
+    let tokens: Vec<&str> = slug.split('-').filter(|t| !t.is_empty()).collect();
+    if tokens.is_empty() || tokens.len() > MAX_SLUG_TOKENS {
+        return None;
+    }
+
+    let mut base = base_root.to_path_buf();
+    let mut i = 0usize;
+    while i < tokens.len() {
+        let max_take = (tokens.len() - i).min(MAX_SEGMENT_TOKENS);
+        let mut advanced = false;
+        // Longest segment first so `edamame_core` wins over `edamame`.
+        for take in (1..=max_take).rev() {
+            let seg_tokens = &tokens[i..i + take];
+            let gaps = seg_tokens.len() - 1;
+            let combos: u32 = 1 << gaps; // gaps <= MAX_SEGMENT_TOKENS-1 (=5)
+            let mut matched = false;
+            for mask in 0..combos {
+                let mut seg = String::new();
+                for (idx, tok) in seg_tokens.iter().enumerate() {
+                    if idx > 0 {
+                        // bit set -> '_', clear -> '-'
+                        seg.push(if (mask >> (idx - 1)) & 1 == 1 {
+                            '_'
+                        } else {
+                            '-'
+                        });
+                    }
+                    seg.push_str(tok);
+                }
+                let cand = base.join(&seg);
+                if cand.is_dir() {
+                    base = cand;
+                    i += take;
+                    matched = true;
+                    break;
+                }
+            }
+            if matched {
+                advanced = true;
+                break;
+            }
+        }
+        if !advanced {
+            return None;
+        }
+    }
+
+    if base.is_dir() {
+        Some(base)
+    } else {
+        None
+    }
+}
+
+/// Derive the workspace root directory for a session from its transcript
+/// `source_path`: decode the project slug, then reconstruct + verify the path on
+/// disk. Returns `None` for agents without the `projects/<slug>` scheme or when
+/// the directory can no longer be found (moved/deleted workspace).
+pub fn workspace_root_from_source_path(source_path: &str) -> Option<PathBuf> {
+    let slug = project_slug_from_source_path(source_path)?;
+    resolve_slug_to_existing_dir(&slug)
+}
+
+/// A single workspace repository's discovered instruction inventory.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceInventory {
+    /// Canonical project slug (from `project_slug_from_source_path`) of the first
+    /// transcript source path that resolved to this root. Empty when the source
+    /// path carried no `projects/<slug>` scheme. Lets callers join per-session
+    /// usage (keyed by decoded slug) back to this resolved root's label.
+    pub slug: String,
+    /// Absolute workspace-root directory that was resolved + scanned.
+    pub root: String,
+    /// Short workspace label (the root's final path component).
+    pub label: String,
+    /// Project-scoped instruction / skill / rule / command / subagent
+    /// components discovered under the root (tagged `edamame:scope=workspace`).
+    pub components: Vec<SbomComponent>,
+}
+
+/// Resolve the distinct workspace roots referenced by a set of transcript
+/// `source_paths` and collect each root's project-scoped instruction inventory.
+///
+/// This is the single shared primitive behind both dispatch paths of the
+/// self-augmentation report: the standalone core calls it directly, and the
+/// (sandboxed) macOS app reaches it through the `collect_workspace_inventory`
+/// helper utility. Source paths that carry no `projects/<slug>` scheme, or whose
+/// slug no longer resolves to an on-disk directory, are silently skipped.
+/// Bounded to [`MAX_WORKSPACE_ROOTS`] distinct roots so a noisy transcript set
+/// cannot fan out an unbounded filesystem walk.
+pub fn collect_workspace_inventories(source_paths: &[String]) -> Vec<WorkspaceInventory> {
+    let mut seen: std::collections::BTreeSet<PathBuf> = std::collections::BTreeSet::new();
+    let mut out: Vec<WorkspaceInventory> = Vec::new();
+    for sp in source_paths {
+        if out.len() >= MAX_WORKSPACE_ROOTS {
+            break;
+        }
+        let root = match workspace_root_from_source_path(sp) {
+            Some(r) => r,
+            None => continue,
+        };
+        if !seen.insert(root.clone()) {
+            continue;
+        }
+        let slug = project_slug_from_source_path(sp).unwrap_or_default();
+        let label = root
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "workspace".to_string());
+        let components = discover_workspace_instruction_components(&root);
+        out.push(WorkspaceInventory {
+            slug,
+            root: root.to_string_lossy().to_string(),
+            label,
+            components,
+        });
+    }
+    out
 }
 
 /// Cap on the number of distinct models projected per agent SBOM.
@@ -5544,5 +6543,468 @@ User: please refactor this function
         let diff = diff_sboms(None, &current);
         assert!(!diff.baseline_present);
         assert!(sbom_drift_alarm("cursor", "cursor-inst", &diff).is_none());
+    }
+
+    #[test]
+    fn classify_rule_load_reads_always_apply_frontmatter() {
+        let always = b"---\ndescription: x\nglobs:\nalwaysApply: true\n---\nbody";
+        assert_eq!(classify_rule_load(always), "always");
+        // alwaysApply true is case-insensitive on the value.
+        let always_caps = b"---\nalwaysApply: TRUE\n---\nbody";
+        assert_eq!(classify_rule_load(always_caps), "always");
+        // Glob-scoped (auto-attached) rule -> conditional.
+        let scoped = b"---\ndescription: x\nglobs: **/*.rs\nalwaysApply: false\n---\nbody";
+        assert_eq!(classify_rule_load(scoped), "conditional");
+        // Description-only (agent-requestable) rule -> conditional.
+        let requestable = b"---\ndescription: only when relevant\n---\nbody";
+        assert_eq!(classify_rule_load(requestable), "conditional");
+        // No frontmatter at all -> conditional (do not inflate context tax).
+        let bare = b"# just a heading\nsome prose";
+        assert_eq!(classify_rule_load(bare), "conditional");
+    }
+
+    #[test]
+    fn analyze_instruction_structure_scores_authoring_quality() {
+        // Fully authored skill: frontmatter name + description + 3 headings.
+        let full = b"---\nname: security-posture\ndescription: Assess posture\n---\n\
+                     # Security posture\n\n## Usage\ntext\n\n## Notes\nmore";
+        let s = analyze_instruction_structure(full);
+        assert!(s.has_frontmatter);
+        assert!(s.has_title);
+        assert!(s.has_description);
+        assert_eq!(s.heading_count, 3);
+        assert_eq!(s.quality(), 100);
+
+        // Thin stub: frontmatter present but no description and no headings.
+        let thin = b"---\nname: stub\n---\njust one line of body";
+        let s = analyze_instruction_structure(thin);
+        assert!(s.has_frontmatter);
+        assert!(s.has_title); // name supplies a title
+        assert!(!s.has_description);
+        assert_eq!(s.heading_count, 0);
+        assert_eq!(s.quality(), 20); // title only
+
+        // Body-only prose with an H1 and two more headings, no frontmatter.
+        let prose = b"# Title\nintro\n## A\nx\n## B\ny";
+        let s = analyze_instruction_structure(prose);
+        assert!(!s.has_frontmatter);
+        assert!(s.has_title); // body H1 counts as a title
+        assert!(!s.has_description);
+        assert_eq!(s.heading_count, 3);
+        assert_eq!(s.quality(), 60); // title(20) + headings>=1(25) + >=3(15)
+
+        // Fenced code block `#` lines must not inflate the heading count.
+        let fenced = b"# Real\n```\n# not a heading\n## also not\n```\n## Real2";
+        let s = analyze_instruction_structure(fenced);
+        assert_eq!(s.heading_count, 2);
+
+        // Empty body -> zero everything.
+        let s = analyze_instruction_structure(b"");
+        assert!(!s.has_frontmatter);
+        assert_eq!(s.heading_count, 0);
+        assert_eq!(s.quality(), 0);
+    }
+
+    #[test]
+    fn classify_instruction_load_by_kind() {
+        // Top-level instruction files and memories are always in context.
+        assert_eq!(
+            classify_instruction_load("instruction", b"anything"),
+            "always"
+        );
+        assert_eq!(classify_instruction_load("memory", b"anything"), "always");
+        // Progressive-disclosure artifacts are conditional regardless of body.
+        assert_eq!(
+            classify_instruction_load("skill", b"anything"),
+            "conditional"
+        );
+        assert_eq!(
+            classify_instruction_load("command", b"anything"),
+            "conditional"
+        );
+        assert_eq!(
+            classify_instruction_load("subagent", b"anything"),
+            "conditional"
+        );
+        // Rules defer to frontmatter classification.
+        assert_eq!(
+            classify_instruction_load("rule", b"---\nalwaysApply: true\n---\n"),
+            "always"
+        );
+    }
+
+    #[test]
+    fn extract_instruction_refs_picks_up_instruction_paths_only() {
+        let body = br#"# Orchestrator skill
+
+See the [code-update](../code-update/SKILL.md) skill and the
+[divergence monitor](skills/divergence-monitor/SKILL.md).
+Also load @rules/invariants.mdc before editing.
+Read the full policy at https://example.com/docs/policy.md (web link, ignore).
+Unrelated config.json mentioned in prose should be ignored.
+Absolute ref: /Users/dev/.claude/skills/deploy/SKILL.md
+"#;
+        let refs = extract_instruction_refs(body);
+        assert!(
+            refs.iter().any(|r| r.ends_with("code-update/SKILL.md")),
+            "relative skill ref missing: {refs:?}"
+        );
+        assert!(
+            refs.contains(&"skills/divergence-monitor/SKILL.md".to_string()),
+            "dir-segment skill ref missing: {refs:?}"
+        );
+        assert!(
+            refs.contains(&"rules/invariants.mdc".to_string()),
+            "@-prefixed rule ref missing: {refs:?}"
+        );
+        assert!(
+            refs.iter()
+                .any(|r| r.ends_with(".claude/skills/deploy/SKILL.md")),
+            "absolute skill ref missing: {refs:?}"
+        );
+        // Web link and bare prose config.json are NOT instruction refs.
+        assert!(
+            !refs.iter().any(|r| r.contains("example.com")),
+            "web link leaked as ref: {refs:?}"
+        );
+        assert!(
+            !refs.iter().any(|r| r == "config.json"),
+            "bare prose filename leaked as ref: {refs:?}"
+        );
+    }
+
+    #[test]
+    fn extract_instruction_refs_is_bounded_and_deduped() {
+        let mut body = String::new();
+        for i in 0..200 {
+            body.push_str(&format!(
+                "[x](skills/dup/SKILL.md) [y](skills/n{i}/SKILL.md)\n"
+            ));
+        }
+        let refs = extract_instruction_refs(body.as_bytes());
+        assert!(
+            refs.len() <= MAX_INSTRUCTION_REFS,
+            "unbounded: {}",
+            refs.len()
+        );
+        // Deduped: the repeated `skills/dup/SKILL.md` appears at most once.
+        assert_eq!(
+            refs.iter().filter(|r| *r == "skills/dup/SKILL.md").count(),
+            1
+        );
+    }
+
+    #[test]
+    fn instruction_components_carry_abspath_and_refs() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+        let skill_dir = root.join(".claude").join("skills").join("orchestrator");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            b"# orchestrator\nUses [code-update](../code-update/SKILL.md).\n",
+        )
+        .unwrap();
+
+        let comps = discover_workspace_instruction_components(root);
+        let orch = comps
+            .iter()
+            .find(|c| c.name == "SKILL.md")
+            .expect("skill component present");
+        let abspath = orch
+            .properties
+            .get("edamame:abspath")
+            .expect("abspath property present");
+        assert!(
+            std::path::Path::new(abspath).is_absolute(),
+            "abspath not absolute: {abspath}"
+        );
+        let refs = orch
+            .properties
+            .get("edamame:refs")
+            .expect("refs property present");
+        assert!(
+            refs.contains("code-update/SKILL.md"),
+            "refs missing edge: {refs}"
+        );
+    }
+
+    #[test]
+    fn read_instruction_content_metadata_only_hides_body() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        let skill = home.join(".cursor").join("skills").join("demo");
+        std::fs::create_dir_all(&skill).unwrap();
+        let path = skill.join("SKILL.md");
+        std::fs::write(&path, b"# demo\nsome body content\n").unwrap();
+
+        let res = read_instruction_content(&path, home, "metadata_only");
+        assert!(res.found, "should resolve: {:?}", res.error);
+        assert_eq!(res.tier, "metadata_only");
+        assert!(res.content.is_empty(), "body leaked at metadata-only tier");
+        assert!(res.size_bytes > 0);
+        assert!(!res.redacted);
+    }
+
+    #[test]
+    fn read_instruction_content_redacts_secret_excerpt() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        let skill = home.join(".cursor").join("skills").join("deploy");
+        std::fs::create_dir_all(&skill).unwrap();
+        let path = skill.join("SKILL.md");
+        std::fs::write(
+            &path,
+            b"# deploy\nexport API_KEY = sk-abcdef0123456789abcdef0123\nprose line stays\n",
+        )
+        .unwrap();
+
+        let res = read_instruction_content(&path, home, "redacted_excerpt");
+        assert!(res.found, "should resolve: {:?}", res.error);
+        assert_eq!(res.tier, "redacted_excerpt");
+        assert!(res.redacted, "secret not masked");
+        assert!(res.redacted_lines >= 1);
+        assert!(
+            !res.content.contains("sk-abcdef0123456789abcdef0123"),
+            "raw secret leaked: {}",
+            res.content
+        );
+        assert!(res.content.contains("REDACTED"), "no redaction marker");
+        assert!(res.content.contains("prose line stays"), "prose dropped");
+    }
+
+    #[test]
+    fn read_instruction_content_forensic_returns_full_unredacted() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        let skill = home.join(".cursor").join("skills").join("full");
+        std::fs::create_dir_all(&skill).unwrap();
+        let path = skill.join("SKILL.md");
+        let body = "# full\nline one\nline two\n";
+        std::fs::write(&path, body.as_bytes()).unwrap();
+
+        let res = read_instruction_content(&path, home, "forensic_full_content");
+        assert!(res.found, "should resolve: {:?}", res.error);
+        assert_eq!(res.tier, "forensic_full_content");
+        assert!(!res.redacted, "forensic tier must not redact");
+        assert_eq!(res.content, body);
+        assert!(!res.truncated);
+    }
+
+    #[test]
+    fn read_instruction_content_refuses_non_instruction_path() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        // A plain file NOT under any instruction subdir and not a top-level
+        // instruction file name.
+        let path = home.join("notes.md");
+        std::fs::write(&path, b"secret plans").unwrap();
+
+        let res = read_instruction_content(&path, home, "forensic_full_content");
+        assert!(!res.found, "arbitrary .md read must be refused");
+        assert!(res.content.is_empty());
+        assert!(res.error.is_some());
+    }
+
+    #[test]
+    fn read_instruction_content_refuses_outside_home() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        // Instruction-shaped path, but living OUTSIDE the declared home.
+        let other = tmp.path().join("elsewhere").join("skills").join("evil");
+        std::fs::create_dir_all(&other).unwrap();
+        let path = other.join("SKILL.md");
+        std::fs::write(&path, b"# evil\nbody").unwrap();
+
+        let res = read_instruction_content(&path, &home, "forensic_full_content");
+        assert!(!res.found, "read outside home must be refused");
+        assert!(res.error.as_deref().unwrap_or("").contains("home"));
+    }
+
+    #[test]
+    fn read_instruction_content_unknown_tier_is_metadata_only() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        let skill = home.join(".cursor").join("skills").join("demo");
+        std::fs::create_dir_all(&skill).unwrap();
+        let path = skill.join("SKILL.md");
+        std::fs::write(&path, b"# demo\nbody\n").unwrap();
+
+        // A typo / unknown tier must collapse to the safest tier.
+        let res = read_instruction_content(&path, home, "full_send_please");
+        assert_eq!(res.tier, "metadata_only");
+        assert!(res.content.is_empty());
+    }
+
+    #[test]
+    fn discover_workspace_instruction_components_walks_project_dirs() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+
+        // Top-level instruction file (always).
+        std::fs::write(root.join("AGENTS.md"), b"# agents guide\n").unwrap();
+
+        // .cursor/rules with one always-applied and one glob-scoped rule.
+        let rules = root.join(".cursor").join("rules");
+        std::fs::create_dir_all(&rules).unwrap();
+        std::fs::write(
+            rules.join("always.mdc"),
+            b"---\nalwaysApply: true\n---\nalways on",
+        )
+        .unwrap();
+        std::fs::write(
+            rules.join("scoped.mdc"),
+            b"---\nglobs: **/*.rs\nalwaysApply: false\n---\nscoped",
+        )
+        .unwrap();
+
+        // .claude/skills with a SKILL.md (conditional).
+        let skill_dir = root.join(".claude").join("skills").join("demo");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(skill_dir.join("SKILL.md"), b"# demo skill\nbody").unwrap();
+
+        // A transcript-store-looking dir MUST NOT be walked.
+        let projects = root.join(".claude").join("projects");
+        std::fs::create_dir_all(&projects).unwrap();
+        std::fs::write(projects.join("session.jsonl"), b"{\"noise\":true}\n").unwrap();
+
+        let comps = discover_workspace_instruction_components(root);
+
+        // AGENTS.md + 2 rules + 1 skill == 4, and none from projects/.
+        assert_eq!(comps.len(), 4, "components: {comps:#?}");
+        assert!(comps
+            .iter()
+            .all(|c| c.properties.get("edamame:scope").map(String::as_str) == Some("workspace")));
+        assert!(comps
+            .iter()
+            .all(|c| c.properties.contains_key("edamame:size_bytes")));
+
+        let by_name = |n: &str| comps.iter().find(|c| c.name == n).unwrap();
+        assert_eq!(
+            by_name("AGENTS.md").properties.get("edamame:load"),
+            Some(&"always".to_string())
+        );
+        assert_eq!(
+            by_name("always.mdc").properties.get("edamame:load"),
+            Some(&"always".to_string())
+        );
+        assert_eq!(
+            by_name("scoped.mdc").properties.get("edamame:load"),
+            Some(&"conditional".to_string())
+        );
+        assert_eq!(
+            by_name("SKILL.md").properties.get("edamame:load"),
+            Some(&"conditional".to_string())
+        );
+        // The workspace label is the project dir name on every component.
+        let ws = root.file_name().unwrap().to_string_lossy().to_string();
+        assert!(comps
+            .iter()
+            .all(|c| c.properties.get("edamame:workspace") == Some(&ws)));
+    }
+
+    #[test]
+    fn project_slug_extracted_for_cursor_and_claude() {
+        assert_eq!(
+            project_slug_from_source_path(
+                "/Users/x/.cursor/projects/Users-x-Programming-foo/agent-transcripts/abc.jsonl"
+            )
+            .as_deref(),
+            Some("Users-x-Programming-foo")
+        );
+        assert_eq!(
+            project_slug_from_source_path("/Users/x/.claude/projects/-Users-x-foo/abc.jsonl")
+                .as_deref(),
+            Some("-Users-x-foo")
+        );
+        // No `projects` component -> no slug.
+        assert_eq!(
+            project_slug_from_source_path("/Users/x/.codex/history/abc.jsonl"),
+            None
+        );
+    }
+
+    #[test]
+    fn resolve_slug_disambiguates_underscores_and_dashes() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("Programming").join("edamame_core")).unwrap();
+        std::fs::create_dir_all(root.join("my-repo")).unwrap();
+
+        // Underscore encoded as '-' in the slug is recovered via is_dir().
+        assert_eq!(
+            resolve_slug_under(root, "Programming-edamame-core"),
+            Some(root.join("Programming").join("edamame_core"))
+        );
+        // A literal dash resolves too.
+        assert_eq!(
+            resolve_slug_under(root, "my-repo"),
+            Some(root.join("my-repo"))
+        );
+        assert_eq!(resolve_slug_under(root, "does-not-exist"), None);
+    }
+
+    #[test]
+    fn resolve_slug_prefers_longest_existing_segment() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("edamame")).unwrap();
+        std::fs::create_dir_all(root.join("edamame_core")).unwrap();
+        assert_eq!(
+            resolve_slug_under(root, "edamame-core"),
+            Some(root.join("edamame_core"))
+        );
+    }
+
+    #[test]
+    fn collect_workspace_inventories_dedupes_and_skips_unresolvable() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+        // A real workspace with a top-level AGENTS.md.
+        let ws = root.join("Programming").join("edamame_core");
+        std::fs::create_dir_all(&ws).unwrap();
+        std::fs::write(ws.join("AGENTS.md"), b"# guide\n").unwrap();
+
+        // Build two Cursor-style source paths that decode to the SAME workspace
+        // (different transcript uuids) plus one that cannot resolve. The public
+        // collector resolves under the real FS root '/', so the slug it consumes
+        // is the full absolute path (leading '/' dropped, separators -> '-').
+        let base_slug = ws
+            .strip_prefix(std::path::Path::new(std::path::MAIN_SEPARATOR_STR))
+            .unwrap_or(&ws)
+            .to_string_lossy()
+            .replace(std::path::MAIN_SEPARATOR, "-")
+            .replace('_', "-");
+        let sp1 = format!("/home/.cursor/projects/{base_slug}/agent-transcripts/a.jsonl");
+        let sp2 = format!("/home/.cursor/projects/{base_slug}/agent-transcripts/b.jsonl");
+        let sp3 = "/home/.cursor/projects/totally-missing-xyz/agent-transcripts/c.jsonl";
+
+        // resolve_slug_under walks the slug tokens relative to its base_root, so
+        // drive determinism against the tempdir with the slug *relative to root*
+        // (the full path prefix `var-folders-...` does not exist under `root`).
+        let rel_slug = ws
+            .strip_prefix(root)
+            .unwrap()
+            .to_string_lossy()
+            .replace(std::path::MAIN_SEPARATOR, "-")
+            .replace('_', "-");
+        assert_eq!(
+            resolve_slug_under(root, &rel_slug),
+            Some(ws.clone()),
+            "sanity: slug decodes to the workspace"
+        );
+
+        // The public collector resolves under the real FS root, so with a
+        // tempdir path it will return empty; assert it never panics and skips
+        // the unresolvable path.
+        let inv = collect_workspace_inventories(&[sp1.clone(), sp2.clone(), sp3.to_string()]);
+        // Under the real root these tempdir slugs won't resolve; the contract
+        // we assert here is bounded, panic-free, de-duplicated behavior.
+        assert!(
+            inv.len() <= 1,
+            "at most one distinct root, got {}",
+            inv.len()
+        );
     }
 }

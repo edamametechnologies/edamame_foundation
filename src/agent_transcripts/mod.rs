@@ -134,6 +134,24 @@ pub struct CollectedRawSession {
     /// as [`economics_raw_text`].
     #[serde(default)]
     pub economics_truncated: bool,
+    /// Cursor-only context-window occupancy snapshot for this conversation,
+    /// read from Cursor's local Electron `state.vscdb`
+    /// (`composerData:<id>.contextTokensUsed` / `.contextTokenLimit` /
+    /// `.contextUsagePercent`, where `<id>` is exactly [`session_key`]). This is
+    /// the share of the model's context window the conversation currently fills
+    /// -- it is NOT billed token usage and NOT a dollar cost. Cursor exposes
+    /// neither token usage nor cost on disk (both live server-side), so this is
+    /// the only economics-adjacent signal recoverable locally for Cursor.
+    /// `None` for every other agent, and for Cursor conversations whose
+    /// `composerData` row is absent or carries no context numbers.
+    /// `#[serde(default)]` for the same rolling helper/core compatibility reason
+    /// as [`economics_raw_text`] (an older helper omits these fields entirely).
+    #[serde(default)]
+    pub context_tokens_used: Option<u64>,
+    #[serde(default)]
+    pub context_token_limit: Option<u64>,
+    #[serde(default)]
+    pub context_usage_percent: Option<f64>,
 }
 
 /// Derive `derived_scope_any_lineage_paths` for an agent from its
@@ -315,6 +333,57 @@ pub struct SessionEconomics {
     // is more robust than parsing a possibly-stale `~/.cursor/mcp.json` /
     // `~/.claude.json`. Empty when the session invoked no MCP-namespaced tool.
     pub mcp_calls_by_server: std::collections::BTreeMap<String, u64>,
+
+    // ---- Skill / command / rule usage attribution (Self-Augmentation) -------
+    //
+    // Counts of skill-bearing invocations attributed to a normalized skill id,
+    // one of `skill:<slug>`, `command:<slug>`, `rule:<slug>`, `subagent:<slug>`.
+    // Derived deterministically from the transcript's structured tool calls --
+    // explicit dispatch tools (`Skill`, `SlashCommand`, `Task`) and file-reads
+    // of skill/command/rule artifacts (a progressive-disclosure load counts as
+    // a use) -- plus leading `/command` tokens (and Claude Code's
+    // `<command-name>` marker) in user turns. This is the "which skills am I
+    // actually using" signal that the Self-Augmentation report joins against
+    // the on-disk SBOM inventory of AVAILABLE skills. Transcript-mined and
+    // heuristic: explicit `Skill`/slash-command hits are high precision;
+    // SKILL.md reads are a good proxy for progressive-disclosure loads. Empty
+    // for transcript shapes with no recognizable skill activity (e.g. Cursor
+    // `.txt` export with no tool blocks and no slash commands).
+    pub skill_invocations_by_name: std::collections::BTreeMap<String, u64>,
+
+    /// Counts of tool invocations attributed to each tool name (native + MCP),
+    /// e.g. `Read`, `Edit`, `Bash`, `mcp__edamame__get_score`. The per-tool
+    /// breakdown behind the aggregate `tool_calls`, feeding the "most/least used
+    /// tools" histogram. Empty for `.txt` transcripts that carry no structured
+    /// tool blocks (consistent with `has_token_data == false`).
+    pub tool_calls_by_name: std::collections::BTreeMap<String, u64>,
+
+    // ---- Deterministic "path directness" / friction signals -----------------
+    //
+    // Passive, LLM-free proxies for "did the model go straight to the point, or
+    // thrash back and forth". Derived from the per-turn `(tool, target)` call
+    // sequence the transcript records -- NOT from any outcome/quality oracle, so
+    // they measure observable REWORK, never "was the answer good". They are only
+    // meaningful for structured `.jsonl` transcripts (Claude Code / Codex /
+    // Claude Desktop / OpenClaw / Hermes) that carry typed `tool_use` /
+    // `function_call` blocks; Cursor's `.txt` export has no such blocks so all
+    // three stay zero/false for it (consistent with `has_token_data == false`).
+    //
+    /// Number of tool invocations whose `(tool_name, target)` signature already
+    /// appeared earlier in the SAME session -- re-reading the same file,
+    /// re-running the same command, re-grepping the same pattern. The purest
+    /// "going in circles" signal. `<= tool_calls`.
+    pub repeated_tool_calls: u64,
+    /// Number of tool invocations whose `(tool_name, target)` signature had
+    /// already ERRORED earlier in the same session (tried X, it failed, tried X
+    /// again). A strict-superset-worse form of a one-off error. `<= tool_calls`.
+    pub retried_after_error_calls: u64,
+    /// True when the session's FINAL tool result was an error -- the last action
+    /// the agent took failed and it did not recover before the transcript ended.
+    /// A weak, aggregate-only "clean finish" proxy (a single session ending
+    /// mid-work is noise; the RATE across many sessions of one model is the
+    /// signal). False when the session had no tool results at all.
+    pub ended_with_tool_error: bool,
 }
 
 /// One tool result the transcript flagged as an error
