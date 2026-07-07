@@ -1078,6 +1078,13 @@ pub fn parse_session_economics(
     // Self-Augmentation: per-skill and per-tool-name usage attribution.
     let mut skill_invocations_by_name: std::collections::BTreeMap<String, u64> =
         std::collections::BTreeMap::new();
+    // Absolute on-disk path a skill/command/rule artifact was actually read
+    // from, keyed by the same `kind:slug` id as `skill_invocations_by_name`.
+    // Populated only when the invocation was a file-read (the path the agent
+    // opened). Lets the augmentation report prove an artifact is on disk even
+    // when it lives in a sibling workspace root (multi-root Cursor sessions).
+    let mut skill_observed_paths: std::collections::BTreeMap<String, String> =
+        std::collections::BTreeMap::new();
     let mut tool_calls_by_name: std::collections::BTreeMap<String, u64> =
         std::collections::BTreeMap::new();
 
@@ -1263,8 +1270,19 @@ pub fn parse_session_economics(
                     // Skill / command / rule / subagent attribution from the
                     // structured call (explicit dispatch tool or a file-read of a
                     // skill/command/rule artifact).
-                    if let Some(skill_id) = skill_from_tool_call(tool_name, input.as_ref()) {
-                        *skill_invocations_by_name.entry(skill_id).or_insert(0) += 1;
+                    if let Some((skill_id, observed_path)) =
+                        skill_from_tool_call(tool_name, input.as_ref())
+                    {
+                        *skill_invocations_by_name
+                            .entry(skill_id.clone())
+                            .or_insert(0) += 1;
+                        if let Some(p) = observed_path {
+                            if !p.is_empty() {
+                                // First observed path wins; subsequent reads of
+                                // the same artifact keep the original.
+                                skill_observed_paths.entry(skill_id).or_insert(p);
+                            }
+                        }
                     }
                     let sig = tool_target_signature(tool_name, input.as_ref());
                     if !seen_tool_sigs.insert(sig.clone()) {
@@ -1432,6 +1450,7 @@ pub fn parse_session_economics(
         inferred_provider_errors,
         mcp_calls_by_server,
         skill_invocations_by_name,
+        skill_observed_paths,
         tool_calls_by_name,
         repeated_tool_calls,
         retried_after_error_calls,
@@ -1605,10 +1624,20 @@ pub fn instruction_join_id(kind: &str, relpath: &str) -> Option<String> {
 }
 
 /// Recognize a skill / command / rule / subagent invocation from a structured
-/// tool call and return a normalized skill id, else `None`. Covers explicit
-/// dispatch tools (`Skill`, `SlashCommand`, `Task`) and file-reads of
-/// skill/command/rule artifacts. Deterministic.
-fn skill_from_tool_call(tool_name: &str, input: Option<&serde_json::Value>) -> Option<String> {
+/// tool call and return `(normalized skill id, observed on-disk path)`, else
+/// `None`. Covers explicit dispatch tools (`Skill`, `SlashCommand`, `Task`) and
+/// file-reads of skill/command/rule artifacts. Deterministic.
+///
+/// The observed path is `Some(<absolute path>)` only for the file-read branch --
+/// the path the agent actually read. Name-only dispatch (`Skill`,
+/// `SlashCommand`, `Task`) carries no on-disk path so it yields `None` there.
+/// The path is used downstream to prove an artifact is on disk even when it
+/// lives in a sibling workspace root the session's `source_path` did not resolve
+/// to (multi-root Cursor workspaces), never to store body content (I5).
+fn skill_from_tool_call(
+    tool_name: &str,
+    input: Option<&serde_json::Value>,
+) -> Option<(String, Option<String>)> {
     let lower = tool_name.trim().to_ascii_lowercase();
     match lower.as_str() {
         "skill" => {
@@ -1617,7 +1646,7 @@ fn skill_from_tool_call(tool_name: &str, input: Option<&serde_json::Value>) -> O
                 if let Some(s) = obj.get(key).and_then(|v| v.as_str()) {
                     let slug = normalize_skill_slug(s);
                     if !slug.is_empty() {
-                        return Some(format!("skill:{slug}"));
+                        return Some((format!("skill:{slug}"), None));
                     }
                 }
             }
@@ -1634,7 +1663,7 @@ fn skill_from_tool_call(tool_name: &str, input: Option<&serde_json::Value>) -> O
                     Some(slug)
                 }
             })?;
-            Some(format!("command:{cmd}"))
+            Some((format!("command:{cmd}"), None))
         }
         "task" => {
             let obj = input?;
@@ -1643,7 +1672,7 @@ fn skill_from_tool_call(tool_name: &str, input: Option<&serde_json::Value>) -> O
             if slug.is_empty() {
                 None
             } else {
-                Some(format!("subagent:{slug}"))
+                Some((format!("subagent:{slug}"), None))
             }
         }
         other if is_instruction_read_tool(other) => {
@@ -1651,7 +1680,7 @@ fn skill_from_tool_call(tool_name: &str, input: Option<&serde_json::Value>) -> O
             for key in TOOL_TARGET_KEYS {
                 if let Some(p) = obj.get(*key).and_then(|v| v.as_str()) {
                     if let Some(id) = skill_from_path(p) {
-                        return Some(id);
+                        return Some((id, Some(p.trim().to_string())));
                     }
                 }
             }
@@ -2176,6 +2205,29 @@ mod economics_tests {
             Some(1)
         );
 
+        // Observed on-disk paths: only file-read invocations carry the path the
+        // agent opened; name-only dispatch (Skill / Task / slash command) yields
+        // no entry. This is the multi-root "prove it's on disk" signal.
+        assert_eq!(
+            econ.skill_observed_paths
+                .get("skill:dogfood-status")
+                .map(String::as_str),
+            Some("/repo/.cursor/skills/dogfood-status/SKILL.md")
+        );
+        assert_eq!(
+            econ.skill_observed_paths
+                .get("rule:invariants")
+                .map(String::as_str),
+            Some("/repo/.cursor/rules/invariants.mdc")
+        );
+        assert!(!econ
+            .skill_observed_paths
+            .contains_key("skill:security-posture"));
+        assert!(!econ.skill_observed_paths.contains_key("subagent:explore"));
+        assert!(!econ
+            .skill_observed_paths
+            .contains_key("command:fp-version-release"));
+
         // Per-tool-name breakdown counts every tool_use (native + dispatch).
         assert_eq!(econ.tool_calls_by_name.get("Read").copied(), Some(2));
         assert_eq!(econ.tool_calls_by_name.get("Skill").copied(), Some(1));
@@ -2227,6 +2279,7 @@ mod economics_tests {
         );
         let econ = parse_session_economics("s2", "/tmp/s2.jsonl", jsonl);
         assert!(econ.skill_invocations_by_name.is_empty());
+        assert!(econ.skill_observed_paths.is_empty());
         assert_eq!(econ.tool_calls_by_name.get("Read").copied(), Some(1));
     }
 

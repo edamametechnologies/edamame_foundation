@@ -351,6 +351,19 @@ pub struct SessionEconomics {
     // `.txt` export with no tool blocks and no slash commands).
     pub skill_invocations_by_name: std::collections::BTreeMap<String, u64>,
 
+    /// Absolute on-disk path a skill/command/rule artifact was actually read
+    /// from during the session, keyed by the same normalized `kind:slug` id as
+    /// `skill_invocations_by_name`. Populated only for invocations that were a
+    /// file-read of the artifact (the path the agent opened); name-only dispatch
+    /// (`Skill`, `SlashCommand`, `Task`) contributes no entry. This is the
+    /// "observed path" signal the Self-Augmentation report uses to mark a used
+    /// artifact as on-disk even when it lives in a sibling workspace root the
+    /// session's `source_path` did not resolve to (multi-root Cursor sessions),
+    /// and to render the artifact's parent folder in the capability graph. Only
+    /// the path is retained, never file contents (I5 no-body-content invariant).
+    /// Empty for transcripts with no file-read skill activity.
+    pub skill_observed_paths: std::collections::BTreeMap<String, String>,
+
     /// Counts of tool invocations attributed to each tool name (native + MCP),
     /// e.g. `Read`, `Edit`, `Bash`, `mcp__edamame__get_score`. The per-tool
     /// breakdown behind the aggregate `tool_calls`, feeding the "most/least used

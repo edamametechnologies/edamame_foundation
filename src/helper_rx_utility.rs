@@ -926,6 +926,37 @@ pub async fn utility_collect_workspace_inventory(
         .map_err(|e| anyhow::anyhow!("Failed to serialize workspace inventories: {}", e))
 }
 
+/// Confirm which observed instruction paths are absent on disk (a `NotFound`
+/// stat, symlinks followed). Like `utility_collect_workspace_inventory`, this
+/// crosses the macOS sandbox boundary on behalf of the (sandboxed) app so the
+/// user's actual project / drive directories are stat-able.
+///
+/// `arg1` is reserved (unused). `arg2` is a JSON object carrying the candidate
+/// paths: `{"paths": ["/Users/.../skills/x/SKILL.md"]}`. Returns a JSON array of
+/// the confirmed-absent subset; the caller drops exactly those and keeps
+/// everything else (fail-open).
+pub async fn utility_confirm_absent_instruction_paths(
+    _reserved: &str,
+    args_json: &str,
+) -> Result<String> {
+    #[derive(serde::Deserialize)]
+    struct Args {
+        paths: Vec<String>,
+    }
+
+    let args: Args = if args_json.trim().is_empty() {
+        Args { paths: Vec::new() }
+    } else {
+        serde_json::from_str(args_json).map_err(|e| {
+            anyhow::anyhow!("Failed to parse confirm_absent_instruction_paths args: {}", e)
+        })?
+    };
+
+    let absent = crate::agent_visibility::confirm_absent_instruction_paths(&args.paths);
+    serde_json::to_string(&absent)
+        .map_err(|e| anyhow::anyhow!("Failed to serialize absent instruction paths: {}", e))
+}
+
 #[cfg(all(
     any(target_os = "macos", target_os = "linux", target_os = "windows"),
     feature = "fim"

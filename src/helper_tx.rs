@@ -23,6 +23,7 @@ pub const UTILITY_ORDER_NAMES: &[&str] = &[
     "collect_agent_visibility",
     "collect_workspace_inventory",
     "compare_custom_whitelists",
+    "confirm_absent_instruction_paths",
     "create_custom_whitelists",
     "get_agent_plugin_status",
     "get_blacklisted_sessions",

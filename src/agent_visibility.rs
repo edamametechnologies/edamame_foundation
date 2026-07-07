@@ -1387,6 +1387,18 @@ const MAX_MCP_CONFIG_BYTES: u64 = 4 * 1024 * 1024;
 /// surface. Far above any realistic per-host MCP server count.
 const MAX_MCP_ENDPOINTS: usize = 512;
 
+/// Maximum directory depth walked under `~/.cursor/plugins/` when discovering
+/// plugin-shipped `mcp.json` files. Marketplace installs land at
+/// `plugins/cache/<publisher>/<name>/<hash>/mcp.json` (depth 4), so a small
+/// cap covers the real layout while bounding traversal of an adversarial or
+/// pathological plugin tree.
+const MAX_PLUGIN_SCAN_DEPTH: usize = 6;
+
+/// Maximum number of plugin `mcp.json` files parsed under `~/.cursor/plugins/`.
+/// A hard stop so a plugin cache stuffed with thousands of config files can't
+/// stall discovery. Well above any realistic installed-plugin count.
+const MAX_PLUGIN_MCP_FILES: usize = 128;
+
 /// Read a file, capping the read at `max_bytes`. Returns the UTF-8 lossy
 /// contents (truncation lands on a byte boundary; lossy decoding repairs any
 /// split multibyte sequence). Used for user/agent-writable config files whose
@@ -1408,6 +1420,13 @@ fn read_capped(path: &Path, max_bytes: u64) -> std::io::Result<String> {
 /// Bounded on two axes: each config read is capped at `MAX_MCP_CONFIG_BYTES`
 /// and the total endpoint count at `MAX_MCP_ENDPOINTS`, so the entire
 /// downstream visibility surface seeded from these endpoints stays bounded.
+///
+/// Beyond the per-agent global configs, Cursor marketplace plugins ship their
+/// own `mcp.json` under `~/.cursor/plugins/**` (not referenced by
+/// `~/.cursor/mcp.json`). Those are discovered separately via
+/// `discover_cursor_plugin_mcp_endpoints` and merged in (deduped by id) so a
+/// plugin like Notion / Slack / Sentry declaring a remote MCP endpoint is not
+/// invisible on the exposure surface.
 pub fn discover_mcp_endpoints(home: &Path) -> Vec<McpEndpoint> {
     let mut endpoints = Vec::new();
     'agents: for def in supported_agents::ordered_supported_agents() {
@@ -1439,6 +1458,99 @@ pub fn discover_mcp_endpoints(home: &Path) -> Vec<McpEndpoint> {
                     &path_str,
                     is_edamame,
                 ));
+            }
+        }
+    }
+    // Cursor marketplace plugins ship their own `mcp.json` under
+    // `~/.cursor/plugins/**`. Merge those endpoints in, deduped by id so a
+    // server also present in `~/.cursor/mcp.json` is not double-counted.
+    if endpoints.len() < MAX_MCP_ENDPOINTS {
+        let mut seen: BTreeSet<String> = endpoints.iter().map(|e| e.id.clone()).collect();
+        for ep in discover_cursor_plugin_mcp_endpoints(home) {
+            if endpoints.len() >= MAX_MCP_ENDPOINTS {
+                break;
+            }
+            if seen.insert(ep.id.clone()) {
+                endpoints.push(ep);
+            }
+        }
+    }
+    endpoints
+}
+
+/// Discover MCP endpoints declared by Cursor marketplace plugins.
+///
+/// Cursor installs plugins under `~/.cursor/plugins/` (marketplace installs at
+/// `plugins/cache/<publisher>/<name>/<hash>/`, local installs elsewhere in the
+/// tree). A plugin that integrates a remote MCP service ships its own
+/// `mcp.json` there; that file is NOT referenced by the user-level
+/// `~/.cursor/mcp.json`, so without this scan a plugin-provided endpoint (e.g.
+/// Notion / Slack / Sentry) is invisible to the exposure surface.
+///
+/// Plugin `mcp.json` files come in two shapes: the standard
+/// `{ "mcpServers": { ... } }` wrapper AND a bare object whose top-level keys
+/// are server names (`{ "notion": { "type": "http", "url": "..." } }`). Both
+/// are handled by `parse_mcp_json_with_bare_fallback`.
+///
+/// Traversal is bounded on three axes (depth, files parsed, and the global
+/// `MAX_MCP_ENDPOINTS` cap) and prunes `node_modules` / `.git` subtrees, so a
+/// large or adversarial plugin cache cannot stall discovery. All endpoints are
+/// attributed to the `cursor` agent and are never the EDAMAME bridge.
+fn discover_cursor_plugin_mcp_endpoints(home: &Path) -> Vec<McpEndpoint> {
+    let plugins_root = home.join(".cursor").join("plugins");
+    if !plugins_root.is_dir() {
+        return Vec::new();
+    }
+    let mut endpoints: Vec<McpEndpoint> = Vec::new();
+    let mut files_parsed = 0usize;
+    // Explicit stack DFS with a depth cap; the cap also breaks any symlink
+    // cycle without needing to track visited inodes.
+    let mut stack: Vec<(PathBuf, usize)> = vec![(plugins_root, 0)];
+    while let Some((dir, depth)) = stack.pop() {
+        if depth > MAX_PLUGIN_SCAN_DEPTH {
+            continue;
+        }
+        let read_dir = match std::fs::read_dir(&dir) {
+            Ok(rd) => rd,
+            Err(_) => continue,
+        };
+        for entry in read_dir.flatten() {
+            if endpoints.len() >= MAX_MCP_ENDPOINTS || files_parsed >= MAX_PLUGIN_MCP_FILES {
+                return endpoints;
+            }
+            let path = entry.path();
+            let file_type = match entry.file_type() {
+                Ok(ft) => ft,
+                Err(_) => continue,
+            };
+            if file_type.is_dir() {
+                // Prune vendored/VCS subtrees that never carry a plugin's own
+                // MCP config but can hold thousands of files.
+                let skip = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|n| n == "node_modules" || n == ".git")
+                    .unwrap_or(false);
+                if !skip {
+                    stack.push((path, depth + 1));
+                }
+            } else if file_type.is_file()
+                && path.file_name().map(|n| n == "mcp.json").unwrap_or(false)
+            {
+                files_parsed += 1;
+                let raw = match read_capped(&path, MAX_MCP_CONFIG_BYTES) {
+                    Ok(text) => text,
+                    Err(_) => continue,
+                };
+                let path_str = path.to_string_lossy().to_string();
+                for server in parse_mcp_json_with_bare_fallback(&raw) {
+                    if endpoints.len() >= MAX_MCP_ENDPOINTS {
+                        return endpoints;
+                    }
+                    // Plugin-provided servers are third-party integrations, never
+                    // EDAMAME's own bridge.
+                    endpoints.push(build_endpoint("cursor", server, &path_str, false));
+                }
             }
         }
     }
@@ -1549,6 +1661,51 @@ fn parse_mcp_json(raw: &str) -> Vec<RawMcpServer> {
     servers
 }
 
+/// Parse a plugin `mcp.json` that may use either the standard `mcpServers`
+/// wrapper OR a bare object whose top-level keys are server names. Tries the
+/// wrapper form first (via `parse_mcp_json`); if that yields nothing, falls
+/// back to treating each top-level object that looks like a server definition
+/// as a bare server entry. The bare-object fallback is scoped to plugin files
+/// only -- the global-config parser (`parse_mcp_json`) intentionally does NOT
+/// use it, so a config like `~/.claude.json` (many unrelated top-level keys) is
+/// never misinterpreted as a flat server map.
+fn parse_mcp_json_with_bare_fallback(raw: &str) -> Vec<RawMcpServer> {
+    let servers = parse_mcp_json(raw);
+    if !servers.is_empty() {
+        return servers;
+    }
+    let value: serde_json::Value = match serde_json::from_str(raw) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+    let Some(map) = value.as_object() else {
+        return Vec::new();
+    };
+    let mut bare = Vec::new();
+    for (name, entry) in map {
+        // Skip the wrapper keys `parse_mcp_json` already handled (defensive:
+        // reached only when those produced no servers).
+        if name == "mcpServers" || name == "projects" {
+            continue;
+        }
+        if entry.is_object() && looks_like_bare_mcp_server(entry) {
+            bare.push(parse_json_server(name, entry));
+        }
+    }
+    bare
+}
+
+/// Heuristic: does a top-level JSON object value look like an MCP server
+/// definition (as opposed to some unrelated config section)? A server entry
+/// carries at least one of the recognized connection keys.
+fn looks_like_bare_mcp_server(entry: &serde_json::Value) -> bool {
+    entry.get("url").is_some()
+        || entry.get("serverUrl").is_some()
+        || entry.get("command").is_some()
+        || entry.get("type").is_some()
+        || entry.get("transport").is_some()
+}
+
 fn parse_json_server(name: &str, entry: &serde_json::Value) -> RawMcpServer {
     let command = entry
         .get("command")
@@ -1587,9 +1744,20 @@ fn parse_json_server(name: &str, entry: &serde_json::Value) -> RawMcpServer {
             })
         })
         .unwrap_or(false);
+    // OAuth is signalled by an explicit type, an `oauth` / `authorization_server`
+    // block, or an `auth` object carrying an OAuth client registration
+    // (`CLIENT_ID`) -- the shape Cursor marketplace plugins (e.g. Slack) use.
     let has_oauth = explicit_type.as_deref() == Some("oauth")
         || entry.get("oauth").is_some()
-        || entry.get("authorization_server").is_some();
+        || entry.get("authorization_server").is_some()
+        || entry
+            .get("auth")
+            .and_then(|a| a.as_object())
+            .map(|a| {
+                a.keys()
+                    .any(|k| k.eq_ignore_ascii_case("client_id") || k.eq_ignore_ascii_case("clientid"))
+            })
+            .unwrap_or(false);
     let has_tls_client_cert = entry.get("clientCert").is_some()
         || entry.get("tlsClientCert").is_some()
         || entry.get("cert").is_some();
@@ -2258,6 +2426,31 @@ pub fn assess_mcp_risk(endpoints: &[McpEndpoint]) -> Vec<VisibilityFinding> {
 // Agent SBOM (INC-2)
 // ---------------------------------------------------------------------------
 
+/// Best-effort "is this agent installed on this host?" check used to decide
+/// whether an agent with an otherwise-empty surface (no MCP servers, no
+/// instruction/skill files) still deserves a minimal SBOM. An agent counts as
+/// installed when any of its resolved global MCP config files exists on disk
+/// (even if it declares zero servers) or its instruction/config root directory
+/// exists. This mirrors the "present on host" intent so an installed-but-empty
+/// agent (e.g. Claude Desktop) yields a valid, minimal CycloneDX document
+/// instead of an empty `{}`.
+fn agent_installed_on_host(home: &Path, agent_type: &str) -> bool {
+    let Some(def) = supported_agents::find_supported_agent(agent_type) else {
+        return false;
+    };
+    if def
+        .resolve_global_mcp_configs(home)
+        .iter()
+        .any(|p| p.exists())
+    {
+        return true;
+    }
+    match def.resolve_instruction_root_with_home(home) {
+        Some(root) => root.is_dir(),
+        None => false,
+    }
+}
+
 /// Build one SBOM per discovered agent type from the live MCP inventory plus
 /// the agent's on-disk instruction/skill artifacts. The agent application is
 /// the root component; each MCP server it declares is a `service` component,
@@ -2430,9 +2623,20 @@ pub fn build_agent_sboms_from_endpoints_with_home(
         components.extend(instruction_components);
 
         // Skip agents that carry nothing beyond the implicit application root
-        // (no servers, no instructions) -- they are not yet "present" on host.
+        // (no servers, no instructions). Exception: an agent actually installed
+        // on this host (its global MCP config file or instruction/config root
+        // exists) still gets a minimal application-only SBOM, so the inventory
+        // and the CycloneDX projection stay consistent with the rest of the
+        // fleet instead of returning `{}` -- e.g. Claude Desktop configured with
+        // an empty `"mcpServers": {}` and no skills. Endpoint-only callers
+        // (`home == None`, tests) keep the strict skip.
         if components.len() == 1 && agent_endpoints.is_empty() {
-            continue;
+            let installed = home
+                .map(|h| agent_installed_on_host(h, &agent_type))
+                .unwrap_or(false);
+            if !installed {
+                continue;
+            }
         }
 
         let mut dependencies = vec![SbomDependency {
@@ -2479,6 +2683,10 @@ fn is_secret_env_key(key: &str) -> bool {
 const INSTRUCTION_SUBDIRS: &[(&str, &str)] = &[
     ("rules", "rule"),
     ("skills", "skill"),
+    // Cursor keeps its built-in / product skills under `skills-cursor`
+    // (`~/.cursor/skills-cursor`), separate from the user `skills` dir; other
+    // agents have no such dir so this is a no-op for them.
+    ("skills-cursor", "skill"),
     ("commands", "command"),
     ("agents", "subagent"),
     ("subagents", "subagent"),
@@ -2489,8 +2697,42 @@ const INSTRUCTION_SUBDIRS: &[(&str, &str)] = &[
 ];
 
 /// File extensions considered instruction/skill artifacts inside the
-/// allowlisted subdirectories.
+/// allowlisted subdirectories. This is the *permissive* set used only by the
+/// on-demand content-drill-down guard ([`path_is_instruction_artifact`]): if the
+/// agent was observed reading a bundled supporting file (a builder script's
+/// sibling `.txt` fixture, a `.json` config) under a skill, the UI must still be
+/// able to show what was read.
 const INSTRUCTION_EXTS: &[&str] = &["md", "mdc", "txt", "json", "toml", "yaml", "yml"];
+
+/// File extensions enumerated as first-class instruction artifacts into the SBOM
+/// (the "what skills / rules / commands / subagents does this agent HAVE" list).
+///
+/// Deliberately narrower than [`INSTRUCTION_EXTS`]: an authored instruction
+/// artifact -- a skill (`SKILL.md` / `DESCRIPTION.md`), rule (`*.mdc`), command,
+/// subagent, prompt, memory, or instruction -- is a Markdown document. The
+/// bundled non-Markdown files a skill ships alongside its doc (a `LICENSE.txt`, a
+/// `.cursor-managed-skills-manifest.json`, an agent runtime `models.json` /
+/// `sessions.json` / `runs.json` state file, a `*.trajectory-path.json`) are
+/// data/config/state, NOT instruction artifacts, and MUST NOT each become their
+/// own "skill" row (they surface as phantom, perpetually-"dead" skills and as
+/// spurious duplicate clusters). Enumerating only Markdown docs is generic --
+/// no per-filename allowlist/blocklist -- and matches how every supported agent
+/// authors its instruction set.
+const INSTRUCTION_DOC_EXTS: &[&str] = &["md", "mdc"];
+
+/// Max instruction artifacts discovered per agent- or workspace-scope root.
+/// Sized to cover a large first-party skills library (Hermes, for example,
+/// ships 300+ skills under `~/.hermes/skills`) with headroom, so the SBOM /
+/// self-augmentation report does not silently truncate an agent's real
+/// on-disk instruction set. Still bounded so a pathological config dir cannot
+/// grow the SBOM without limit; each artifact is additionally bounded by
+/// [`INSTRUCTION_MAX_FILE_BYTES`] and the walk by [`INSTRUCTION_MAX_DEPTH`].
+const INSTRUCTION_MAX_FILES: usize = 1024;
+/// Max directory depth walked under an instruction subdirectory.
+const INSTRUCTION_MAX_DEPTH: usize = 4;
+/// Max body size of a single instruction artifact that is read+hashed into the
+/// SBOM. Larger files are skipped (the body is a data blob, not an instruction).
+const INSTRUCTION_MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
 
 /// Classify a top-level file (directly under the config dir) as an instruction
 /// artifact. Returns its `edamame:kind`, or `None` if it is not one.
@@ -2578,12 +2820,25 @@ fn normalize_content_tier(tier: &str) -> &'static str {
     }
 }
 
-/// True when `path` has the shape of a recognized instruction artifact: either a
-/// top-level instruction file (`CLAUDE.md`, `.cursorrules`, ...) or a file with
-/// an instruction extension living under an `INSTRUCTION_SUBDIRS` segment
-/// (`skills/`, `rules/`, `commands/`, ...). This is the allowlist that prevents
-/// the privileged (root/helper) side from being coerced into reading an
-/// arbitrary file such as `/etc/shadow`.
+/// True when `path` has the shape of a readable instruction artifact: a
+/// top-level instruction file (`CLAUDE.md`, `.cursorrules`, ...), ANY regular
+/// file under a `skills/` (or `skills-cursor/`) tree, or a file with an
+/// instruction extension living under one of the other `INSTRUCTION_SUBDIRS`
+/// segments (`rules/`, `commands/`, ...).
+///
+/// Skill folders are special-cased to allow any extension because a skill
+/// legitimately bundles supporting files -- builder scripts, fixtures, assets --
+/// that the agent reads while running the skill, so the drill-down must be able
+/// to show exactly what the agent read (e.g. `skills/deck_suite/builders/*.py`),
+/// not only the `SKILL.md` doc. Rejecting those made the UI claim on-disk files
+/// were "not found".
+///
+/// This stays an allowlist, not an arbitrary-file read: guard 2 in
+/// [`read_instruction_content`] confines the canonicalized path to the user's
+/// home directory, and guard 3 re-runs THIS check on the canonicalized path, so
+/// a symlink under `skills/` pointing at `/etc/shadow` or `~/.ssh/id_rsa`
+/// resolves to a path with no `skills` ancestor (and outside any instruction
+/// subdir) and is rejected.
 fn path_is_instruction_artifact(path: &Path) -> bool {
     let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
         return false;
@@ -2591,6 +2846,21 @@ fn path_is_instruction_artifact(path: &Path) -> bool {
     if classify_toplevel_instruction(name).is_some() {
         return true;
     }
+    // Lower-cased ancestor directory segments, computed once.
+    let segments: Vec<String> = path
+        .components()
+        .filter_map(|c| c.as_os_str().to_str().map(|s| s.to_ascii_lowercase()))
+        .collect();
+    // A skill folder bundles supporting files (scripts / assets / fixtures) the
+    // agent reads as part of running the skill; allow any extension under it.
+    if segments
+        .iter()
+        .any(|s| s.as_str() == "skills" || s.as_str() == "skills-cursor")
+    {
+        return true;
+    }
+    // Other instruction subdirs (rules / commands / prompts / ...) are doc-only:
+    // require a recognized instruction extension there.
     let ext_ok = path
         .extension()
         .and_then(|e| e.to_str())
@@ -2599,16 +2869,9 @@ fn path_is_instruction_artifact(path: &Path) -> bool {
     if !ext_ok {
         return false;
     }
-    // At least one ancestor directory segment must be an instruction subdir.
-    path.components().any(|c| {
-        c.as_os_str()
-            .to_str()
-            .map(|seg| {
-                let seg = seg.to_ascii_lowercase();
-                INSTRUCTION_SUBDIRS.iter().any(|(dir, _)| *dir == seg)
-            })
-            .unwrap_or(false)
-    })
+    segments
+        .iter()
+        .any(|seg| INSTRUCTION_SUBDIRS.iter().any(|(dir, _)| *dir == seg.as_str()))
 }
 
 /// Key-name hints that mark a `key = value` / `key: value` line as carrying a
@@ -2884,15 +3147,19 @@ pub fn read_instruction_content(path: &Path, home: &Path, tier: &str) -> Instruc
 /// transcript / session stores are never walked. Bodies are hashed, never
 /// stored (invariant I5).
 fn discover_agent_instruction_components(home: &Path, agent_type: &str) -> Vec<SbomComponent> {
-    const MAX_FILES: usize = 256;
-    const MAX_DEPTH: usize = 4;
-    const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
+    const MAX_FILES: usize = INSTRUCTION_MAX_FILES;
+    const MAX_DEPTH: usize = INSTRUCTION_MAX_DEPTH;
+    const MAX_FILE_BYTES: u64 = INSTRUCTION_MAX_FILE_BYTES;
 
     let def = match supported_agents::find_supported_agent(agent_type) {
         Some(d) => d,
         None => return Vec::new(),
     };
-    let config_dir = match def.resolve_config_dir_with_home(home) {
+    // Walk the AGENT's real config/instruction root (`~/.cursor`, `~/.claude`,
+    // ...), NOT the EDAMAME plugin's `<agent>-edamame` data dir. Using the
+    // plugin dir (`resolve_config_dir_with_home`) finds nothing and leaves
+    // skills unassociated across the whole fleet.
+    let config_dir = match def.resolve_instruction_root_with_home(home) {
         Some(d) => d,
         None => return Vec::new(),
     };
@@ -2912,7 +3179,8 @@ fn discover_agent_instruction_components(home: &Path, agent_type: &str) -> Vec<S
                 break;
             }
             let path = entry.path();
-            if !entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
+            let (_is_dir, is_file) = entry_kind_following_symlinks(&entry, &path);
+            if !is_file {
                 continue;
             }
             if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
@@ -2946,8 +3214,47 @@ fn discover_agent_instruction_components(home: &Path, agent_type: &str) -> Vec<S
     out
 }
 
-/// Bounded DFS over an instruction subdirectory, collecting files whose
-/// extension is in `INSTRUCTION_EXTS`.
+/// Classify a directory entry as `(is_dir, is_file)`, FOLLOWING symlinks.
+///
+/// `DirEntry::file_type()` is an `lstat`: it reports a symlink AS a symlink, so
+/// `is_dir()` / `is_file()` are BOTH false for a symlink-to-dir /
+/// symlink-to-file. Agent skill managers routinely install instruction
+/// artifacts as symlinks -- agentfield links `~/.claude/skills/<name>` and
+/// `~/.claude/commands/<name>.md` into `~/.agentfield/skills/<name>/current`,
+/// and the EDAMAME plugins install `<agent>-edamame/current` the same way -- so
+/// walking with the non-following `file_type()` silently skips the entire
+/// symlinked subtree (the canonical "skill wrongly marked not on disk" cause).
+///
+/// This resolves through the link with `fs::metadata`. A dangling symlink
+/// (target missing, e.g. an unmounted drive or a deleted skill) yields
+/// `(false, false)` and is therefore correctly excluded -- the artifact is not
+/// actually present. Non-symlink entries pay no extra syscall.
+fn entry_kind_following_symlinks(entry: &std::fs::DirEntry, path: &Path) -> (bool, bool) {
+    match entry.file_type() {
+        Ok(t) if t.is_symlink() => match std::fs::metadata(path) {
+            Ok(m) => (m.is_dir(), m.is_file()),
+            Err(_) => (false, false),
+        },
+        Ok(t) => (t.is_dir(), t.is_file()),
+        Err(_) => (false, false),
+    }
+}
+
+/// Bounded DFS over an instruction subdirectory, collecting Markdown
+/// instruction documents (extension in [`INSTRUCTION_DOC_EXTS`]).
+///
+/// Hidden entries (name starting with `.`) are skipped for BOTH files and
+/// directories. Inside an instruction tree, hidden entries are tool-managed /
+/// system internals -- Codex's built-in `skills/.system/` bundle, Cursor's
+/// `.cursor-managed-skills-manifest.json` / `.sync-manifest.json`, stray `.git`
+/// / `.DS_Store` -- never user-authored instruction docs. Combined with the
+/// Markdown-only extension gate, this keeps runtime state, manifests, and
+/// license files out of the SBOM so they cannot surface as phantom "dead"
+/// skills or spurious duplicates. (The config-dir ROOTS -- `~/.cursor`,
+/// `~/.claude`, ... -- are themselves dot-dirs, but the walk STARTS inside
+/// them, so this only filters dot-entries *within* an instruction subtree; the
+/// top-level `.cursorrules` file is handled separately by
+/// [`classify_toplevel_instruction`] and is unaffected.)
 fn collect_instruction_files(
     root: &Path,
     kind: &'static str,
@@ -2969,19 +3276,26 @@ fn collect_instruction_files(
                 return;
             }
             let path = entry.path();
-            let ftype = match entry.file_type() {
-                Ok(t) => t,
-                Err(_) => continue,
-            };
-            if ftype.is_dir() {
+            // Skip hidden files/dirs (tool-managed / system internals), never
+            // descending into them.
+            if path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.starts_with('.'))
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            let (is_dir, is_file) = entry_kind_following_symlinks(&entry, &path);
+            if is_dir {
                 if depth + 1 <= max_depth {
                     stack.push((path, depth + 1));
                 }
-            } else if ftype.is_file() {
+            } else if is_file {
                 let ext_ok = path
                     .extension()
                     .and_then(|e| e.to_str())
-                    .map(|e| INSTRUCTION_EXTS.iter().any(|x| x.eq_ignore_ascii_case(e)))
+                    .map(|e| INSTRUCTION_DOC_EXTS.iter().any(|x| x.eq_ignore_ascii_case(e)))
                     .unwrap_or(false);
                 if ext_ok {
                     acc.push((path, kind));
@@ -3023,6 +3337,19 @@ fn instruction_file_component(
         "edamame:abspath".to_string(),
         path.to_string_lossy().to_string(),
     );
+    // Canonical (symlink-resolved) on-disk path. Agent skill managers install
+    // one physical artifact reachable via multiple symlink aliases -- e.g.
+    // agentfield links BOTH `~/.claude/commands/<name>.md` AND
+    // `~/.claude/skills/<name>/commands/<name>.md` to the same file under
+    // `~/.agentfield/skills/<name>/current/...`. Without a canonical identity,
+    // the two aliases look like two byte-identical copies and get flagged as a
+    // (false) duplicate. Resolved here (helper-side / standalone, where the file
+    // is actually reachable) so the sandboxed core need not -- and cannot --
+    // canonicalize. Falls back to the plain abspath when canonicalization fails.
+    let canonical = std::fs::canonicalize(path)
+        .map(|c| c.to_string_lossy().to_string())
+        .unwrap_or_else(|_| path.to_string_lossy().to_string());
+    props.insert("edamame:canonical_abspath".to_string(), canonical);
     // Byte size (the body was already read to hash it) and the load class
     // (always-in-context vs conditional / on-demand) drive the per-workspace
     // prompt-weight ("context tax") accounting in the self-augmentation report.
@@ -3098,15 +3425,23 @@ const INSTRUCTION_REF_BASENAMES: &[&str] = &[
     "copilot-instructions.md",
 ];
 
-/// Directory segments that mark a path token as an instruction reference.
-const INSTRUCTION_REF_DIR_SEGMENTS: &[&str] = &[
-    "skills/",
-    "commands/",
-    "rules/",
-    "agents/",
-    "subagents/",
-    "prompts/",
-];
+/// Instruction directory segments whose artifacts are *folders* (`skills/foo`,
+/// `agents/foo`). A reference to the folder name -- or to any doc/support file
+/// under it -- names a concrete artifact, so a folder-name token qualifies.
+const INSTRUCTION_REF_FOLDER_DIR_SEGMENTS: &[&str] = &["skills/", "agents/", "subagents/"];
+
+/// Instruction directory segments whose artifacts are *files* (`rules/foo.mdc`,
+/// `commands/foo.md`). A reference must name an actual document file with a
+/// recognized doc extension; the bare directory (`rules/preferences`) names no
+/// artifact and must not become an edge.
+const INSTRUCTION_REF_FILE_DIR_SEGMENTS: &[&str] = &["commands/", "rules/", "prompts/"];
+
+/// Document extensions an instruction artifact body can carry. This is the doc
+/// subset of [`INSTRUCTION_EXTS`]; the config/data extensions (`json`, `toml`,
+/// `yaml`, `yml`) are deliberately excluded so a prose mention of a config file
+/// (`hooks.json`, `settings.json`, `cli-config.json`) never becomes a reference
+/// edge -- those are data the skill reads, not other instruction artifacts.
+const INSTRUCTION_REF_DOC_EXTS: &[&str] = &["md", "mdc", "txt"];
 
 /// Extract path-like references to *other* instruction artifacts from an
 /// instruction file body. Pure and metadata-only (invariant I5): the body is
@@ -3116,42 +3451,97 @@ const INSTRUCTION_REF_DIR_SEGMENTS: &[&str] = &[
 ///
 /// A token qualifies as an instruction reference when, after trimming anchors /
 /// queries / surrounding punctuation, it is not a URL and it either
-/// (a) ends with a known instruction extension AND contains a `/` or a
-/// recognized instruction directory segment, (b) contains a known instruction
-/// directory segment, or (c) is a well-known top-level instruction filename.
-/// This is deliberately conservative: prose sentences, plain web links, and
-/// arbitrary code paths do not become edges.
+/// (a) is a well-known top-level instruction filename referenced with a path or
+/// an explicit `@` mention, (b) contains a folder-instruction directory segment
+/// (`skills/`, `agents/`, `subagents/`) AND is either the extension-less folder
+/// name or a *doc* file under it (a `.py`/`.json`/`.png` inside the package is
+/// the package's own internals, not another instruction artifact), or
+/// (c) contains a file-instruction directory segment (`rules/`, `commands/`,
+/// `prompts/`) AND names a document file (doc extension). A plain doc path that
+/// is NOT anchored under any instruction directory (`docs/ARCHITECTURE.md`,
+/// `sub/README.md`) is a reference to the *codebase the rule operates on*, not
+/// to another instruction artifact, and does NOT qualify.
+/// This is deliberately conservative -- prose sentences, plain web links, config
+/// files, package-internal code, unanchored documentation, and arbitrary code
+/// paths do not become edges. Three additional guards
+/// keep authoring guides (skills that TEACH how to write skills/rules/hooks)
+/// from emitting phantom edges to their illustrative placeholders:
+/// - content inside fenced code blocks (```` ``` ```` / `~~~`) is skipped
+///   entirely (it is example markup, not a live dependency);
+/// - directory-only tokens (`skills/foo/`, `rules/`) are rejected (they name no
+///   concrete artifact);
+/// - a bare top-level basename dropped into prose ("...or AGENTS.md") is only
+///   kept when written as an explicit `@AGENTS.md` mention or with a path.
 pub fn extract_instruction_refs(body: &[u8]) -> Vec<String> {
     let text = String::from_utf8_lossy(body);
     let mut refs: BTreeSet<String> = BTreeSet::new();
-    for raw in text.split(|c: char| {
-        c.is_whitespace()
-            || matches!(
-                c,
-                '(' | ')'
-                    | '['
-                    | ']'
-                    | '{'
-                    | '}'
-                    | '"'
-                    | '\''
-                    | '`'
-                    | '<'
-                    | '>'
-                    | '|'
-                    | ','
-                    | ';'
-                    | '='
-                    | '*'
-            )
-    }) {
-        if let Some(tok) = normalize_ref_token(raw) {
-            if looks_like_instruction_ref(&tok) {
-                refs.insert(tok);
-                if refs.len() >= MAX_INSTRUCTION_REFS * 4 {
-                    // Hard stop scanning a pathological file once we have far
-                    // more than we will keep; the take() below trims to the cap.
-                    break;
+    let mut in_fence = false;
+    let mut fence_marker = "";
+    'lines: for line in text.lines() {
+        let trimmed = line.trim_start();
+        // Toggle fenced code-block state on ``` / ~~~ fences. Everything inside
+        // a fence is illustrative (authoring examples, shell snippets, config
+        // samples) and must NOT contribute reference edges.
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            let marker = if trimmed.starts_with("```") {
+                "```"
+            } else {
+                "~~~"
+            };
+            if in_fence {
+                if marker == fence_marker {
+                    in_fence = false;
+                }
+            } else {
+                in_fence = true;
+                fence_marker = marker;
+            }
+            continue;
+        }
+        if in_fence {
+            continue;
+        }
+        for raw in line.split(|c: char| {
+            c.is_whitespace()
+                || matches!(
+                    c,
+                    '(' | ')'
+                        | '['
+                        | ']'
+                        | '{'
+                        | '}'
+                        | '"'
+                        | '\''
+                        | '`'
+                        | '<'
+                        | '>'
+                        | '|'
+                        | ','
+                        | ';'
+                        | '='
+                        | '*'
+                )
+        }) {
+            let raw_trim = raw.trim();
+            if raw_trim.is_empty() {
+                continue;
+            }
+            // `@file` is an *explicit* reference; a bare basename in prose is
+            // not. Capture the signal before normalization strips the `@`.
+            let explicit = raw_trim.starts_with('@');
+            // A directory-only token (`skills/foo/`, `rules/`) names no concrete
+            // artifact -- skip it rather than emit a dangling ghost edge.
+            if raw_trim.ends_with('/') {
+                continue;
+            }
+            if let Some(tok) = normalize_ref_token(raw_trim) {
+                if looks_like_instruction_ref(&tok, explicit) {
+                    refs.insert(tok);
+                    if refs.len() >= MAX_INSTRUCTION_REFS * 4 {
+                        // Hard stop scanning a pathological file once we have far
+                        // more than we will keep; the take() below trims to cap.
+                        break 'lines;
+                    }
                 }
             }
         }
@@ -3189,31 +3579,76 @@ fn normalize_ref_token(raw: &str) -> Option<String> {
     Some(s.to_string())
 }
 
-/// Decide whether a normalized token names an instruction artifact.
-fn looks_like_instruction_ref(tok: &str) -> bool {
+/// Decide whether a normalized token names an instruction artifact. `explicit`
+/// is true when the raw token was written as an `@file` mention (which promotes
+/// an otherwise-ambiguous bare top-level basename to a real reference).
+fn looks_like_instruction_ref(tok: &str, explicit: bool) -> bool {
     if tok.contains("://") || tok.starts_with("mailto:") {
         return false; // web link / email, not an instruction file
     }
     let lower = tok.to_ascii_lowercase();
+    let has_sep = lower.contains('/');
     let basename = lower.rsplit('/').next().unwrap_or(&lower);
-    if INSTRUCTION_REF_BASENAMES.contains(&basename) {
-        return true;
-    }
-    let has_instruction_dir = INSTRUCTION_REF_DIR_SEGMENTS
-        .iter()
-        .any(|seg| lower.contains(seg));
-    if has_instruction_dir {
-        return true;
-    }
-    // Otherwise require a recognized instruction extension AND that it looks
-    // like a path (contains a separator) so we don't pick up prose like
-    // "config.json" mentioned in passing.
-    let ext_ok = std::path::Path::new(&lower)
+    let ext = std::path::Path::new(basename)
         .extension()
         .and_then(|e| e.to_str())
-        .map(|e| INSTRUCTION_EXTS.iter().any(|x| x.eq_ignore_ascii_case(e)))
+        .map(|e| e.to_ascii_lowercase());
+    let is_doc_ext = ext
+        .as_deref()
+        .map(|e| INSTRUCTION_REF_DOC_EXTS.contains(&e))
         .unwrap_or(false);
-    ext_ok && lower.contains('/')
+    // A recognized-but-non-doc instruction extension is a config/data file
+    // (`json`, `yaml`, `toml`, ...). These are data a skill reads, never other
+    // instruction artifacts, so a mention of one never becomes an edge.
+    let is_config_ext = ext
+        .as_deref()
+        .map(|e| INSTRUCTION_EXTS.contains(&e) && !INSTRUCTION_REF_DOC_EXTS.contains(&e))
+        .unwrap_or(false);
+
+    // (a) Well-known top-level instruction filename (AGENTS.md, CLAUDE.md,
+    // .cursorrules, ...). A real reference either carries a path
+    // (`.cursor/AGENTS.md`) or is an explicit `@AGENTS.md` mention; a bare
+    // basename dropped into prose ("...or AGENTS.md") is a passing mention.
+    if INSTRUCTION_REF_BASENAMES.contains(&basename) {
+        return has_sep || explicit;
+    }
+
+    if is_config_ext {
+        return false;
+    }
+
+    let in_folder_dir = INSTRUCTION_REF_FOLDER_DIR_SEGMENTS
+        .iter()
+        .any(|seg| lower.contains(seg));
+    // (b) Folder-instruction dir segment: the folder name itself
+    // (`skills/gtm_report`, extension-less) or a *doc* under it
+    // (`skills/gtm_report/SKILL.md`) is a concrete artifact reference. A
+    // code/data file living inside the package (`skills/foo/surface_registry.py`,
+    // `skills/foo/config.json`, `agents/bar/impl.ts`) is the package's own
+    // internals -- data the skill reads or code it runs, never *another*
+    // instruction artifact -- so it must NOT become a reference edge. Without
+    // this extension gate every `.py`/`.json`/`.png` mentioned under a `skills/`
+    // path in prose became a phantom "broken" edge.
+    if in_folder_dir {
+        return ext.is_none() || is_doc_ext;
+    }
+    let in_file_dir = INSTRUCTION_REF_FILE_DIR_SEGMENTS
+        .iter()
+        .any(|seg| lower.contains(seg));
+    // (c) File-instruction dir segment: must name an actual document file.
+    if in_file_dir {
+        return is_doc_ext;
+    }
+
+    // (d) A doc path that is NOT anchored under any instruction directory
+    // segment -- `docs/ARCHITECTURE.md`, `private/notes/plan.md`, a nested
+    // `sub/README.md` -- is a reference to the *codebase the rule operates on*,
+    // not to another instruction artifact. In code-heavy workspaces these plain
+    // documentation paths are the dominant phantom-edge source, so they do not
+    // qualify. A genuine instruction cross-reference always lives under an
+    // instruction directory segment (caught by (b)/(c)) or is a well-known
+    // top-level basename (caught by (a)).
+    false
 }
 
 /// Classify whether an instruction artifact is *always* injected into the model
@@ -3396,9 +3831,9 @@ const WORKSPACE_CONFIG_DIRS: &[&str] = &[".cursor", ".claude"];
 /// size) and limited to the same allowlist, so transcript / session stores are
 /// never scanned. Bodies are hashed, never stored (invariant I5).
 pub fn discover_workspace_instruction_components(workspace_root: &Path) -> Vec<SbomComponent> {
-    const MAX_FILES: usize = 256;
-    const MAX_DEPTH: usize = 4;
-    const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
+    const MAX_FILES: usize = INSTRUCTION_MAX_FILES;
+    const MAX_DEPTH: usize = INSTRUCTION_MAX_DEPTH;
+    const MAX_FILE_BYTES: u64 = INSTRUCTION_MAX_FILE_BYTES;
 
     if !workspace_root.is_dir() {
         return Vec::new();
@@ -3438,7 +3873,8 @@ pub fn discover_workspace_instruction_components(workspace_root: &Path) -> Vec<S
                     break;
                 }
                 let path = entry.path();
-                if !entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
+                let (_is_dir, is_file) = entry_kind_following_symlinks(&entry, &path);
+                if !is_file {
                     continue;
                 }
                 if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
@@ -3653,6 +4089,36 @@ pub fn collect_workspace_inventories(source_paths: &[String]) -> Vec<WorkspaceIn
         });
     }
     out
+}
+
+/// Return the subset of `paths` that are CONFIRMED ABSENT on disk.
+///
+/// A path is reported absent only when stat-ing it (symlinks followed) fails
+/// with a `NotFound` error -- i.e. the file, or a broken symlink's target, is
+/// genuinely gone (a deleted skill, an unmounted network drive, ...). Any path
+/// that exists, or whose status is ambiguous for any other reason (a permission
+/// error, a transient I/O error), is intentionally omitted so the caller can
+/// fail open and never drop a path it is not sure about.
+///
+/// This is the shared primitive behind the self-augmentation builder's
+/// observed-path pruning: an observed skill is "rescued" to `available=true` on
+/// the strength of a past transcript read, and without a live existence check it
+/// would stay available forever even after its backing file vanished. The check
+/// runs unsandboxed -- in-process for the standalone core, or across the macOS
+/// sandbox boundary via the `confirm_absent_instruction_paths` helper utility so
+/// the app can reach the user's real project directories.
+pub fn confirm_absent_instruction_paths(paths: &[String]) -> Vec<String> {
+    paths
+        .iter()
+        .filter(|p| {
+            !p.is_empty()
+                && matches!(
+                    std::fs::metadata(Path::new(p.as_str())),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound
+                )
+        })
+        .cloned()
+        .collect()
 }
 
 /// Cap on the number of distinct models projected per agent SBOM.
@@ -5509,6 +5975,166 @@ bob ALL=(ALL) NOPASSWD: ALL
         build_endpoint(agent, server, "/tmp/mcp.json", false)
     }
 
+    // --- Follow-up #1: Cursor marketplace-plugin MCP discovery ---------------
+
+    /// Write a Cursor plugin `mcp.json` at the marketplace cache layout depth
+    /// (`plugins/cache/<publisher>/<name>/<hash>/mcp.json`).
+    fn write_cursor_plugin_mcp(home: &Path, name: &str, contents: &str) {
+        let dir = home
+            .join(".cursor")
+            .join("plugins")
+            .join("cache")
+            .join("cursor-public")
+            .join(name)
+            .join("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("mcp.json"), contents).unwrap();
+    }
+
+    #[test]
+    fn cursor_plugin_bare_object_mcp_json_is_discovered() {
+        // The Notion marketplace plugin ships a BARE object (top-level keys are
+        // server names), NOT the `mcpServers` wrapper. It must still surface.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        write_cursor_plugin_mcp(
+            home,
+            "notion-workspace",
+            r#"{ "notion": { "type": "http", "url": "https://mcp.notion.com/mcp" } }"#,
+        );
+        let endpoints = discover_mcp_endpoints(home);
+        let notion = endpoints
+            .iter()
+            .find(|e| e.server_name == "notion")
+            .expect("notion plugin endpoint discovered");
+        assert_eq!(notion.agent_type, "cursor");
+        assert!(!notion.is_edamame_server);
+        assert_eq!(notion.url.as_deref(), Some("https://mcp.notion.com/mcp"));
+        assert!(notion.config_path.contains("plugins"));
+    }
+
+    #[test]
+    fn cursor_plugin_wrapper_with_auth_client_id_is_oauth() {
+        // The Slack marketplace plugin uses the `mcpServers` wrapper plus an
+        // `auth: { CLIENT_ID: ... }` OAuth registration.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        write_cursor_plugin_mcp(
+            home,
+            "slack",
+            r#"{ "mcpServers": { "slack": { "url": "https://mcp.slack.com/mcp", "auth": { "CLIENT_ID": "abc.123" } } } }"#,
+        );
+        let endpoints = discover_mcp_endpoints(home);
+        let slack = endpoints
+            .iter()
+            .find(|e| e.server_name == "slack")
+            .expect("slack plugin endpoint discovered");
+        assert_eq!(slack.agent_type, "cursor");
+        // `auth.CLIENT_ID` -> OAuth: the OAuth metadata URI is derived from the
+        // server host, which is only populated when `has_oauth` was detected.
+        assert_eq!(
+            slack.oauth_metadata_uri.as_deref(),
+            Some("https://mcp.slack.com/.well-known/oauth-protected-resource"),
+        );
+    }
+
+    #[test]
+    fn cursor_plugin_endpoint_deduped_against_global_config() {
+        // Same server declared in both ~/.cursor/mcp.json and a plugin file must
+        // collapse to a single endpoint (identical id).
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        std::fs::create_dir_all(home.join(".cursor")).unwrap();
+        std::fs::write(
+            home.join(".cursor").join("mcp.json"),
+            r#"{ "mcpServers": { "notion": { "type": "http", "url": "https://mcp.notion.com/mcp" } } }"#,
+        )
+        .unwrap();
+        write_cursor_plugin_mcp(
+            home,
+            "notion-workspace",
+            r#"{ "notion": { "type": "http", "url": "https://mcp.notion.com/mcp" } }"#,
+        );
+        let endpoints = discover_mcp_endpoints(home);
+        let notion_count = endpoints.iter().filter(|e| e.server_name == "notion").count();
+        assert_eq!(notion_count, 1, "duplicate global+plugin server must dedup");
+    }
+
+    #[test]
+    fn bare_fallback_ignores_non_server_top_level_objects() {
+        // A global-style JSON object with unrelated top-level keys (the shape of
+        // `~/.claude.json`) must NOT be misparsed as a flat server map.
+        let raw = r#"{ "numStartups": 7, "installMethod": "brew", "tips": { "shown": true } }"#;
+        assert!(parse_mcp_json_with_bare_fallback(raw).is_empty());
+        // But a real bare server map IS parsed.
+        let raw2 = r#"{ "notion": { "type": "http", "url": "https://mcp.notion.com/mcp" } }"#;
+        let servers = parse_mcp_json_with_bare_fallback(raw2);
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].name, "notion");
+    }
+
+    // --- Follow-up #3: installed-but-empty agents get a minimal SBOM ----------
+
+    #[test]
+    fn installed_empty_agent_gets_minimal_sbom_uninstalled_skipped() {
+        // Cursor is "installed" (its ~/.cursor root exists) but has no MCP
+        // servers and no skills -> it still gets a minimal application-only SBOM.
+        // Claude Code has no footprint at all -> it stays skipped.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        std::fs::create_dir_all(home.join(".cursor")).unwrap();
+
+        assert!(agent_installed_on_host(home, "cursor"));
+        assert!(!agent_installed_on_host(home, "claude_code"));
+
+        let sboms = build_agent_sboms(home);
+        let cursor = sboms
+            .iter()
+            .find(|s| s.agent_type == "cursor")
+            .expect("installed cursor gets a minimal SBOM");
+        assert_eq!(
+            cursor.components.len(),
+            1,
+            "minimal SBOM carries just the application root component",
+        );
+        assert!(
+            !sboms.iter().any(|s| s.agent_type == "claude_code"),
+            "an agent with no on-host footprint is still skipped",
+        );
+
+        // The CycloneDX projection is a valid document, never `{}`.
+        let cdx = sbom_to_cyclonedx(cursor);
+        assert_eq!(cdx["bomFormat"], "CycloneDX");
+        assert!(cdx["components"].as_array().map(|a| !a.is_empty()).unwrap_or(false));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn claude_desktop_empty_config_yields_valid_cyclonedx() {
+        // The exact user scenario: Claude Desktop is installed with an empty
+        // `"mcpServers": {}` config and no skills. It must yield a valid,
+        // minimal CycloneDX SBOM rather than `{}`.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        let dir = home.join("Library/Application Support/Claude");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("claude_desktop_config.json"),
+            r#"{ "mcpServers": {} }"#,
+        )
+        .unwrap();
+
+        assert!(agent_installed_on_host(home, "claude_desktop"));
+        let sboms = build_agent_sboms(home);
+        let desktop = sboms
+            .iter()
+            .find(|s| s.agent_type == "claude_desktop")
+            .expect("installed claude_desktop gets a minimal SBOM");
+        let cdx = sbom_to_cyclonedx(desktop);
+        assert_eq!(cdx["bomFormat"], "CycloneDX");
+        assert!(cdx["components"].as_array().map(|a| !a.is_empty()).unwrap_or(false));
+    }
+
     #[test]
     fn owasp_refs_cover_every_emitted_rule_and_tag_is_metadata_only() {
         // Every rule_id emitted by a visibility domain MUST resolve to an OWASP
@@ -6694,6 +7320,156 @@ Absolute ref: /Users/dev/.claude/skills/deploy/SKILL.md
         );
     }
 
+    /// Authoring-guide skills (skills that TEACH how to write skills / rules /
+    /// hooks / subagents) are riddled with illustrative placeholders inside
+    /// fenced code blocks, config-file mentions, directory-only paths, and bare
+    /// top-level basenames dropped into prose. NONE of those are live
+    /// dependencies and must NOT become reference edges -- otherwise the
+    /// capability graph paints them as red "broken" nodes. This mirrors the real
+    /// Cursor meta-skills (`create-subagent`, `migrate-to-skills`, `create-hook`,
+    /// `update-cli-config`, `create-rule`, `onboard`, `create-skill`).
+    #[test]
+    fn extract_instruction_refs_suppresses_authoring_guide_phantoms() {
+        let body = br#"# How to author things
+
+## Subagent example
+```bash
+# For project-level
+mkdir -p .cursor/agents
+touch .cursor/agents/my-agent.md
+```
+
+## Rule migration
+```markdown
+# Before: .cursor/rules/my-rule.mdc
+# After: .cursor/skills/commit/SKILL.md
+```
+
+The config lives at ~/.cursor/hooks.json and ~/.cursor/cli-config.json.
+Projects layer overrides via .cursor/cli.json and settings.json files.
+This rule is created when the user asks about .cursor/rules/ or AGENTS.md.
+Skills are stored as skills/skill-name/ directories.
+Ask about rules/preferences and team setup.
+
+Real dependency: see @AGENTS.md and the [helper](skills/deploy/SKILL.md).
+Also load @rules/invariants.mdc first.
+"#;
+        let refs = extract_instruction_refs(body);
+
+        // --- Phantoms that MUST be suppressed ---
+        for phantom in [
+            "my-agent",       // fenced bash example
+            "my-rule",        // fenced markdown example
+            "commit",         // fenced markdown example
+            "hooks",          // config file (.json)
+            "cli-config",     // config file (.json)
+            "cli",            // config file (.json)
+            "settings",       // config file (.json)
+            "skill-name",     // directory-only (trailing slash)
+            "preferences",    // file-dir (rules/) without a doc extension
+        ] {
+            assert!(
+                !refs.iter().any(|r| ref_candidate_name(r) == phantom),
+                "phantom edge '{phantom}' leaked as ref: {refs:?}"
+            );
+        }
+        // A bare `AGENTS.md` in prose (no `@`, no path) must NOT be a ref, but
+        // an explicit `@AGENTS.md` mention below MUST be. Assert both.
+        assert!(
+            refs.iter().any(|r| r == "AGENTS.md"),
+            "explicit @AGENTS.md mention should be a ref: {refs:?}"
+        );
+
+        // --- Legit refs that MUST survive ---
+        assert!(
+            refs.contains(&"skills/deploy/SKILL.md".to_string()),
+            "legit skill ref missing: {refs:?}"
+        );
+        assert!(
+            refs.contains(&"rules/invariants.mdc".to_string()),
+            "legit @-rule ref missing: {refs:?}"
+        );
+    }
+
+    /// Code-heavy workspaces (e.g. a marketing/sales automation repo whose
+    /// `.cursor/rules/*.mdc` describe a parallel `skills/<pkg>/` Python tree)
+    /// mention their OWN codebase constantly: package-internal source files
+    /// (`skills/foo/surface_registry.py`), config/data (`private/config/x.json`),
+    /// and plain documentation (`docs/ARCHITECTURE.md`, `sub/README.md`). None of
+    /// those are references to *another instruction artifact*, so none may become
+    /// reference edges -- otherwise the capability graph paints a rule red for
+    /// merely describing the code it operates on. This is the dominant residual
+    /// phantom class after fenced-block / config / directory-only suppression.
+    #[test]
+    fn extract_instruction_refs_suppresses_codebase_phantoms() {
+        let body = br#"# GTM rule
+
+The single source of truth is `skills/partner_complement_outreach/surface_registry.py`
+and its `skills/partner_complement_outreach/discover.py` entry point, plus the
+package init at skills/partner_complement_outreach/__init__.py.
+Config lives in private/config/customer_journey.json and settings.json.
+Architecture notes: docs/ARCHITECTURE.md and the nested reference/api_reference.md.
+See also docs/ONBOARDING.md and the top-level README.md write-up.
+
+Real dependency: the [helper](skills/deploy/SKILL.md) skill and the bare package
+skills/gtm-report and @rules/invariants.mdc.
+"#;
+        let refs = extract_instruction_refs(body);
+
+        // --- Codebase phantoms that MUST be suppressed ---
+        for phantom in [
+            "surface_registry", // package-internal .py under skills/
+            "discover",         // package-internal .py under skills/
+            "__init__",         // package init .py under skills/
+            "customer_journey", // config .json
+            "settings",         // config .json
+            "architecture",     // unanchored doc (docs/*.md)
+            "api_reference",    // unanchored doc (nested */*.md)
+            "onboarding",       // unanchored doc (docs/*.md)
+            "readme",           // unanchored top-level doc
+        ] {
+            assert!(
+                !refs.iter().any(|r| ref_candidate_name(r) == phantom),
+                "codebase phantom '{phantom}' leaked as ref: {refs:?}"
+            );
+        }
+
+        // --- Legit instruction refs that MUST survive ---
+        assert!(
+            refs.contains(&"skills/deploy/SKILL.md".to_string()),
+            "doc under skills/ dropped: {refs:?}"
+        );
+        assert!(
+            refs.iter().any(|r| ref_candidate_name(r) == "gtm-report"),
+            "extension-less skill package folder dropped: {refs:?}"
+        );
+        assert!(
+            refs.contains(&"rules/invariants.mdc".to_string()),
+            "@-rule ref dropped: {refs:?}"
+        );
+    }
+
+    /// Helper used above to derive the slug the reference graph resolves against,
+    /// so the phantom assertions match how the core builds edge labels.
+    fn ref_candidate_name(token: &str) -> String {
+        let lower = token.trim().trim_matches('/').to_ascii_lowercase();
+        let segs: Vec<&str> = lower.split('/').filter(|s| !s.is_empty()).collect();
+        let basename = match segs.last() {
+            Some(b) => *b,
+            None => return String::new(),
+        };
+        if basename == "skill.md" {
+            if segs.len() >= 2 {
+                return segs[segs.len() - 2].to_string();
+            }
+            return String::new();
+        }
+        match basename.rsplit_once('.') {
+            Some((stem, _ext)) if !stem.is_empty() => stem.to_string(),
+            _ => basename.to_string(),
+        }
+    }
+
     #[test]
     fn instruction_components_carry_abspath_and_refs() {
         let tmp = tempfile::TempDir::new().unwrap();
@@ -6835,6 +7611,532 @@ Absolute ref: /Users/dev/.claude/skills/deploy/SKILL.md
         let res = read_instruction_content(&path, home, "full_send_please");
         assert_eq!(res.tier, "metadata_only");
         assert!(res.content.is_empty());
+    }
+
+    // A skill bundles supporting files (builder scripts, fixtures, assets) that
+    // the agent reads while running the skill. Those must be previewable in the
+    // drill-down, not reported as "not found on disk". This is the deck_suite
+    // regression: `.../skills/deck_suite/builders/*.py` was refused because `.py`
+    // is not an INSTRUCTION_EXTS doc extension.
+    #[test]
+    fn read_instruction_content_allows_skill_support_script() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        let builders = home
+            .join("proj")
+            .join("skills")
+            .join("deck_suite")
+            .join("builders");
+        std::fs::create_dir_all(&builders).unwrap();
+        let path = builders.join("build_deck.py");
+        let body = "#!/usr/bin/env python3\nprint('hi')\n";
+        std::fs::write(&path, body.as_bytes()).unwrap();
+
+        let res = read_instruction_content(&path, home, "forensic_full_content");
+        assert!(res.found, "skill support .py must be readable: {:?}", res.error);
+        assert_eq!(res.content, body);
+    }
+
+    // Cursor product skills live under `skills-cursor/`; support files there are
+    // readable too (any extension, same rationale as `skills/`).
+    #[test]
+    fn read_instruction_content_allows_skills_cursor_support_file() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        let assets = home
+            .join(".cursor")
+            .join("skills-cursor")
+            .join("canvas")
+            .join("assets");
+        std::fs::create_dir_all(&assets).unwrap();
+        let path = assets.join("helper.sh");
+        std::fs::write(&path, b"#!/bin/sh\necho ok\n").unwrap();
+
+        let res = read_instruction_content(&path, home, "forensic_full_content");
+        assert!(res.found, "skills-cursor support file must be readable: {:?}", res.error);
+    }
+
+    // The any-extension relaxation is SCOPED to skill folders. A non-doc file
+    // under a doc-only instruction subdir (`rules/`) stays refused.
+    #[test]
+    fn read_instruction_content_refuses_non_doc_under_rules() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        let rules = home.join(".cursor").join("rules");
+        std::fs::create_dir_all(&rules).unwrap();
+        let path = rules.join("exfil.py");
+        std::fs::write(&path, b"# not a doc").unwrap();
+
+        let res = read_instruction_content(&path, home, "forensic_full_content");
+        assert!(!res.found, ".py under rules/ must stay refused");
+        assert!(res.content.is_empty());
+    }
+
+    // A non-doc file at the home root (no instruction subdir ancestor) stays
+    // refused regardless of the skill relaxation.
+    #[test]
+    fn read_instruction_content_refuses_non_doc_at_home_root() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        let path = home.join("secrets.py");
+        std::fs::write(&path, b"TOKEN=deadbeef").unwrap();
+
+        let res = read_instruction_content(&path, home, "forensic_full_content");
+        assert!(!res.found, "arbitrary .py at home root must be refused");
+    }
+
+    // Defense in depth: a symlink UNDER a skills/ dir that points at a sensitive
+    // in-home file (`~/.ssh/id_rsa`) passes guard 1 (raw path is skill-shaped)
+    // and guard 2 (target is under home), but the post-canonicalize re-check
+    // (guard 3) rejects it because the resolved path has no skill/instruction
+    // ancestor. The any-extension relaxation must NOT open this hole.
+    #[cfg(unix)]
+    #[test]
+    fn read_instruction_content_refuses_skill_symlink_escape() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+
+        // Sensitive in-home target, NOT under any instruction dir.
+        let ssh = home.join(".ssh");
+        std::fs::create_dir_all(&ssh).unwrap();
+        let secret = ssh.join("id_rsa");
+        std::fs::write(&secret, b"-----BEGIN PRIVATE KEY-----\n").unwrap();
+
+        // Symlink placed under a skills/ tree pointing at the secret.
+        let skills = home.join(".claude").join("skills").join("evil");
+        std::fs::create_dir_all(&skills).unwrap();
+        let link = skills.join("stolen_key");
+        symlink(&secret, &link).unwrap();
+
+        let res = read_instruction_content(&link, home, "forensic_full_content");
+        assert!(!res.found, "symlink escape out of skills/ must be refused");
+        assert!(res.content.is_empty());
+        assert!(
+            res.error
+                .as_deref()
+                .unwrap_or("")
+                .contains("resolved path is not a recognized instruction artifact"),
+            "expected post-canonicalize refusal, got: {:?}",
+            res.error
+        );
+    }
+
+    #[test]
+    fn agent_instruction_discovery_uses_real_config_dir_and_isolates_agents() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+
+        // Cursor's user skill lives under ~/.cursor/skills, NOT the EDAMAME
+        // plugin's `cursor-edamame` data dir.
+        let cursor_skill = home.join(".cursor").join("skills").join("demo");
+        std::fs::create_dir_all(&cursor_skill).unwrap();
+        std::fs::write(cursor_skill.join("SKILL.md"), b"# cursor demo\n").unwrap();
+
+        // Cursor product skills live under ~/.cursor/skills-cursor.
+        let cursor_builtin = home.join(".cursor").join("skills-cursor").join("canvas");
+        std::fs::create_dir_all(&cursor_builtin).unwrap();
+        std::fs::write(cursor_builtin.join("SKILL.md"), b"# canvas\n").unwrap();
+
+        // Claude Code's skill lives under ~/.claude/skills.
+        let claude_skill = home.join(".claude").join("skills").join("agentfield");
+        std::fs::create_dir_all(&claude_skill).unwrap();
+        std::fs::write(claude_skill.join("SKILL.md"), b"# agentfield\n").unwrap();
+
+        // A skill dropped into the OLD (buggy) plugin config dir must NOT be
+        // attributed to the agent -- discovery no longer walks it.
+        if let Some(plugin_dir) = supported_agents::find_supported_agent("cursor")
+            .and_then(|d| d.resolve_config_dir_with_home(home))
+        {
+            let stray = plugin_dir.join("skills").join("stray");
+            std::fs::create_dir_all(&stray).unwrap();
+            std::fs::write(stray.join("SKILL.md"), b"# stray\n").unwrap();
+        }
+
+        let cursor_rels: Vec<String> = discover_agent_instruction_components(home, "cursor")
+            .iter()
+            .filter_map(|c| c.properties.get("edamame:relpath").cloned())
+            .collect();
+        assert!(
+            cursor_rels.iter().any(|r| r == "skills/demo/SKILL.md"),
+            "cursor user skill missing: {cursor_rels:?}"
+        );
+        assert!(
+            cursor_rels
+                .iter()
+                .any(|r| r == "skills-cursor/canvas/SKILL.md"),
+            "cursor product skill missing: {cursor_rels:?}"
+        );
+        // Proper association: cursor must NOT pick up Claude's skill ...
+        assert!(
+            !cursor_rels.iter().any(|r| r.contains("agentfield")),
+            "claude skill leaked into cursor: {cursor_rels:?}"
+        );
+        // ... nor the stray file from the EDAMAME plugin data dir.
+        assert!(
+            !cursor_rels.iter().any(|r| r.contains("stray")),
+            "plugin-dir stray leaked into cursor: {cursor_rels:?}"
+        );
+
+        let claude_rels: Vec<String> = discover_agent_instruction_components(home, "claude_code")
+            .iter()
+            .filter_map(|c| c.properties.get("edamame:relpath").cloned())
+            .collect();
+        assert!(
+            claude_rels
+                .iter()
+                .any(|r| r == "skills/agentfield/SKILL.md"),
+            "claude skill missing: {claude_rels:?}"
+        );
+        assert!(
+            !claude_rels.iter().any(|r| r.contains("demo")),
+            "cursor skill leaked into claude: {claude_rels:?}"
+        );
+    }
+
+    // Regression: agent skill managers (agentfield, the EDAMAME plugins, ...)
+    // install skills/commands as SYMLINKS into an external `.../current` store.
+    // `DirEntry::file_type()` does not follow symlinks, so the pre-fix walk
+    // reported symlink-to-dir / symlink-to-file as neither and silently skipped
+    // the entire subtree -- the canonical "skill wrongly marked not on disk"
+    // cause. Discovery must follow the link. A DANGLING symlink (unmounted
+    // drive / deleted target) must still be excluded.
+    #[cfg(unix)]
+    #[test]
+    fn agent_instruction_discovery_follows_symlinked_skills_and_drops_dangling() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+
+        // External store the way agentfield lays it out:
+        //   ~/.agentfield/skills/agentfield/current/{SKILL.md,commands/agentfield.md}
+        let store = home
+            .join(".agentfield")
+            .join("skills")
+            .join("agentfield")
+            .join("current");
+        std::fs::create_dir_all(store.join("commands")).unwrap();
+        std::fs::write(store.join("SKILL.md"), b"# agentfield\n").unwrap();
+        std::fs::write(store.join("commands").join("agentfield.md"), b"# cmd\n").unwrap();
+
+        // ~/.claude/skills/agentfield -> external current dir (symlinked dir)
+        let claude_skills = home.join(".claude").join("skills");
+        std::fs::create_dir_all(&claude_skills).unwrap();
+        symlink(&store, claude_skills.join("agentfield")).unwrap();
+
+        // ~/.claude/commands/agentfield.md -> external file (symlinked file)
+        let claude_commands = home.join(".claude").join("commands");
+        std::fs::create_dir_all(&claude_commands).unwrap();
+        symlink(
+            store.join("commands").join("agentfield.md"),
+            claude_commands.join("agentfield.md"),
+        )
+        .unwrap();
+
+        // Dangling symlinks (target missing -- unmounted drive / deleted skill).
+        let missing_dir = home.join("unmounted_drive").join("skills").join("ghost");
+        let missing_file = home.join("unmounted_drive").join("ghost.md");
+        symlink(&missing_dir, claude_skills.join("ghost")).unwrap();
+        symlink(&missing_file, claude_commands.join("ghost.md")).unwrap();
+
+        let rels: Vec<String> = discover_agent_instruction_components(home, "claude_code")
+            .iter()
+            .filter_map(|c| c.properties.get("edamame:relpath").cloned())
+            .collect();
+
+        // Symlinked skill dir is traversed through the link.
+        assert!(
+            rels.iter().any(|r| r == "skills/agentfield/SKILL.md"),
+            "symlinked skill dir not discovered: {rels:?}"
+        );
+        // Symlinked command file is discovered through the link.
+        assert!(
+            rels.iter().any(|r| r == "commands/agentfield.md"),
+            "symlinked command file not discovered: {rels:?}"
+        );
+        // Dangling symlinks are excluded (the artifact is not actually present).
+        assert!(
+            !rels.iter().any(|r| r.contains("ghost")),
+            "dangling symlink surfaced as present: {rels:?}"
+        );
+    }
+
+    // Observed-path existence filter: only paths CONFIRMED absent (NotFound) are
+    // returned. Present files -- including those reached through a symlink -- are
+    // kept (omitted from the absent set). This backs the augmentation builder's
+    // pruning of stale observed-skill "rescues" (unmounted drive / deleted
+    // skill) without ever dropping a legitimately-present skill.
+    #[test]
+    fn confirm_absent_instruction_paths_reports_only_missing() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let present = tmp.path().join("present_skill.md");
+        std::fs::write(&present, b"# skill\n").unwrap();
+        let missing = tmp.path().join("unmounted").join("ghost_skill.md");
+
+        let present_s = present.to_string_lossy().to_string();
+        let missing_s = missing.to_string_lossy().to_string();
+        let absent =
+            confirm_absent_instruction_paths(&[present_s.clone(), missing_s.clone(), String::new()]);
+
+        assert!(
+            absent.contains(&missing_s),
+            "missing path not reported absent: {absent:?}"
+        );
+        assert!(
+            !absent.contains(&present_s),
+            "present path wrongly reported absent: {absent:?}"
+        );
+        // Empty string is ignored, never reported as absent.
+        assert!(
+            !absent.iter().any(|p| p.is_empty()),
+            "empty path leaked into absent set: {absent:?}"
+        );
+    }
+
+    // A symlink to an existing target must be treated as present (metadata
+    // follows the link); a dangling symlink must be reported absent.
+    #[cfg(unix)]
+    #[test]
+    fn confirm_absent_instruction_paths_follows_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let target = tmp.path().join("real_skill.md");
+        std::fs::write(&target, b"# skill\n").unwrap();
+
+        let good_link = tmp.path().join("good_link.md");
+        symlink(&target, &good_link).unwrap();
+        let dangling = tmp.path().join("dangling_link.md");
+        symlink(tmp.path().join("gone.md"), &dangling).unwrap();
+
+        let good_s = good_link.to_string_lossy().to_string();
+        let dangling_s = dangling.to_string_lossy().to_string();
+        let absent = confirm_absent_instruction_paths(&[good_s.clone(), dangling_s.clone()]);
+
+        assert!(
+            !absent.contains(&good_s),
+            "valid symlink reported absent: {absent:?}"
+        );
+        assert!(
+            absent.contains(&dangling_s),
+            "dangling symlink not reported absent: {absent:?}"
+        );
+    }
+
+    /// Host-dependent broad audit: run the REAL instruction discovery against
+    /// EVERY supported agent that is actually installed on this machine and
+    /// cross-check it two independent ways, per agent:
+    ///
+    ///   * PHANTOM: every discovered component's absolute path must still exist
+    ///     on disk right now (`fs::metadata`, which follows symlinks). A
+    ///     discovered artifact that is not on disk is a phantom.
+    ///   * MISS: an independent symlink-following walk of the same config root
+    ///     (top-level instruction files + the `INSTRUCTION_SUBDIRS` allowlist,
+    ///     `INSTRUCTION_EXTS`, depth <= 4) must not surface any readable,
+    ///     <=2 MB artifact that discovery failed to return. Files above the
+    ///     2 MB body cap or an agent whose candidate set exceeds the
+    ///     `INSTRUCTION_MAX_FILES` cap are excluded from the miss assertion
+    ///     (discovery legitimately drops / truncates those), and reported instead.
+    ///
+    /// Ignored by default because it reads the developer's own agent dirs; run
+    /// explicitly on a host to audit the live fleet:
+    ///   cargo test -p edamame_foundation --lib \
+    ///     local_host_all_agents_discovery_consistency -- --ignored --nocapture
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+    #[test]
+    #[ignore = "host-dependent: reads the developer's real agent config dirs"]
+    fn local_host_all_agents_discovery_consistency() {
+        const MAX_FILES: usize = INSTRUCTION_MAX_FILES;
+        const MAX_DEPTH: usize = INSTRUCTION_MAX_DEPTH;
+        const MAX_FILE_BYTES: u64 = INSTRUCTION_MAX_FILE_BYTES;
+
+        let home = match std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+            Some(h) => PathBuf::from(h),
+            None => {
+                eprintln!("[audit] no HOME/USERPROFILE; skipping");
+                return;
+            }
+        };
+
+        // Independent, symlink-following reproduction of discovery's traversal.
+        // Reuses the module's own consts/helpers so it tracks the real rules,
+        // but walks the tree independently of `discover_agent_instruction_components`.
+        fn independent_walk(config_dir: &Path) -> Vec<PathBuf> {
+            let mut found: Vec<PathBuf> = Vec::new();
+            if let Ok(entries) = std::fs::read_dir(config_dir) {
+                for entry in entries.flatten() {
+                    if found.len() >= MAX_FILES {
+                        break;
+                    }
+                    let path = entry.path();
+                    let (_d, is_file) = entry_kind_following_symlinks(&entry, &path);
+                    if !is_file {
+                        continue;
+                    }
+                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                        if classify_toplevel_instruction(name).is_some() {
+                            found.push(path);
+                        }
+                    }
+                }
+            }
+            for (subdir, _kind) in INSTRUCTION_SUBDIRS {
+                let root = config_dir.join(subdir);
+                if !root.is_dir() {
+                    continue;
+                }
+                let mut stack: Vec<(PathBuf, usize)> = vec![(root, 0)];
+                while let Some((dir, depth)) = stack.pop() {
+                    if found.len() >= MAX_FILES {
+                        break;
+                    }
+                    let entries = match std::fs::read_dir(&dir) {
+                        Ok(e) => e,
+                        Err(_) => continue,
+                    };
+                    for entry in entries.flatten() {
+                        if found.len() >= MAX_FILES {
+                            break;
+                        }
+                        let path = entry.path();
+                        // Mirror discovery: skip hidden files/dirs.
+                        if path
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .map(|n| n.starts_with('.'))
+                            .unwrap_or(false)
+                        {
+                            continue;
+                        }
+                        let (is_dir, is_file) = entry_kind_following_symlinks(&entry, &path);
+                        if is_dir {
+                            if depth + 1 <= MAX_DEPTH {
+                                stack.push((path, depth + 1));
+                            }
+                        } else if is_file {
+                            // Mirror discovery: Markdown instruction docs only.
+                            let ext_ok = path
+                                .extension()
+                                .and_then(|e| e.to_str())
+                                .map(|e| {
+                                    INSTRUCTION_DOC_EXTS.iter().any(|x| x.eq_ignore_ascii_case(e))
+                                })
+                                .unwrap_or(false);
+                            if ext_ok {
+                                found.push(path);
+                            }
+                        }
+                    }
+                }
+            }
+            found.sort();
+            found.dedup();
+            found
+        }
+
+        let mut total_present = 0usize;
+        let mut total_discovered = 0usize;
+        let mut total_phantoms: Vec<String> = Vec::new();
+        let mut total_misses: Vec<String> = Vec::new();
+        let mut capped_agents: Vec<String> = Vec::new();
+
+        eprintln!("\n[audit] local-host agent discovery consistency (home={home:?})");
+        eprintln!(
+            "[audit] {:<16} {:>10} {:>7} {:>8}  root",
+            "agent", "discovered", "phantom", "miss"
+        );
+
+        for def in supported_agents::ordered_supported_agents() {
+            let root = match def.resolve_instruction_root_with_home(&home) {
+                Some(r) => r,
+                None => continue,
+            };
+            if !root.is_dir() {
+                continue; // agent not installed on this host
+            }
+            total_present += 1;
+
+            // REAL, freshly-compiled discovery under test.
+            let comps = discover_agent_instruction_components(&home, &def.agent_type);
+            let discovered: BTreeSet<String> = comps
+                .iter()
+                .filter_map(|c| c.properties.get("edamame:abspath").cloned())
+                .collect();
+            total_discovered += discovered.len();
+
+            // PHANTOM: discovered but not present on disk (follows symlinks).
+            let mut agent_phantoms: Vec<String> = Vec::new();
+            for p in &discovered {
+                if std::fs::metadata(Path::new(p)).is_err() {
+                    agent_phantoms.push(p.clone());
+                }
+            }
+
+            // MISS: independent walk finds a readable <=2MB artifact discovery dropped.
+            let candidates = independent_walk(&root);
+            let capped = candidates.len() >= MAX_FILES;
+            let mut agent_misses: Vec<String> = Vec::new();
+            if capped {
+                capped_agents.push(def.agent_type.clone());
+            } else {
+                for c in &candidates {
+                    let cs = c.to_string_lossy().to_string();
+                    if discovered.contains(&cs) {
+                        continue;
+                    }
+                    // Excluded-by-design: >2 MB body cap or unreadable.
+                    match std::fs::metadata(c) {
+                        Ok(m) if m.is_file() && m.len() <= MAX_FILE_BYTES => {
+                            if std::fs::read(c).is_ok() {
+                                agent_misses.push(cs);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            eprintln!(
+                "[audit] {:<16} {:>10} {:>7} {:>8}{}  {}",
+                def.agent_type,
+                discovered.len(),
+                agent_phantoms.len(),
+                agent_misses.len(),
+                if capped { " (capped)" } else { "" },
+                root.display()
+            );
+            for p in &agent_phantoms {
+                eprintln!("[audit]     PHANTOM {p}");
+            }
+            for m in &agent_misses {
+                eprintln!("[audit]     MISS    {m}");
+            }
+            total_phantoms.extend(agent_phantoms);
+            total_misses.extend(agent_misses);
+        }
+
+        eprintln!(
+            "[audit] SUMMARY present={total_present} discovered={total_discovered} \
+             phantoms={} misses={} capped_agents={:?}",
+            total_phantoms.len(),
+            total_misses.len(),
+            capped_agents
+        );
+
+        assert!(
+            total_phantoms.is_empty(),
+            "discovery returned {} phantom artifact(s) not on disk: {:#?}",
+            total_phantoms.len(),
+            total_phantoms
+        );
+        assert!(
+            total_misses.is_empty(),
+            "discovery missed {} on-disk instruction artifact(s): {:#?}",
+            total_misses.len(),
+            total_misses
+        );
     }
 
     #[test]

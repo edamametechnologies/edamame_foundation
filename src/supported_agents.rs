@@ -128,6 +128,60 @@ impl SupportedAgentDefinition {
         }
     }
 
+    /// Resolve the agent product's own on-host configuration / instruction
+    /// root -- the directory the *agent* reads its skills, rules, commands,
+    /// subagents, and other instruction artifacts from (`~/.cursor`,
+    /// `~/.claude`, `~/.codex`, `~/.hermes`, `~/.openclaw`, ...).
+    ///
+    /// This is deliberately DISTINCT from [`resolve_config_dir_with_home`],
+    /// which returns the EDAMAME *plugin*'s own data directory
+    /// (`<agent>-edamame`, e.g. `~/Library/Application Support/cursor-edamame`)
+    /// used for plugin provisioning. SBOM / instruction discovery must walk the
+    /// agent's real tree; using the plugin config dir finds nothing (or the
+    /// plugin's own bundle) and mis-associates skills across the fleet.
+    ///
+    /// Keyed on `agent_type` and mirrors the per-agent real-path knowledge in
+    /// [`resolve_global_mcp_configs`]. Honors `CODEX_HOME` / `HERMES_HOME`
+    /// overrides for parity with the MCP-config resolver. Returns `None` for
+    /// agents with no stable instruction dot-dir.
+    pub fn resolve_instruction_root_with_home(&self, home: &Path) -> Option<PathBuf> {
+        match self.agent_type.as_str() {
+            "cursor" => Some(home.join(".cursor")),
+            "claude_code" => Some(home.join(".claude")),
+            "codex" => Some(
+                std::env::var("CODEX_HOME")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|_| home.join(".codex")),
+            ),
+            "hermes" => Some(
+                std::env::var("HERMES_HOME")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|_| home.join(".hermes")),
+            ),
+            "openclaw" => Some(home.join(".openclaw")),
+            // Claude Desktop is a GUI app whose instruction surface (when
+            // present) lives under its platform app-support dir, not a dot-dir
+            // shared with Claude Code -- keeping it distinct avoids falsely
+            // attributing Claude Code's `~/.claude` skills to Claude Desktop.
+            // Derived from `home` so discovery stays hermetic under tests.
+            "claude_desktop" => {
+                #[cfg(target_os = "macos")]
+                {
+                    Some(home.join("Library/Application Support/Claude"))
+                }
+                #[cfg(target_os = "windows")]
+                {
+                    Some(home.join("AppData/Roaming/Claude"))
+                }
+                #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+                {
+                    Some(home.join(".config/Claude"))
+                }
+            }
+            _ => None,
+        }
+    }
+
     pub fn resolve_state_dir_with_home(&self, home: &Path) -> Option<PathBuf> {
         match self.install_layout.state_kind.as_str() {
             "none" => None,

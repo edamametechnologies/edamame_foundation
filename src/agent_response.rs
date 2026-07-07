@@ -82,6 +82,30 @@ impl ResponseActionKind {
         !self.reversible()
     }
 
+    /// True when the action's side-effect primitive is actually wired to a real
+    /// containment mechanism in `edamame_core`. When false, a non-simulated
+    /// request records an auditable operator-decision intent but performs NO
+    /// live side effect -- the primitive is not yet implemented.
+    ///
+    /// `mcp_enabled` reflects whether `edamame_core` was built with the `mcp`
+    /// feature: `RevokeToolGrant` is wired to the MCP pairing store, so it is a
+    /// live action only when MCP is compiled in. This MUST stay in lockstep with
+    /// the dispatch match in `CoreManager::request_response_action`
+    /// (core_manager_visibility_enforce.rs) -- a `wired == true` here whose
+    /// dispatch arm is a no-op would reintroduce the truth-in-UX bug this flag
+    /// exists to fix.
+    pub fn wired(&self, mcp_enabled: bool) -> bool {
+        match self {
+            ResponseActionKind::PauseAgent | ResponseActionKind::RequireConfirmAllCalls => true,
+            ResponseActionKind::RevokeToolGrant => mcp_enabled,
+            // Side-effect primitives not yet implemented (intent recorded only).
+            ResponseActionKind::QuarantineMemoryNamespace
+            | ResponseActionKind::KillEgressSession
+            | ResponseActionKind::DisableAgent
+            | ResponseActionKind::RotateExposedSecret => false,
+        }
+    }
+
     /// Human-readable description for the catalog UI.
     pub fn description(&self) -> &'static str {
         match self {
@@ -132,10 +156,18 @@ pub struct ResponseActionDescriptor {
     /// True when a simulate-first dry run is mandatory before real execution
     /// (always true for irreversible actions per I6).
     pub simulate_required: bool,
+    /// True when the action's side-effect primitive is actually wired in
+    /// `edamame_core`. When false, a non-simulated request records an auditable
+    /// operator-decision intent but performs no live containment. Consumers MUST
+    /// surface this honestly (record-intent vs execute) rather than implying the
+    /// action took effect.
+    pub wired: bool,
 }
 
-/// Build the full read-only catalog.
-pub fn response_action_catalog() -> Vec<ResponseActionDescriptor> {
+/// Build the full read-only catalog. `mcp_enabled` reflects whether
+/// `edamame_core` was built with the `mcp` feature and governs the `wired`
+/// status of `RevokeToolGrant` (see [`ResponseActionKind::wired`]).
+pub fn response_action_catalog(mcp_enabled: bool) -> Vec<ResponseActionDescriptor> {
     ResponseActionKind::all()
         .into_iter()
         .map(|k| ResponseActionDescriptor {
@@ -146,6 +178,7 @@ pub fn response_action_catalog() -> Vec<ResponseActionDescriptor> {
             // Irreversible actions MUST be simulated first; reversible ones
             // default to simulate-encouraged but allowed direct.
             simulate_required: !k.reversible(),
+            wired: k.wired(mcp_enabled),
         })
         .collect()
 }
@@ -294,7 +327,7 @@ mod tests {
 
     #[test]
     fn catalog_marks_reversibility_and_simulate() {
-        let cat = response_action_catalog();
+        let cat = response_action_catalog(true);
         assert_eq!(cat.len(), 7);
         let pause = cat.iter().find(|d| d.kind == "pause_agent").unwrap();
         assert!(pause.reversible);
@@ -303,6 +336,41 @@ mod tests {
         assert!(!disable.reversible);
         assert!(disable.operator_gated);
         assert!(disable.simulate_required);
+    }
+
+    #[test]
+    fn catalog_marks_wired_status() {
+        // With MCP enabled, the three wired actions are pause_agent,
+        // require_confirm_all_calls, and revoke_tool_grant. The rest record
+        // intent only.
+        let cat = response_action_catalog(true);
+        let wired: std::collections::BTreeSet<&str> = cat
+            .iter()
+            .filter(|d| d.wired)
+            .map(|d| d.kind.as_str())
+            .collect();
+        assert_eq!(
+            wired,
+            ["pause_agent", "require_confirm_all_calls", "revoke_tool_grant"]
+                .into_iter()
+                .collect()
+        );
+        // kill_egress_session is conceptually reversible but NOT wired: it must
+        // never be presented as executed containment.
+        let kill = cat
+            .iter()
+            .find(|d| d.kind == "kill_egress_session")
+            .unwrap();
+        assert!(kill.reversible);
+        assert!(!kill.wired);
+
+        // Without MCP, revoke_tool_grant drops out of the wired set.
+        let cat_no_mcp = response_action_catalog(false);
+        let revoke = cat_no_mcp
+            .iter()
+            .find(|d| d.kind == "revoke_tool_grant")
+            .unwrap();
+        assert!(!revoke.wired);
     }
 
     #[test]

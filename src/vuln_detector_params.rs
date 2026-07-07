@@ -1014,6 +1014,8 @@ pub struct CveDetectionParamsJSON {
     pub secret_content_network_command_tokens: Vec<String>,
     #[serde(default = "default_secret_content_scan_excluded_path_patterns")]
     pub secret_content_scan_excluded_path_patterns: Vec<String>,
+    #[serde(default = "default_secret_content_scan_skip_extensions")]
+    pub secret_content_scan_skip_extensions: Vec<String>,
     pub recent_sensitive_open_file_ttl_secs: u64,
     pub generic_reuse_tokens: Vec<String>,
     pub generic_application_tokens: Vec<String>,
@@ -1383,6 +1385,63 @@ fn default_secret_content_scan_excluded_path_patterns() -> Vec<String> {
         // Same race shape -- build-tool transient outputs with no secret
         // content value.
         "/cargo-install",
+    ])
+}
+
+/// File extensions whose content is never worth secret-scanning because it
+/// is binary or media, not text that could carry a credential / token /
+/// script payload.
+///
+/// The vulnerability detector enriches each L7-attributed process with its
+/// live open-file list (`flodbadd::open_files::get_open_file_paths`). For a
+/// process that is playing audio, browsing photos, or watching video (Music,
+/// Photos, QuickTime, Preview, a browser, Finder QuickLook, Spotlight
+/// indexers, ...) that list includes large media assets under the user's
+/// `~/Music`, `~/Pictures`, and `~/Movies` trees. Those directories are
+/// TCC-protected on macOS, so the daemon's `fs::metadata()` +
+/// `read_file_with_shared_delete()` probe on such a candidate triggers a
+/// privacy consent prompt (and, on a freshly rebuilt / re-signed binary,
+/// re-prompts because the code identity changed). The bytes themselves are
+/// never secret content, so the probe is pure waste AND user-visible noise.
+///
+/// This list short-circuits the scan on extension BEFORE any filesystem
+/// access, so a `.mp3` / `.jpg` / `.mov` candidate is dropped without ever
+/// calling `metadata()` or opening the file. It complements the
+/// path-substring exclusion list above (build-artifact trees): that list
+/// is about WHERE the file lives; this one is about WHAT the file is.
+///
+/// Match semantics: the candidate path is lowercased and compared by
+/// suffix, so JSON entries are lowercase, dot-prefixed extensions
+/// (`.mp3`, `.jpg`, ...) and apply on every platform.
+///
+/// Tunable via CloudModel so new binary/media formats can be added (or
+/// trimmed) without a release.
+fn default_secret_content_scan_skip_extensions() -> Vec<String> {
+    strings(&[
+        // Audio.
+        ".mp3", ".m4a", ".m4b", ".m4p", ".aac", ".flac", ".wav", ".aiff",
+        ".aif", ".ogg", ".oga", ".opus", ".wma", ".alac", ".mid", ".midi",
+        ".amr", ".caf",
+        // Images.
+        ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".tif", ".heic",
+        ".heif", ".webp", ".avif", ".raw", ".cr2", ".cr3", ".nef", ".arw",
+        ".dng", ".orf", ".rw2", ".icns", ".ico", ".psd",
+        // Video.
+        ".mov", ".mp4", ".m4v", ".avi", ".mkv", ".wmv", ".flv", ".webm",
+        ".mpg", ".mpeg", ".3gp", ".3g2", ".m2ts", ".mts",
+        // Fonts.
+        ".ttf", ".otf", ".ttc", ".woff", ".woff2",
+        // Archives / disk images.
+        ".zip", ".gz", ".tgz", ".bz2", ".xz", ".zst", ".7z", ".rar",
+        ".dmg", ".iso", ".jar",
+        // Compiled / linked binary artifacts.
+        ".o", ".a", ".so", ".dylib", ".dll", ".exe", ".rlib", ".rmeta",
+        ".pdb", ".class", ".pyc", ".wasm",
+        // Databases / on-disk stores (media libraries, address books, ...).
+        ".sqlite", ".sqlite3", ".sqlite-wal", ".sqlite-shm", ".db",
+        ".db-wal", ".db-shm", ".musicdb", ".abcddb",
+        // Documents that are container/binary, not scannable text.
+        ".pdf",
     ])
 }
 
@@ -2811,6 +2870,7 @@ pub struct CveDetectionParams {
     pub secret_content_script_extensions: Vec<String>,
     pub secret_content_network_command_tokens: Vec<String>,
     pub secret_content_scan_excluded_path_patterns: Vec<String>,
+    pub secret_content_scan_skip_extensions: Vec<String>,
     pub recent_sensitive_open_file_ttl_secs: u64,
     pub generic_reuse_tokens: HashSet<String>,
     pub generic_application_tokens: HashSet<String>,
@@ -3024,6 +3084,11 @@ impl CveDetectionParams {
                 .secret_content_scan_excluded_path_patterns
                 .iter()
                 .map(|pat| pat.to_ascii_lowercase().replace('\\', "/"))
+                .collect(),
+            secret_content_scan_skip_extensions: json
+                .secret_content_scan_skip_extensions
+                .iter()
+                .map(|ext| ext.to_ascii_lowercase())
                 .collect(),
             recent_sensitive_open_file_ttl_secs: json.recent_sensitive_open_file_ttl_secs,
             generic_reuse_tokens: json.generic_reuse_tokens.iter().cloned().collect(),
@@ -5081,6 +5146,37 @@ pub fn is_secret_content_scan_excluded_path(path: &str) -> bool {
         .any(|pattern| normalized.contains(pattern.as_str()))
 }
 
+/// Lowercased, dot-prefixed file extensions whose content is never worth
+/// secret-scanning (binary / media). See
+/// [`default_secret_content_scan_skip_extensions`] for the rationale
+/// (TCC re-prompts on `~/Music` / `~/Pictures` / `~/Movies` media assets
+/// opened by media/browser processes and enumerated via
+/// `flodbadd::open_files`).
+pub fn secret_content_scan_skip_extensions() -> Vec<String> {
+    PARAMS_SNAPSHOT
+        .load()
+        .secret_content_scan_skip_extensions
+        .clone()
+}
+
+/// Returns true when the path's extension marks it as binary/media content
+/// that MUST NOT be content-scanned. Checked BEFORE any filesystem access
+/// so a media candidate is dropped without a `metadata()` / open() probe
+/// (which would otherwise trigger a macOS TCC consent prompt for protected
+/// media directories).
+///
+/// Match semantics: lowercase the path, then check whether it ends with
+/// any configured extension. The extensions are already normalized to
+/// lowercase by `CveDetectionParams::new_from_json`.
+pub fn is_secret_content_scan_skipped_extension(path: &str) -> bool {
+    let normalized = path.to_ascii_lowercase();
+    let snapshot = PARAMS_SNAPSHOT.load();
+    snapshot
+        .secret_content_scan_skip_extensions
+        .iter()
+        .any(|ext| normalized.ends_with(ext.as_str()))
+}
+
 pub fn recent_sensitive_open_file_ttl_secs() -> u64 {
     PARAMS_SNAPSHOT.load().recent_sensitive_open_file_ttl_secs
 }
@@ -5396,6 +5492,60 @@ mod tests {
             assert!(
                 exts.iter().any(|e| e == required),
                 "required script extension {required:?} missing from {exts:?}"
+            );
+        }
+    }
+
+    /// The binary/media skip-extension list MUST cover the audio / image /
+    /// video assets found under `~/Music`, `~/Pictures`, and `~/Movies`.
+    /// These are the paths that a media/browser process holds open and that
+    /// `flodbadd::open_files` surfaces to the content-scan candidate
+    /// collector -- probing them triggers a macOS TCC consent prompt for
+    /// protected media directories.
+    #[test]
+    fn test_is_secret_content_scan_skipped_extension_covers_media() {
+        for media in [
+            "/Users/me/Music/Music/Media.localized/Song.m4a",
+            "/Users/me/Music/iTunes/Track.mp3",
+            "/Users/me/Pictures/Photos Library.photoslibrary/originals/1/IMG.heic",
+            "/Users/me/Pictures/Screenshot.png",
+            "/Users/me/Pictures/vacation.jpg",
+            "/Users/me/Movies/clip.mov",
+            "/Users/me/Movies/render.mp4",
+            // Case-insensitive match (macOS assets often use uppercase).
+            "/Users/me/Pictures/RAW/DSC_0001.NEF",
+            // Media library on-disk databases.
+            "/Users/me/Music/Music/Music Library.musicdb",
+        ] {
+            assert!(
+                is_secret_content_scan_skipped_extension(media),
+                "media path {media:?} must be skipped by extension"
+            );
+        }
+    }
+
+    /// Negative control: text-bearing candidates the detector exists to
+    /// catch (credentials, scripts, config, prose) MUST NOT be dropped by
+    /// the extension gate, even when they live under a media directory.
+    #[test]
+    fn test_is_secret_content_scan_skipped_extension_keeps_text() {
+        for keep in [
+            "/Users/me/.aws/credentials",
+            "/Users/me/.ssh/id_rsa",
+            "/Users/me/.kube/config",
+            "/private/tmp/exfil.py",
+            "/private/tmp/sifu-autopull.log",
+            "/Users/me/project/.env",
+            // Extension-less credential files.
+            "/Users/me/.netrc",
+            // A note that merely mentions media in its name but is text.
+            "/Users/me/Documents/music-notes.txt",
+            // A stray text file dropped inside a media directory.
+            "/Users/me/Music/playlist-export.json",
+        ] {
+            assert!(
+                !is_secret_content_scan_skipped_extension(keep),
+                "text-bearing path {keep:?} must NOT be skipped by extension"
             );
         }
     }
