@@ -3328,7 +3328,12 @@ fn instruction_file_component(
     let bytes = std::fs::read(path).ok()?;
     let hash = hash_bytes(&bytes);
     let rel = path.strip_prefix(config_dir).unwrap_or(path);
-    let rel_str = rel.to_string_lossy().to_string();
+    // Normalize to forward slashes so `edamame:relpath` is a stable, OS-independent
+    // identity/display string. The core-side observed-path derivation
+    // (`observed_scope_owner_relpath`) and the id join (`instruction_join_id`) both
+    // normalize separators; emitting a native `\` here on Windows would make the
+    // same artifact display two different relpaths depending on its discovery source.
+    let rel_str = rel.to_string_lossy().replace('\\', "/");
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
