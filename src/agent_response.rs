@@ -351,9 +351,13 @@ mod tests {
             .collect();
         assert_eq!(
             wired,
-            ["pause_agent", "require_confirm_all_calls", "revoke_tool_grant"]
-                .into_iter()
-                .collect()
+            [
+                "pause_agent",
+                "require_confirm_all_calls",
+                "revoke_tool_grant"
+            ]
+            .into_iter()
+            .collect()
         );
         // kill_egress_session is conceptually reversible but NOT wired: it must
         // never be presented as executed containment.

@@ -1754,8 +1754,9 @@ fn parse_json_server(name: &str, entry: &serde_json::Value) -> RawMcpServer {
             .get("auth")
             .and_then(|a| a.as_object())
             .map(|a| {
-                a.keys()
-                    .any(|k| k.eq_ignore_ascii_case("client_id") || k.eq_ignore_ascii_case("clientid"))
+                a.keys().any(|k| {
+                    k.eq_ignore_ascii_case("client_id") || k.eq_ignore_ascii_case("clientid")
+                })
             })
             .unwrap_or(false);
     let has_tls_client_cert = entry.get("clientCert").is_some()
@@ -2869,9 +2870,11 @@ fn path_is_instruction_artifact(path: &Path) -> bool {
     if !ext_ok {
         return false;
     }
-    segments
-        .iter()
-        .any(|seg| INSTRUCTION_SUBDIRS.iter().any(|(dir, _)| *dir == seg.as_str()))
+    segments.iter().any(|seg| {
+        INSTRUCTION_SUBDIRS
+            .iter()
+            .any(|(dir, _)| *dir == seg.as_str())
+    })
 }
 
 /// Key-name hints that mark a `key = value` / `key: value` line as carrying a
@@ -3295,7 +3298,11 @@ fn collect_instruction_files(
                 let ext_ok = path
                     .extension()
                     .and_then(|e| e.to_str())
-                    .map(|e| INSTRUCTION_DOC_EXTS.iter().any(|x| x.eq_ignore_ascii_case(e)))
+                    .map(|e| {
+                        INSTRUCTION_DOC_EXTS
+                            .iter()
+                            .any(|x| x.eq_ignore_ascii_case(e))
+                    })
                     .unwrap_or(false);
                 if ext_ok {
                     acc.push((path, kind));
@@ -6056,7 +6063,10 @@ bob ALL=(ALL) NOPASSWD: ALL
             r#"{ "notion": { "type": "http", "url": "https://mcp.notion.com/mcp" } }"#,
         );
         let endpoints = discover_mcp_endpoints(home);
-        let notion_count = endpoints.iter().filter(|e| e.server_name == "notion").count();
+        let notion_count = endpoints
+            .iter()
+            .filter(|e| e.server_name == "notion")
+            .count();
         assert_eq!(notion_count, 1, "duplicate global+plugin server must dedup");
     }
 
@@ -6105,7 +6115,10 @@ bob ALL=(ALL) NOPASSWD: ALL
         // The CycloneDX projection is a valid document, never `{}`.
         let cdx = sbom_to_cyclonedx(cursor);
         assert_eq!(cdx["bomFormat"], "CycloneDX");
-        assert!(cdx["components"].as_array().map(|a| !a.is_empty()).unwrap_or(false));
+        assert!(cdx["components"]
+            .as_array()
+            .map(|a| !a.is_empty())
+            .unwrap_or(false));
     }
 
     #[cfg(target_os = "macos")]
@@ -6132,7 +6145,10 @@ bob ALL=(ALL) NOPASSWD: ALL
             .expect("installed claude_desktop gets a minimal SBOM");
         let cdx = sbom_to_cyclonedx(desktop);
         assert_eq!(cdx["bomFormat"], "CycloneDX");
-        assert!(cdx["components"].as_array().map(|a| !a.is_empty()).unwrap_or(false));
+        assert!(cdx["components"]
+            .as_array()
+            .map(|a| !a.is_empty())
+            .unwrap_or(false));
     }
 
     #[test]
@@ -7358,15 +7374,15 @@ Also load @rules/invariants.mdc first.
 
         // --- Phantoms that MUST be suppressed ---
         for phantom in [
-            "my-agent",       // fenced bash example
-            "my-rule",        // fenced markdown example
-            "commit",         // fenced markdown example
-            "hooks",          // config file (.json)
-            "cli-config",     // config file (.json)
-            "cli",            // config file (.json)
-            "settings",       // config file (.json)
-            "skill-name",     // directory-only (trailing slash)
-            "preferences",    // file-dir (rules/) without a doc extension
+            "my-agent",    // fenced bash example
+            "my-rule",     // fenced markdown example
+            "commit",      // fenced markdown example
+            "hooks",       // config file (.json)
+            "cli-config",  // config file (.json)
+            "cli",         // config file (.json)
+            "settings",    // config file (.json)
+            "skill-name",  // directory-only (trailing slash)
+            "preferences", // file-dir (rules/) without a doc extension
         ] {
             assert!(
                 !refs.iter().any(|r| ref_candidate_name(r) == phantom),
@@ -7633,7 +7649,11 @@ skills/gtm-report and @rules/invariants.mdc.
         std::fs::write(&path, body.as_bytes()).unwrap();
 
         let res = read_instruction_content(&path, home, "forensic_full_content");
-        assert!(res.found, "skill support .py must be readable: {:?}", res.error);
+        assert!(
+            res.found,
+            "skill support .py must be readable: {:?}",
+            res.error
+        );
         assert_eq!(res.content, body);
     }
 
@@ -7653,7 +7673,11 @@ skills/gtm-report and @rules/invariants.mdc.
         std::fs::write(&path, b"#!/bin/sh\necho ok\n").unwrap();
 
         let res = read_instruction_content(&path, home, "forensic_full_content");
-        assert!(res.found, "skills-cursor support file must be readable: {:?}", res.error);
+        assert!(
+            res.found,
+            "skills-cursor support file must be readable: {:?}",
+            res.error
+        );
     }
 
     // The any-extension relaxation is SCOPED to skill folders. A non-doc file
@@ -7877,8 +7901,11 @@ skills/gtm-report and @rules/invariants.mdc.
 
         let present_s = present.to_string_lossy().to_string();
         let missing_s = missing.to_string_lossy().to_string();
-        let absent =
-            confirm_absent_instruction_paths(&[present_s.clone(), missing_s.clone(), String::new()]);
+        let absent = confirm_absent_instruction_paths(&[
+            present_s.clone(),
+            missing_s.clone(),
+            String::new(),
+        ]);
 
         assert!(
             absent.contains(&missing_s),
@@ -8021,7 +8048,9 @@ skills/gtm-report and @rules/invariants.mdc.
                                 .extension()
                                 .and_then(|e| e.to_str())
                                 .map(|e| {
-                                    INSTRUCTION_DOC_EXTS.iter().any(|x| x.eq_ignore_ascii_case(e))
+                                    INSTRUCTION_DOC_EXTS
+                                        .iter()
+                                        .any(|x| x.eq_ignore_ascii_case(e))
                                 })
                                 .unwrap_or(false);
                             if ext_ok {

@@ -948,7 +948,10 @@ pub async fn utility_confirm_absent_instruction_paths(
         Args { paths: Vec::new() }
     } else {
         serde_json::from_str(args_json).map_err(|e| {
-            anyhow::anyhow!("Failed to parse confirm_absent_instruction_paths args: {}", e)
+            anyhow::anyhow!(
+                "Failed to parse confirm_absent_instruction_paths args: {}",
+                e
+            )
         })?
     };
 

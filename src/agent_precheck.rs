@@ -111,7 +111,12 @@ pub fn risk_input_from_precheck(
         agent_type: req.agent_type.clone(),
         tool_name: req.tool_name.clone(),
         tool_privilege_slugs: privilege_slugs_for_tool_class(&req.tool_class),
-        origin_trust_zone: if req.origin_untrusted { "trust2" } else { "trust1" }.to_string(),
+        origin_trust_zone: if req.origin_untrusted {
+            "trust2"
+        } else {
+            "trust1"
+        }
+        .to_string(),
         data_flow_taint,
         sink_trust_zone,
         attack_pattern_corroborated,
@@ -285,7 +290,12 @@ mod tests {
     use super::*;
     use crate::agent_firewall::{build_tool_call_risk, FirewallMode};
 
-    fn req(tool_class: &str, taint: Option<&str>, sink: Option<&str>, untrusted: bool) -> PreExecutionRequest {
+    fn req(
+        tool_class: &str,
+        taint: Option<&str>,
+        sink: Option<&str>,
+        untrusted: bool,
+    ) -> PreExecutionRequest {
         PreExecutionRequest {
             agent_type: "claude_code".to_string(),
             tool_name: "Bash".to_string(),
@@ -335,7 +345,10 @@ mod tests {
         let r = req("network", Some("secret"), Some("trust2_remote"), false);
         let input = risk_input_from_precheck(&r, false);
         let score = build_tool_call_risk(&input, FirewallMode::Confirm);
-        assert_eq!(decision_for_verdict(score.verdict), PreExecutionDecision::Hold);
+        assert_eq!(
+            decision_for_verdict(score.verdict),
+            PreExecutionDecision::Hold
+        );
     }
 
     #[test]
