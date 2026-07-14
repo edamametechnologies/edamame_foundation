@@ -26,10 +26,14 @@ use std::path::{Path, PathBuf};
 pub mod claude_code;
 pub mod claude_desktop;
 pub mod codex;
+pub mod craft;
 pub mod cursor;
 pub mod hermes;
 pub mod openclaw;
 pub mod parsing;
+mod session_cache;
+
+pub(crate) use session_cache::get_or_build_session;
 
 #[cfg(test)]
 mod tests;
@@ -242,7 +246,7 @@ pub struct CollectResult {
 ///
 /// `est_cost_usd` is an ESTIMATE derived from the CloudModel-refreshable
 /// per-model price table in `cve-detection-params-db.json`, resolved via
-/// `crate::vuln_detector_params::resolve_model_price`. The token counts
+/// `crate::agent_visibility_params::resolve_model_price`. The token counts
 /// themselves are EXACT when the transcript carries usage metadata. Plain
 /// `.txt` transcripts (Cursor's text export) carry no usage, so
 /// `has_token_data` is false and the token/cost fields stay zero -- the UI
@@ -344,7 +348,7 @@ pub struct SessionEconomics {
     // a use) -- plus leading `/command` tokens (and Claude Code's
     // `<command-name>` marker) in user turns. This is the "which skills am I
     // actually using" signal that the Self-Augmentation report joins against
-    // the on-disk SBOM inventory of AVAILABLE skills. Transcript-mined and
+    // the on-disk component inventory of AVAILABLE skills. Transcript-mined and
     // heuristic: explicit `Skill`/slash-command hits are high precision;
     // SKILL.md reads are a good proxy for progressive-disclosure loads. Empty
     // for transcript shapes with no recognizable skill activity (e.g. Cursor
@@ -395,8 +399,132 @@ pub struct SessionEconomics {
     /// the agent took failed and it did not recover before the transcript ended.
     /// A weak, aggregate-only "clean finish" proxy (a single session ending
     /// mid-work is noise; the RATE across many sessions of one model is the
-    /// signal). False when the session had no tool results at all.
+    /// signal). False when the session had no tool results at all. Counts both
+    /// explicitly-flagged errors (`is_error`) and content-inferred failures.
     pub ended_with_tool_error: bool,
+
+    // ---- Content-inferred failures + run outcome + compaction + churn -------
+    //
+    // Deterministic signals that go beyond the provider's explicit error
+    // flags. Many agents (Codex `shell`, Claude Code `Bash`) return a FAILED
+    // command as a plain, unflagged `tool_result` whose content carries the
+    // failure shape ("command not found", "No such file or directory",
+    // non-zero exit code, a Python traceback). Counting only `is_error`
+    // undercounts real friction on exactly the runs that need attention.
+    //
+    /// Number of tool results NOT flagged `is_error` whose content matched a
+    /// conservative failure shape (anchored near the start of the result:
+    /// "error:", "command not found", "permission denied", "no such file or
+    /// directory", a traceback header, a non-zero exit-code marker, a rustc
+    /// `error[E...]`). Disjoint from `tool_errors` (never double-counted).
+    /// These ALSO feed the retry-after-error signature set and the
+    /// `ended_with_tool_error` clean-finish proxy.
+    pub inferred_tool_failures: u64,
+    /// Role of the last transcript line that carried a non-empty prose text
+    /// block (`"user"` / `"assistant"`; empty when the transcript had none).
+    /// Tool-result carrier lines (role user with only `tool_result` blocks)
+    /// do NOT update this -- it tracks actual conversation turns.
+    pub last_text_role: String,
+    /// Deterministic run-outcome classification:
+    ///   * `"errored"`   -- the session's final tool result failed
+    ///     (explicit or content-inferred) and the agent never recovered.
+    ///   * `"abandoned"` -- the last prose turn was the USER's (a question or
+    ///     instruction the agent never answered before the session went idle).
+    ///   * `"completed"` -- the last prose turn was the assistant's and the
+    ///     final tool result (if any) succeeded.
+    ///   * `""`          -- unknown (no prose turns at all, e.g. empty file).
+    /// Aggregate-only: one session's label is noise, the completion RATE
+    /// across sessions is the signal (used by the augmentation leverage axis).
+    pub run_outcome: String,
+    /// Number of context-compaction boundaries observed mid-session (Claude
+    /// Code `compact_boundary` / `isCompactSummary` markers, Codex `compacted`
+    /// events, or the canonical "continued from a previous conversation"
+    /// summary text). A compaction means the task OUTGREW the context window
+    /// -- the causal, per-session form of the context-pressure signal that the
+    /// static always-on token tax can only approximate.
+    pub compaction_events: u64,
+    /// Distinct files targeted by edit-class tools (`Edit`, `Write`,
+    /// `StrReplace`, `ApplyPatch`, `MultiEdit`, notebook edits) this session.
+    pub edited_file_count: u64,
+    /// Edit-class calls whose target file had ALREADY been edited earlier in
+    /// the same session -- rewrite churn ("wrote it, then rewrote it").
+    /// `0` when every edited file was touched exactly once.
+    pub re_edited_file_count: u64,
+    /// Sorted, deduplicated secret-signature labels that matched anywhere in
+    /// this session's transcript text (`private_key`, `github_token`,
+    /// `aws_secret`, ...). Matching uses the high-precision
+    /// `transcript_secret_signatures` tunable (vendor-anchored prefixes + PEM
+    /// headers only), NOT the broader file-scan list. Labels only -- the
+    /// matched content itself NEVER leaves the parser. Non-empty means
+    /// secret material entered the agent's context window (BR-1 blast-radius
+    /// amplifier: the LLM can exfiltrate it through any egress channel).
+    pub secret_exposure_labels: Vec<String>,
+    /// Total transcript secret-signature hits behind `secret_exposure_labels`.
+    pub secret_exposure_hits: u64,
+    /// Sorted, deduplicated prompt-injection bait labels that matched in this
+    /// session's transcript text (`instruction_override`,
+    /// `system_prompt_exfil`, `covert_instruction`, `role_override`).
+    /// Matching uses the deterministic `prompt_injection_signatures` tunable.
+    /// Non-empty means injection bait ENTERED the agent's context window --
+    /// the OWASP ASI01/LLM01 leading indicator (BR-2). Labels only, never
+    /// content.
+    pub prompt_injection_labels: Vec<String>,
+    /// Total prompt-injection signature hits behind `prompt_injection_labels`.
+    pub prompt_injection_hits: u64,
+
+    // ---- Craft heuristics (prompt / workflow quality; deterministic) --------
+    //
+    // The HUMAN side of the augmentation equation: how well the user drives
+    // the agent. Computed by `craft::analyze_craft` from the session's user
+    // prose turns and resolved tool-call sequence. All heuristic, LLM-free,
+    // labels/scores only -- prompt content never leaves the parser. Only
+    // meaningful when `craft_substantive_prompts > 0`; a session with no
+    // substantive user prompt (control-only, tool-result carriers, empty
+    // `.txt` export) leaves every dimension at 0 and `craft_intent_class`
+    // empty, which consumers MUST treat as "not scored", never as an F.
+    //
+    /// Constraints dimension (0-100): 100 when the FIRST substantive prompt
+    /// carries constraint language / spec structure, 50 when only a later
+    /// prompt does, 0 when absent.
+    pub prompt_maturity_constraints: u64,
+    /// Success-criteria dimension (0-100), same front-loading grade.
+    pub prompt_maturity_success_criteria: u64,
+    /// Verification-language dimension (0-100), same front-loading grade.
+    pub prompt_maturity_verification: u64,
+    /// Context-provision dimension (0-100): file refs / code fences in the
+    /// prompt (100/50 by position) or, failing that, 60 when the session ran
+    /// context-gathering tools (read/grep/glob, `rg`/`git`/... exec calls).
+    pub prompt_maturity_context: u64,
+    /// Specificity dimension (0-100): first substantive prompt's length plus
+    /// a structure bonus (headings/bullets/spec phrases).
+    pub prompt_maturity_specificity: u64,
+    /// Mean of the five maturity dimensions (0 when not scored).
+    pub prompt_maturity_score: u64,
+    /// Substantive (non-control) user prompts behind the maturity analysis.
+    /// 0 means the craft block is "not scored" for this session.
+    pub craft_substantive_prompts: u64,
+    /// Prompts that exact-match or Jaccard-match (>= 0.85) an earlier prompt
+    /// in the SAME session -- the user asking the same thing again.
+    pub duplicate_prompt_count: u64,
+    /// True when duplicate prompts co-occur with tool errors/retries: the
+    /// user re-asking while the session fails (the stuck re-ask shape).
+    pub stuck_reask: bool,
+    /// User prompts reading as frustration (repeated `!!!`/`???`, hostile
+    /// phrases, ALL-CAPS ratio) -- code fences stripped first so pasted logs
+    /// never count as tone.
+    pub frustration_marker_count: u64,
+    /// True when the tool sequence shows a runaway loop: >= 5 identical
+    /// consecutive signatures with >= 3 failures, or a 12-call window with
+    /// >= 6 failures / a failure-heavy dominant-class saturation. Refines
+    /// `repeated_tool_calls` into a hard "it is going in circles" flag.
+    pub runaway_tool_loop: bool,
+    /// `planning` / `implementation` / `debugging` / `review` /
+    /// `exploration` from the first substantive prompt + edit activity;
+    /// empty when not scored.
+    pub craft_intent_class: String,
+    /// True when the first substantive prompt has spec structure (headings,
+    /// bullets, or canonical spec phrases).
+    pub spec_driven_start: bool,
 }
 
 /// One tool result the transcript flagged as an error

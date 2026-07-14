@@ -108,6 +108,16 @@ update_cve_detection_params_db() {
         "$is_local"
 }
 
+update_agent_visibility_params_db() {
+    local is_local=${1:-false}
+    update_obfuscated_fallback \
+        "agent-visibility-params-db.json" \
+        "./src/agent_visibility_params_db.rs" \
+        "AGENT_VISIBILITY_PARAMS_DB" \
+        "Built in default agent visibility params db (obfuscated)" \
+        "$is_local"
+}
+
 # Define the array of target operating systems.
 targets=("macOS" "Linux" "Windows" "iOS" "Android")
 
@@ -135,4 +145,5 @@ else
         update_threat_metrics "$os" "$USE_LOCAL"
     done
     update_cve_detection_params_db "$USE_LOCAL"
+    update_agent_visibility_params_db "$USE_LOCAL"
 fi

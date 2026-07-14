@@ -199,6 +199,109 @@ pub fn inspect_secret_like_file(path: &str) -> Option<SecretContentFileMatch> {
     })
 }
 
+/// Result of scanning agent transcript text for secret exposure (BR-1).
+/// Carries only labels and hit counts -- NEVER the matched content itself
+/// (transcript bodies must not leave the parser; I5 invariant).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TranscriptSecretExposure {
+    /// Sorted, deduplicated signature labels that matched
+    /// (`private_key`, `github_token`, `aws_secret`, ...).
+    pub labels: Vec<String>,
+    /// Total signature hits (weighted per the signature's `hits` field).
+    pub hits: u64,
+}
+
+/// Scan raw agent transcript text for high-precision secret markers (BR-1
+/// "secret material entered agent context").
+///
+/// Uses the dedicated `transcript_secret_signatures` tunable -- vendor-anchored
+/// key prefixes and PEM private-key headers only -- NOT the broader
+/// `secret_content_signatures` file list, whose env-style markers
+/// (`token=`, `password=`, `[default]`) would alert on nearly every developer
+/// conversation. A secret that was pasted into a prompt or echoed into a tool
+/// result has entered the agent's context window, from which it can leak
+/// through ANY egress channel the LLM has (including destinations attributed
+/// as routine vendor backends), so a non-empty result is an exposure signal
+/// regardless of observed network activity.
+///
+/// Pure text matching (single lowercase pass + literal `contains`), no I/O,
+/// no regex; cheap enough to run on every parsed session.
+pub fn scan_transcript_text_for_secrets(text: &str) -> TranscriptSecretExposure {
+    match_signatures_in_text(
+        text,
+        &crate::agent_visibility_params::transcript_secret_signatures(),
+    )
+}
+
+/// Scan raw agent transcript text for prompt-injection bait phrases (BR-2,
+/// OWASP ASI01/LLM01 leading indicator): instruction-override preambles
+/// ("ignore all previous instructions"), system-prompt exfiltration asks,
+/// covert-action instructions ("do not tell the user"), and role overrides.
+///
+/// These phrases essentially never occur in legitimate task material an
+/// agent ingests (READMEs, tool results, retrieved pages, rules files), so a
+/// hit means bait text entered the agent's context window -- the
+/// precondition for a successful injection. Consequence detection
+/// (divergence verdicts, cross-boundary egress) remains the durable
+/// backstop; this is the deterministic leading indicator. Labels only --
+/// the matched content never leaves the parser. Same pure single-pass
+/// matching as the secret scan.
+pub fn scan_transcript_text_for_prompt_injection(text: &str) -> TranscriptSecretExposure {
+    match_signatures_in_text(
+        text,
+        &crate::agent_visibility_params::prompt_injection_signatures(),
+    )
+}
+
+/// Shared single-pass signature matcher behind the transcript secret and
+/// prompt-injection scans: one lowercase pass + literal `contains` per
+/// marker, no I/O, no regex.
+fn match_signatures_in_text(
+    text: &str,
+    signatures: &[vuln_detector_params::SecretContentSignatureJSON],
+) -> TranscriptSecretExposure {
+    if text.is_empty() {
+        return TranscriptSecretExposure::default();
+    }
+    let normalized = text.to_ascii_lowercase();
+    let mut labels = BTreeSet::new();
+    let mut hits: u64 = 0;
+    for signature in signatures {
+        if signature.markers.is_empty() {
+            continue;
+        }
+        let matched = if signature.mode == "all" {
+            signature
+                .markers
+                .iter()
+                .all(|marker| normalized.contains(marker.as_str()))
+        } else {
+            signature
+                .markers
+                .iter()
+                .any(|marker| normalized.contains(marker.as_str()))
+        };
+        if !matched {
+            continue;
+        }
+        if signature.per_marker {
+            for marker in &signature.markers {
+                if normalized.contains(marker.as_str()) {
+                    labels.insert(signature.label.clone());
+                    hits += signature.hits as u64;
+                }
+            }
+        } else {
+            labels.insert(signature.label.clone());
+            hits += signature.hits as u64;
+        }
+    }
+    TranscriptSecretExposure {
+        labels: labels.into_iter().collect(),
+        hits,
+    }
+}
+
 /// Batched scan used by the vulnerability detector tick. Returns every signal
 /// that carries at least one indicator the detector may promote:
 ///   - `secret_hits >= secret_content_min_hits` (primary sensitive-material

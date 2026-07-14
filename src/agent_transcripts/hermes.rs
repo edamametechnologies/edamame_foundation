@@ -31,7 +31,7 @@ use super::codex::{gather_jsonl_transcripts, GenericTranscriptCandidate};
 use super::parsing::{
     classify_open_files_excluding_sensitive, classify_sensitive_paths, extract_commands,
     extract_paths, extract_ports, extract_tool_names, extract_traffic, infer_process_paths,
-    parse_jsonl_transcript, parse_txt_transcript, ParsedTranscript,
+    parse_txt_transcript, ParsedTranscript,
 };
 use super::{
     datetime_from_secs, hostname_string, mtime_secs, observer_agent_instance_id,
@@ -106,26 +106,32 @@ pub fn collect(home: &Path, options: &CollectOptions) -> anyhow::Result<CollectR
 
     let mut sessions: Vec<CollectedRawSession> = Vec::new();
     for candidate in candidates.into_iter().take(limit) {
-        let raw_text = match super::read_transcript_capped(&candidate.path) {
-            Ok(text) => text,
-            Err(_) => continue,
+        // Cached by (path, mtime, size): `build_session` is a pure function of
+        // the transcript bytes plus the per-host-constant `workspace_root`/
+        // `home_str`, so unchanged transcripts skip the parse+extract build and
+        // a session built under one window is reused verbatim when the window
+        // widens.
+        let session = match super::get_or_build_session(
+            &candidate.path,
+            candidate.is_jsonl,
+            |parsed: ParsedTranscript| {
+                let inputs = SessionInputs {
+                    session_key: transcript_session_id(&candidate.path),
+                    title_hint: None,
+                    user_text: parsed.user_text,
+                    assistant_text: parsed.assistant_text,
+                    raw_text: parsed.raw_text,
+                    source_path: candidate.path.to_string_lossy().to_string(),
+                    started_at: datetime_from_secs(candidate.birthtime_secs),
+                    modified_at: datetime_from_secs(candidate.mtime_secs),
+                };
+                build_session(inputs, &workspace_root, &home_str)
+            },
+        ) {
+            Some(session) => session,
+            None => continue,
         };
-        let parsed: ParsedTranscript = if candidate.is_jsonl {
-            parse_jsonl_transcript(&raw_text)
-        } else {
-            parse_txt_transcript(&raw_text)
-        };
-        let inputs = SessionInputs {
-            session_key: transcript_session_id(&candidate.path),
-            title_hint: None,
-            user_text: parsed.user_text,
-            assistant_text: parsed.assistant_text,
-            raw_text: parsed.raw_text,
-            source_path: candidate.path.to_string_lossy().to_string(),
-            started_at: datetime_from_secs(candidate.birthtime_secs),
-            modified_at: datetime_from_secs(candidate.mtime_secs),
-        };
-        sessions.push(build_session(inputs, &workspace_root, &home_str));
+        sessions.push(session);
     }
 
     // 2) Tolerant sessions.json manifest reader. File transcripts take

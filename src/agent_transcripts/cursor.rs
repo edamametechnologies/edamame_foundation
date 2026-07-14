@@ -9,8 +9,7 @@ use chrono::{DateTime, Utc};
 
 use super::parsing::{
     classify_open_files_excluding_sensitive, classify_sensitive_paths, extract_commands,
-    extract_paths, extract_ports, extract_tool_names, extract_traffic, parse_jsonl_transcript,
-    parse_txt_transcript, ParsedTranscript,
+    extract_paths, extract_ports, extract_tool_names, extract_traffic, ParsedTranscript,
 };
 use super::{
     birthtime_secs, datetime_from_secs, hostname_string, mtime_secs, observer_agent_instance_id,
@@ -99,69 +98,78 @@ pub fn collect(home: &Path, options: &CollectOptions) -> anyhow::Result<CollectR
     let mut sessions: Vec<CollectedRawSession> = Vec::new();
 
     for candidate in candidates.into_iter().take(options.limit.max(1)) {
-        let raw_text = match super::read_transcript_capped(&candidate.preferred_source) {
-            Ok(text) => text,
-            Err(_) => continue,
+        // The built session is a pure function of the transcript bytes plus the
+        // per-host-constant `workspace_root`/`home_str` and the Cursor path
+        // constants, so it is cached by (path, mtime, size) and the whole
+        // parse+extract pass is skipped when the file is unchanged. The
+        // window-independent build means a session built during a 24h collect is
+        // reused verbatim when the window widens to 7d. `context_tokens_used` is
+        // NOT part of the cached session (it is `None` here) and is re-attached
+        // from live `state.vscdb` after the loop on every call.
+        let session = match super::get_or_build_session(
+            &candidate.preferred_source,
+            candidate.preferred_source_is_jsonl,
+            |parsed: ParsedTranscript| {
+                let combined = format!(
+                    "{}\n\n{}\n\n{}",
+                    parsed.user_text, parsed.assistant_text, parsed.raw_text
+                );
+                let extracted_paths = extract_paths(&combined, &workspace_root);
+                let tool_names = extract_tool_names(&parsed.raw_text, &parsed.assistant_text);
+                let commands = extract_commands(&parsed.raw_text, &parsed.assistant_text);
+                let traffic = extract_traffic(&combined, &commands, CURSOR_LLM_HOSTS);
+                let ports = extract_ports(&combined, &commands);
+                let inferred = super::parsing::infer_process_paths(&commands, &workspace_root);
+                let expected_open =
+                    classify_open_files_excluding_sensitive(&extracted_paths, &home_str);
+                let _expected_sensitive = classify_sensitive_paths(&extracted_paths, &home_str);
+
+                let session_id = transcript_session_id(&candidate.preferred_source);
+                let title = first_non_empty_line(&parsed.user_text)
+                    .unwrap_or_else(|| format!("Cursor session {}", session_id));
+                let started_at = datetime_from_secs(candidate.birthtime_secs);
+                let modified_at = datetime_from_secs(candidate.mtime_secs);
+
+                CollectedRawSession {
+                    session_key: session_id,
+                    title,
+                    user_text: parsed.user_text.clone(),
+                    assistant_text: parsed.assistant_text.clone(),
+                    raw_text: parsed.raw_text.clone(),
+                    tool_names,
+                    commands,
+                    derived_expected_traffic: traffic,
+                    derived_expected_local_open_ports: ports,
+                    derived_expected_process_paths: inferred.process_paths,
+                    derived_expected_parent_paths: inferred.parent_paths,
+                    derived_expected_grandparent_paths: Vec::new(),
+                    derived_scope_process_paths: Vec::new(),
+                    derived_scope_parent_paths: CURSOR_SCOPE_PARENT_PATHS
+                        .iter()
+                        .map(|s| (*s).to_string())
+                        .collect(),
+                    derived_scope_grandparent_paths: Vec::new(),
+                    derived_scope_any_lineage_paths: super::agent_identity_lineage_paths(
+                        "cursor",
+                        CURSOR_SCOPE_PARENT_PATHS,
+                    ),
+                    derived_expected_open_files: expected_open,
+                    source_path: candidate.preferred_source.to_string_lossy().to_string(),
+                    started_at,
+                    modified_at,
+                    economics_raw_text: String::new(),
+                    economics_truncated: false,
+                    // Populated below by attach_cursor_context_usage() on desktop.
+                    context_tokens_used: None,
+                    context_token_limit: None,
+                    context_usage_percent: None,
+                }
+            },
+        ) {
+            Some(session) => session,
+            None => continue,
         };
-        let parsed: ParsedTranscript = if candidate.preferred_source_is_jsonl {
-            parse_jsonl_transcript(&raw_text)
-        } else {
-            parse_txt_transcript(&raw_text)
-        };
-
-        let combined = format!(
-            "{}\n\n{}\n\n{}",
-            parsed.user_text, parsed.assistant_text, parsed.raw_text
-        );
-        let extracted_paths = extract_paths(&combined, &workspace_root);
-        let tool_names = extract_tool_names(&parsed.raw_text, &parsed.assistant_text);
-        let commands = extract_commands(&parsed.raw_text, &parsed.assistant_text);
-        let traffic = extract_traffic(&combined, &commands, CURSOR_LLM_HOSTS);
-        let ports = extract_ports(&combined, &commands);
-        let inferred = super::parsing::infer_process_paths(&commands, &workspace_root);
-        let expected_open = classify_open_files_excluding_sensitive(&extracted_paths, &home_str);
-        let _expected_sensitive = classify_sensitive_paths(&extracted_paths, &home_str);
-
-        let session_id = transcript_session_id(&candidate.preferred_source);
-        let title = first_non_empty_line(&parsed.user_text)
-            .unwrap_or_else(|| format!("Cursor session {}", session_id));
-        let started_at = datetime_from_secs(candidate.birthtime_secs);
-        let modified_at = datetime_from_secs(candidate.mtime_secs);
-
-        sessions.push(CollectedRawSession {
-            session_key: session_id,
-            title,
-            user_text: parsed.user_text.clone(),
-            assistant_text: parsed.assistant_text.clone(),
-            raw_text: parsed.raw_text.clone(),
-            tool_names,
-            commands,
-            derived_expected_traffic: traffic,
-            derived_expected_local_open_ports: ports,
-            derived_expected_process_paths: inferred.process_paths,
-            derived_expected_parent_paths: inferred.parent_paths,
-            derived_expected_grandparent_paths: Vec::new(),
-            derived_scope_process_paths: Vec::new(),
-            derived_scope_parent_paths: CURSOR_SCOPE_PARENT_PATHS
-                .iter()
-                .map(|s| (*s).to_string())
-                .collect(),
-            derived_scope_grandparent_paths: Vec::new(),
-            derived_scope_any_lineage_paths: super::agent_identity_lineage_paths(
-                "cursor",
-                CURSOR_SCOPE_PARENT_PATHS,
-            ),
-            derived_expected_open_files: expected_open,
-            source_path: candidate.preferred_source.to_string_lossy().to_string(),
-            started_at,
-            modified_at,
-            economics_raw_text: String::new(),
-            economics_truncated: false,
-            // Populated below by attach_cursor_context_usage() on desktop.
-            context_tokens_used: None,
-            context_token_limit: None,
-            context_usage_percent: None,
-        });
+        sessions.push(session);
     }
 
     // Cursor does not persist billed token usage or dollar cost on disk (both

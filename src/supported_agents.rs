@@ -136,7 +136,7 @@ impl SupportedAgentDefinition {
     /// This is deliberately DISTINCT from [`resolve_config_dir_with_home`],
     /// which returns the EDAMAME *plugin*'s own data directory
     /// (`<agent>-edamame`, e.g. `~/Library/Application Support/cursor-edamame`)
-    /// used for plugin provisioning. SBOM / instruction discovery must walk the
+    /// used for plugin provisioning. Component / instruction discovery must walk the
     /// agent's real tree; using the plugin config dir finds nothing (or the
     /// plugin's own bundle) and mis-associates skills across the fleet.
     ///

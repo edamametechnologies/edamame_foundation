@@ -6,8 +6,7 @@ use chrono::Utc;
 
 use super::parsing::{
     classify_open_files_excluding_sensitive, classify_sensitive_paths, extract_commands,
-    extract_paths, extract_ports, extract_tool_names, extract_traffic, parse_jsonl_transcript,
-    parse_txt_transcript, ParsedTranscript,
+    extract_paths, extract_ports, extract_tool_names, extract_traffic, ParsedTranscript,
 };
 use super::{
     datetime_from_secs, hostname_string, mtime_secs, observer_agent_instance_id,
@@ -124,67 +123,75 @@ pub(crate) fn build_payload(
     let mut sessions: Vec<CollectedRawSession> = Vec::new();
 
     for candidate in candidates.into_iter().take(options.limit.max(1)) {
-        let raw_text = match super::read_transcript_capped(&candidate.path) {
-            Ok(text) => text,
-            Err(_) => continue,
-        };
-        let parsed: ParsedTranscript = if candidate.is_jsonl {
-            parse_jsonl_transcript(&raw_text)
-        } else {
-            parse_txt_transcript(&raw_text)
-        };
-        let combined = format!(
-            "{}\n\n{}\n\n{}",
-            parsed.user_text, parsed.assistant_text, parsed.raw_text
-        );
-        let extracted_paths = extract_paths(&combined, &workspace_root);
-        let tool_names = extract_tool_names(&parsed.raw_text, &parsed.assistant_text);
-        let commands = extract_commands(&parsed.raw_text, &parsed.assistant_text);
-        let traffic = extract_traffic(&combined, &commands, llm_hosts);
-        let ports = extract_ports(&combined, &commands);
-        let inferred = super::parsing::infer_process_paths(&commands, &workspace_root);
-        let expected_open = classify_open_files_excluding_sensitive(&extracted_paths, &home_str);
-        let _expected_sensitive = classify_sensitive_paths(&extracted_paths, &home_str);
+        // Cached by (path, mtime, size): the whole parse+extract build is a
+        // pure function of the transcript bytes plus the per-host-constant
+        // `workspace_root`/`home_str` and the agent's compile-time path
+        // constants, so an unchanged file is served without re-extracting, and
+        // a session built under one window is reused verbatim when the window
+        // widens.
+        let session = match super::get_or_build_session(
+            &candidate.path,
+            candidate.is_jsonl,
+            |parsed: ParsedTranscript| {
+                let combined = format!(
+                    "{}\n\n{}\n\n{}",
+                    parsed.user_text, parsed.assistant_text, parsed.raw_text
+                );
+                let extracted_paths = extract_paths(&combined, &workspace_root);
+                let tool_names = extract_tool_names(&parsed.raw_text, &parsed.assistant_text);
+                let commands = extract_commands(&parsed.raw_text, &parsed.assistant_text);
+                let traffic = extract_traffic(&combined, &commands, llm_hosts);
+                let ports = extract_ports(&combined, &commands);
+                let inferred = super::parsing::infer_process_paths(&commands, &workspace_root);
+                let expected_open =
+                    classify_open_files_excluding_sensitive(&extracted_paths, &home_str);
+                let _expected_sensitive = classify_sensitive_paths(&extracted_paths, &home_str);
 
-        let session_id = transcript_session_id(&candidate.path);
-        let title = first_non_empty_line(&parsed.user_text)
-            .unwrap_or_else(|| format!("{} session {}", agent_type, session_id));
-        let started_at = datetime_from_secs(candidate.birthtime_secs);
-        let modified_at = datetime_from_secs(candidate.mtime_secs);
+                let session_id = transcript_session_id(&candidate.path);
+                let title = first_non_empty_line(&parsed.user_text)
+                    .unwrap_or_else(|| format!("{} session {}", agent_type, session_id));
+                let started_at = datetime_from_secs(candidate.birthtime_secs);
+                let modified_at = datetime_from_secs(candidate.mtime_secs);
 
-        sessions.push(CollectedRawSession {
-            session_key: session_id,
-            title,
-            user_text: parsed.user_text.clone(),
-            assistant_text: parsed.assistant_text.clone(),
-            raw_text: parsed.raw_text.clone(),
-            tool_names,
-            commands,
-            derived_expected_traffic: traffic,
-            derived_expected_local_open_ports: ports,
-            derived_expected_process_paths: inferred.process_paths,
-            derived_expected_parent_paths: inferred.parent_paths,
-            derived_expected_grandparent_paths: Vec::new(),
-            derived_scope_process_paths: Vec::new(),
-            derived_scope_parent_paths: scope_parent_paths
-                .iter()
-                .map(|s| (*s).to_string())
-                .collect(),
-            derived_scope_grandparent_paths: Vec::new(),
-            derived_scope_any_lineage_paths: super::agent_identity_lineage_paths(
-                agent_type,
-                scope_parent_paths,
-            ),
-            derived_expected_open_files: expected_open,
-            source_path: candidate.path.to_string_lossy().to_string(),
-            started_at,
-            modified_at,
-            economics_raw_text: String::new(),
-            economics_truncated: false,
-            context_tokens_used: None,
-            context_token_limit: None,
-            context_usage_percent: None,
-        });
+                CollectedRawSession {
+                    session_key: session_id,
+                    title,
+                    user_text: parsed.user_text.clone(),
+                    assistant_text: parsed.assistant_text.clone(),
+                    raw_text: parsed.raw_text.clone(),
+                    tool_names,
+                    commands,
+                    derived_expected_traffic: traffic,
+                    derived_expected_local_open_ports: ports,
+                    derived_expected_process_paths: inferred.process_paths,
+                    derived_expected_parent_paths: inferred.parent_paths,
+                    derived_expected_grandparent_paths: Vec::new(),
+                    derived_scope_process_paths: Vec::new(),
+                    derived_scope_parent_paths: scope_parent_paths
+                        .iter()
+                        .map(|s| (*s).to_string())
+                        .collect(),
+                    derived_scope_grandparent_paths: Vec::new(),
+                    derived_scope_any_lineage_paths: super::agent_identity_lineage_paths(
+                        agent_type,
+                        scope_parent_paths,
+                    ),
+                    derived_expected_open_files: expected_open,
+                    source_path: candidate.path.to_string_lossy().to_string(),
+                    started_at,
+                    modified_at,
+                    economics_raw_text: String::new(),
+                    economics_truncated: false,
+                    context_tokens_used: None,
+                    context_token_limit: None,
+                    context_usage_percent: None,
+                }
+            },
+        ) {
+            Some(session) => session,
+            None => continue,
+        };
+        sessions.push(session);
     }
 
     let (window_start, window_end) = if sessions.is_empty() {

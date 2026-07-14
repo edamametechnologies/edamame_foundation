@@ -26,7 +26,7 @@
 //! - Pure: no I/O, no clock except `generated_at` via `chrono::Utc::now()`.
 
 use crate::agent_visibility::{VisibilityFinding, VisibilitySeverity};
-use crate::vuln_detector_params::{self, CriticalSubprocessClassJSON};
+use crate::agent_visibility_params::{self, CriticalSubprocessClassJSON};
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -138,7 +138,7 @@ pub fn classify_subprocess(process_name: &str) -> Option<CriticalSubprocessClass
     if base.is_empty() {
         return None;
     }
-    vuln_detector_params::agent_critical_subprocess_catalog()
+    agent_visibility_params::agent_critical_subprocess_catalog()
         .iter()
         .find(|c| c.names.iter().any(|n| n.as_str() == base))
         .map(CriticalSubprocessClass::from_json)
@@ -237,9 +237,16 @@ impl SubprocessInput {
                 s.push_str(part);
             }
         }
-        for c in &self.command {
-            s.push(' ');
-            s.push_str(c);
+        // For session-sourced inputs `command` is the subprocess argv and is
+        // legitimate attribution material. For FIM-sourced inputs it carries
+        // the touched file path instead -- an unrelated process writing into
+        // an agent's config directory must NOT be attributed to that agent,
+        // so the command is display-only there.
+        if self.source != "fim" {
+            for c in &self.command {
+                s.push(' ');
+                s.push_str(c);
+            }
         }
         s.to_ascii_lowercase()
     }
@@ -298,6 +305,25 @@ pub struct AgentSubprocessObservation {
     pub finding_key: String,
 }
 
+impl AgentSubprocessObservation {
+    /// The deduplication key used to collapse repeated sightings of the same
+    /// agent/binary/destination/source into a single observation. Identical to
+    /// the key computed in [`build_subprocess_observations`], so a persisted
+    /// history entry re-keys stably against a freshly built one (used by
+    /// [`merge_and_window_subprocess_history`]).
+    pub fn dedup_key(&self) -> String {
+        let dest_host = self
+            .destination
+            .as_deref()
+            .map(host_only)
+            .unwrap_or_else(|| "local".to_string());
+        format!(
+            "{}|{}|{}|{}",
+            self.agent_type, self.process_name, dest_host, self.source
+        )
+    }
+}
+
 /// Per-agent rollup of subprocess usage.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentSubprocessAgentSummary {
@@ -341,7 +367,11 @@ const MAX_COMMAND_CHARS: usize = 256;
 /// and the serialized UI payload. Existing keys keep accumulating their counts;
 /// only brand-new keys past the cap are dropped. Far above any realistic count
 /// of distinct critical-subprocess destinations a host legitimately produces.
-const MAX_SUBPROCESS_OBSERVATIONS: usize = 512;
+fn max_subprocess_observations() -> usize {
+    agent_visibility_params::history_retention()
+        .subprocess_max_observations
+        .max(1)
+}
 
 fn join_command(cmd: &[String]) -> String {
     let joined = cmd.join(" ");
@@ -357,19 +387,20 @@ fn join_command(cmd: &[String]) -> String {
 // Builder (deterministic, pure)
 // ---------------------------------------------------------------------------
 
-/// Build the agent subprocess-usage surface from candidate inputs. Pure: keeps
-/// only inputs that classify as a critical subprocess AND attribute to a known
-/// agent, dedups them, rolls up per-agent counts, and synthesizes one
-/// `VisibilityFinding` per deduped observation (severity capped at `Medium`).
+/// Deduplicate + classify + attribute candidate inputs into observations,
+/// WITHOUT the sort / rollup / finding synthesis (that is [`finalize_usage`]).
+/// Pure: keeps only inputs that classify as a critical subprocess AND
+/// attribute to a known agent, and collapses repeated sightings by the dedup
+/// key `agent|process_basename|dest_host|source`. The returned vec is in
+/// dedup-key order (not display order); pass it to [`finalize_usage`] to get a
+/// sorted, rolled-up [`AgentSubprocessUsage`].
 ///
-/// `window_seconds` is the rolling capture-retention horizon the `inputs` were
-/// drawn from (the caller's session-retention bound). It is carried through to
-/// [`AgentSubprocessUsage::window_seconds`] so the UI can state the time window
-/// explicitly; pass `0` when no capture window applies.
-pub fn build_agent_subprocess_usage(
+/// Split out from [`build_agent_subprocess_usage`] so the core manager can feed
+/// the fresh observations into a persisted history merge
+/// ([`merge_and_window_subprocess_history`]) before finalizing.
+pub fn build_subprocess_observations(
     inputs: &[SubprocessInput],
-    window_seconds: u32,
-) -> AgentSubprocessUsage {
+) -> Vec<AgentSubprocessObservation> {
     use std::collections::BTreeMap;
 
     // dedup key -> accumulating observation
@@ -377,7 +408,7 @@ pub fn build_agent_subprocess_usage(
 
     // Load the CloudModel catalog once for the whole batch (names are
     // pre-lowercased by `CveDetectionParams::new_from_json`).
-    let catalog = vuln_detector_params::agent_critical_subprocess_catalog();
+    let catalog = agent_visibility_params::agent_critical_subprocess_catalog();
 
     for input in inputs {
         let proc_base = normalize_process_basename(&input.process_name);
@@ -408,7 +439,7 @@ pub fn build_agent_subprocess_usage(
         // Bound the dedup map on its only attacker-influenceable dimension
         // (dest_host). A brand-new key past the cap is dropped; existing keys
         // keep accumulating so occurrence counts stay accurate.
-        if acc.len() >= MAX_SUBPROCESS_OBSERVATIONS && !acc.contains_key(&key) {
+        if acc.len() >= max_subprocess_observations() && !acc.contains_key(&key) {
             continue;
         }
 
@@ -444,7 +475,20 @@ pub fn build_agent_subprocess_usage(
             });
     }
 
-    let mut observations: Vec<AgentSubprocessObservation> = acc.into_values().collect();
+    acc.into_values().collect()
+}
+
+/// Finalize a set of deduplicated observations into the wire surface: sort them
+/// into display order, roll up per-agent counts, synthesize one capped
+/// `VisibilityFinding` per observation, and stamp the caller-supplied
+/// `window_seconds`. Shared by [`build_agent_subprocess_usage`] (live build)
+/// and [`merge_and_window_subprocess_history`] (windowed history read).
+pub fn finalize_usage(
+    mut observations: Vec<AgentSubprocessObservation>,
+    window_seconds: u32,
+) -> AgentSubprocessUsage {
+    use std::collections::BTreeMap;
+
     // Sort: criticality desc, then count desc, then agent + name for stability.
     observations.sort_by(|a, b| {
         b.criticality
@@ -494,70 +538,8 @@ pub fn build_agent_subprocess_usage(
     });
 
     // Synthesize findings (one per deduped observation).
-    let findings: Vec<VisibilityFinding> = observations
-        .iter()
-        .map(|o| {
-            let rule_id = format!("subprocess_{}", o.category);
-            let subject_id = format!(
-                "{}:{}:{}",
-                o.agent_type,
-                o.process_name,
-                o.destination
-                    .as_deref()
-                    .map(host_only)
-                    .unwrap_or_else(|| "local".to_string())
-            );
-            let dest_str = o
-                .destination
-                .as_deref()
-                .filter(|d| !d.trim().is_empty())
-                .unwrap_or("local");
-            let title = format!(
-                "Agent '{}' spawned critical subprocess '{}'",
-                o.agent_type, o.process_name
-            );
-            let description = format!(
-                "The '{}' agent spawned '{}' ({}, {} criticality) -> {} (observed {}x).",
-                o.agent_type,
-                o.process_name,
-                o.category,
-                o.criticality.as_str(),
-                dest_str,
-                o.count
-            );
-            let mut f = VisibilityFinding::new(
-                "subprocess",
-                &rule_id,
-                o.criticality.finding_severity(),
-                &subject_id,
-                title,
-                description,
-            )
-            .with_evidence("agent_type", o.agent_type.as_str())
-            .with_evidence("process_name", o.process_name.as_str())
-            .with_evidence("category", o.category.as_str())
-            .with_evidence("criticality", o.criticality.as_str())
-            .with_evidence("count", o.count.to_string())
-            .with_evidence("source", o.source.as_str())
-            .with_evidence("owasp_refs", o.owasp_refs.as_str());
-            if !o.process_path.is_empty() {
-                f = f.with_evidence("process_path", o.process_path.as_str());
-            }
-            if !o.parent_process_name.is_empty() {
-                f = f.with_evidence("parent_process_name", o.parent_process_name.as_str());
-            }
-            if !o.parent_process_path.is_empty() {
-                f = f.with_evidence("parent_process_path", o.parent_process_path.as_str());
-            }
-            if !o.command.is_empty() {
-                f = f.with_evidence("command", o.command.as_str());
-            }
-            if let Some(d) = &o.destination {
-                f = f.with_evidence("destination", d.as_str());
-            }
-            f
-        })
-        .collect();
+    let findings: Vec<VisibilityFinding> =
+        observations.iter().map(finding_for_observation).collect();
 
     let total_observations = observations.len() as u32;
     let agents_with_usage = by_agent.len() as u32;
@@ -572,6 +554,184 @@ pub fn build_agent_subprocess_usage(
         observations,
         findings,
     }
+}
+
+/// Build the capped `VisibilityFinding` (Medium/Low/Info per criticality) for a
+/// single observation. Reveal-only: severity never reaches the alertable gate.
+fn finding_for_observation(o: &AgentSubprocessObservation) -> VisibilityFinding {
+    let rule_id = format!("subprocess_{}", o.category);
+    let subject_id = format!(
+        "{}:{}:{}",
+        o.agent_type,
+        o.process_name,
+        o.destination
+            .as_deref()
+            .map(host_only)
+            .unwrap_or_else(|| "local".to_string())
+    );
+    let dest_str = o
+        .destination
+        .as_deref()
+        .filter(|d| !d.trim().is_empty())
+        .unwrap_or("local");
+    let title = format!(
+        "Agent '{}' spawned critical subprocess '{}'",
+        o.agent_type, o.process_name
+    );
+    let description = format!(
+        "The '{}' agent spawned '{}' ({}, {} criticality) -> {} (observed {}x).",
+        o.agent_type,
+        o.process_name,
+        o.category,
+        o.criticality.as_str(),
+        dest_str,
+        o.count
+    );
+    let mut f = VisibilityFinding::new(
+        "subprocess",
+        &rule_id,
+        o.criticality.finding_severity(),
+        &subject_id,
+        title,
+        description,
+    )
+    .with_evidence("agent_type", o.agent_type.as_str())
+    .with_evidence("process_name", o.process_name.as_str())
+    .with_evidence("category", o.category.as_str())
+    .with_evidence("criticality", o.criticality.as_str())
+    .with_evidence("count", o.count.to_string())
+    .with_evidence("source", o.source.as_str())
+    .with_evidence("owasp_refs", o.owasp_refs.as_str());
+    if !o.process_path.is_empty() {
+        f = f.with_evidence("process_path", o.process_path.as_str());
+    }
+    if !o.parent_process_name.is_empty() {
+        f = f.with_evidence("parent_process_name", o.parent_process_name.as_str());
+    }
+    if !o.parent_process_path.is_empty() {
+        f = f.with_evidence("parent_process_path", o.parent_process_path.as_str());
+    }
+    if !o.command.is_empty() {
+        f = f.with_evidence("command", o.command.as_str());
+    }
+    if let Some(d) = &o.destination {
+        f = f.with_evidence("destination", d.as_str());
+    }
+    f
+}
+
+/// Build the agent subprocess-usage surface from candidate inputs. Pure: keeps
+/// only inputs that classify as a critical subprocess AND attribute to a known
+/// agent, dedups them, rolls up per-agent counts, and synthesizes one
+/// `VisibilityFinding` per deduped observation (severity capped at `Medium`).
+///
+/// `window_seconds` is the rolling capture-retention horizon the `inputs` were
+/// drawn from (the caller's session-retention bound). It is carried through to
+/// [`AgentSubprocessUsage::window_seconds`] so the UI can state the time window
+/// explicitly; pass `0` when no capture window applies.
+pub fn build_agent_subprocess_usage(
+    inputs: &[SubprocessInput],
+    window_seconds: u32,
+) -> AgentSubprocessUsage {
+    finalize_usage(build_subprocess_observations(inputs), window_seconds)
+}
+
+/// Merge freshly built observations into a persisted history vector, prune the
+/// history to `retention_seconds`, cap it, and return the finalized surface for
+/// the requested `window_seconds`.
+///
+/// `history` is the caller-owned persisted set of deduplicated observations
+/// (the full retained horizon, mutated in place so the caller can persist it).
+/// `fresh` is the current live surface's observations (from
+/// [`build_subprocess_observations`]). Merge semantics per dedup key:
+/// - `first_seen` = earliest ever seen, `last_seen` = latest ever seen;
+/// - display fields (path/command/destination/pid/session_uid) are refreshed
+///   from the freshest sighting so the row reflects the most recent activity;
+/// - `count` = the PEAK single-window occurrence count (`max`, never a running
+///   sum) so a long-lived session re-counted across many live reads does not
+///   inflate the lifetime total without bound.
+///
+/// Then: entries older than `retention_seconds` (by `last_seen`) are pruned;
+/// the history is capped at the unified retention policy's
+/// `subprocess_max_observations`, evicting the
+/// oldest `last_seen` first; and the returned surface contains only entries
+/// whose `last_seen` is within `window_seconds` of `now`. `window_seconds == 0`
+/// means "no window filter" (return the full retained set). Pure except for the
+/// injected `now` (no clock, no IO), so it is unit-testable.
+pub fn merge_and_window_subprocess_history(
+    history: &mut Vec<AgentSubprocessObservation>,
+    fresh: &[AgentSubprocessObservation],
+    now: chrono::DateTime<chrono::Utc>,
+    retention_seconds: i64,
+    window_seconds: u32,
+) -> AgentSubprocessUsage {
+    use std::collections::HashMap;
+
+    // Index existing history by dedup key for O(1) merge.
+    let mut index: HashMap<String, usize> = HashMap::with_capacity(history.len());
+    for (i, o) in history.iter().enumerate() {
+        index.insert(o.dedup_key(), i);
+    }
+
+    for f in fresh {
+        let key = f.dedup_key();
+        if let Some(&i) = index.get(&key) {
+            let o = &mut history[i];
+            if f.first_seen < o.first_seen {
+                o.first_seen = f.first_seen;
+            }
+            if f.last_seen >= o.last_seen {
+                o.last_seen = f.last_seen;
+                // Refresh display fields from the freshest sighting.
+                o.process_path = f.process_path.clone();
+                o.parent_process_name = f.parent_process_name.clone();
+                o.parent_process_path = f.parent_process_path.clone();
+                o.command = f.command.clone();
+                o.destination = f.destination.clone();
+                o.pid = f.pid;
+                o.parent_pid = f.parent_pid;
+                o.session_uid = f.session_uid.clone();
+                o.criticality = f.criticality;
+                o.category = f.category.clone();
+                o.owasp_refs = f.owasp_refs.clone();
+                o.finding_key = f.finding_key.clone();
+            }
+            // Peak single-window occurrence count (never a running sum).
+            if f.count > o.count {
+                o.count = f.count;
+            }
+        } else {
+            let idx = history.len();
+            history.push(f.clone());
+            index.insert(key, idx);
+        }
+    }
+
+    // Prune by retention horizon (by last activity).
+    if retention_seconds > 0 {
+        history.retain(|o| (now - o.last_seen).num_seconds() <= retention_seconds);
+    }
+
+    // Cap the retained set, evicting the oldest `last_seen` first.
+    let cap = max_subprocess_observations();
+    if history.len() > cap {
+        history.sort_by(|a, b| b.last_seen.cmp(&a.last_seen));
+        history.truncate(cap);
+    }
+
+    // Windowed projection: entries active within `window_seconds` of `now`.
+    let windowed: Vec<AgentSubprocessObservation> = if window_seconds == 0 {
+        history.clone()
+    } else {
+        let cutoff = window_seconds as i64;
+        history
+            .iter()
+            .filter(|o| (now - o.last_seen).num_seconds() <= cutoff)
+            .cloned()
+            .collect()
+    };
+
+    finalize_usage(windowed, window_seconds)
 }
 
 /// Host-only (port stripped) form of a `destination` string, for finding keys.
@@ -714,6 +874,34 @@ mod tests {
     }
 
     #[test]
+    fn fim_command_is_display_only_never_attribution() {
+        // FIM-sourced inputs carry the touched file path in `command`. A
+        // random (non-agent) process writing into an agent's config dir must
+        // NOT be attributed to that agent off the file path alone.
+        let mut unattributed = input("ssh", "/usr/bin/sshd", None);
+        unattributed.source = "fim".to_string();
+        unattributed.session_uid = None;
+        unattributed.command = vec![
+            "modify".to_string(),
+            "/home/me/.cursor/mcp.json".to_string(),
+        ];
+        let usage = build_agent_subprocess_usage(&[unattributed], 0);
+        assert_eq!(usage.total_observations, 0);
+
+        // The same FIM input WITH real agent lineage is kept, sourced "fim",
+        // destination-less ("local" host bucket).
+        let mut attributed = input("ssh", "/home/me/.cursor/x", None);
+        attributed.source = "fim".to_string();
+        attributed.session_uid = None;
+        attributed.command = vec!["create".to_string(), "/tmp/staging".to_string()];
+        let usage = build_agent_subprocess_usage(&[attributed], 0);
+        assert_eq!(usage.total_observations, 1);
+        assert_eq!(usage.observations[0].source, "fim");
+        assert_eq!(usage.observations[0].agent_type, "cursor");
+        assert!(usage.observations[0].destination.is_none());
+    }
+
+    #[test]
     fn empty_inputs_yield_empty_usage() {
         let usage = build_agent_subprocess_usage(&[], 0);
         assert_eq!(usage.total_observations, 0);
@@ -727,10 +915,11 @@ mod tests {
         // Distinct destination hosts are the only attacker-influenceable
         // dimension of the dedup key, so a flood of distinct ssh destinations
         // must not grow the observation set without limit. Feed
-        // MAX_SUBPROCESS_OBSERVATIONS + 50 distinct destinations, then one
+        // cap + 50 distinct destinations, then one
         // duplicate of the FIRST (already-inserted) destination to prove that
         // existing keys keep accumulating even after the cap is reached.
-        let mut inputs: Vec<SubprocessInput> = (0..(MAX_SUBPROCESS_OBSERVATIONS + 50))
+        let cap = max_subprocess_observations();
+        let mut inputs: Vec<SubprocessInput> = (0..(cap + 50))
             .map(|i| {
                 input(
                     "ssh",
@@ -749,13 +938,13 @@ mod tests {
 
         let usage = build_agent_subprocess_usage(&inputs, 7200);
         assert_eq!(
-            usage.total_observations, MAX_SUBPROCESS_OBSERVATIONS as u32,
-            "observation set must saturate at MAX_SUBPROCESS_OBSERVATIONS"
+            usage.total_observations, cap as u32,
+            "observation set must saturate at subprocess_max_observations"
         );
         assert_eq!(
             usage.observations.len(),
-            MAX_SUBPROCESS_OBSERVATIONS,
-            "observations vec must be bounded at MAX_SUBPROCESS_OBSERVATIONS"
+            cap,
+            "observations vec must be bounded at subprocess_max_observations"
         );
         // host-0 was seen twice; it sorts first (count desc) and proves
         // existing keys keep accumulating past the cap.
@@ -766,6 +955,163 @@ mod tests {
         assert_eq!(
             usage.observations[0].destination.as_deref(),
             Some("host-0.example.com:22")
+        );
+    }
+
+    fn input_at(
+        process: &str,
+        parent_path: &str,
+        dest: Option<&str>,
+        observed_at: chrono::DateTime<chrono::Utc>,
+    ) -> SubprocessInput {
+        let mut i = input(process, parent_path, dest);
+        i.observed_at = observed_at;
+        i
+    }
+
+    #[test]
+    fn merge_history_dedups_and_tracks_first_last_seen() {
+        let now = chrono::Utc::now();
+        let t_old = now - chrono::Duration::hours(6);
+        let t_new = now - chrono::Duration::minutes(5);
+
+        // History: one ssh sighting 6h ago.
+        let mut history = build_subprocess_observations(&[input_at(
+            "ssh",
+            "/home/me/.cursor/x",
+            Some("example.com:22"),
+            t_old,
+        )]);
+        assert_eq!(history.len(), 1);
+
+        // Fresh: same key, seen 5 min ago.
+        let fresh = build_subprocess_observations(&[input_at(
+            "ssh",
+            "/home/me/.cursor/x",
+            Some("example.com:22"),
+            t_new,
+        )]);
+
+        // 30-day retention, no window filter.
+        let usage =
+            merge_and_window_subprocess_history(&mut history, &fresh, now, 30 * 24 * 3600, 0);
+        // Same dedup key -> still ONE observation, not two.
+        assert_eq!(history.len(), 1);
+        assert_eq!(usage.total_observations, 1);
+        let o = &usage.observations[0];
+        assert_eq!(
+            o.first_seen, t_old,
+            "first_seen keeps the earliest sighting"
+        );
+        assert_eq!(
+            o.last_seen, t_new,
+            "last_seen advances to the freshest sighting"
+        );
+    }
+
+    #[test]
+    fn merge_history_windows_out_stale_entries() {
+        let now = chrono::Utc::now();
+        let t_2d = now - chrono::Duration::days(2);
+        let t_now = now - chrono::Duration::minutes(1);
+
+        // History has an ssh from 2 days ago and a curl from 1 min ago.
+        let mut history = build_subprocess_observations(&[
+            input_at(
+                "ssh",
+                "/home/me/.cursor/x",
+                Some("old.example.com:22"),
+                t_2d,
+            ),
+            input_at(
+                "curl",
+                "/home/me/.claude/projects/p",
+                Some("api.example.com:443"),
+                t_now,
+            ),
+        ]);
+        assert_eq!(history.len(), 2);
+
+        // 24h window: the 2-day-old ssh drops out of the projection but stays
+        // in the retained history (retention is 30d).
+        let usage =
+            merge_and_window_subprocess_history(&mut history, &[], now, 30 * 24 * 3600, 24 * 3600);
+        assert_eq!(history.len(), 2, "retention keeps both entries on disk");
+        assert_eq!(
+            usage.total_observations, 1,
+            "24h window projects only the recent curl"
+        );
+        assert_eq!(usage.observations[0].process_name, "curl");
+
+        // 7d window: both entries are within the window.
+        let usage7 = merge_and_window_subprocess_history(
+            &mut history,
+            &[],
+            now,
+            30 * 24 * 3600,
+            7 * 24 * 3600,
+        );
+        assert_eq!(usage7.total_observations, 2);
+    }
+
+    #[test]
+    fn merge_history_prunes_beyond_retention() {
+        let now = chrono::Utc::now();
+        let t_40d = now - chrono::Duration::days(40);
+
+        let mut history = build_subprocess_observations(&[input_at(
+            "ssh",
+            "/home/me/.cursor/x",
+            Some("ancient.example.com:22"),
+            t_40d,
+        )]);
+        assert_eq!(history.len(), 1);
+
+        // 30-day retention prunes the 40-day-old entry entirely.
+        let usage = merge_and_window_subprocess_history(&mut history, &[], now, 30 * 24 * 3600, 0);
+        assert!(history.is_empty(), "entry older than retention is pruned");
+        assert_eq!(usage.total_observations, 0);
+    }
+
+    #[test]
+    fn merge_history_count_is_peak_not_sum() {
+        let now = chrono::Utc::now();
+        let t = now - chrono::Duration::minutes(10);
+
+        // Fresh window A: ssh seen 3x.
+        let fresh_a = build_subprocess_observations(&[
+            input_at("ssh", "/home/me/.cursor/x", Some("example.com:22"), t),
+            input_at("ssh", "/home/me/.cursor/x", Some("example.com:22"), t),
+            input_at("ssh", "/home/me/.cursor/x", Some("example.com:22"), t),
+        ]);
+        assert_eq!(fresh_a[0].count, 3);
+
+        let mut history: Vec<AgentSubprocessObservation> = Vec::new();
+        merge_and_window_subprocess_history(&mut history, &fresh_a, now, 30 * 24 * 3600, 0);
+        assert_eq!(history[0].count, 3);
+
+        // Fresh window B (later read): same session re-counted at 2x. The peak
+        // stays 3 -- counts do NOT accumulate into 5 across reads.
+        let fresh_b = build_subprocess_observations(&[
+            input_at("ssh", "/home/me/.cursor/x", Some("example.com:22"), now),
+            input_at("ssh", "/home/me/.cursor/x", Some("example.com:22"), now),
+        ]);
+        merge_and_window_subprocess_history(&mut history, &fresh_b, now, 30 * 24 * 3600, 0);
+        assert_eq!(
+            history[0].count, 3,
+            "count is the peak single-window occurrence, never a running sum"
+        );
+
+        // A higher peak DOES raise the stored count.
+        let fresh_c = build_subprocess_observations(
+            &(0..5)
+                .map(|_| input_at("ssh", "/home/me/.cursor/x", Some("example.com:22"), now))
+                .collect::<Vec<_>>(),
+        );
+        merge_and_window_subprocess_history(&mut history, &fresh_c, now, 30 * 24 * 3600, 0);
+        assert_eq!(
+            history[0].count, 5,
+            "a higher single-window peak raises the count"
         );
     }
 }

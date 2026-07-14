@@ -804,6 +804,106 @@ fn economics_per_turn_timing_absent_without_timestamps() {
 }
 
 #[test]
+fn economics_craft_signals_from_spec_driven_transcript() {
+    // Craft heuristics: a structured, front-loaded spec prompt with file
+    // references plus healthy tool activity must score high on every
+    // maturity dimension and classify as implementation intent.
+    let raw = concat!(
+        r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Refactor the session parser in src/parsing.rs.\n# Requirements\n- must keep the existing public API\n- acceptance criteria: all tests pass\n- verify with cargo test after each change"}]}}"#,
+        "\n",
+        r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"src/parsing.rs"}}]}}"#,
+        "\n",
+        r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"file contents"}]}}"#,
+        "\n",
+        r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}"#,
+        "\n",
+    );
+    let econ = super::parsing::parse_session_economics("craft-spec", "/tmp/craft.jsonl", raw);
+    assert_eq!(econ.craft_substantive_prompts, 1);
+    assert_eq!(econ.prompt_maturity_constraints, 100);
+    assert_eq!(econ.prompt_maturity_success_criteria, 100);
+    assert_eq!(econ.prompt_maturity_verification, 100);
+    assert_eq!(
+        econ.prompt_maturity_context, 100,
+        "prompt carries file refs"
+    );
+    assert!(econ.prompt_maturity_specificity >= 90);
+    assert!(econ.prompt_maturity_score >= 90);
+    assert!(econ.spec_driven_start);
+    assert_eq!(econ.craft_intent_class, "implementation");
+    assert_eq!(econ.duplicate_prompt_count, 0);
+    assert!(!econ.stuck_reask);
+    assert_eq!(econ.frustration_marker_count, 0);
+    assert!(!econ.runaway_tool_loop);
+}
+
+#[test]
+fn economics_craft_detects_stuck_reask_and_runaway_loop() {
+    // The failure shape: the user re-asks the same thing while the agent
+    // hammers the same failing command. Duplicate prompts + errors =
+    // stuck re-ask; >= 5 identical consecutive failing signatures =
+    // runaway tool loop. Debug tokens in the first prompt = debugging intent.
+    let mut lines: Vec<String> = Vec::new();
+    lines.push(
+        r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"please fix the database connection pool timeout error"}]}}"#
+            .to_string(),
+    );
+    for i in 0..5 {
+        lines.push(format!(
+            r#"{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"tool_use","id":"b{i}","name":"Bash","input":{{"command":"cargo build"}}}}]}}}}"#
+        ));
+        lines.push(format!(
+            r#"{{"type":"user","message":{{"role":"user","content":[{{"type":"tool_result","tool_use_id":"b{i}","is_error":true,"content":"error: build failed"}}]}}}}"#
+        ));
+    }
+    lines.push(
+        r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"please fix the database connection pool timeout error"}]}}"#
+            .to_string(),
+    );
+    let raw = lines.join("\n");
+    let econ = super::parsing::parse_session_economics("craft-stuck", "/tmp/stuck.jsonl", &raw);
+    assert_eq!(econ.craft_intent_class, "debugging");
+    assert!(econ.duplicate_prompt_count >= 1, "re-asked the same prompt");
+    assert!(econ.stuck_reask, "duplicates while erroring");
+    assert!(econ.runaway_tool_loop, "5 identical failing bash calls");
+    assert_eq!(econ.tool_errors, 5);
+}
+
+#[test]
+fn economics_craft_context_from_tool_activity_and_control_prompts_skipped() {
+    // A vague prompt with no file refs, but the agent grounded itself via
+    // Grep: the context dimension gets the tool-side partial credit (60).
+    // Control prompts ("continue") never count as substantive.
+    let raw = concat!(
+        r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"please improve the error handling somehow in this project"}]}}"#,
+        "\n",
+        r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"g1","name":"Grep","input":{"pattern":"unwrap"}}]}}"#,
+        "\n",
+        r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"continue"}]}}"#,
+        "\n",
+    );
+    let econ = super::parsing::parse_session_economics("craft-ctx", "/tmp/ctx.jsonl", raw);
+    assert_eq!(econ.craft_substantive_prompts, 1, "control prompt skipped");
+    assert_eq!(
+        econ.prompt_maturity_context, 60,
+        "tool-side grounding credit"
+    );
+}
+
+#[test]
+fn economics_craft_not_scored_for_unstructured_txt_export() {
+    // Cursor `.txt` export lines are not JSON, so no user prompts are
+    // collected: the craft block must read as "not scored", never as a
+    // zero-grade session.
+    let raw = "user:\nplease build the feature\n\nassistant:\nbuilding now\n";
+    let econ = super::parsing::parse_session_economics("craft-txt", "/tmp/session.txt", raw);
+    assert_eq!(econ.craft_substantive_prompts, 0);
+    assert_eq!(econ.prompt_maturity_score, 0);
+    assert!(econ.craft_intent_class.is_empty());
+    assert!(!econ.spec_driven_start);
+}
+
+#[test]
 fn collect_to_json_round_trips() {
     let temp = tempfile::tempdir().expect("tempdir");
     let home = temp.path();

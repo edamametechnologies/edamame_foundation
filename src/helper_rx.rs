@@ -750,6 +750,12 @@ pub async fn rpc_run(
             "uninstall_agent_plugin" => utility_uninstall_agent_plugin(arg1, arg2).await,
             "test_agent_plugin" => utility_test_agent_plugin(arg1, arg2).await,
             "collect_agent_transcripts" => utility_collect_agent_transcripts(arg1, arg2).await,
+            #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+            "detect_agent_clis" => utility_detect_agent_clis(arg1, arg2).await,
+            #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+            "run_agent_cli_insight" => utility_run_agent_cli_insight(arg1, arg2).await,
+            #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+            "run_agent_cli_fix" => utility_run_agent_cli_fix(arg1, arg2).await,
             "collect_agent_visibility" => utility_collect_agent_visibility(arg1, arg2).await,
             "read_instruction_content" => utility_read_instruction_content(arg1, arg2).await,
             "collect_workspace_inventory" => utility_collect_workspace_inventory(arg1, arg2).await,

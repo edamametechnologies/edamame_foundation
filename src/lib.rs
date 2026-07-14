@@ -3,11 +3,13 @@
 pub mod admin;
 pub mod advisor;
 pub mod agent_a2a;
-pub mod agent_alignment;
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+pub mod agent_cli_insight;
 pub mod agent_dataflow;
 pub mod agent_drift;
 pub mod agent_enforcement;
 pub mod agent_firewall;
+pub mod agent_history;
 pub mod agent_memory;
 pub mod agent_owasp;
 pub mod agent_plugin;
@@ -18,7 +20,10 @@ pub mod agent_provenance;
 pub mod agent_response;
 pub mod agent_subprocess;
 pub mod agent_transcripts;
+pub mod agent_trust_controls;
 pub mod agent_visibility;
+pub mod agent_visibility_params;
+pub mod agent_visibility_params_db;
 pub mod backend;
 pub mod cloud_model_fallback;
 pub mod cve_detection_params_db;

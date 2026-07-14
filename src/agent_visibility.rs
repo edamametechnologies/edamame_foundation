@@ -18,8 +18,8 @@
 //! compiling for iOS/Android (where the agent plugins never install and the
 //! collectors simply find nothing on disk).
 
+use crate::agent_visibility_params;
 use crate::supported_agents;
-use crate::vuln_detector_params;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -59,7 +59,7 @@ impl VisibilitySeverity {
 pub struct VisibilityFinding {
     /// `<domain>:<rule_id>:<subject_id>` -- stable across ticks.
     pub finding_key: String,
-    /// Domain that produced this finding (`mcp`, `sbom`, `graph`, `recursion`).
+    /// Domain that produced this finding (`mcp`, `graph`, `recursion`).
     pub domain: String,
     /// Deterministic rule identifier (e.g. `mcp_public_no_auth`).
     pub rule_id: String,
@@ -134,10 +134,6 @@ pub(crate) fn owasp_refs_for_rule(rule_id: &str) -> Option<&'static str> {
         "cascading_failure" | "unbounded_consumption" => Some("OWASP-ASI08,OWASP-LLM10"),
         "dataflow_sensitive_egress" => Some("OWASP-ASI01,OWASP-ASI03,OWASP-LLM01,OWASP-LLM02"),
         "memory_poisoning_surface" => Some("OWASP-ASI06,OWASP-LLM04,OWASP-LLM08"),
-        // Agent supply-chain drift: the agent's capability surface (MCP servers,
-        // tool classes, secret bindings, instruction files) changed vs the
-        // approved baseline -- the canonical "agentic supply chain" violation.
-        "sbom_baseline_drift" => Some("OWASP-ASI02,OWASP-ASI04,OWASP-LLM03"),
         _ if rule_id.starts_with("mcp_") => Some("OWASP-ASI02,OWASP-ASI03,OWASP-LLM06"),
         _ if rule_id.starts_with("recursion_") => Some("OWASP-ASI08,OWASP-LLM10"),
         _ if rule_id.starts_with("a2a_") => Some("OWASP-ASI07,OWASP-ASI08"),
@@ -293,50 +289,36 @@ pub struct McpInventory {
 }
 
 // ---------------------------------------------------------------------------
-// Agent SBOM (INC-2) -- CycloneDX-shaped projection from live discovery
+// Agent component inventory -- live-discovered instruction/capability surface
 // ---------------------------------------------------------------------------
 
-/// One component in the agent bill of materials.
+/// One component in an agent's live-discovered component inventory. This is the
+/// augmentation / Enlightenment Coach backing: instruction/skill/rule/command
+/// files, plus the MCP servers, tool-privilege classes, and secret bindings the
+/// agent declares.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SbomComponent {
-    /// Stable bom-ref used as the CycloneDX `bom-ref` and dependency key.
+pub struct AgentComponent {
+    /// Stable ref used as the dependency/dedup key.
     pub bom_ref: String,
-    /// CycloneDX component type: `application` | `service` | `data` |
-    /// `machine-learning-model` | `file` | `library`.
+    /// Component class: `application` | `service` | `data` | `file`.
     pub component_type: String,
     pub name: String,
     pub version: Option<String>,
     /// Content-addressed hash for `file` components (never the body, I5).
     pub content_hash: Option<String>,
-    /// Extra metadata-only properties (transport, exposure, privilege, ...).
+    /// Extra metadata-only properties (transport, exposure, privilege, load,
+    /// size, relpath, ...).
     pub properties: BTreeMap<String, String>,
 }
 
-/// A `depends_on`-style relationship between two components.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SbomDependency {
-    pub bom_ref: String,
-    pub depends_on: Vec<String>,
-}
-
-/// Live-discovered bill of materials for a single agent instance.
+/// Live-discovered component inventory for a single agent instance. Backs the
+/// augmentation / Enlightenment Coach instruction-inventory path.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentSbom {
+pub struct AgentComponentInventory {
     pub agent_type: String,
     pub agent_instance_id: String,
     pub generated_at: chrono::DateTime<chrono::Utc>,
-    pub components: Vec<SbomComponent>,
-    pub dependencies: Vec<SbomDependency>,
-}
-
-/// Diff of a current SBOM against an approved baseline (INC-2 drift).
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct SbomDiff {
-    pub added: Vec<SbomComponent>,
-    pub removed: Vec<SbomComponent>,
-    /// bom_refs whose version or content hash changed.
-    pub changed: Vec<String>,
-    pub baseline_present: bool,
+    pub components: Vec<AgentComponent>,
 }
 
 // ---------------------------------------------------------------------------
@@ -537,7 +519,12 @@ fn build_agent_sandbox(
 /// - the host grants the agent's user passwordless root (a `NOPASSWD` sudoers
 ///   rule), so a compromised agent can become root with no prompt; and/or
 /// - the agent has already been observed spawning a `Critical` subprocess
-///   (ssh/scp/nc/socat/docker/...), i.e. it can reach off-box or open a shell.
+///   (ssh/scp/nc/socat/docker/...), i.e. it can reach off-box or open a shell;
+///   and/or
+/// - secret material (vendor-anchored key prefixes / PEM private-key headers)
+///   was observed in the agent's transcript context (BR-1), so a compromised
+///   or prompt-injected agent already HOLDS credentials it could exfiltrate
+///   through any egress channel.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlastRadiusAgent {
     pub agent_type: String,
@@ -547,27 +534,35 @@ pub struct BlastRadiusAgent {
     pub passwordless_root: bool,
     /// The agent has been observed spawning a `Critical` subprocess.
     pub critical_subprocess: bool,
+    /// Secret material was observed in the agent's transcript context (BR-1).
+    pub secret_exposure: bool,
+    /// Sorted secret-signature labels behind `secret_exposure`
+    /// (`private_key`, `github_token`, ...). Labels only, never content.
+    pub secret_exposure_labels: Vec<String>,
     /// Short human-readable reasons (for the UI / threat description).
     pub reasons: Vec<String>,
 }
 
 /// Pure host blast-radius rule (INC-7). Given the host privilege assessment,
 /// the per-agent OS-confinement rows (already filtered to agents actually
-/// present on the host by the caller), and a map of `agent_type -> Critical
-/// subprocess observation count`, return the agents whose compromise would have
-/// outsized host reach: unsandboxed AND (passwordless root OR an observed
-/// `Critical` subprocess). Deterministic, sorted by `agent_type`.
+/// present on the host by the caller), a map of `agent_type -> Critical
+/// subprocess observation count`, and a map of `agent_type -> transcript
+/// secret-exposure labels` (BR-1), return the agents whose compromise would
+/// have outsized host reach: unsandboxed AND (passwordless root OR an observed
+/// `Critical` subprocess OR secret material in the agent's context).
+/// Deterministic, sorted by `agent_type`.
 ///
 /// The host-level `passwordless_root` applies to every agent on the host (they
 /// all inherit the launching user's session), so it is the same amplifier for
-/// each candidate; the per-agent `Critical` subprocess count is the
-/// agent-specific amplifier. A positively OS-confined (or unassessed) agent
-/// never qualifies regardless of host privilege, because the OS sandbox bounds
-/// its reach.
+/// each candidate; the per-agent `Critical` subprocess count and the per-agent
+/// secret-exposure labels are the agent-specific amplifiers. A positively
+/// OS-confined (or unassessed) agent never qualifies regardless of host
+/// privilege, because the OS sandbox bounds its reach.
 pub fn agents_with_blast_radius(
     host_privilege: &HostPrivilege,
     agent_sandboxes: &[AgentSandbox],
     critical_subprocess_by_agent: &BTreeMap<String, u32>,
+    secret_exposure_by_agent: &BTreeMap<String, Vec<String>>,
 ) -> Vec<BlastRadiusAgent> {
     // Only a positively-assessed passwordless-root host counts as the amplifier
     // (an unassessed host must not be treated as privileged).
@@ -585,7 +580,12 @@ pub fn agents_with_blast_radius(
             .copied()
             .unwrap_or(0)
             > 0;
-        if !passwordless_root && !critical_subprocess {
+        let secret_exposure_labels: Vec<String> = secret_exposure_by_agent
+            .get(&sandbox.agent_type)
+            .cloned()
+            .unwrap_or_default();
+        let secret_exposure = !secret_exposure_labels.is_empty();
+        if !passwordless_root && !critical_subprocess && !secret_exposure {
             continue;
         }
         let mut reasons: Vec<String> = vec!["unsandboxed (full user-file access)".to_string()];
@@ -595,11 +595,19 @@ pub fn agents_with_blast_radius(
         if critical_subprocess {
             reasons.push("observed critical subprocess (ssh/nc/docker/...)".to_string());
         }
+        if secret_exposure {
+            reasons.push(format!(
+                "secret material in agent context ({})",
+                secret_exposure_labels.join(", ")
+            ));
+        }
         out.push(BlastRadiusAgent {
             agent_type: sandbox.agent_type.clone(),
             unsandboxed: true,
             passwordless_root,
             critical_subprocess,
+            secret_exposure,
+            secret_exposure_labels,
             reasons,
         });
     }
@@ -608,11 +616,11 @@ pub fn agents_with_blast_radius(
 }
 
 // ---------------------------------------------------------------------------
-// Agent governance harness presence (AI-SDLC posture)
+// Agent governance harness presence (AI agent governance posture)
 // ---------------------------------------------------------------------------
 
 /// A known agent-governance "harness" / control-plane product and whether its
-/// per-user footprint is present on this host. A harness is the AI-SDLC control
+/// per-user footprint is present on this host. A harness is the AI agent control
 /// layer that wraps coding agents with policy enforcement, cryptographic
 /// identity, guardrails (budgets / turn caps / tool allow-lists), and an audit
 /// trail -- so a redirected or compromised agent is bounded and provable rather
@@ -904,7 +912,7 @@ fn detect_agent_harnesses_with(home: &Path, path_dirs: &[PathBuf]) -> Vec<AgentH
     out
 }
 
-/// AI-SDLC posture rule: the host is "running AI agents without a
+/// AI agent governance rule: the host is "running AI agents without a
 /// governance harness" when at least one agent is present/discovered on the host
 /// AND no known harness is detected. This is a posture *gap* signal -- the
 /// common workstation default is no harness, which is exactly the gap to
@@ -915,7 +923,7 @@ pub fn agents_without_harness(discovered_agent_count: usize, harnesses: &[AgentH
     discovered_agent_count > 0 && !harnesses.iter().any(|h| h.detected)
 }
 
-/// AI-SDLC posture rule: "a governance harness is installed on this host, yet a
+/// AI agent governance rule: "a governance harness is installed on this host, yet a
 /// discovered agent still shows host blast-radius escape" -- i.e. the control
 /// plane is present but is not actually confining the agent. This is the
 /// complement of `agents_without_harness`: that rule fires when NO harness wraps
@@ -1322,8 +1330,8 @@ pub fn build_mcp_inventory(home: &Path) -> McpInventory {
 }
 
 /// Combined output of the structural visibility domains (MCP inventory, agent
-/// SBOMs, capability graph) for one host. Built from a single endpoint
-/// discovery pass so the helper crosses the sandbox boundary only once.
+/// component inventories, capability graph) for one host. Built from a single
+/// endpoint discovery pass so the helper crosses the sandbox boundary only once.
 ///
 /// Recursion / delegation (INC-4) is NOT part of the bundle: it derives from
 /// transcript bodies that core already collects via `collect_agent_transcripts`,
@@ -1332,14 +1340,14 @@ pub fn build_mcp_inventory(home: &Path) -> McpInventory {
 pub struct VisibilityBundle {
     pub generated_at: chrono::DateTime<chrono::Utc>,
     pub inventory: McpInventory,
-    pub sboms: Vec<AgentSbom>,
+    pub component_inventories: Vec<AgentComponentInventory>,
     pub graph_edges: Vec<GraphEdge>,
     /// Host-level privilege (INC-7): the blast radius every agent inherits from
     /// the user session. Shared across all agents on this host.
     pub host_privilege: HostPrivilege,
     /// Per-agent OS confinement (INC-7), one entry per supported agent type.
     pub agent_sandboxes: Vec<AgentSandbox>,
-    /// Agent governance harnesses (AI-SDLC control plane) detected on this host,
+    /// Agent governance harnesses (AI agent control plane) detected on this host,
     /// one entry per known harness. All-undetected means agents here
     /// run without a harness (the `agents_without_harness` gap).
     pub harnesses: Vec<AgentHarness>,
@@ -1352,7 +1360,8 @@ pub fn build_visibility_bundle(home: &Path) -> VisibilityBundle {
     let now = chrono::Utc::now();
     let endpoints = discover_mcp_endpoints(home);
     let findings = assess_mcp_risk(&endpoints);
-    let sboms = build_agent_sboms_from_endpoints_with_home(&endpoints, Some(home));
+    let component_inventories =
+        build_agent_component_inventories_from_endpoints_with_home(&endpoints, Some(home));
     let graph_edges = build_capability_graph_from_endpoints(&endpoints);
     let host_privilege = assess_host_privilege(home);
     let agent_sandboxes = assess_agent_sandboxes(home);
@@ -1365,7 +1374,7 @@ pub fn build_visibility_bundle(home: &Path) -> VisibilityBundle {
     VisibilityBundle {
         generated_at: now,
         inventory,
-        sboms,
+        component_inventories,
         graph_edges,
         host_privilege,
         agent_sandboxes,
@@ -1382,7 +1391,7 @@ const MAX_MCP_CONFIG_BYTES: u64 = 4 * 1024 * 1024;
 
 /// Maximum number of MCP endpoints retained across all agents and config
 /// files. Each endpoint seeds A2A peers, capability-graph nodes, data-flow
-/// edges, SBOM components, and confused-deputy analysis, so an unbounded
+/// edges, inventory components, and confused-deputy analysis, so an unbounded
 /// endpoint list would propagate unbounded growth across the entire visibility
 /// surface. Far above any realistic per-host MCP server count.
 const MAX_MCP_ENDPOINTS: usize = 512;
@@ -2218,7 +2227,7 @@ fn classify_tool_privileges(server: &RawMcpServer) -> Vec<ToolPrivilegeClass> {
 
     // CloudModel-tunable per-class keyword lists (lowercased by
     // `CveDetectionParams::new_from_json`).
-    let keywords = vuln_detector_params::agent_tool_privilege_keywords();
+    let keywords = agent_visibility_params::agent_tool_privilege_keywords();
     let contains_any = |needles: &[String]| needles.iter().any(|n| haystack.contains(n.as_str()));
 
     if contains_any(&keywords.shell) {
@@ -2424,17 +2433,17 @@ pub fn assess_mcp_risk(endpoints: &[McpEndpoint]) -> Vec<VisibilityFinding> {
 }
 
 // ---------------------------------------------------------------------------
-// Agent SBOM (INC-2)
+// Agent component inventory (INC-2)
 // ---------------------------------------------------------------------------
 
 /// Best-effort "is this agent installed on this host?" check used to decide
 /// whether an agent with an otherwise-empty surface (no MCP servers, no
-/// instruction/skill files) still deserves a minimal SBOM. An agent counts as
-/// installed when any of its resolved global MCP config files exists on disk
+/// instruction/skill files) still deserves a minimal inventory. An agent counts
+/// as installed when any of its resolved global MCP config files exists on disk
 /// (even if it declares zero servers) or its instruction/config root directory
 /// exists. This mirrors the "present on host" intent so an installed-but-empty
-/// agent (e.g. Claude Desktop) yields a valid, minimal CycloneDX document
-/// instead of an empty `{}`.
+/// agent (e.g. Claude Desktop) yields a valid, minimal inventory with just the
+/// application root component instead of being dropped entirely.
 fn agent_installed_on_host(home: &Path, agent_type: &str) -> bool {
     let Some(def) = supported_agents::find_supported_agent(agent_type) else {
         return false;
@@ -2452,38 +2461,40 @@ fn agent_installed_on_host(home: &Path, agent_type: &str) -> bool {
     }
 }
 
-/// Build one SBOM per discovered agent type from the live MCP inventory plus
-/// the agent's on-disk instruction/skill artifacts. The agent application is
-/// the root component; each MCP server it declares is a `service` component,
-/// each distinct tool-privilege class a `data` component, each secret-bearing
-/// env binding a `data` component, and each instruction/skill/rule/command
-/// file a content-hashed `file` component.
-pub fn build_agent_sboms(home: &Path) -> Vec<AgentSbom> {
+/// Build one component inventory per discovered agent type from the live MCP
+/// inventory plus the agent's on-disk instruction/skill artifacts. The agent
+/// application is the root component; each MCP server it declares is a `service`
+/// component, each distinct tool-privilege class a `data` component, each
+/// secret-bearing env binding a `data` component, and each
+/// instruction/skill/rule/command file a content-hashed `file` component.
+pub fn build_agent_component_inventories(home: &Path) -> Vec<AgentComponentInventory> {
     let endpoints = discover_mcp_endpoints(home);
-    build_agent_sboms_from_endpoints_with_home(&endpoints, Some(home))
+    build_agent_component_inventories_from_endpoints_with_home(&endpoints, Some(home))
 }
 
-/// Endpoint-only SBOM projection (no on-disk instruction scan). Retained for
+/// Endpoint-only projection (no on-disk instruction scan). Retained for
 /// callers/tests that only have endpoints; prefer the `_with_home` variant in
 /// the live bundle path so instruction/skill files surface too.
-pub fn build_agent_sboms_from_endpoints(endpoints: &[McpEndpoint]) -> Vec<AgentSbom> {
-    build_agent_sboms_from_endpoints_with_home(endpoints, None)
+pub fn build_agent_component_inventories_from_endpoints(
+    endpoints: &[McpEndpoint],
+) -> Vec<AgentComponentInventory> {
+    build_agent_component_inventories_from_endpoints_with_home(endpoints, None)
 }
 
-/// Full SBOM projection. When `home` is provided, each agent's instruction /
-/// skill / rule / command / subagent files are discovered from its config dir
-/// and projected as content-hashed `file` components (bodies are never stored,
-/// invariant I5).
-pub fn build_agent_sboms_from_endpoints_with_home(
+/// Full component-inventory projection. When `home` is provided, each agent's
+/// instruction / skill / rule / command / subagent files are discovered from
+/// its config dir and projected as content-hashed `file` components (bodies are
+/// never stored, invariant I5).
+pub fn build_agent_component_inventories_from_endpoints_with_home(
     endpoints: &[McpEndpoint],
     home: Option<&Path>,
-) -> Vec<AgentSbom> {
+) -> Vec<AgentComponentInventory> {
     let mut by_agent: BTreeMap<String, Vec<&McpEndpoint>> = BTreeMap::new();
     for ep in endpoints {
         by_agent.entry(ep.agent_type.clone()).or_default().push(ep);
     }
     // Some agents have instruction files but no MCP servers; make sure they
-    // still get an SBOM when a home is available.
+    // still get an inventory when a home is available.
     if let Some(home) = home {
         for def in supported_agents::ordered_supported_agents() {
             by_agent.entry(def.agent_type.clone()).or_default();
@@ -2492,17 +2503,15 @@ pub fn build_agent_sboms_from_endpoints_with_home(
     }
 
     let now = chrono::Utc::now();
-    let mut sboms = Vec::new();
+    let mut inventories = Vec::new();
     for (agent_type, agent_endpoints) in by_agent {
         let app_ref = format!("agent:{}", agent_type);
         let mut components = Vec::new();
         // Deduped side-component tables (deterministic ordering via BTreeMap).
-        let mut tool_components: BTreeMap<String, SbomComponent> = BTreeMap::new();
-        let mut env_components: BTreeMap<String, SbomComponent> = BTreeMap::new();
-        let mut app_dep_refs: Vec<String> = Vec::new();
-        let mut service_deps: Vec<SbomDependency> = Vec::new();
+        let mut tool_components: BTreeMap<String, AgentComponent> = BTreeMap::new();
+        let mut env_components: BTreeMap<String, AgentComponent> = BTreeMap::new();
 
-        components.push(SbomComponent {
+        components.push(AgentComponent {
             bom_ref: app_ref.clone(),
             component_type: "application".to_string(),
             name: agent_type.clone(),
@@ -2518,7 +2527,6 @@ pub fn build_agent_sboms_from_endpoints_with_home(
 
         for ep in &agent_endpoints {
             let svc_ref = format!("mcp:{}", ep.id);
-            app_dep_refs.push(svc_ref.clone());
             let mut props = BTreeMap::new();
             props.insert("edamame:kind".to_string(), "mcp_server".to_string());
             props.insert("edamame:transport".to_string(), ep.transport.clone());
@@ -2542,7 +2550,7 @@ pub fn build_agent_sboms_from_endpoints_with_home(
                 "edamame:is_edamame_server".to_string(),
                 ep.is_edamame_server.to_string(),
             );
-            components.push(SbomComponent {
+            components.push(AgentComponent {
                 bom_ref: svc_ref.clone(),
                 component_type: "service".to_string(),
                 name: ep.server_name.clone(),
@@ -2551,16 +2559,13 @@ pub fn build_agent_sboms_from_endpoints_with_home(
                 properties: props,
             });
 
-            // Each server depends on the tool capabilities it exposes and the
-            // secret bindings it is wired to.
-            let mut svc_dep_refs: Vec<String> = Vec::new();
-
+            // Project the tool capabilities the server exposes and the secret
+            // bindings it is wired to as deduped side components.
             for class in &ep.tool_privilege_classes {
                 if matches!(class, ToolPrivilegeClass::Unknown) {
                     continue;
                 }
                 let tool_ref = format!("tool:{}:{}", agent_type, class.slug());
-                svc_dep_refs.push(tool_ref.clone());
                 tool_components.entry(tool_ref.clone()).or_insert_with(|| {
                     let mut p = BTreeMap::new();
                     p.insert("edamame:kind".to_string(), "tool_capability".to_string());
@@ -2568,7 +2573,7 @@ pub fn build_agent_sboms_from_endpoints_with_home(
                         "edamame:high_privilege".to_string(),
                         class.is_high_privilege().to_string(),
                     );
-                    SbomComponent {
+                    AgentComponent {
                         bom_ref: tool_ref,
                         component_type: "data".to_string(),
                         name: class.label().to_string(),
@@ -2584,12 +2589,11 @@ pub fn build_agent_sboms_from_endpoints_with_home(
                     continue;
                 }
                 let env_ref = format!("env:{}:{}", agent_type, key);
-                svc_dep_refs.push(env_ref.clone());
                 env_components.entry(env_ref.clone()).or_insert_with(|| {
                     let mut p = BTreeMap::new();
                     p.insert("edamame:kind".to_string(), "secret_binding".to_string());
                     // Name only -- never the value (invariant I5).
-                    SbomComponent {
+                    AgentComponent {
                         bom_ref: env_ref,
                         component_type: "data".to_string(),
                         name: key.clone(),
@@ -2599,13 +2603,6 @@ pub fn build_agent_sboms_from_endpoints_with_home(
                     }
                 });
             }
-
-            if !svc_dep_refs.is_empty() {
-                service_deps.push(SbomDependency {
-                    bom_ref: svc_ref,
-                    depends_on: svc_dep_refs,
-                });
-            }
         }
 
         // Instruction / skill / rule / command / subagent files (I5: hashes,
@@ -2613,9 +2610,6 @@ pub fn build_agent_sboms_from_endpoints_with_home(
         let instruction_components = home
             .map(|h| discover_agent_instruction_components(h, &agent_type))
             .unwrap_or_default();
-        for comp in &instruction_components {
-            app_dep_refs.push(comp.bom_ref.clone());
-        }
 
         // Assemble components in a stable order: app, services already pushed;
         // append tools, env bindings, instruction files.
@@ -2626,10 +2620,10 @@ pub fn build_agent_sboms_from_endpoints_with_home(
         // Skip agents that carry nothing beyond the implicit application root
         // (no servers, no instructions). Exception: an agent actually installed
         // on this host (its global MCP config file or instruction/config root
-        // exists) still gets a minimal application-only SBOM, so the inventory
-        // and the CycloneDX projection stay consistent with the rest of the
-        // fleet instead of returning `{}` -- e.g. Claude Desktop configured with
-        // an empty `"mcpServers": {}` and no skills. Endpoint-only callers
+        // exists) still gets a minimal application-only inventory, so the
+        // Agents tab stays consistent with the rest of the fleet instead of
+        // returning `{}` -- e.g. Claude Desktop configured with an empty
+        // `"mcpServers": {}` and no skills. Endpoint-only callers
         // (`home == None`, tests) keep the strict skip.
         if components.len() == 1 && agent_endpoints.is_empty() {
             let installed = home
@@ -2640,13 +2634,7 @@ pub fn build_agent_sboms_from_endpoints_with_home(
             }
         }
 
-        let mut dependencies = vec![SbomDependency {
-            bom_ref: app_ref,
-            depends_on: app_dep_refs,
-        }];
-        dependencies.append(&mut service_deps);
-
-        // Multi-instance correctness (Fix #4): key the SBOM on the same
+        // Multi-instance correctness (Fix #4): key the inventory on the same
         // per-(host, agent_type) instance id the divergence observer uses, so
         // the Agents tab no longer collapses distinct instances of one agent
         // type. When no home is available (endpoint-only callers/tests) fall
@@ -2655,29 +2643,28 @@ pub fn build_agent_sboms_from_endpoints_with_home(
             Some(h) => crate::agent_transcripts::observer_agent_instance_id(&agent_type, h),
             None => agent_type.clone(),
         };
-        sboms.push(AgentSbom {
+        inventories.push(AgentComponentInventory {
             agent_type: agent_type.clone(),
             agent_instance_id,
             generated_at: now,
             components,
-            dependencies,
         });
     }
-    sboms
+    inventories
 }
 
 /// Env-var names that look like they carry a secret/credential. Used to
-/// project secret bindings into the SBOM (names only, invariant I5).
+/// project secret bindings into the component inventory (names only, I5).
 fn is_secret_env_key(key: &str) -> bool {
     let upper = key.to_ascii_uppercase();
     // CloudModel-tunable needles (uppercased by `CveDetectionParams::new_from_json`).
-    vuln_detector_params::agent_secret_env_key_needles()
+    agent_visibility_params::agent_secret_env_key_needles()
         .iter()
         .any(|n| upper.contains(n.as_str()))
 }
 
 /// Subdirectories within an agent's config dir that carry agent instructions /
-/// skills / commands / subagents, paired with the SBOM `edamame:kind` each
+/// skills / commands / subagents, paired with the component `edamame:kind` each
 /// projects to. This is an allowlist on purpose: only these well-known dirs are
 /// walked, so transcript / session / log stores (`projects/`, `sessions/`,
 /// `history/`, ...) are never scanned.
@@ -2705,8 +2692,9 @@ const INSTRUCTION_SUBDIRS: &[(&str, &str)] = &[
 /// able to show what was read.
 const INSTRUCTION_EXTS: &[&str] = &["md", "mdc", "txt", "json", "toml", "yaml", "yml"];
 
-/// File extensions enumerated as first-class instruction artifacts into the SBOM
-/// (the "what skills / rules / commands / subagents does this agent HAVE" list).
+/// File extensions enumerated as first-class instruction artifacts into the
+/// component inventory (the "what skills / rules / commands / subagents does
+/// this agent HAVE" list).
 ///
 /// Deliberately narrower than [`INSTRUCTION_EXTS`]: an authored instruction
 /// artifact -- a skill (`SKILL.md` / `DESCRIPTION.md`), rule (`*.mdc`), command,
@@ -2723,16 +2711,16 @@ const INSTRUCTION_DOC_EXTS: &[&str] = &["md", "mdc"];
 
 /// Max instruction artifacts discovered per agent- or workspace-scope root.
 /// Sized to cover a large first-party skills library (Hermes, for example,
-/// ships 300+ skills under `~/.hermes/skills`) with headroom, so the SBOM /
-/// self-augmentation report does not silently truncate an agent's real
-/// on-disk instruction set. Still bounded so a pathological config dir cannot
-/// grow the SBOM without limit; each artifact is additionally bounded by
-/// [`INSTRUCTION_MAX_FILE_BYTES`] and the walk by [`INSTRUCTION_MAX_DEPTH`].
+/// ships 300+ skills under `~/.hermes/skills`) with headroom, so the component
+/// inventory / self-augmentation report does not silently truncate an agent's
+/// real on-disk instruction set. Still bounded so a pathological config dir
+/// cannot grow the inventory without limit; each artifact is additionally
+/// bounded by [`INSTRUCTION_MAX_FILE_BYTES`] and the walk by [`INSTRUCTION_MAX_DEPTH`].
 const INSTRUCTION_MAX_FILES: usize = 1024;
 /// Max directory depth walked under an instruction subdirectory.
 const INSTRUCTION_MAX_DEPTH: usize = 4;
 /// Max body size of a single instruction artifact that is read+hashed into the
-/// SBOM. Larger files are skipped (the body is a data blob, not an instruction).
+/// inventory. Larger files are skipped (the body is a data blob, not an instruction).
 const INSTRUCTION_MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
 
 /// Classify a top-level file (directly under the config dir) as an instruction
@@ -3022,7 +3010,7 @@ fn head_str_lossy(bytes: &[u8], max: usize) -> (String, bool) {
 /// (invariant I5). Single source of truth shared by the standalone core path
 /// (direct call) and the helper path (`utility_read_instruction_content`).
 ///
-/// - `path`: absolute path of the artifact to read (as discovered by the SBOM).
+/// - `path`: absolute path of the artifact to read (as discovered by the inventory).
 /// - `home`: the user's real home dir; the read is refused unless `path`
 ///   canonicalizes to a location under `home` (no reads outside the user's home).
 /// - `tier`: one of `metadata_only` | `redacted_excerpt` | `forensic_full_content`.
@@ -3144,12 +3132,12 @@ pub fn read_instruction_content(path: &Path, home: &Path, tier: &str) -> Instruc
 }
 
 /// Discover an agent's instruction / skill / rule / command / subagent files
-/// from its config dir and project them as content-hashed `file` SBOM
+/// from its config dir and project them as content-hashed `file` inventory
 /// components. Bounded (depth + count + size) and limited to the
 /// `INSTRUCTION_SUBDIRS` allowlist plus top-level instruction files, so
 /// transcript / session stores are never walked. Bodies are hashed, never
 /// stored (invariant I5).
-fn discover_agent_instruction_components(home: &Path, agent_type: &str) -> Vec<SbomComponent> {
+fn discover_agent_instruction_components(home: &Path, agent_type: &str) -> Vec<AgentComponent> {
     const MAX_FILES: usize = INSTRUCTION_MAX_FILES;
     const MAX_DEPTH: usize = INSTRUCTION_MAX_DEPTH;
     const MAX_FILE_BYTES: u64 = INSTRUCTION_MAX_FILE_BYTES;
@@ -3206,7 +3194,7 @@ fn discover_agent_instruction_components(home: &Path, agent_type: &str) -> Vec<S
     found.sort_by(|a, b| a.0.cmp(&b.0));
     found.dedup_by(|a, b| a.0 == b.0);
 
-    let mut out: Vec<SbomComponent> = Vec::new();
+    let mut out: Vec<AgentComponent> = Vec::new();
     for (path, kind) in found.into_iter().take(MAX_FILES) {
         if let Some(comp) =
             instruction_file_component(&config_dir, agent_type, &path, kind, MAX_FILE_BYTES)
@@ -3252,7 +3240,7 @@ fn entry_kind_following_symlinks(entry: &std::fs::DirEntry, path: &Path) -> (boo
 /// `.cursor-managed-skills-manifest.json` / `.sync-manifest.json`, stray `.git`
 /// / `.DS_Store` -- never user-authored instruction docs. Combined with the
 /// Markdown-only extension gate, this keeps runtime state, manifests, and
-/// license files out of the SBOM so they cannot surface as phantom "dead"
+/// license files out of the inventory so they cannot surface as phantom "dead"
 /// skills or spurious duplicates. (The config-dir ROOTS -- `~/.cursor`,
 /// `~/.claude`, ... -- are themselves dot-dirs, but the walk STARTS inside
 /// them, so this only filters dot-entries *within* an instruction subtree; the
@@ -3320,7 +3308,7 @@ fn instruction_file_component(
     path: &Path,
     kind: &str,
     max_bytes: u64,
-) -> Option<SbomComponent> {
+) -> Option<AgentComponent> {
     let meta = std::fs::metadata(path).ok()?;
     if !meta.is_file() || meta.len() > max_bytes {
         return None;
@@ -3401,7 +3389,7 @@ fn instruction_file_component(
     if !refs.is_empty() {
         props.insert("edamame:refs".to_string(), refs.join("\n"));
     }
-    Some(SbomComponent {
+    Some(AgentComponent {
         bom_ref: format!(
             "file:{}:{}",
             agent_type,
@@ -3835,14 +3823,14 @@ const WORKSPACE_TOPLEVEL_INSTRUCTION_FILES: &[(&str, &str)] = &[
 const WORKSPACE_CONFIG_DIRS: &[&str] = &[".cursor", ".claude"];
 
 /// Discover a *workspace repository's* instruction / skill / rule / command /
-/// subagent files and project them as content-hashed `file` SBOM components,
+/// subagent files and project them as content-hashed `file` inventory components,
 /// tagged `edamame:scope=workspace`. Mirrors
 /// [`discover_agent_instruction_components`] but roots the walk at a project
 /// directory (`<root>/.cursor`, `<root>/.claude`, and top-level `AGENTS.md` /
 /// `CLAUDE.md` / `.github/copilot-instructions.md`). Bounded (depth + count +
 /// size) and limited to the same allowlist, so transcript / session stores are
 /// never scanned. Bodies are hashed, never stored (invariant I5).
-pub fn discover_workspace_instruction_components(workspace_root: &Path) -> Vec<SbomComponent> {
+pub fn discover_workspace_instruction_components(workspace_root: &Path) -> Vec<AgentComponent> {
     const MAX_FILES: usize = INSTRUCTION_MAX_FILES;
     const MAX_DEPTH: usize = INSTRUCTION_MAX_DEPTH;
     const MAX_FILE_BYTES: u64 = INSTRUCTION_MAX_FILE_BYTES;
@@ -3910,7 +3898,7 @@ pub fn discover_workspace_instruction_components(workspace_root: &Path) -> Vec<S
     found.sort_by(|a, b| a.0.cmp(&b.0));
     found.dedup_by(|a, b| a.0 == b.0);
 
-    let mut out: Vec<SbomComponent> = Vec::new();
+    let mut out: Vec<AgentComponent> = Vec::new();
     for (path, kind) in found.into_iter().take(MAX_FILES) {
         if let Some(mut comp) =
             instruction_file_component(workspace_root, &agent_scope, &path, kind, MAX_FILE_BYTES)
@@ -3940,6 +3928,11 @@ const MAX_SLUG_TOKENS: usize = 64;
 
 /// Cap on the number of distinct workspace roots resolved per inventory pass.
 const MAX_WORKSPACE_ROOTS: usize = 64;
+
+/// Cap on the number of directory entries examined per level while resolving a
+/// slug via the directory-scan fallback. Guards against pathological
+/// directories (huge caches, node_modules at an unexpected level, ...).
+const MAX_DIR_SCAN_ENTRIES: usize = 4096;
 
 /// Extract the encoded project slug from a Cursor/Claude transcript
 /// `source_path`. Both encode the workspace as the path component immediately
@@ -3991,42 +3984,25 @@ pub fn resolve_slug_under(base_root: &Path, slug: &str) -> Option<PathBuf> {
     let mut base = base_root.to_path_buf();
     let mut i = 0usize;
     while i < tokens.len() {
-        let max_take = (tokens.len() - i).min(MAX_SEGMENT_TOKENS);
-        let mut advanced = false;
-        // Longest segment first so `edamame_core` wins over `edamame`.
-        for take in (1..=max_take).rev() {
-            let seg_tokens = &tokens[i..i + take];
-            let gaps = seg_tokens.len() - 1;
-            let combos: u32 = 1 << gaps; // gaps <= MAX_SEGMENT_TOKENS-1 (=5)
-            let mut matched = false;
-            for mask in 0..combos {
-                let mut seg = String::new();
-                for (idx, tok) in seg_tokens.iter().enumerate() {
-                    if idx > 0 {
-                        // bit set -> '_', clear -> '-'
-                        seg.push(if (mask >> (idx - 1)) & 1 == 1 {
-                            '_'
-                        } else {
-                            '-'
-                        });
-                    }
-                    seg.push_str(tok);
-                }
-                let cand = base.join(&seg);
-                if cand.is_dir() {
-                    base = cand;
-                    i += take;
-                    matched = true;
-                    break;
-                }
+        let remaining = &tokens[i..];
+        // Cheap stat-probe path first (handles '-'/'_' only; no read_dir), then
+        // the directory-scan fallback which reconstructs names with arbitrary
+        // separator characters (spaces, parentheses, '@', '.', non-breaking
+        // spaces, ... -- e.g. a localized Google Drive mount like
+        // `Mon Drive (user@example.org)`). Prefer whichever consumes the most
+        // slug tokens so `edamame_core` still wins over `edamame`.
+        let stat_hit = stat_probe_slug_match(&base, remaining);
+        let scan_hit = scan_dir_for_slug_match(&base, remaining);
+        let hit = match (stat_hit, scan_hit) {
+            (Some(a), Some(b)) => Some(if b.1 > a.1 { b } else { a }),
+            (a, b) => a.or(b),
+        };
+        match hit {
+            Some((next, take)) => {
+                base = next;
+                i += take;
             }
-            if matched {
-                advanced = true;
-                break;
-            }
-        }
-        if !advanced {
-            return None;
+            None => return None,
         }
     }
 
@@ -4035,6 +4011,86 @@ pub fn resolve_slug_under(base_root: &Path, slug: &str) -> Option<PathBuf> {
     } else {
         None
     }
+}
+
+/// Stat-probe arm of [`resolve_slug_under`]: re-materialize candidate segment
+/// names by re-joining the leading `remaining` tokens with every `-`/`_`
+/// combination and `is_dir()`-checking each candidate. Longest segment first.
+/// Returns the matched child and the number of tokens it consumes.
+fn stat_probe_slug_match(base: &Path, remaining: &[&str]) -> Option<(PathBuf, usize)> {
+    let max_take = remaining.len().min(MAX_SEGMENT_TOKENS);
+    for take in (1..=max_take).rev() {
+        let seg_tokens = &remaining[..take];
+        let gaps = seg_tokens.len() - 1;
+        let combos: u32 = 1 << gaps; // gaps <= MAX_SEGMENT_TOKENS-1 (=5)
+        for mask in 0..combos {
+            let mut seg = String::new();
+            for (idx, tok) in seg_tokens.iter().enumerate() {
+                if idx > 0 {
+                    // bit set -> '_', clear -> '-'
+                    seg.push(if (mask >> (idx - 1)) & 1 == 1 {
+                        '_'
+                    } else {
+                        '-'
+                    });
+                }
+                seg.push_str(tok);
+            }
+            let cand = base.join(&seg);
+            if cand.is_dir() {
+                return Some((cand, take));
+            }
+        }
+    }
+    None
+}
+
+/// Tokenize a directory name the way the Cursor/Claude slug encoder does:
+/// every run of non-alphanumeric characters collapses into one separator.
+fn slug_tokens_of_name(name: &str) -> Vec<String> {
+    name.split(|c: char| !c.is_alphanumeric())
+        .filter(|t| !t.is_empty())
+        .map(|t| t.to_string())
+        .collect()
+}
+
+/// Directory-scan arm of [`resolve_slug_under`]: list `base`'s child
+/// directories, tokenize each name with [`slug_tokens_of_name`], and pick the
+/// child whose token sequence is the longest prefix of `remaining`. This is
+/// what resolves segments whose original name contains separator characters
+/// the slug collapsed to '-' (spaces, parentheses, '@', '.', ...). Returns the
+/// matched child and the number of tokens it consumes.
+fn scan_dir_for_slug_match(base: &Path, remaining: &[&str]) -> Option<(PathBuf, usize)> {
+    let entries = std::fs::read_dir(base).ok()?;
+    let mut best: Option<(PathBuf, usize)> = None;
+    for entry in entries.flatten().take(MAX_DIR_SCAN_ENTRIES) {
+        let path = entry.path();
+        let is_dir = match entry.file_type() {
+            Ok(ft) if ft.is_dir() => true,
+            // Follow symlinked workspace roots.
+            Ok(ft) if ft.is_symlink() => path.is_dir(),
+            _ => false,
+        };
+        if !is_dir {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        let name_tokens = slug_tokens_of_name(&name);
+        if name_tokens.is_empty() || name_tokens.len() > remaining.len() {
+            continue;
+        }
+        if name_tokens
+            .iter()
+            .zip(remaining.iter())
+            .all(|(a, b)| a == *b)
+        {
+            let take = name_tokens.len();
+            if best.as_ref().map_or(true, |(_, t)| take > *t) {
+                best = Some((path, take));
+            }
+        }
+    }
+    best
 }
 
 /// Derive the workspace root directory for a session from its transcript
@@ -4060,7 +4116,7 @@ pub struct WorkspaceInventory {
     pub label: String,
     /// Project-scoped instruction / skill / rule / command / subagent
     /// components discovered under the root (tagged `edamame:scope=workspace`).
-    pub components: Vec<SbomComponent>,
+    pub components: Vec<AgentComponent>,
 }
 
 /// Resolve the distinct workspace roots referenced by a set of transcript
@@ -4131,488 +4187,6 @@ pub fn confirm_absent_instruction_paths(paths: &[String]) -> Vec<String> {
         })
         .cloned()
         .collect()
-}
-
-/// Cap on the number of distinct models projected per agent SBOM.
-const MAX_MODELS_PER_AGENT: usize = 24;
-
-/// Extract distinct LLM model identifiers from raw transcript text. Pure: no
-/// IO. Bodies are never stored -- only the recognized model strings are
-/// returned (invariant I5). Output is sorted + deduped for determinism.
-pub fn extract_models_from_transcript(text: &str) -> Vec<String> {
-    let mut models: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    for raw in text.split(|c: char| {
-        !(c.is_ascii_alphanumeric() || c == '-' || c == '.' || c == '_' || c == ':')
-    }) {
-        if models.len() >= MAX_MODELS_PER_AGENT {
-            break;
-        }
-        if let Some(model) = normalize_model_token(raw) {
-            models.insert(model);
-        }
-    }
-    models.into_iter().take(MAX_MODELS_PER_AGENT).collect()
-}
-
-/// Normalize a candidate token to a model id, or `None` if it is not one.
-/// Strips a leading `provider/` or `provider:` qualifier (e.g.
-/// `anthropic/claude-3-5-sonnet`, `openai:gpt-4o`).
-fn normalize_model_token(raw: &str) -> Option<String> {
-    let trimmed = raw.trim_matches(|c: char| !c.is_ascii_alphanumeric());
-    if trimmed.len() < 3 || trimmed.len() > 64 {
-        return None;
-    }
-    // Drop a provider qualifier if present.
-    let candidate = trimmed
-        .rsplit(['/', ':'])
-        .next()
-        .unwrap_or(trimmed)
-        .to_ascii_lowercase();
-    if candidate.len() < 3 || candidate.len() > 64 {
-        return None;
-    }
-    // CloudModel-tunable family prefixes (lowercased by
-    // `CveDetectionParams::new_from_json`). Conservative on purpose: a token is
-    // only treated as a model when it begins with one of these AND carries a
-    // version digit, so arbitrary prose never produces a model component.
-    let starts_with_family = vuln_detector_params::agent_model_family_prefixes()
-        .iter()
-        .any(|p| candidate.starts_with(p.as_str()));
-    if !starts_with_family {
-        return None;
-    }
-    // Require a version digit so bare family words ("claude-code") are skipped.
-    if !candidate.chars().any(|c| c.is_ascii_digit()) {
-        return None;
-    }
-    Some(candidate)
-}
-
-/// SBOM application-component property recording how the agent's model(s) were
-/// determined: `recorded` (read from an authoritative structured transcript
-/// field) or `not_recorded` (the agent was observed but records no model
-/// field at all, e.g. Cursor). Lets the UI show "models not recorded by this
-/// agent" instead of guessing model names from conversational prose.
-pub const MODELS_SOURCE_PROP: &str = "edamame:models_source";
-
-/// Extract **authoritative** LLM model identifiers from a raw JSONL transcript.
-///
-/// Unlike [`extract_models_from_transcript`] (a text heuristic that scans prose
-/// for family-prefixed tokens), this reads ONLY explicit structured fields
-/// (`model` / `modelId` / `model_id`, top-level or inside a known
-/// message/request/response container), so the SBOM reflects the model(s) the
-/// agent actually recorded -- never a model name merely mentioned in a comment
-/// or chat message. Agents that record no such field (e.g. Cursor) yield an
-/// empty set and are marked `not_recorded` by the caller rather than guessed.
-///
-/// Pure: no IO. Bodies are never stored (invariant I5); only the recognized
-/// model strings are returned, sorted + deduped, capped at
-/// [`MAX_MODELS_PER_AGENT`].
-pub fn extract_models_from_transcript_structured(raw_text: &str) -> Vec<String> {
-    let mut models: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    for line in raw_text.lines() {
-        if models.len() >= MAX_MODELS_PER_AGENT {
-            break;
-        }
-        let trimmed = line.trim();
-        if !trimmed.starts_with('{') {
-            continue;
-        }
-        let value: serde_json::Value = match serde_json::from_str(trimmed) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-        collect_authoritative_models(&value, &mut models);
-    }
-    models.into_iter().take(MAX_MODELS_PER_AGENT).collect()
-}
-
-/// Pull authoritative model ids out of one parsed JSON object: the top-level
-/// model fields plus the same fields one level inside a known container.
-fn collect_authoritative_models(
-    value: &serde_json::Value,
-    out: &mut std::collections::BTreeSet<String>,
-) {
-    let obj = match value.as_object() {
-        Some(o) => o,
-        None => return,
-    };
-    let mut pull = |v: &serde_json::Value| {
-        if let Some(s) = v.as_str() {
-            if let Some(m) = normalize_authoritative_model(s) {
-                out.insert(m);
-            }
-        }
-    };
-    // CloudModel-tunable: the field names that carry an authoritative model id,
-    // and the container objects descended into exactly one level. Bounded on
-    // purpose -- never a blind whole-tree walk that could mistake an unrelated
-    // `model` key (e.g. a device model) for an LLM identifier.
-    let field_keys = vuln_detector_params::agent_model_field_keys();
-    let container_keys = vuln_detector_params::agent_model_container_keys();
-    for key in &field_keys {
-        if let Some(v) = obj.get(key.as_str()) {
-            pull(v);
-        }
-    }
-    for key in &container_keys {
-        if let Some(child) = obj.get(key.as_str()).and_then(|c| c.as_object()) {
-            for fk in &field_keys {
-                if let Some(v) = child.get(fk.as_str()) {
-                    pull(v);
-                }
-            }
-        }
-    }
-}
-
-/// Normalize an authoritative model field value to a model id, or `None` if it
-/// is obviously not a model token. Trusts the field (no family-prefix / version
-/// requirement -- the agent explicitly declared it), but strips a `provider/`
-/// or `provider:` qualifier, lowercases, and rejects empty / overlong /
-/// non-identifier-shaped values so a stray field cannot pollute the SBOM.
-fn normalize_authoritative_model(raw: &str) -> Option<String> {
-    let trimmed = raw.trim();
-    if trimmed.len() < 2 || trimmed.len() > 64 {
-        return None;
-    }
-    let candidate = trimmed
-        .rsplit(['/', ':'])
-        .next()
-        .unwrap_or(trimmed)
-        .trim()
-        .to_ascii_lowercase();
-    if candidate.len() < 2 || candidate.len() > 64 {
-        return None;
-    }
-    // Must look like a model identifier (alphanumerics plus - . _) and carry at
-    // least one letter -- rejects pure-numeric or symbol-only stray values.
-    if !candidate
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_'))
-    {
-        return None;
-    }
-    if !candidate.chars().any(|c| c.is_ascii_alphabetic()) {
-        return None;
-    }
-    Some(candidate)
-}
-
-/// Set the [`MODELS_SOURCE_PROP`] marker on an agent SBOM's application root
-/// component. Idempotent. Returns `true` if the property value changed (so the
-/// caller can report the SBOM as updated).
-pub fn mark_models_source(sbom: &mut AgentSbom, source: &str) -> bool {
-    let app_ref = format!("agent:{}", sbom.agent_type);
-    match sbom.components.iter_mut().find(|c| c.bom_ref == app_ref) {
-        Some(app) => {
-            let prev = app
-                .properties
-                .insert(MODELS_SOURCE_PROP.to_string(), source.to_string());
-            prev.as_deref() != Some(source)
-        }
-        None => false,
-    }
-}
-
-/// Append `machine-learning-model` components for the given model ids onto an
-/// existing agent SBOM (deduped against models already present) and wire them
-/// as dependencies of the agent application root. Returns `true` when the SBOM
-/// gained at least one new model component.
-pub fn merge_models_into_sbom(sbom: &mut AgentSbom, model_ids: &[String]) -> bool {
-    if model_ids.is_empty() {
-        return false;
-    }
-    // Authoritative models are being merged -> record on the app root that this
-    // agent's models came from a structured transcript field (not a guess).
-    let marked = mark_models_source(sbom, "recorded");
-    let app_ref = format!("agent:{}", sbom.agent_type);
-    let mut present: std::collections::BTreeSet<String> = sbom
-        .components
-        .iter()
-        .filter(|c| c.component_type == "machine-learning-model")
-        .map(|c| c.bom_ref.clone())
-        .collect();
-
-    let mut new_refs: Vec<String> = Vec::new();
-    for model in model_ids {
-        let model_ref = format!("model:{}:{}", sbom.agent_type, model);
-        if present.contains(&model_ref) {
-            continue;
-        }
-        present.insert(model_ref.clone());
-        let mut p = BTreeMap::new();
-        p.insert("edamame:kind".to_string(), "model".to_string());
-        // Authoritative: read from an explicit transcript model field.
-        p.insert("edamame:source".to_string(), "recorded".to_string());
-        sbom.components.push(SbomComponent {
-            bom_ref: model_ref.clone(),
-            component_type: "machine-learning-model".to_string(),
-            name: model.clone(),
-            version: None,
-            content_hash: None,
-            properties: p,
-        });
-        new_refs.push(model_ref);
-    }
-
-    if new_refs.is_empty() {
-        return marked;
-    }
-    if let Some(dep) = sbom.dependencies.iter_mut().find(|d| d.bom_ref == app_ref) {
-        dep.depends_on.extend(new_refs);
-    } else {
-        sbom.dependencies.push(SbomDependency {
-            bom_ref: app_ref,
-            depends_on: new_refs,
-        });
-    }
-    true
-}
-
-/// Project an `AgentSbom` to a minimal CycloneDX 1.5 JSON document. Pure
-/// serialization -- no network, no file IO.
-pub fn sbom_to_cyclonedx(sbom: &AgentSbom) -> serde_json::Value {
-    let components: Vec<serde_json::Value> = sbom
-        .components
-        .iter()
-        .map(|c| {
-            let mut obj = serde_json::Map::new();
-            obj.insert("type".to_string(), serde_json::json!(c.component_type));
-            obj.insert("bom-ref".to_string(), serde_json::json!(c.bom_ref));
-            obj.insert("name".to_string(), serde_json::json!(c.name));
-            if let Some(v) = &c.version {
-                obj.insert("version".to_string(), serde_json::json!(v));
-            }
-            if let Some(h) = &c.content_hash {
-                obj.insert(
-                    "hashes".to_string(),
-                    serde_json::json!([{ "alg": "SHA-256", "content": h }]),
-                );
-            }
-            if !c.properties.is_empty() {
-                let props: Vec<serde_json::Value> = c
-                    .properties
-                    .iter()
-                    .map(|(k, v)| serde_json::json!({ "name": k, "value": v }))
-                    .collect();
-                obj.insert("properties".to_string(), serde_json::json!(props));
-            }
-            serde_json::Value::Object(obj)
-        })
-        .collect();
-
-    let dependencies: Vec<serde_json::Value> = sbom
-        .dependencies
-        .iter()
-        .map(|d| {
-            serde_json::json!({
-                "ref": d.bom_ref,
-                "dependsOn": d.depends_on,
-            })
-        })
-        .collect();
-
-    serde_json::json!({
-        "bomFormat": "CycloneDX",
-        "specVersion": "1.5",
-        "version": 1,
-        "metadata": {
-            "timestamp": sbom.generated_at.to_rfc3339(),
-            "component": {
-                "type": "application",
-                "name": sbom.agent_type,
-                "bom-ref": format!("agent:{}", sbom.agent_type),
-            },
-            "properties": [
-                { "name": "edamame:agent_instance_id", "value": sbom.agent_instance_id },
-            ],
-        },
-        "components": components,
-        "dependencies": dependencies,
-    })
-}
-
-/// Diff a current SBOM against an approved baseline. `added`/`removed` are by
-/// bom_ref; `changed` lists refs whose version or content hash differs.
-pub fn diff_sboms(baseline: Option<&AgentSbom>, current: &AgentSbom) -> SbomDiff {
-    let baseline = match baseline {
-        Some(b) => b,
-        None => {
-            return SbomDiff {
-                added: current.components.clone(),
-                removed: Vec::new(),
-                changed: Vec::new(),
-                baseline_present: false,
-            }
-        }
-    };
-    let base_by_ref: BTreeMap<&str, &SbomComponent> = baseline
-        .components
-        .iter()
-        .map(|c| (c.bom_ref.as_str(), c))
-        .collect();
-    let cur_by_ref: BTreeMap<&str, &SbomComponent> = current
-        .components
-        .iter()
-        .map(|c| (c.bom_ref.as_str(), c))
-        .collect();
-
-    let mut diff = SbomDiff {
-        baseline_present: true,
-        ..Default::default()
-    };
-    for (cref, comp) in &cur_by_ref {
-        match base_by_ref.get(cref) {
-            None => diff.added.push((*comp).clone()),
-            Some(base_comp) => {
-                if base_comp.version != comp.version || base_comp.content_hash != comp.content_hash
-                {
-                    diff.changed.push(cref.to_string());
-                }
-            }
-        }
-    }
-    for (bref, comp) in &base_by_ref {
-        if !cur_by_ref.contains_key(bref) {
-            diff.removed.push((*comp).clone());
-        }
-    }
-    diff
-}
-
-/// `true` when a component is part of the agent's **structural** capability
-/// surface that the baseline-drift alarm cares about: MCP servers, tool
-/// classes, secret/env bindings, instruction files, and the agent root.
-/// Model components are explicitly excluded -- which model an agent happens to
-/// call on a given run is dynamic, informational state, not a supply-chain
-/// change, so a model appearing/disappearing must NOT raise a drift alarm.
-fn is_structural_component(c: &SbomComponent) -> bool {
-    c.component_type != "machine-learning-model"
-        && c.properties.get("edamame:kind").map(String::as_str) != Some("model")
-}
-
-/// Deterministic outcome of grading an SBOM diff for baseline-drift alarming.
-#[derive(Debug, Clone)]
-pub struct SbomDriftAlarm {
-    /// The alertable/visible finding to record + notify on.
-    pub finding: VisibilityFinding,
-    /// Stable signature of the structural drift set. The caller persists this
-    /// per `agent_instance_id` and only (re-)notifies when it changes, so an
-    /// unchanged drift does not re-alarm every tick (notification dedup).
-    pub signature: String,
-}
-
-/// Grade an SBOM `diff` for an agent instance into an optional baseline-drift
-/// alarm. Pure: no IO, no notification side effects.
-///
-/// Only **structural** capability changes count (see [`is_structural_component`]):
-/// a new/removed MCP server, tool class, secret binding, or instruction file,
-/// or a changed instruction-file content hash. Model add/remove is ignored.
-///
-/// Severity grading (mirrors the attack-pattern alertable gate -- only HIGH/
-/// CRITICAL trip a CI gate / score):
-/// - **High**: the capability surface *expanded* (any structural addition) or
-///   an instruction file's content changed -- the security-relevant direction
-///   (new server/tool/secret = new attack surface; changed instructions =
-///   prompt-injection / behavior-change surface).
-/// - **Medium**: only *removals* (capability shrank) -- still drift the
-///   operator should see, but not alertable on its own.
-///
-/// Returns `None` when the baseline is absent (nothing to drift from) or when
-/// no structural change remains after filtering models out.
-pub fn sbom_drift_alarm(
-    agent_type: &str,
-    agent_instance_id: &str,
-    diff: &SbomDiff,
-) -> Option<SbomDriftAlarm> {
-    if !diff.baseline_present {
-        return None;
-    }
-    let added: Vec<&SbomComponent> = diff
-        .added
-        .iter()
-        .filter(|c| is_structural_component(c))
-        .collect();
-    let removed: Vec<&SbomComponent> = diff
-        .removed
-        .iter()
-        .filter(|c| is_structural_component(c))
-        .collect();
-    // Only instruction files carry a content_hash, so any `changed` ref is an
-    // instruction-file content change. Models never appear here (no hash).
-    let changed: Vec<&String> = diff
-        .changed
-        .iter()
-        .filter(|r| !r.starts_with("model:"))
-        .collect();
-
-    if added.is_empty() && removed.is_empty() && changed.is_empty() {
-        return None;
-    }
-
-    let severity = if !added.is_empty() || !changed.is_empty() {
-        VisibilitySeverity::High
-    } else {
-        VisibilitySeverity::Medium
-    };
-
-    // Stable signature over the structural drift set -- sorted bom_refs tagged
-    // by direction so the caller can dedup notifications across ticks.
-    let mut sig_parts: Vec<String> = Vec::new();
-    for c in &added {
-        sig_parts.push(format!("+{}", c.bom_ref));
-    }
-    for c in &removed {
-        sig_parts.push(format!("-{}", c.bom_ref));
-    }
-    for r in &changed {
-        sig_parts.push(format!("~{}", r));
-    }
-    sig_parts.sort();
-    let signature = short_hash(&sig_parts.join("|"));
-
-    // Human-readable subject names (capped) for the description.
-    let names = |comps: &[&SbomComponent]| -> String {
-        let mut v: Vec<&str> = comps.iter().map(|c| c.name.as_str()).collect();
-        v.sort_unstable();
-        v.truncate(6);
-        v.join(", ")
-    };
-
-    let mut parts: Vec<String> = Vec::new();
-    if !added.is_empty() {
-        parts.push(format!("added {} ({})", added.len(), names(&added)));
-    }
-    if !changed.is_empty() {
-        parts.push(format!("changed {} instruction file(s)", changed.len()));
-    }
-    if !removed.is_empty() {
-        parts.push(format!("removed {} ({})", removed.len(), names(&removed)));
-    }
-    let description = format!(
-        "Agent '{}' capability surface drifted from its approved baseline: {}.",
-        agent_type,
-        parts.join("; ")
-    );
-
-    let finding = VisibilityFinding::new(
-        "sbom",
-        "sbom_baseline_drift",
-        severity,
-        agent_instance_id,
-        format!("{} SBOM drifted from approved baseline", agent_type),
-        description,
-    )
-    .with_evidence("agent_type", agent_type)
-    .with_evidence("agent_instance_id", agent_instance_id)
-    .with_evidence("added_count", added.len().to_string())
-    .with_evidence("removed_count", removed.len().to_string())
-    .with_evidence("changed_count", changed.len().to_string())
-    .with_evidence("drift_signature", signature.clone())
-    .with_owasp();
-
-    Some(SbomDriftAlarm { finding, signature })
 }
 
 // ---------------------------------------------------------------------------
@@ -4924,7 +4498,7 @@ fn is_high_privilege_label(label: &str) -> bool {
 /// Operator-facing classification of a discovered agent, framed as a
 /// first-seen tripwire rather than a governance allow-list. The deterministic
 /// rule lives in `classify_agent`; core assembles the inputs from the
-/// transcript-observer status, the MCP/SBOM discovery, and the operator
+/// transcript-observer status, the MCP/component discovery, and the operator
 /// acknowledgment set. Precedence (most → least specific):
 /// `acknowledged` > `shadow` > `new`.
 ///
@@ -4997,7 +4571,7 @@ pub fn classify_agent(
 }
 
 /// One row of the operator agent inventory (INC-10). Pure data container;
-/// core fills it by joining observer status + MCP/SBOM discovery + allow-list.
+/// core fills it by joining observer status + MCP/component discovery + allow-list.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentInventoryEntry {
     pub agent_type: String,
@@ -5013,8 +4587,8 @@ pub struct AgentInventoryEntry {
     pub acknowledged: bool,
     /// Count of MCP endpoints declared by this agent.
     pub mcp_endpoint_count: u32,
-    /// Count of SBOM components attributed to this agent.
-    pub sbom_component_count: u32,
+    /// Count of discovered components attributed to this agent.
+    pub component_count: u32,
     /// Count of high-or-critical visibility findings touching this agent.
     pub alertable_finding_count: u32,
 }
@@ -5360,7 +4934,7 @@ fn goal_loop_hash(goal_text: &str) -> String {
 ///   sub-agents.
 ///
 /// All three thresholds are CloudModel-tunable via
-/// `vuln_detector_params::agent_recursion_thresholds()`.
+/// `agent_visibility_params::agent_recursion_thresholds()`.
 pub fn analyze_delegation(
     agent_type: &str,
     agent_instance_id: &str,
@@ -5372,7 +4946,7 @@ pub fn analyze_delegation(
     // * `loop_min_repeats` -- same-goal re-delegations at/above which a
     //   same-purpose loop is flagged even when every spawn reads at depth 1.
     // * `fanout_high` -- sub-agent fan-out at/above which fan-out alone fires.
-    let thresholds = vuln_detector_params::agent_recursion_thresholds();
+    let thresholds = agent_visibility_params::agent_recursion_thresholds();
     let root = DelegationNode {
         node_id: short_hash(&format!("{}|{}|root", agent_type, agent_instance_id)),
         agent_type: agent_type.to_string(),
@@ -5530,8 +5104,8 @@ pub fn analyze_delegation_from_transcript(
     analyze_delegation(agent_type, agent_instance_id, &spawns)
 }
 
-/// Content-addressed hash of an instruction/config file body for SBOM `file`
-/// components. Never stores the body (invariant I5). Returns `None` if the
+/// Content-addressed hash of an instruction/config file body for inventory
+/// `file` components. Never stores the body (invariant I5). Returns `None` if the
 /// file cannot be read.
 pub fn hash_instruction_file(path: &Path) -> Option<String> {
     let bytes = std::fs::read(path).ok()?;
@@ -5638,7 +5212,7 @@ bob ALL=(ALL) NOPASSWD: ALL
     fn blast_radius_fires_on_unsandboxed_plus_passwordless_root() {
         let host = host_privilege_fixture(true, true);
         let sandboxes = vec![agent_sandbox_fixture("cursor", Some(false))];
-        let out = agents_with_blast_radius(&host, &sandboxes, &BTreeMap::new());
+        let out = agents_with_blast_radius(&host, &sandboxes, &BTreeMap::new(), &BTreeMap::new());
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].agent_type, "cursor");
         assert!(out[0].unsandboxed);
@@ -5653,7 +5227,7 @@ bob ALL=(ALL) NOPASSWD: ALL
         let sandboxes = vec![agent_sandbox_fixture("claude_code", Some(false))];
         let mut critical = BTreeMap::new();
         critical.insert("claude_code".to_string(), 2u32);
-        let out = agents_with_blast_radius(&host, &sandboxes, &critical);
+        let out = agents_with_blast_radius(&host, &sandboxes, &critical, &BTreeMap::new());
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].agent_type, "claude_code");
         assert!(out[0].critical_subprocess);
@@ -5665,7 +5239,7 @@ bob ALL=(ALL) NOPASSWD: ALL
         // Unsandboxed alone is not enough -- it is the common workstation case.
         let host = host_privilege_fixture(true, false);
         let sandboxes = vec![agent_sandbox_fixture("cursor", Some(false))];
-        let out = agents_with_blast_radius(&host, &sandboxes, &BTreeMap::new());
+        let out = agents_with_blast_radius(&host, &sandboxes, &BTreeMap::new(), &BTreeMap::new());
         assert!(out.is_empty());
     }
 
@@ -5677,7 +5251,7 @@ bob ALL=(ALL) NOPASSWD: ALL
         let sandboxes = vec![agent_sandbox_fixture("sandboxed_agent", Some(true))];
         let mut critical = BTreeMap::new();
         critical.insert("sandboxed_agent".to_string(), 5u32);
-        let out = agents_with_blast_radius(&host, &sandboxes, &critical);
+        let out = agents_with_blast_radius(&host, &sandboxes, &critical, &BTreeMap::new());
         assert!(out.is_empty());
     }
 
@@ -5686,7 +5260,7 @@ bob ALL=(ALL) NOPASSWD: ALL
         // `None` is "could not determine" -- not a claim, so never qualifies.
         let host = host_privilege_fixture(true, true);
         let sandboxes = vec![agent_sandbox_fixture("unknown_agent", None)];
-        let out = agents_with_blast_radius(&host, &sandboxes, &BTreeMap::new());
+        let out = agents_with_blast_radius(&host, &sandboxes, &BTreeMap::new(), &BTreeMap::new());
         assert!(out.is_empty());
     }
 
@@ -5701,13 +5275,55 @@ bob ALL=(ALL) NOPASSWD: ALL
         ];
         let mut critical = BTreeMap::new();
         critical.insert("claude_code".to_string(), 1u32);
-        let out = agents_with_blast_radius(&host, &sandboxes, &critical);
+        let out = agents_with_blast_radius(&host, &sandboxes, &critical, &BTreeMap::new());
         // cursor has no amplifier (host unassessed, no critical subprocess);
         // claude_code fires on its critical subprocess only.
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].agent_type, "claude_code");
         assert!(!out[0].passwordless_root);
         assert!(out[0].critical_subprocess);
+    }
+
+    #[test]
+    fn blast_radius_fires_on_unsandboxed_plus_secret_exposure() {
+        // No passwordless root, no critical subprocess -- but secret material
+        // was observed in the agent's transcript context (BR-1).
+        let host = host_privilege_fixture(true, false);
+        let sandboxes = vec![agent_sandbox_fixture("codex", Some(false))];
+        let mut secrets = BTreeMap::new();
+        secrets.insert(
+            "codex".to_string(),
+            vec!["github_token".to_string(), "private_key".to_string()],
+        );
+        let out = agents_with_blast_radius(&host, &sandboxes, &BTreeMap::new(), &secrets);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].agent_type, "codex");
+        assert!(out[0].secret_exposure);
+        assert_eq!(
+            out[0].secret_exposure_labels,
+            vec!["github_token".to_string(), "private_key".to_string()]
+        );
+        assert!(!out[0].passwordless_root);
+        assert!(!out[0].critical_subprocess);
+        assert!(out[0]
+            .reasons
+            .iter()
+            .any(|r| r.contains("secret material in agent context")));
+    }
+
+    #[test]
+    fn blast_radius_secret_exposure_still_bounded_by_os_confinement() {
+        // Secret exposure on a positively OS-confined agent does NOT qualify:
+        // the sandbox bounds what the agent can reach even with the material.
+        let host = host_privilege_fixture(true, false);
+        let sandboxes = vec![agent_sandbox_fixture("sandboxed_agent", Some(true))];
+        let mut secrets = BTreeMap::new();
+        secrets.insert(
+            "sandboxed_agent".to_string(),
+            vec!["private_key".to_string()],
+        );
+        let out = agents_with_blast_radius(&host, &sandboxes, &BTreeMap::new(), &secrets);
+        assert!(out.is_empty());
     }
 
     #[test]
@@ -5718,12 +5334,12 @@ bob ALL=(ALL) NOPASSWD: ALL
             agent_sandbox_fixture("cursor", Some(false)),
             agent_sandbox_fixture("claude_code", Some(false)),
         ];
-        let out = agents_with_blast_radius(&host, &sandboxes, &BTreeMap::new());
+        let out = agents_with_blast_radius(&host, &sandboxes, &BTreeMap::new(), &BTreeMap::new());
         let names: Vec<&str> = out.iter().map(|a| a.agent_type.as_str()).collect();
         assert_eq!(names, vec!["claude_code", "cursor", "openclaw"]);
     }
 
-    // --- Agent governance harness presence (AI-SDLC posture) -----------------
+    // --- Agent governance harness presence (AI agent governance posture) -----------------
 
     fn harness_fixture(slug: &str, detected: bool) -> AgentHarness {
         AgentHarness {
@@ -5745,7 +5361,7 @@ bob ALL=(ALL) NOPASSWD: ALL
             harness_fixture("agentfield", false),
             harness_fixture("rippletide", false),
         ];
-        // Agents present + no harness detected -> the AI-SDLC gap fires.
+        // Agents present + no harness detected -> the AI agent governance gap fires.
         assert!(agents_without_harness(2, &harnesses));
         // No agents present -> nothing to govern, so it never fires.
         assert!(!agents_without_harness(0, &harnesses));
@@ -5851,6 +5467,8 @@ bob ALL=(ALL) NOPASSWD: ALL
             unsandboxed: true,
             passwordless_root: true,
             critical_subprocess: false,
+            secret_exposure: false,
+            secret_exposure_labels: Vec::new(),
             reasons: vec!["unsandboxed (full user-file access)".to_string()],
         }
     }
@@ -6088,13 +5706,13 @@ bob ALL=(ALL) NOPASSWD: ALL
         assert_eq!(servers[0].name, "notion");
     }
 
-    // --- Follow-up #3: installed-but-empty agents get a minimal SBOM ----------
+    // --- Follow-up #3: installed-but-empty agents get a minimal inventory -----
 
     #[test]
-    fn installed_empty_agent_gets_minimal_sbom_uninstalled_skipped() {
+    fn installed_empty_agent_gets_minimal_inventory_uninstalled_skipped() {
         // Cursor is "installed" (its ~/.cursor root exists) but has no MCP
-        // servers and no skills -> it still gets a minimal application-only SBOM.
-        // Claude Code has no footprint at all -> it stays skipped.
+        // servers and no skills -> it still gets a minimal application-only
+        // inventory. Claude Code has no footprint at all -> it stays skipped.
         let tmp = tempfile::TempDir::new().unwrap();
         let home = tmp.path();
         std::fs::create_dir_all(home.join(".cursor")).unwrap();
@@ -6102,36 +5720,28 @@ bob ALL=(ALL) NOPASSWD: ALL
         assert!(agent_installed_on_host(home, "cursor"));
         assert!(!agent_installed_on_host(home, "claude_code"));
 
-        let sboms = build_agent_sboms(home);
-        let cursor = sboms
+        let inventories = build_agent_component_inventories(home);
+        let cursor = inventories
             .iter()
             .find(|s| s.agent_type == "cursor")
-            .expect("installed cursor gets a minimal SBOM");
+            .expect("installed cursor gets a minimal inventory");
         assert_eq!(
             cursor.components.len(),
             1,
-            "minimal SBOM carries just the application root component",
+            "minimal inventory carries just the application root component",
         );
         assert!(
-            !sboms.iter().any(|s| s.agent_type == "claude_code"),
+            !inventories.iter().any(|s| s.agent_type == "claude_code"),
             "an agent with no on-host footprint is still skipped",
         );
-
-        // The CycloneDX projection is a valid document, never `{}`.
-        let cdx = sbom_to_cyclonedx(cursor);
-        assert_eq!(cdx["bomFormat"], "CycloneDX");
-        assert!(cdx["components"]
-            .as_array()
-            .map(|a| !a.is_empty())
-            .unwrap_or(false));
     }
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn claude_desktop_empty_config_yields_valid_cyclonedx() {
+    fn claude_desktop_empty_config_yields_minimal_inventory() {
         // The exact user scenario: Claude Desktop is installed with an empty
-        // `"mcpServers": {}` config and no skills. It must yield a valid,
-        // minimal CycloneDX SBOM rather than `{}`.
+        // `"mcpServers": {}` config and no skills. It must still yield a valid,
+        // minimal inventory with just the application root component.
         let tmp = tempfile::TempDir::new().unwrap();
         let home = tmp.path();
         let dir = home.join("Library/Application Support/Claude");
@@ -6143,17 +5753,15 @@ bob ALL=(ALL) NOPASSWD: ALL
         .unwrap();
 
         assert!(agent_installed_on_host(home, "claude_desktop"));
-        let sboms = build_agent_sboms(home);
-        let desktop = sboms
+        let inventories = build_agent_component_inventories(home);
+        let desktop = inventories
             .iter()
             .find(|s| s.agent_type == "claude_desktop")
-            .expect("installed claude_desktop gets a minimal SBOM");
-        let cdx = sbom_to_cyclonedx(desktop);
-        assert_eq!(cdx["bomFormat"], "CycloneDX");
-        assert!(cdx["components"]
-            .as_array()
-            .map(|a| !a.is_empty())
-            .unwrap_or(false));
+            .expect("installed claude_desktop gets a minimal inventory");
+        assert!(
+            !desktop.components.is_empty(),
+            "minimal inventory carries at least the application root component",
+        );
     }
 
     #[test]
@@ -6213,7 +5821,7 @@ bob ALL=(ALL) NOPASSWD: ALL
 
         // Unmapped rule_id -> no `owasp_refs` key inserted (pure no-op).
         let untagged = VisibilityFinding::new(
-            "sbom",
+            "graph",
             "definitely_unmapped_rule_xyz",
             VisibilitySeverity::Low,
             "subj-2",
@@ -6446,42 +6054,19 @@ command = "uvx"
     }
 
     #[test]
-    fn sbom_projects_app_and_services() {
+    fn inventory_projects_app_and_services() {
         let ep = endpoint_from_json("cursor", "fs", r#"{"command":"npx"}"#);
-        let sboms = build_agent_sboms_from_endpoints(&[ep]);
-        assert_eq!(sboms.len(), 1);
-        let sbom = &sboms[0];
-        assert_eq!(sbom.agent_type, "cursor");
+        let inventories = build_agent_component_inventories_from_endpoints(&[ep]);
+        assert_eq!(inventories.len(), 1);
+        let inv = &inventories[0];
+        assert_eq!(inv.agent_type, "cursor");
         // app + one service.
-        assert_eq!(sbom.components.len(), 2);
-        assert!(sbom
+        assert_eq!(inv.components.len(), 2);
+        assert!(inv
             .components
             .iter()
             .any(|c| c.component_type == "application"));
-        assert!(sbom
-            .components
-            .iter()
-            .any(|c| c.component_type == "service"));
-        // CycloneDX projection is well-formed.
-        let cdx = sbom_to_cyclonedx(sbom);
-        assert_eq!(cdx["bomFormat"], "CycloneDX");
-        assert_eq!(cdx["specVersion"], "1.5");
-        assert!(cdx["components"].as_array().unwrap().len() == 2);
-    }
-
-    #[test]
-    fn sbom_diff_detects_added_and_removed() {
-        let base_ep = endpoint_from_json("cursor", "fs", r#"{"command":"npx"}"#);
-        let base = build_agent_sboms_from_endpoints(&[base_ep]).remove(0);
-
-        let new_ep = endpoint_from_json("cursor", "git", r#"{"command":"npx"}"#);
-        let current = build_agent_sboms_from_endpoints(&[new_ep]).remove(0);
-
-        let diff = diff_sboms(Some(&base), &current);
-        assert!(diff.baseline_present);
-        // git service added, fs service removed (app ref is stable).
-        assert!(diff.added.iter().any(|c| c.component_type == "service"));
-        assert!(diff.removed.iter().any(|c| c.component_type == "service"));
+        assert!(inv.components.iter().any(|c| c.component_type == "service"));
     }
 
     #[test]
@@ -6745,18 +6330,18 @@ some normal line
     }
 
     #[test]
-    fn sbom_projects_tool_and_secret_components() {
+    fn inventory_projects_tool_and_secret_components() {
         // A shell server wired to a secret env var yields, besides app +
         // service: a tool_capability component (Shell) and a secret_binding
-        // component (the env key), each a dependency of the service.
+        // component (the env key).
         let ep = endpoint_from_json(
             "cursor",
             "shellsrv",
             r#"{"command":"bash","args":["-c","mcp"],"env":{"OPENAI_API_KEY":"x"}}"#,
         );
-        let sbom = build_agent_sboms_from_endpoints(&[ep]).remove(0);
+        let inv = build_agent_component_inventories_from_endpoints(&[ep]).remove(0);
 
-        let tool = sbom
+        let tool = inv
             .components
             .iter()
             .find(|c| {
@@ -6766,7 +6351,7 @@ some normal line
         assert_eq!(tool.name, "Shell");
         assert_eq!(tool.component_type, "data");
 
-        let secret = sbom
+        let secret = inv
             .components
             .iter()
             .find(|c| {
@@ -6776,29 +6361,14 @@ some normal line
         // I5: the key name is captured, never the value.
         assert_eq!(secret.name, "OPENAI_API_KEY");
         assert!(secret.content_hash.is_none());
-
-        // The service depends on both the tool and the secret binding.
-        let svc_dep = sbom
-            .dependencies
-            .iter()
-            .find(|d| d.bom_ref.starts_with("mcp:"))
-            .expect("service dependency present");
-        assert!(svc_dep
-            .depends_on
-            .iter()
-            .any(|r| r.starts_with("tool:cursor:shell")));
-        assert!(svc_dep
-            .depends_on
-            .iter()
-            .any(|r| r.starts_with("env:cursor:OPENAI_API_KEY")));
     }
 
     #[test]
     fn unknown_tool_class_is_not_projected() {
         // "fs"/"npx" classifies as Unknown -> no tool component, just app+service.
         let ep = endpoint_from_json("cursor", "fs", r#"{"command":"npx"}"#);
-        let sbom = build_agent_sboms_from_endpoints(&[ep]).remove(0);
-        assert!(!sbom
+        let inv = build_agent_component_inventories_from_endpoints(&[ep]).remove(0);
+        assert!(!inv
             .components
             .iter()
             .any(|c| c.bom_ref.contains("unclassified")));
@@ -6834,66 +6404,6 @@ some normal line
         assert_eq!(exposes.dst_label, "Git");
         // no edge ever carries the "Unclassified" label.
         assert!(edges.iter().all(|e| e.dst_label != "Unclassified"));
-    }
-
-    #[test]
-    fn extract_models_from_transcript_recognizes_known_families() {
-        let text = r#"
-        {"model":"claude-opus-4-20250514","role":"assistant"}
-        used openai:gpt-4o-mini for the cheap pass
-        fallback to anthropic/claude-3-5-sonnet-20241022
-        also tried gemini-2.0-flash and o3-mini
-        prose mentioning claude code and a key should not match
-        "#;
-        let models = extract_models_from_transcript(text);
-        assert!(models.iter().any(|m| m == "claude-opus-4-20250514"));
-        assert!(models.iter().any(|m| m == "gpt-4o-mini"));
-        // provider qualifier stripped.
-        assert!(models.iter().any(|m| m == "claude-3-5-sonnet-20241022"));
-        assert!(models.iter().any(|m| m == "gemini-2.0-flash"));
-        assert!(models.iter().any(|m| m == "o3-mini"));
-        // bare family words without a version digit are rejected.
-        assert!(!models.iter().any(|m| m == "claude-code"));
-        // deterministic ordering (sorted).
-        let mut sorted = models.clone();
-        sorted.sort();
-        assert_eq!(models, sorted);
-    }
-
-    #[test]
-    fn merge_models_into_sbom_dedups_and_wires_app_dependency() {
-        let ep = endpoint_from_json("cursor", "fs", r#"{"command":"npx"}"#);
-        let mut sbom = build_agent_sboms_from_endpoints(&[ep]).remove(0);
-
-        let first = merge_models_into_sbom(&mut sbom, &["claude-opus-4".to_string()]);
-        assert!(first);
-        let model_comp = sbom
-            .components
-            .iter()
-            .find(|c| c.component_type == "machine-learning-model")
-            .expect("model component present");
-        assert_eq!(model_comp.name, "claude-opus-4");
-        // wired as a dependency of the agent application root.
-        let app_dep = sbom
-            .dependencies
-            .iter()
-            .find(|d| d.bom_ref == "agent:cursor")
-            .unwrap();
-        assert!(app_dep
-            .depends_on
-            .iter()
-            .any(|r| r == "model:cursor:claude-opus-4"));
-
-        // Re-merging the same model is a no-op (dedup).
-        let second = merge_models_into_sbom(&mut sbom, &["claude-opus-4".to_string()]);
-        assert!(!second);
-        assert_eq!(
-            sbom.components
-                .iter()
-                .filter(|c| c.component_type == "machine-learning-model")
-                .count(),
-            1
-        );
     }
 
     #[test]
@@ -6987,209 +6497,33 @@ some normal line
         assert!(!AgentClassification::Acknowledged.needs_review());
     }
 
-    // -- Fix #1: authoritative structured model extraction -------------------
-
-    #[test]
-    fn extract_models_structured_reads_only_explicit_fields() {
-        // A top-level `model` field, a `model` field nested one level inside a
-        // `message` container, plus a model-shaped string sitting in a NON-model
-        // field (`text`) and a prose mention on a non-JSON line. Only the two
-        // explicit structured fields must be picked up; the prose / wrong-field
-        // mentions are ignored (this is the whole point of authoritative-only).
-        let transcript = r#"
-{"role":"assistant","model":"claude-opus-4-20250514"}
-{"type":"message","message":{"role":"assistant","model":"openai/gpt-4o-mini"}}
-{"role":"assistant","text":"we should switch to claude-3-5-sonnet-20241022 here"}
-plain prose mentioning gemini-2.0-flash should never match
-"#;
-        let models = extract_models_from_transcript_structured(transcript);
-        // provider qualifier stripped, lowercased, sorted + deduped.
-        assert_eq!(
-            models,
-            vec![
-                "claude-opus-4-20250514".to_string(),
-                "gpt-4o-mini".to_string()
-            ]
-        );
-        // the model-shaped token in a non-model field is NOT mined.
-        assert!(!models.iter().any(|m| m == "claude-3-5-sonnet-20241022"));
-        // the prose mention is NOT mined.
-        assert!(!models.iter().any(|m| m == "gemini-2.0-flash"));
-    }
-
-    #[test]
-    fn extract_models_structured_empty_when_no_model_field() {
-        // The canonical Cursor case: transcript text / JSON lines that carry no
-        // explicit `model` field at all. We yield an empty set (the caller then
-        // marks the agent `not_recorded`) rather than guessing from prose.
-        let transcript = r#"
-User: please refactor this function
-{"role":"user","content":"please refactor this function"}
-{"role":"assistant","content":"done, used the usual approach"}
-"#;
-        assert!(extract_models_from_transcript_structured(transcript).is_empty());
-    }
-
-    #[test]
-    fn merge_models_marks_recorded_and_mark_source_is_idempotent() {
-        let ep = endpoint_from_json("cursor", "fs", r#"{"command":"npx"}"#);
-        let mut sbom = build_agent_sboms_from_endpoints(&[ep]).remove(0);
-        let app_ref = "agent:cursor".to_string();
-
-        // Merging authoritative models marks the app root as `recorded`.
-        assert!(merge_models_into_sbom(
-            &mut sbom,
-            &["claude-opus-4".to_string()]
-        ));
-        let app = sbom
-            .components
-            .iter()
-            .find(|c| c.bom_ref == app_ref)
-            .unwrap();
-        assert_eq!(
-            app.properties.get(MODELS_SOURCE_PROP).map(String::as_str),
-            Some("recorded")
-        );
-
-        // An agent with no recorded models is explicitly marked `not_recorded`
-        // (Cursor case) -- and re-marking the same value is a no-op.
-        let no_model_ep = endpoint_from_json("cursor", "fs", r#"{"command":"npx"}"#);
-        let mut bare = build_agent_sboms_from_endpoints(&[no_model_ep]).remove(0);
-        assert!(mark_models_source(&mut bare, "not_recorded"));
-        assert!(!mark_models_source(&mut bare, "not_recorded"));
-        let bare_app = bare
-            .components
-            .iter()
-            .find(|c| c.bom_ref == app_ref)
-            .unwrap();
-        assert_eq!(
-            bare_app
-                .properties
-                .get(MODELS_SOURCE_PROP)
-                .map(String::as_str),
-            Some("not_recorded")
-        );
-    }
-
     // -- Fix #4: per-(host, agent_type) instance id -------------------------
 
     #[test]
-    fn sbom_instance_id_is_distinct_per_home() {
+    fn inventory_instance_id_is_distinct_per_home() {
         let ep_a = endpoint_from_json("cursor", "fs", r#"{"command":"npx"}"#);
         let ep_b = endpoint_from_json("cursor", "fs", r#"{"command":"npx"}"#);
         let home_a = std::path::Path::new("/tmp/edamame-test-home-a");
         let home_b = std::path::Path::new("/tmp/edamame-test-home-b");
 
-        let sbom_a = build_agent_sboms_from_endpoints_with_home(&[ep_a], Some(home_a)).remove(0);
-        let sbom_b = build_agent_sboms_from_endpoints_with_home(&[ep_b], Some(home_b)).remove(0);
+        let inv_a =
+            build_agent_component_inventories_from_endpoints_with_home(&[ep_a], Some(home_a))
+                .remove(0);
+        let inv_b =
+            build_agent_component_inventories_from_endpoints_with_home(&[ep_b], Some(home_b))
+                .remove(0);
 
         // Same agent_type, two homes -> two DISTINCT instance ids, so the
         // Agents tab keys them separately instead of collapsing into one.
-        assert_eq!(sbom_a.agent_type, "cursor");
-        assert_eq!(sbom_b.agent_type, "cursor");
-        assert_ne!(sbom_a.agent_instance_id, sbom_b.agent_instance_id);
-        assert!(sbom_a.agent_instance_id.ends_with("-observer"));
+        assert_eq!(inv_a.agent_type, "cursor");
+        assert_eq!(inv_b.agent_type, "cursor");
+        assert_ne!(inv_a.agent_instance_id, inv_b.agent_instance_id);
+        assert!(inv_a.agent_instance_id.ends_with("-observer"));
 
         // Endpoint-only callers (no home) fall back to agent_type as the id.
         let ep_c = endpoint_from_json("cursor", "fs", r#"{"command":"npx"}"#);
-        let sbom_c = build_agent_sboms_from_endpoints(&[ep_c]).remove(0);
-        assert_eq!(sbom_c.agent_instance_id, "cursor");
-    }
-
-    // -- Fix #5: structural-only baseline-drift alarm + signature -----------
-
-    #[test]
-    fn drift_alarm_ignores_model_only_change() {
-        // Baseline and current have the SAME structural surface; the only
-        // difference is a model component appearing on the current SBOM. A
-        // model add/remove is dynamic state, NOT a supply-chain drift, so no
-        // alarm must be raised.
-        let base_ep = endpoint_from_json("cursor", "fs", r#"{"command":"npx"}"#);
-        let baseline = build_agent_sboms_from_endpoints(&[base_ep]).remove(0);
-
-        let cur_ep = endpoint_from_json("cursor", "fs", r#"{"command":"npx"}"#);
-        let mut current = build_agent_sboms_from_endpoints(&[cur_ep]).remove(0);
-        assert!(merge_models_into_sbom(
-            &mut current,
-            &["claude-opus-4".to_string()]
-        ));
-
-        let diff = diff_sboms(Some(&baseline), &current);
-        // The model component is the only added component.
-        assert!(diff
-            .added
-            .iter()
-            .all(|c| c.component_type == "machine-learning-model"));
-        assert!(sbom_drift_alarm("cursor", "cursor-inst", &diff).is_none());
-    }
-
-    #[test]
-    fn drift_alarm_high_on_server_addition_with_stable_signature() {
-        // Baseline = one server (fs); current = a different server (git).
-        // Structurally: git added, fs removed -> capability surface expanded
-        // -> HIGH (alertable), and the signature is deterministic across calls.
-        let base_ep = endpoint_from_json("cursor", "fs", r#"{"command":"npx"}"#);
-        let baseline = build_agent_sboms_from_endpoints(&[base_ep]).remove(0);
-        let new_ep = endpoint_from_json("cursor", "git", r#"{"command":"npx"}"#);
-        let current = build_agent_sboms_from_endpoints(&[new_ep]).remove(0);
-
-        let diff = diff_sboms(Some(&baseline), &current);
-        let alarm =
-            sbom_drift_alarm("cursor", "cursor-inst", &diff).expect("structural drift -> alarm");
-        assert_eq!(alarm.finding.severity, VisibilitySeverity::High);
-        assert!(alarm.finding.severity.is_alertable());
-        assert_eq!(alarm.finding.rule_id, "sbom_baseline_drift");
-        assert_eq!(alarm.finding.subject_id, "cursor-inst");
-        assert_eq!(
-            alarm.finding.evidence.get("drift_signature"),
-            Some(&alarm.signature)
-        );
-        // OWASP metadata is attached (drift is a mapped rule).
-        assert!(alarm.finding.evidence.contains_key("owasp_refs"));
-
-        // Signature is a pure function of the structural drift set.
-        let again = sbom_drift_alarm("cursor", "cursor-inst", &diff).unwrap();
-        assert_eq!(alarm.signature, again.signature);
-    }
-
-    #[test]
-    fn drift_alarm_medium_on_removal_only_and_distinct_signature() {
-        // Baseline = two servers (fs + git); current = only fs (git removed).
-        // Capability surface SHRANK -> MEDIUM (visible, not alertable), and the
-        // signature differs from the add-and-remove case above.
-        let fs_ep = endpoint_from_json("cursor", "fs", r#"{"command":"npx"}"#);
-        let git_ep = endpoint_from_json("cursor", "git", r#"{"command":"npx"}"#);
-        let baseline = build_agent_sboms_from_endpoints(&[fs_ep, git_ep]).remove(0);
-
-        let cur_fs = endpoint_from_json("cursor", "fs", r#"{"command":"npx"}"#);
-        let current = build_agent_sboms_from_endpoints(&[cur_fs]).remove(0);
-
-        let diff = diff_sboms(Some(&baseline), &current);
-        assert!(diff.added.iter().all(|c| !is_structural_component(c)));
-        assert!(diff.removed.iter().any(is_structural_component));
-        let alarm =
-            sbom_drift_alarm("cursor", "cursor-inst", &diff).expect("removal is still drift");
-        assert_eq!(alarm.finding.severity, VisibilitySeverity::Medium);
-        assert!(!alarm.finding.severity.is_alertable());
-
-        // Add-and-remove drift vs removal-only drift produce different sigs.
-        let new_ep = endpoint_from_json("cursor", "git", r#"{"command":"npx"}"#);
-        let only_fs_base = endpoint_from_json("cursor", "fs", r#"{"command":"npx"}"#);
-        let add_remove_base = build_agent_sboms_from_endpoints(&[only_fs_base]).remove(0);
-        let add_remove_cur = build_agent_sboms_from_endpoints(&[new_ep]).remove(0);
-        let add_remove_diff = diff_sboms(Some(&add_remove_base), &add_remove_cur);
-        let add_remove_alarm = sbom_drift_alarm("cursor", "cursor-inst", &add_remove_diff).unwrap();
-        assert_ne!(alarm.signature, add_remove_alarm.signature);
-    }
-
-    #[test]
-    fn drift_alarm_none_without_baseline() {
-        // No baseline present -> nothing to drift FROM -> no alarm.
-        let ep = endpoint_from_json("cursor", "fs", r#"{"command":"npx"}"#);
-        let current = build_agent_sboms_from_endpoints(&[ep]).remove(0);
-        let diff = diff_sboms(None, &current);
-        assert!(!diff.baseline_present);
-        assert!(sbom_drift_alarm("cursor", "cursor-inst", &diff).is_none());
+        let inv_c = build_agent_component_inventories_from_endpoints(&[ep_c]).remove(0);
+        assert_eq!(inv_c.agent_instance_id, "cursor");
     }
 
     #[test]
@@ -8279,6 +7613,27 @@ skills/gtm-report and @rules/invariants.mdc.
             Some(root.join("my-repo"))
         );
         assert_eq!(resolve_slug_under(root, "does-not-exist"), None);
+    }
+
+    #[test]
+    fn resolve_slug_handles_arbitrary_separator_characters() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+        // Localized Google Drive mount shape: spaces, parentheses, '@', '.',
+        // plus a non-breaking space -- all of which the slug encoder collapses
+        // to '-'. The stat-probe arm cannot reconstruct these; the directory
+        // scan must.
+        let drive = root.join("Mon\u{a0}Drive (frank@lyonnet.org)");
+        std::fs::create_dir_all(drive.join("jarvis")).unwrap();
+        assert_eq!(
+            resolve_slug_under(root, "Mon-Drive-frank-lyonnet-org-jarvis"),
+            Some(drive.join("jarvis"))
+        );
+        // A partial-token mismatch must not match.
+        assert_eq!(
+            resolve_slug_under(root, "Mon-Drive-frank-lyonnet-com-jarvis"),
+            None
+        );
     }
 
     #[test]

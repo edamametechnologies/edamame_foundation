@@ -8,11 +8,12 @@
 //!   applies to the agent fleet. Each rule is a deterministic predicate over a
 //!   `PolicyInputs` snapshot (which the core assembles from the visibility
 //!   projections it already owns: firewall mode, MCP findings, agent approval
-//!   state, SBOM baselines, the alignment rollup, cross-boundary data flow).
+//!   state, active alertable divergence/attack-pattern findings,
+//!   cross-boundary data flow).
 //!   `evaluate_policy_pack` produces a `PolicyEvaluation` compliance report.
 //! - **Attestations** -- a tamper-evident, content-addressed digest over an
-//!   artifact (a policy evaluation, or a CycloneDX SBOM). The digest is a full
-//!   SHA-256 over the canonical bytes; `verify_attestation` re-derives it. This
+//!   artifact (a policy evaluation). The digest is a full SHA-256 over the
+//!   canonical bytes; `verify_attestation` re-derives it. This
 //!   is the deterministic-first primitive; a cryptographic signature
 //!   (cosign / in-toto) is the deployment-time extension that wraps this digest.
 //! - **Cross-zone approval** -- an operator workflow record for promoting an
@@ -60,11 +61,9 @@ pub enum PolicyRuleKind {
     ForbidCleartextMcp,
     /// No locally-bound MCP server may be publicly reachable without strong auth.
     ForbidPublicMcpWithoutStrongAuth,
-    /// Every discovered agent must have an operator-approved SBOM baseline.
-    RequireSbomBaselineApproved,
-    /// The composite alignment band must be at least `param`
-    /// (critical < drifting < watch < aligned).
-    RequireAlignmentBandAtLeast,
+    /// The fleet must carry no active alertable (HIGH/CRITICAL, non-dismissed)
+    /// divergence or attack-pattern findings.
+    ForbidActiveAlertableFindings,
     /// No cross-trust-boundary egress edge may move secret/credential taint.
     ForbidCrossBoundarySecretEgress,
 }
@@ -77,8 +76,7 @@ impl PolicyRuleKind {
             PolicyRuleKind::ForbidPublicMcpWithoutStrongAuth => {
                 "forbid_public_mcp_without_strong_auth"
             }
-            PolicyRuleKind::RequireSbomBaselineApproved => "require_sbom_baseline_approved",
-            PolicyRuleKind::RequireAlignmentBandAtLeast => "require_alignment_band_at_least",
+            PolicyRuleKind::ForbidActiveAlertableFindings => "forbid_active_alertable_findings",
             PolicyRuleKind::ForbidCrossBoundarySecretEgress => {
                 "forbid_cross_boundary_secret_egress"
             }
@@ -91,8 +89,8 @@ impl PolicyRuleKind {
 pub struct PolicyRule {
     pub rule_id: String,
     pub kind: PolicyRuleKind,
-    /// Threshold parameter for parameterised kinds (firewall mode / alignment
-    /// band); `None` for boolean kinds.
+    /// Threshold parameter for parameterised kinds (firewall mode); `None` for
+    /// boolean kinds.
     pub param: Option<String>,
     /// Severity attributed to a violation (`critical`/`high`/`medium`/`low`).
     pub severity: String,
@@ -115,9 +113,9 @@ pub struct PolicyPack {
 }
 
 /// The built-in EDAMAME baseline policy pack. Conservative defaults that any
-/// fleet should clear: no cleartext/public-unauth MCP, no shadow agents, every
-/// agent SBOM-baselined, alignment at least `watch`, no cross-boundary secret
-/// egress, and the firewall at least in `recommend`.
+/// fleet should clear: no cleartext/public-unauth MCP, no active alertable
+/// divergence/attack-pattern findings, no cross-boundary secret egress, and
+/// the firewall at least in `recommend`.
 pub fn default_policy_pack() -> PolicyPack {
     PolicyPack {
         pack_id: "edamame-baseline".to_string(),
@@ -151,19 +149,13 @@ pub fn default_policy_pack() -> PolicyPack {
                         .to_string(),
             },
             PolicyRule {
-                rule_id: "sbom-baselined".to_string(),
-                kind: PolicyRuleKind::RequireSbomBaselineApproved,
+                rule_id: "no-active-alertable-findings".to_string(),
+                kind: PolicyRuleKind::ForbidActiveAlertableFindings,
                 param: None,
-                severity: "medium".to_string(),
-                description: "Every discovered agent must have an approved SBOM baseline."
-                    .to_string(),
-            },
-            PolicyRule {
-                rule_id: "alignment-watch".to_string(),
-                kind: PolicyRuleKind::RequireAlignmentBandAtLeast,
-                param: Some("watch".to_string()),
                 severity: "high".to_string(),
-                description: "Composite alignment band must be at least watch.".to_string(),
+                description:
+                    "No active alertable (HIGH/CRITICAL) divergence or attack-pattern findings."
+                        .to_string(),
             },
             PolicyRule {
                 rule_id: "no-secret-egress".to_string(),
@@ -193,12 +185,9 @@ pub struct PolicyInputs {
     pub mcp_cleartext_findings: u32,
     /// Count of MCP findings keyed `mcp_public_no_strong_auth`.
     pub mcp_public_no_auth_findings: u32,
-    /// Discovered agents whose SBOM baseline is not operator-approved.
-    pub agents_without_approved_sbom: u32,
-    /// Composite alignment band slug (`aligned`/`watch`/`drifting`/`critical`).
-    pub alignment_band: String,
-    /// Deterministic alignment hard-fail (any CRITICAL domain).
-    pub alignment_hard_fail: bool,
+    /// Count of active alertable (HIGH/CRITICAL, non-dismissed) divergence and
+    /// attack-pattern findings across the fleet.
+    pub active_alertable_findings: u32,
     /// Count of alertable cross-boundary data-flow edges moving secret taint.
     pub cross_boundary_secret_egress_count: u32,
 }
@@ -243,16 +232,6 @@ fn firewall_rank(mode: &str) -> i32 {
     }
 }
 
-fn alignment_rank(band: &str) -> i32 {
-    match band.trim().to_ascii_lowercase().as_str() {
-        "critical" => 0,
-        "drifting" => 1,
-        "watch" => 2,
-        "aligned" => 3,
-        _ => -1,
-    }
-}
-
 /// Evaluate one rule against the inputs. Pure.
 fn evaluate_rule(rule: &PolicyRule, inputs: &PolicyInputs) -> PolicyRuleResult {
     let (satisfied, detail) = match rule.kind {
@@ -287,33 +266,14 @@ fn evaluate_rule(rule: &PolicyRule, inputs: &PolicyInputs) -> PolicyRuleResult {
                 ),
             )
         }
-        PolicyRuleKind::RequireSbomBaselineApproved => {
-            let ok = inputs.agents_without_approved_sbom == 0;
+        PolicyRuleKind::ForbidActiveAlertableFindings => {
+            let ok = inputs.active_alertable_findings == 0;
             (
                 ok,
                 format!(
-                    "{} agent(s) without an approved SBOM baseline",
-                    inputs.agents_without_approved_sbom
+                    "{} active alertable divergence/attack-pattern finding(s)",
+                    inputs.active_alertable_findings
                 ),
-            )
-        }
-        PolicyRuleKind::RequireAlignmentBandAtLeast => {
-            let required = rule.param.as_deref().unwrap_or("watch");
-            let ok = !inputs.alignment_hard_fail
-                && alignment_rank(&inputs.alignment_band) >= alignment_rank(required);
-            (
-                ok,
-                if inputs.alignment_hard_fail {
-                    format!(
-                        "alignment hard-fail (a CRITICAL domain), band '{}', required at least '{}'",
-                        inputs.alignment_band, required
-                    )
-                } else {
-                    format!(
-                        "alignment band is '{}', required at least '{}'",
-                        inputs.alignment_band, required
-                    )
-                },
             )
         }
         PolicyRuleKind::ForbidCrossBoundarySecretEgress => {
@@ -397,7 +357,7 @@ pub fn evaluate_policy_pack(pack: &PolicyPack, inputs: &PolicyInputs) -> PolicyE
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Attestation {
     pub attestation_id: String,
-    /// What was attested (`policy_evaluation` / `agent_sbom`).
+    /// What was attested (`policy_evaluation`).
     pub subject: String,
     /// Reference to the attested subject (pack id, agent type, ...).
     pub subject_ref: String,
@@ -459,22 +419,6 @@ pub fn attest_evaluation(eval: &PolicyEvaluation) -> Attestation {
             } else {
                 "non-compliant"
             }
-        ),
-    )
-}
-
-/// Attest a CycloneDX SBOM document: digest over the SBOM bytes. This is the
-/// "signed SBOM" primitive -- a tamper-evident anchor an enterprise pins to a
-/// known-good fleet baseline.
-pub fn attest_sbom(agent_type: &str, cyclonedx_json: &str) -> Attestation {
-    build_attestation(
-        "agent_sbom",
-        agent_type,
-        cyclonedx_json,
-        None,
-        format!(
-            "attestation of the CycloneDX SBOM for agent '{}'",
-            agent_type
         ),
     )
 }
@@ -566,9 +510,7 @@ mod tests {
             firewall_mode: "recommend".to_string(),
             mcp_cleartext_findings: 0,
             mcp_public_no_auth_findings: 0,
-            agents_without_approved_sbom: 0,
-            alignment_band: "aligned".to_string(),
-            alignment_hard_fail: false,
+            active_alertable_findings: 0,
             cross_boundary_secret_egress_count: 0,
         }
     }
@@ -599,19 +541,20 @@ mod tests {
     }
 
     #[test]
-    fn alignment_hard_fail_violates_band_rule() {
+    fn active_alertable_findings_violate_rule() {
         let pack = default_policy_pack();
         let mut inp = clean_inputs();
-        inp.alignment_band = "critical".to_string();
-        inp.alignment_hard_fail = true;
+        inp.active_alertable_findings = 2;
         let eval = evaluate_policy_pack(&pack, &inp);
+        assert!(!eval.compliant);
         let r = eval
             .results
             .iter()
-            .find(|r| r.rule_id == "alignment-watch")
+            .find(|r| r.rule_id == "no-active-alertable-findings")
             .unwrap();
         assert!(!r.satisfied);
-        assert!(r.detail.contains("hard-fail"));
+        assert_eq!(r.severity, "high");
+        assert!(r.detail.contains("2 active alertable"));
     }
 
     #[test]
@@ -672,16 +615,6 @@ mod tests {
         tampered.compliant = false;
         let tampered_canonical = serde_json::to_string(&tampered).unwrap();
         assert!(!verify_attestation(&att, &tampered_canonical));
-    }
-
-    #[test]
-    fn sbom_attestation_is_content_addressed() {
-        let sbom = r#"{"bomFormat":"CycloneDX","specVersion":"1.5","components":[]}"#;
-        let att = attest_sbom("cursor", sbom);
-        assert_eq!(att.subject, "agent_sbom");
-        assert_eq!(att.subject_ref, "cursor");
-        assert!(verify_attestation(&att, sbom));
-        assert!(!verify_attestation(&att, "{}"));
     }
 
     #[test]

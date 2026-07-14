@@ -808,8 +808,100 @@ pub async fn utility_collect_agent_transcripts(
     crate::agent_transcripts::collect_to_json(agent_type, &home_path, &options)
 }
 
+/// Which of the given agent types have a detected headless CLI on this host.
+/// `arg1` is a JSON array of agent types; `arg2` is a JSON object with `home`
+/// (the user's real home, so user-level install locations are probed even
+/// though the helper runs as root). Returns a JSON array of agent types.
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+pub async fn utility_detect_agent_clis(agent_types_json: &str, args_json: &str) -> Result<String> {
+    #[derive(serde::Deserialize)]
+    struct Args {
+        #[serde(default)]
+        home: String,
+    }
+
+    let agent_types: Vec<String> = serde_json::from_str(agent_types_json)
+        .map_err(|e| anyhow::anyhow!("Failed to parse detect_agent_clis agent types: {}", e))?;
+    let args: Args = if args_json.trim().is_empty() {
+        Args {
+            home: String::new(),
+        }
+    } else {
+        serde_json::from_str(args_json)
+            .map_err(|e| anyhow::anyhow!("Failed to parse detect_agent_clis args: {}", e))?
+    };
+    let home_path = if args.home.is_empty() {
+        crate::agent_plugin::real_home_dir()
+    } else {
+        Some(std::path::PathBuf::from(args.home))
+    };
+
+    let detected = crate::agent_cli_insight::detect_agent_clis(&agent_types, home_path.as_deref());
+    serde_json::to_string(&detected)
+        .map_err(|e| anyhow::anyhow!("Failed to serialize detected agent CLIs: {}", e))
+}
+
+/// Run a read-only, ephemeral Enlightenment Coach insight generation through
+/// a detected agent CLI. `arg1` is the agent type; `arg2` is a JSON object
+/// `{"prompt": "...", "home": "..."}`. Returns the extracted model text (the
+/// core-side envelope validator decides whether it is acceptable).
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+pub async fn utility_run_agent_cli_insight(agent_type: &str, args_json: &str) -> Result<String> {
+    #[derive(serde::Deserialize)]
+    struct Args {
+        prompt: String,
+        #[serde(default)]
+        home: String,
+    }
+
+    let args: Args = serde_json::from_str(args_json)
+        .map_err(|e| anyhow::anyhow!("Failed to parse run_agent_cli_insight args: {}", e))?;
+    let home_path = if args.home.is_empty() {
+        crate::agent_plugin::real_home_dir()
+    } else {
+        Some(std::path::PathBuf::from(args.home))
+    };
+
+    crate::agent_cli_insight::run_agent_cli_insight(agent_type, &args.prompt, home_path.as_deref())
+        .await
+}
+
+/// Spawn a user-confirmed fix run in a workspace through a detected agent
+/// CLI (detached; the resulting session is recorded by the transcript
+/// observer). `arg1` is the agent type; `arg2` is a JSON object
+/// `{"workspace_path": "...", "prompt": "...", "home": "..."}`. Returns the
+/// JSON-serialized `AgentCliFixSpawn` confirmation.
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+pub async fn utility_run_agent_cli_fix(agent_type: &str, args_json: &str) -> Result<String> {
+    #[derive(serde::Deserialize)]
+    struct Args {
+        workspace_path: String,
+        prompt: String,
+        #[serde(default)]
+        home: String,
+    }
+
+    let args: Args = serde_json::from_str(args_json)
+        .map_err(|e| anyhow::anyhow!("Failed to parse run_agent_cli_fix args: {}", e))?;
+    let home_path = if args.home.is_empty() {
+        crate::agent_plugin::real_home_dir()
+    } else {
+        Some(std::path::PathBuf::from(args.home))
+    };
+
+    let spawn = crate::agent_cli_insight::run_agent_cli_fix(
+        agent_type,
+        &args.workspace_path,
+        &args.prompt,
+        home_path.as_deref(),
+    )
+    .await?;
+    serde_json::to_string(&spawn)
+        .map_err(|e| anyhow::anyhow!("Failed to serialize fix spawn confirmation: {}", e))
+}
+
 /// Build the structural agent-visibility bundle (MCP inventory + risk findings,
-/// agent SBOMs, capability-graph edges) for the host. Like
+/// agent component inventories, capability-graph edges) for the host. Like
 /// `utility_collect_agent_transcripts`, this crosses the macOS sandbox boundary
 /// on behalf of the (sandboxed) app so MCP config files under the user's actual
 /// home directory are readable.

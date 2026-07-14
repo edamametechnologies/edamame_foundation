@@ -230,6 +230,11 @@ impl RunProvenance {
                 .iter()
                 .any(|e| e.kind == ProvenanceEventKind::DivergenceEvidence),
             alertable_event_count: self.alertable_event_count,
+            tool_error_count: self
+                .events
+                .iter()
+                .filter(|e| e.kind == ProvenanceEventKind::ToolError)
+                .count() as u32,
             chain_valid: self.chain_valid,
         }
     }
@@ -314,6 +319,11 @@ pub struct RunIndexEntry {
     pub max_severity: Option<String>,
     pub has_divergence: bool,
     pub alertable_event_count: u32,
+    /// Count of `tool_error` events (developer-observability failures the
+    /// agent itself flagged; carries no security severity so it is not part
+    /// of `alertable_event_count`). Lets the recorder index be filtered to
+    /// security-evidence runs without fetching each run's full record.
+    pub tool_error_count: u32,
     pub chain_valid: bool,
 }
 
