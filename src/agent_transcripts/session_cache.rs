@@ -311,12 +311,17 @@ mod tests {
             .unwrap();
         assert_eq!(a.user_text, "one");
 
-        // Grow the file: size differs -> different key -> rebuild. A stale HIT
-        // would still return "one"; a correct miss re-extracts and yields "two".
-        write_file(&dir, "b.txt", "user:\ntwo\n");
+        // Grow the file so the byte size differs (not just the content). A
+        // same-size content swap ("one" -> "two") would only differ by mtime,
+        // whose resolution is coarse on some filesystems (NTFS), so two rapid
+        // writes could collide on the key and mask a stale hit. Changing the
+        // size guarantees a distinct key -> deterministic miss -> rebuild on
+        // every platform. A stale HIT would still return "one"; a correct miss
+        // re-extracts and yields "twotwo".
+        write_file(&dir, "b.txt", "user:\ntwotwo\n");
         let b = get_or_build_session(&path, false, |parsed| session_with_user(&parsed.user_text))
             .unwrap();
-        assert_eq!(b.user_text, "two");
+        assert_eq!(b.user_text, "twotwo");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
