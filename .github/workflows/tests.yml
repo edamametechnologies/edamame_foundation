@@ -171,18 +171,22 @@ jobs:
           fi
 
       - name: Install Rust toolchain (nightly for ebpf)
-        uses: dtolnay/rust-toolchain@nightly
+        # Pinned: nightly-2026-07-13 ICEs on the #[test]+#[serial] test entrypoint
+        # marker (rust-lang/rust#152889). 2026-07-08 is the last nightly that built
+        # the --test targets and is recent enough for the ebpf rust-src build.
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: nightly-2026-07-08
           targets: ${{ matrix.target }}
 
       - name: Set Rust toolchain
         shell: bash
         run: |
           # For ebpf
-          rustup toolchain install nightly --component rust-src
-          rustup component add --toolchain nightly llvm-tools-preview
-          # Use nightly by default so that build.rs picks it up automatically
-          echo "RUSTUP_TOOLCHAIN=nightly" >> $HOME/.cargo/env
+          rustup toolchain install nightly-2026-07-08 --component rust-src
+          rustup component add --toolchain nightly-2026-07-08 llvm-tools-preview
+          # Use the pinned nightly by default so that build.rs picks it up automatically
+          echo "RUSTUP_TOOLCHAIN=nightly-2026-07-08" >> "$GITHUB_ENV"
 
       - name: iOS add-ons
         if: matrix.platform == 'ios'
