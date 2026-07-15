@@ -253,9 +253,91 @@ pub fn scan_transcript_text_for_prompt_injection(text: &str) -> TranscriptSecret
     )
 }
 
+/// Minimum length of the real token body that must follow a value-prefix
+/// secret marker (`ghp_`, `gho_`, `sk-ant-`, `xoxb-`, ...) for the marker to
+/// count as an actual exposed credential rather than a masked display or a
+/// bare-prefix mention. Real vendor tokens carry far longer bodies than this
+/// (a GitHub PAT is prefix + >= 36 base62 chars); the bound only has to
+/// exclude short masks.
+const MIN_SECRET_VALUE_BODY_LEN: usize = 8;
+
+/// True when `marker` is a *value prefix* -- the literal opening of a secret
+/// VALUE (`ghp_`, `gho_`, `sk-ant-`, `sk-proj-`, `xoxb-`, `sk_live_`, ...) as
+/// opposed to a key name (`aws_secret_access_key`), a self-evident phrase / PEM
+/// header (`-----begin openssh private key-----`, prompt-injection baits), or a
+/// URL/assignment marker (`//registry.npmjs.org/:_authtoken=`).
+///
+/// Value-prefix markers require a plausible high-entropy body after them (see
+/// [`marker_followed_by_real_secret_body`]); every other marker kind is
+/// evidence on its own and keeps the plain substring semantics. The shape test
+/// is deliberately structural, not a hardcoded vendor list: no whitespace,
+/// does not start with `-` (excludes PEM headers), short, and ends in a token
+/// delimiter (`_`, `-`, `.`) -- exactly how vendors delimit their key prefixes.
+fn marker_is_value_prefix(marker: &str) -> bool {
+    !marker.contains(char::is_whitespace)
+        && !marker.starts_with('-')
+        && marker.len() <= 20
+        && matches!(marker.chars().last(), Some('_') | Some('-') | Some('.'))
+}
+
+/// Characters that can appear in a vendor token body after the prefix: base62
+/// plus the `-`/`_`/`.` separators some vendors embed (Slack
+/// `xoxb-<digits>-<digits>-<alnum>`, fine-grained `github_pat_<...>_<...>`,
+/// Google `ya29.<...>`).
+fn is_secret_body_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')
+}
+
+/// True when at least one occurrence of value-prefix `marker` in `normalized`
+/// is immediately followed by a plausible real token body: a run of
+/// [`is_secret_body_char`] at least [`MIN_SECRET_VALUE_BODY_LEN`] long that
+/// contains BOTH a letter and a digit. This rejects the two canonical false
+/// positives the transcript scanner was tripping on:
+///   - masked displays (`gho_************************************` from
+///     `gh auth status`, `ghp_XXXXXXXXXXXX`, `sk-ant-****`) -- the body is
+///     empty or single-class (no digit, or no letter); and
+///   - bare-prefix prose ("use a `gho_` token", "the ghp_ prefix",
+///     "the 15EE-AFB5 device code was already consumed") -- the marker is
+///     followed by whitespace / punctuation, yielding an empty body.
+///
+/// Real base62 credentials always carry both letters and digits, so the check
+/// keeps every genuine exposure while dropping masks and mentions.
+fn marker_followed_by_real_secret_body(normalized: &str, marker: &str) -> bool {
+    let mut from = 0usize;
+    while let Some(rel) = normalized[from..].find(marker) {
+        let body_start = from + rel + marker.len();
+        let body: String = normalized[body_start..]
+            .chars()
+            .take_while(|c| is_secret_body_char(*c))
+            .collect();
+        let has_alpha = body.chars().any(|c| c.is_ascii_alphabetic());
+        let has_digit = body.chars().any(|c| c.is_ascii_digit());
+        if body.len() >= MIN_SECRET_VALUE_BODY_LEN && has_alpha && has_digit {
+            return true;
+        }
+        // Advance past this occurrence (at least one byte) to find the next.
+        from = body_start.max(from + rel + 1);
+    }
+    false
+}
+
+/// Whether `marker` is present in `normalized` as a real signal. Value-prefix
+/// markers additionally require a plausible token body (masked displays and
+/// bare-prefix mentions are rejected -- see
+/// [`marker_followed_by_real_secret_body`]); every other marker keeps plain
+/// substring semantics.
+fn marker_present(normalized: &str, marker: &str) -> bool {
+    if marker_is_value_prefix(marker) {
+        marker_followed_by_real_secret_body(normalized, marker)
+    } else {
+        normalized.contains(marker)
+    }
+}
+
 /// Shared single-pass signature matcher behind the transcript secret and
-/// prompt-injection scans: one lowercase pass + literal `contains` per
-/// marker, no I/O, no regex.
+/// prompt-injection scans: one lowercase pass + literal `contains` per marker
+/// (value-prefix markers additionally require a real token body via
+/// [`marker_present`]), no I/O, no regex.
 fn match_signatures_in_text(
     text: &str,
     signatures: &[vuln_detector_params::SecretContentSignatureJSON],
@@ -274,19 +356,19 @@ fn match_signatures_in_text(
             signature
                 .markers
                 .iter()
-                .all(|marker| normalized.contains(marker.as_str()))
+                .all(|marker| marker_present(&normalized, marker.as_str()))
         } else {
             signature
                 .markers
                 .iter()
-                .any(|marker| normalized.contains(marker.as_str()))
+                .any(|marker| marker_present(&normalized, marker.as_str()))
         };
         if !matched {
             continue;
         }
         if signature.per_marker {
             for marker in &signature.markers {
-                if normalized.contains(marker.as_str()) {
+                if marker_present(&normalized, marker.as_str()) {
                     labels.insert(signature.label.clone());
                     hits += signature.hits as u64;
                 }
@@ -622,5 +704,93 @@ mod tests {
         assert_eq!(scanned.len(), body.len());
 
         cleanup(&renamed);
+    }
+
+    /// Shape classifier: only delimited value prefixes (ending in `_`/`-`/`.`,
+    /// short, no whitespace, no leading `-`) require a token body. Key names,
+    /// bare-word prefixes, PEM headers, and URL/assignment markers keep plain
+    /// substring semantics.
+    #[test]
+    fn marker_is_value_prefix_classifies_delimited_prefixes() {
+        for m in ["ghp_", "gho_", "github_pat_", "sk-ant-", "sk-proj-", "xoxb-", "sk_live_"] {
+            assert!(marker_is_value_prefix(m), "{m} should be a value prefix");
+        }
+        for m in [
+            "aws_secret_access_key",
+            "aizasy",
+            "-----begin openssh private key-----",
+            "//registry.npmjs.org/:_authtoken=",
+            "ignore all previous instructions",
+        ] {
+            assert!(!marker_is_value_prefix(m), "{m} must NOT be a value prefix");
+        }
+    }
+
+    /// Reported FP: `gh auth status` masks the token (`gho_****...`); the real
+    /// value is never printed. A masked prefix must NOT flag `github_token`.
+    #[test]
+    fn masked_github_token_display_is_not_a_secret_exposure() {
+        let text = "Logged in to github.com account mday\n  Token: \
+                    gho_************************************\n  Token scopes: repo";
+        let scan = scan_transcript_text_for_secrets(text);
+        assert!(
+            scan.labels.is_empty(),
+            "masked gho_**** must not flag a secret (got {:?})",
+            scan.labels
+        );
+        assert_eq!(scan.hits, 0);
+    }
+
+    /// Prose that merely names a prefix, plus a consumed OAuth device-flow code
+    /// (`15EE-AFB5`, which matches no vendor marker), carries no secret body.
+    #[test]
+    fn bare_prefix_and_device_code_are_not_secret_exposures() {
+        let text = "the gho_ prefix marks an OAuth token; device code 15EE-AFB5 \
+                    from gh auth login was already consumed and is invalid";
+        let scan = scan_transcript_text_for_secrets(text);
+        assert!(
+            scan.labels.is_empty(),
+            "bare prefix / device code must not flag a secret (got {:?})",
+            scan.labels
+        );
+    }
+
+    /// The whole delimited-prefix class is gated, not just GitHub: masked
+    /// Anthropic and Slack prefixes must not flag either.
+    #[test]
+    fn masked_vendor_prefixes_are_not_secret_exposures() {
+        for text in [
+            "ANTHROPIC_API_KEY=sk-ant-****************************",
+            "SLACK_BOT_TOKEN=xoxb-****-****-****",
+            "STRIPE=sk_live_************************",
+        ] {
+            let scan = scan_transcript_text_for_secrets(text);
+            assert!(
+                scan.labels.is_empty(),
+                "masked vendor prefix must not flag a secret for {text:?} (got {:?})",
+                scan.labels
+            );
+        }
+    }
+
+    /// Positive control: a REAL token with a long mixed base62 body is still
+    /// detected -- the body check suppresses masks/mentions only.
+    #[test]
+    fn real_vendor_tokens_are_still_detected() {
+        let scan = scan_transcript_text_for_secrets(
+            "leaked gho_16C7e42F292c6912E7710c838347Ae178B4a2E9 rotate now",
+        );
+        assert_eq!(scan.labels, vec!["github_token".to_string()]);
+        assert!(scan.hits >= 2);
+    }
+
+    /// Regression guard: phrase markers (PEM headers) are NOT value prefixes
+    /// and keep literal substring semantics -- a private key header still fires.
+    #[test]
+    fn pem_private_key_header_still_detected() {
+        let scan = scan_transcript_text_for_secrets(
+            "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXk...\n-----END OPENSSH PRIVATE KEY-----",
+        );
+        assert_eq!(scan.labels, vec!["private_key".to_string()]);
     }
 }

@@ -3014,6 +3014,60 @@ mod economics_tests {
     }
 
     #[test]
+    fn transcript_secret_exposure_ignores_masked_github_token_display() {
+        // `gh auth status` prints the token MASKED -- the real value is never
+        // emitted. A bare `gho_` prefix followed by asterisks (or a
+        // single-use device-flow code that matches no marker) must NOT be
+        // flagged as an exposed GitHub token. This is the reported FP.
+        let jsonl = concat!(
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":[{"type":"text","text":"github.com\n  Logged in to github.com account mday\n  Token: gho_************************************\n  Token scopes: gist, read:org, repo"}]}]}}"#,
+            "\n",
+        );
+        let econ = parse_session_economics("s3", "/tmp/s3.jsonl", jsonl);
+        assert!(
+            econ.secret_exposure_labels.is_empty(),
+            "masked `gho_****` display must not flag github_token, got {:?}",
+            econ.secret_exposure_labels
+        );
+        assert_eq!(econ.secret_exposure_hits, 0);
+    }
+
+    #[test]
+    fn transcript_secret_exposure_ignores_bare_prefix_prose_and_device_code() {
+        // Prose that merely NAMES a token prefix, plus a consumed OAuth
+        // device-flow code (`15EE-AFB5`, which matches no vendor marker),
+        // carries no real secret body -- neither must trip the scan.
+        let jsonl = concat!(
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"the gho_ prefix marks an OAuth token; the one-time device code 15EE-AFB5 from gh auth login was already consumed and is invalid now"}]}}"#,
+            "\n",
+        );
+        let econ = parse_session_economics("s4", "/tmp/s4.jsonl", jsonl);
+        assert!(
+            econ.secret_exposure_labels.is_empty(),
+            "bare prefix / device code must not flag a secret, got {:?}",
+            econ.secret_exposure_labels
+        );
+        assert_eq!(econ.secret_exposure_hits, 0);
+    }
+
+    #[test]
+    fn transcript_secret_exposure_still_detects_real_github_oauth_token() {
+        // Positive control: a REAL `gho_` OAuth token (prefix + a long
+        // mixed base62 body) is still detected -- the body check suppresses
+        // masks and mentions without weakening genuine exposure detection.
+        let jsonl = concat!(
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"leaked: gho_16C7e42F292c6912E7710c838347Ae178B4a2E9 -- rotate it"}]}}"#,
+            "\n",
+        );
+        let econ = parse_session_economics("s5", "/tmp/s5.jsonl", jsonl);
+        assert_eq!(
+            econ.secret_exposure_labels,
+            vec!["github_token".to_string()]
+        );
+        assert!(econ.secret_exposure_hits >= 2);
+    }
+
+    #[test]
     fn prompt_injection_bait_detected_in_tool_result() {
         // Injection bait arriving through a tool result (e.g. a poisoned
         // README the agent just read) -- the canonical ASI01/LLM01 shape.
