@@ -712,7 +712,15 @@ mod tests {
     /// substring semantics.
     #[test]
     fn marker_is_value_prefix_classifies_delimited_prefixes() {
-        for m in ["ghp_", "gho_", "github_pat_", "sk-ant-", "sk-proj-", "xoxb-", "sk_live_"] {
+        for m in [
+            "ghp_",
+            "gho_",
+            "github_pat_",
+            "sk-ant-",
+            "sk-proj-",
+            "xoxb-",
+            "sk_live_",
+        ] {
             assert!(marker_is_value_prefix(m), "{m} should be a value prefix");
         }
         for m in [
