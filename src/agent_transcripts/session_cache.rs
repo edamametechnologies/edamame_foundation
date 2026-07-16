@@ -274,6 +274,7 @@ mod tests {
             context_tokens_used: None,
             context_token_limit: None,
             context_usage_percent: None,
+            workspace_hint: String::new(),
         }
     }
 

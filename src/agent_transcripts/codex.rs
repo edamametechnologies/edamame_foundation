@@ -254,6 +254,10 @@ pub(crate) fn build_payload(
                     context_tokens_used: None,
                     context_token_limit: None,
                     context_usage_percent: None,
+                    // Legacy JSONL rollout files carry no separate cwd; the
+                    // SQLite thread path (thread_row_to_session) is the one that
+                    // recovers the real working directory.
+                    workspace_hint: String::new(),
                 }
             },
         ) {
@@ -767,6 +771,13 @@ fn thread_row_to_session(
         context_tokens_used: None,
         context_token_limit: None,
         context_usage_percent: None,
+        // Codex records the real per-thread working directory in its SQLite
+        // index but writes rollout transcripts under ~/.codex/sessions/, so
+        // source_path never carries a projects/<slug> segment. Preserve the cwd
+        // as the workspace signal so attribution can derive a workspace slug
+        // (workspace_slug_for_session) instead of dropping the session into the
+        // agent-home bucket.
+        workspace_hint: cwd.clone().unwrap_or_default(),
     })
 }
 

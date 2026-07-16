@@ -154,6 +154,9 @@ pub fn collect(home: &Path, options: &CollectOptions) -> anyhow::Result<CollectR
                     context_tokens_used: None,
                     context_token_limit: None,
                     context_usage_percent: None,
+                    // Claude Desktop is a chat surface with no per-session
+                    // working directory; there is no workspace to augment.
+                    workspace_hint: String::new(),
                 }
             },
         ) {

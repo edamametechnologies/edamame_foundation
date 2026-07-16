@@ -4102,6 +4102,78 @@ pub fn workspace_root_from_source_path(source_path: &str) -> Option<PathBuf> {
     resolve_slug_to_existing_dir(&slug)
 }
 
+/// Dash-encode an absolute working-directory into the same slug shape the
+/// `projects/<slug>` scheme uses (leading `-` for the root, path separators as
+/// `-`). Used to give agents that record only a raw `cwd` (Codex) a stable,
+/// join-able workspace slug that groups by directory exactly like the
+/// transcript-path agents. The encoding does NOT need to round-trip through
+/// [`resolve_slug_to_existing_dir`] because the cwd IS the resolved root (see
+/// [`workspace_root_and_slug_for_session`]); it only has to be stable so a
+/// session's slug matches its [`WorkspaceInventory::slug`]. Empty for an empty
+/// or root-only path.
+pub fn slug_from_workspace_dir(dir: &str) -> String {
+    let comps: Vec<String> = Path::new(dir)
+        .components()
+        .filter_map(|c| match c {
+            std::path::Component::Normal(s) => Some(s.to_string_lossy().to_string()),
+            _ => None,
+        })
+        .collect();
+    if comps.is_empty() {
+        return String::new();
+    }
+    format!("-{}", comps.join("-"))
+}
+
+/// Resolve a session's workspace slug, preferring the `projects/<slug>` segment
+/// decoded from `source_path` and falling back to a slug derived from
+/// `workspace_hint` (the agent's recorded `cwd`, e.g. Codex). Pure string work,
+/// no filesystem access -- safe to call from the sandboxed core. Returns `None`
+/// when neither signal yields a slug (a chat session with no working directory).
+pub fn workspace_slug_for_session(source_path: &str, workspace_hint: &str) -> Option<String> {
+    if let Some(slug) = project_slug_from_source_path(source_path) {
+        return Some(slug);
+    }
+    if !workspace_hint.trim().is_empty() {
+        let slug = slug_from_workspace_dir(workspace_hint);
+        if !slug.is_empty() {
+            return Some(slug);
+        }
+    }
+    None
+}
+
+/// Resolve a session's `(workspace_root, slug)` for filesystem inventory
+/// scanning, honouring `workspace_hint`. Requires filesystem access, so it runs
+/// only on the unsandboxed path (standalone core / helper daemon).
+///
+/// - When `source_path` carries a `projects/<slug>` segment: identical to
+///   [`workspace_root_from_source_path`] -- resolve the slug back to an on-disk
+///   directory. This preserves today's behaviour for Cursor / Claude exactly.
+/// - Otherwise, when `workspace_hint` names an existing directory (Codex's
+///   recorded `cwd`): that directory IS the root, and the slug is
+///   [`slug_from_workspace_dir`].
+/// - Otherwise `None`.
+pub fn workspace_root_and_slug_for_session(
+    source_path: &str,
+    workspace_hint: &str,
+) -> Option<(PathBuf, String)> {
+    if let Some(slug) = project_slug_from_source_path(source_path) {
+        let root = resolve_slug_to_existing_dir(&slug)?;
+        return Some((root, slug));
+    }
+    if !workspace_hint.trim().is_empty() {
+        let dir = Path::new(workspace_hint);
+        if dir.is_dir() {
+            let slug = slug_from_workspace_dir(workspace_hint);
+            if !slug.is_empty() {
+                return Some((dir.to_path_buf(), slug));
+            }
+        }
+    }
+    None
+}
+
 /// A single workspace repository's discovered instruction inventory.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkspaceInventory {
@@ -4129,21 +4201,35 @@ pub struct WorkspaceInventory {
 /// slug no longer resolves to an on-disk directory, are silently skipped.
 /// Bounded to [`MAX_WORKSPACE_ROOTS`] distinct roots so a noisy transcript set
 /// cannot fan out an unbounded filesystem walk.
+///
+/// Each entry is either a bare `source_path` or `"<source_path>\t<workspace_hint>"`.
+/// The optional tab-separated hint carries an agent-recorded `cwd` for agents
+/// (Codex) whose transcript path has no `projects/<slug>` segment, so the scan
+/// can still resolve a workspace root. The encoding keeps the wire contract a
+/// plain `Vec<String>` (the `collect_workspace_inventory` helper utility forwards
+/// the strings untouched): a hint is appended ONLY when non-empty, so an older
+/// helper that predates hint support sees the bare source path for every
+/// transcript agent and degrades exactly to its prior behaviour (Codex, which
+/// had no resolvable root before, simply stays unresolved until the helper is
+/// rebuilt).
 pub fn collect_workspace_inventories(source_paths: &[String]) -> Vec<WorkspaceInventory> {
     let mut seen: std::collections::BTreeSet<PathBuf> = std::collections::BTreeSet::new();
     let mut out: Vec<WorkspaceInventory> = Vec::new();
-    for sp in source_paths {
+    for sp_raw in source_paths {
         if out.len() >= MAX_WORKSPACE_ROOTS {
             break;
         }
-        let root = match workspace_root_from_source_path(sp) {
-            Some(r) => r,
+        let (sp, hint) = match sp_raw.split_once('\t') {
+            Some((p, h)) => (p, h),
+            None => (sp_raw.as_str(), ""),
+        };
+        let (root, slug) = match workspace_root_and_slug_for_session(sp, hint) {
+            Some(rs) => rs,
             None => continue,
         };
         if !seen.insert(root.clone()) {
             continue;
         }
-        let slug = project_slug_from_source_path(sp).unwrap_or_default();
         let label = root
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
@@ -7696,6 +7782,73 @@ skills/gtm-report and @rules/invariants.mdc.
             inv.len() <= 1,
             "at most one distinct root, got {}",
             inv.len()
+        );
+    }
+
+    #[test]
+    fn workspace_slug_for_session_prefers_source_path_over_hint() {
+        // A Cursor-style transcript already carries the workspace in its
+        // `projects/<slug>` segment; the cwd hint must never override it.
+        let slug = workspace_slug_for_session(
+            "/home/.cursor/projects/-Users-me-proj/agent-transcripts/a.jsonl",
+            "/some/other/dir",
+        );
+        assert_eq!(slug.as_deref(), Some("-Users-me-proj"));
+    }
+
+    #[test]
+    fn workspace_slug_for_session_falls_back_to_cwd_hint() {
+        // A Codex rollout path lives under ~/.codex/sessions/ with no
+        // `projects/<slug>` segment; the recorded cwd is the only workspace
+        // signal, so the slug is derived from it (pure string work, no FS).
+        let slug = workspace_slug_for_session(
+            "/home/me/.codex/sessions/2026/07/16/rollout-abc.jsonl",
+            "/Users/me/work/edamame_core",
+        );
+        assert_eq!(slug.as_deref(), Some("-Users-me-work-edamame_core"));
+    }
+
+    #[test]
+    fn workspace_slug_for_session_none_without_any_signal() {
+        // No project segment AND no cwd hint (a bare chat session) -> unresolved.
+        let slug = workspace_slug_for_session(
+            "/home/me/.codex/sessions/2026/07/16/rollout-abc.jsonl",
+            "",
+        );
+        assert_eq!(slug, None);
+    }
+
+    #[test]
+    fn collect_workspace_inventories_resolves_cwd_hint_when_source_path_has_no_project() {
+        // Codex writes rollout transcripts outside any `projects/<slug>` tree but
+        // records the real cwd. The tab-encoded `"<source_path>\t<cwd>"` entry
+        // must resolve to that cwd as the workspace root and scan its
+        // instruction inventory -- deterministic because the hint path is used
+        // directly (is_dir), not decoded under the real FS root.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let ws = tmp.path().join("edamame_core");
+        std::fs::create_dir_all(&ws).unwrap();
+        std::fs::write(ws.join("AGENTS.md"), b"# guide\n").unwrap();
+
+        let codex_sp = "/home/me/.codex/sessions/2026/07/16/rollout-abc.jsonl";
+        let entry = format!("{}\t{}", codex_sp, ws.to_string_lossy());
+
+        // Bare (no hint) resolves nothing under the real root -> empty; the
+        // tab-encoded hint entry resolves the real tempdir workspace.
+        assert!(collect_workspace_inventories(&[codex_sp.to_string()]).is_empty());
+
+        let inv = collect_workspace_inventories(&[entry]);
+        assert_eq!(inv.len(), 1, "cwd hint should resolve one workspace root");
+        assert_eq!(inv[0].root, ws.to_string_lossy());
+        assert_eq!(inv[0].slug, slug_from_workspace_dir(&ws.to_string_lossy()));
+        assert!(
+            inv[0].components.iter().any(|c| c.name == "AGENTS.md"),
+            "expected the cwd workspace's AGENTS.md to be discovered, got {:?}",
+            inv[0]
+                .components
+                .iter()
+                .map(|c| c.name.as_str())
+                .collect::<Vec<_>>()
         );
     }
 }

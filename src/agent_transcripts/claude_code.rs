@@ -185,6 +185,9 @@ pub(crate) fn build_payload(
                     context_tokens_used: None,
                     context_token_limit: None,
                     context_usage_percent: None,
+                    // Claude Code transcripts live under ~/.claude/projects/<slug>/,
+                    // so source_path already yields the workspace slug.
+                    workspace_hint: String::new(),
                 }
             },
         ) {

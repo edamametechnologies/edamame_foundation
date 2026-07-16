@@ -317,6 +317,8 @@ fn build_session(
         context_tokens_used: None,
         context_token_limit: None,
         context_usage_percent: None,
+        // Hermes manifests do not expose a per-session working directory yet.
+        workspace_hint: String::new(),
     }
 }
 

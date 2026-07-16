@@ -156,6 +156,19 @@ pub struct CollectedRawSession {
     pub context_token_limit: Option<u64>,
     #[serde(default)]
     pub context_usage_percent: Option<f64>,
+    /// Absolute working-directory the agent operated in for this session, when
+    /// the agent records it out-of-band from `source_path`. This is the ONLY
+    /// workspace signal for agents whose transcript files do not live under a
+    /// `projects/<slug>/` tree (Codex writes `~/.codex/sessions/...` rollout
+    /// files while recording the real `cwd` in its SQLite thread index; chat
+    /// agents may carry none). Attribution prefers the `projects/<slug>` slug
+    /// decoded from `source_path` and falls back to a slug derived from this
+    /// directory (see `agent_visibility::workspace_slug_for_session`). Empty
+    /// when the agent exposes no working-directory signal.
+    /// `#[serde(default)]` for the same rolling helper/core compatibility reason
+    /// as [`economics_raw_text`] (an older helper omits this field entirely).
+    #[serde(default)]
+    pub workspace_hint: String,
 }
 
 /// Derive `derived_scope_any_lineage_paths` for an agent from its

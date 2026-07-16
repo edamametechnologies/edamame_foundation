@@ -163,6 +163,9 @@ pub fn collect(home: &Path, options: &CollectOptions) -> anyhow::Result<CollectR
                     context_tokens_used: None,
                     context_token_limit: None,
                     context_usage_percent: None,
+                    // Cursor's source_path already carries the project path, so
+                    // slug derivation needs no separate cwd hint.
+                    workspace_hint: String::new(),
                 }
             },
         ) {
