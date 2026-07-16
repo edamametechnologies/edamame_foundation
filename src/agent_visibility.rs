@@ -7811,10 +7811,8 @@ skills/gtm-report and @rules/invariants.mdc.
     #[test]
     fn workspace_slug_for_session_none_without_any_signal() {
         // No project segment AND no cwd hint (a bare chat session) -> unresolved.
-        let slug = workspace_slug_for_session(
-            "/home/me/.codex/sessions/2026/07/16/rollout-abc.jsonl",
-            "",
-        );
+        let slug =
+            workspace_slug_for_session("/home/me/.codex/sessions/2026/07/16/rollout-abc.jsonl", "");
         assert_eq!(slug, None);
     }
 
