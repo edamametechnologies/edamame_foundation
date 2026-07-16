@@ -124,9 +124,10 @@ pub fn detect_agent_clis(agent_types: &[String], home: Option<&Path>) -> Vec<Str
         .collect()
 }
 
-/// Spawn confirmation for a detached fix run. The agent's output is NOT
-/// captured -- the resulting session shows up in the transcript observer
-/// and gets graded by the normal pipeline.
+/// Spawn confirmation for a detached fix run. The resulting session also
+/// shows up in the transcript observer and gets graded by the normal
+/// pipeline; separately, the run's combined stdout/stderr is captured to
+/// `log_path` so the operator can watch what the agent did.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentCliFixSpawn {
     pub agent_type: String,
@@ -136,6 +137,100 @@ pub struct AgentCliFixSpawn {
     /// The exact argv (binary + args) shown to the user in the confirmation
     /// dialog and logged for the audit trail.
     pub command: Vec<String>,
+    /// Absolute path of the file capturing the run's combined stdout/stderr.
+    /// Empty when the log file could not be created (the run still proceeds,
+    /// detached, exactly as before).
+    pub log_path: String,
+}
+
+/// Resolve the directory where detached fix-run logs are written:
+/// `<home>/.edamame/agent-fix-logs/` (uniform across platforms; the real,
+/// un-sandboxed home is passed in), falling back to the system temp dir when
+/// no home is known. Best-effort: the caller degrades to no-capture when this
+/// or the file open fails.
+fn fix_log_dir(home: Option<&Path>) -> PathBuf {
+    match home {
+        Some(h) => h.join(".edamame").join("agent-fix-logs"),
+        None => std::env::temp_dir().join("edamame-agent-fix-logs"),
+    }
+}
+
+/// Sanitize an arbitrary string into a filesystem-safe log filename fragment
+/// (ASCII alphanumerics, `-` and `_` kept; everything else collapsed to `-`).
+fn sanitize_log_fragment(s: &str) -> String {
+    let cleaned: String = s
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let trimmed = cleaned.trim_matches('-');
+    if trimmed.is_empty() {
+        "run".to_string()
+    } else {
+        trimmed.chars().take(48).collect()
+    }
+}
+
+/// Give the newly-created log file (and its parent dir) back to the real user
+/// when we are running as root (helper daemon case). No-op when not root or
+/// on non-unix. Best-effort -- a chown failure never blocks the run.
+#[cfg(unix)]
+fn chown_fix_log_to_user(path: &Path, home: Option<&Path>) {
+    use std::os::unix::fs::MetadataExt;
+    if unsafe { libc::getuid() } != 0 {
+        return;
+    }
+    let Some(home) = home else {
+        return;
+    };
+    let Ok(meta) = std::fs::metadata(home) else {
+        return;
+    };
+    let (uid, gid) = (meta.uid(), meta.gid());
+    if let Ok(c_path) = std::ffi::CString::new(path.to_string_lossy().as_bytes()) {
+        unsafe {
+            libc::chown(c_path.as_ptr(), uid, gid);
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn chown_fix_log_to_user(_path: &Path, _home: Option<&Path>) {}
+
+/// Best-effort prune so the fix-log directory does not grow without bound:
+/// keep the newest `keep` `.log` files, delete the rest. Any error is ignored.
+fn prune_fix_logs(dir: &Path, keep: usize) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut logs: Vec<(std::time::SystemTime, PathBuf)> = entries
+        .flatten()
+        .filter_map(|e| {
+            let path = e.path();
+            if path.extension().and_then(|x| x.to_str()) != Some("log") {
+                return None;
+            }
+            let mtime = e
+                .metadata()
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .unwrap_or(std::time::UNIX_EPOCH);
+            Some((mtime, path))
+        })
+        .collect();
+    if logs.len() <= keep {
+        return;
+    }
+    // Newest first, then drop everything past `keep`.
+    logs.sort_by(|a, b| b.0.cmp(&a.0));
+    for (_, path) in logs.into_iter().skip(keep) {
+        let _ = std::fs::remove_file(path);
+    }
 }
 
 fn insight_args(agent_type: &str) -> Vec<String> {
@@ -317,25 +412,100 @@ pub async fn run_agent_cli_fix(
         ));
     }
 
+    let mut argv = vec![binary.to_string_lossy().to_string()];
+    argv.extend(args.clone());
+
     let mut command = Command::new(&binary);
     command.args(&args).current_dir(workspace);
     configure_command(&mut command, home);
-    // Detached: nothing reads these pipes after spawn.
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+    command.stdin(Stdio::null());
+
+    // Capture the detached run's combined stdout/stderr into a per-run log file
+    // so the operator can "view log". Best-effort: any failure falls back to
+    // the previous detached-to-null behavior, and the run still proceeds.
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let ws_slug = sanitize_log_fragment(
+        workspace
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("workspace"),
+    );
+    let log_dir = fix_log_dir(home);
+    let mut log_path = String::new();
+    if std::fs::create_dir_all(&log_dir).is_ok() {
+        let file_path = log_dir.join(format!(
+            "{}-{}-{}.log",
+            sanitize_log_fragment(agent_type),
+            ws_slug,
+            ts
+        ));
+        match std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&file_path)
+        {
+            Ok(file) => {
+                // Header first so the log has context even before the agent
+                // emits anything. `&File` implements `Write`, so this shares
+                // the file offset the child inherits (Unix dup / Windows
+                // handle inheritance both append correctly).
+                {
+                    use std::io::Write as _;
+                    let mut w = &file;
+                    let _ = writeln!(w, "=== EDAMAME agent fix run ===");
+                    let _ = writeln!(w, "agent:     {}", agent_type);
+                    let _ = writeln!(w, "workspace: {}", workspace_path);
+                    let _ = writeln!(w, "command:   {}", argv.join(" "));
+                    let _ = writeln!(w, "started:   unix {}", ts);
+                    let _ = writeln!(w, "=============================");
+                    let _ = w.flush();
+                }
+                match file.try_clone() {
+                    Ok(err_file) => {
+                        command
+                            .stdout(Stdio::from(file))
+                            .stderr(Stdio::from(err_file));
+                        log_path = file_path.to_string_lossy().to_string();
+                    }
+                    Err(_) => {
+                        command.stdout(Stdio::null()).stderr(Stdio::null());
+                    }
+                }
+            }
+            Err(_) => {
+                command.stdout(Stdio::null()).stderr(Stdio::null());
+            }
+        }
+    } else {
+        command.stdout(Stdio::null()).stderr(Stdio::null());
+    }
 
     let child = command
         .spawn()
         .map_err(|e| anyhow!("Failed to spawn {}: {}", binary.display(), e))?;
     let pid = child.id().unwrap_or(0);
 
-    let mut argv = vec![binary.to_string_lossy().to_string()];
-    argv.extend(args);
+    // Hand the log file (and dir) back to the real user when the helper daemon
+    // created them as root, then keep the log dir bounded. Both best-effort.
+    if !log_path.is_empty() {
+        chown_fix_log_to_user(&log_dir, home);
+        chown_fix_log_to_user(Path::new(&log_path), home);
+        prune_fix_logs(&log_dir, 40);
+    }
+
     info!(
-        "Spawned fix run: agent={} pid={} workspace={}",
-        agent_type, pid, workspace_path
+        "Spawned fix run: agent={} pid={} workspace={} log={}",
+        agent_type,
+        pid,
+        workspace_path,
+        if log_path.is_empty() {
+            "<none>"
+        } else {
+            log_path.as_str()
+        }
     );
 
     Ok(AgentCliFixSpawn {
@@ -344,6 +514,7 @@ pub async fn run_agent_cli_fix(
         workspace_path: workspace_path.to_string(),
         pid,
         command: argv,
+        log_path,
     })
 }
 
