@@ -34,7 +34,12 @@ fn main() {
 
     println!("agent_type={agent_type}");
     println!("workspace={workspace}");
-    println!("home={}", home.as_ref().map(|h| h.display().to_string()).unwrap_or_default());
+    println!(
+        "home={}",
+        home.as_ref()
+            .map(|h| h.display().to_string())
+            .unwrap_or_default()
+    );
 
     match edamame_foundation::agent_cli_insight::run_agent_cli_fix_interactive(
         &agent_type,

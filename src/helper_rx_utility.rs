@@ -906,8 +906,12 @@ pub async fn utility_run_agent_cli_fix_interactive(
         &args.prompt,
         home_path.as_deref(),
     )?;
-    serde_json::to_string(&spawn)
-        .map_err(|e| anyhow::anyhow!("Failed to serialize interactive fix launch confirmation: {}", e))
+    serde_json::to_string(&spawn).map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to serialize interactive fix launch confirmation: {}",
+            e
+        )
+    })
 }
 
 /// Build the structural agent-visibility bundle (MCP inventory + risk findings,

@@ -475,7 +475,10 @@ fn launch_interactive_terminal(ctx: LaunchCtx) -> Result<u32> {
             .ok_or_else(|| anyhow!("Cannot resolve target user for interactive launch"))?;
         let display = detect_user_display().unwrap_or_else(|| ":0".to_string());
         let mut c = std::process::Command::new("sudo");
-        c.arg("-u").arg(&user).arg("env").arg(format!("DISPLAY={}", display));
+        c.arg("-u")
+            .arg(&user)
+            .arg("env")
+            .arg(format!("DISPLAY={}", display));
         if let Some(home) = ctx.home {
             let xauth = home.join(".Xauthority");
             if xauth.is_file() {
