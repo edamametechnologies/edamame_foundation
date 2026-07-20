@@ -157,6 +157,15 @@ pub struct AugmentationCoachTemplateJSON {
     /// Stable coach-kind id the UI and cache key on
     /// (`prompt_maturity_review`, `security_hygiene_review`, ...).
     pub id: String,
+    /// Coaching domain this template belongs to: `"security"` or
+    /// `"augmentation"`. The core builds a domain-scoped coach payload from
+    /// this field -- a `"security"` template gets the security-only payload
+    /// (posture + exposure + security transcript signals) and an
+    /// `"augmentation"` template gets the augmentation-only payload (no
+    /// security sections). Keeps the Security Coach and Enlightenment Coach
+    /// evidence surfaces disjoint so enlightenment coaching never bleeds
+    /// security signals and vice versa.
+    pub domain: String,
     /// Monotonic template version; part of the insight cache key.
     pub version: u32,
     /// Short operator-facing card title.

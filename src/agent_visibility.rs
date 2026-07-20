@@ -3822,14 +3822,33 @@ const WORKSPACE_TOPLEVEL_INSTRUCTION_FILES: &[(&str, &str)] = &[
 /// top-level instruction files plus the [`INSTRUCTION_SUBDIRS`] allowlist.
 const WORKSPACE_CONFIG_DIRS: &[&str] = &[".cursor", ".claude"];
 
+/// Instruction subdirectories that live directly under the workspace root
+/// (not under `.cursor` / `.claude`). Many first-party skill libraries use a
+/// top-level `skills/<name>/SKILL.md` layout (SIFU, custom agent packs); if we
+/// only walk `.cursor`/`.claude`, those packages stay out of the inventory and
+/// every rule that references them surfaces as a false "broken reference".
+///
+/// Narrower than [`INSTRUCTION_SUBDIRS`]: omit `rules` / `hooks` / `prompts`
+/// at the repo root so ordinary project docs (`docs/`, prose `rules.md`) are
+/// not sucked into the instruction inventory. Keep the folder-artifact kinds
+/// that match the reference-graph resolver (`skills/`, `agents/`, …).
+const WORKSPACE_ROOT_INSTRUCTION_SUBDIRS: &[(&str, &str)] = &[
+    ("skills", "skill"),
+    ("skills-cursor", "skill"),
+    ("commands", "command"),
+    ("agents", "subagent"),
+    ("subagents", "subagent"),
+];
+
 /// Discover a *workspace repository's* instruction / skill / rule / command /
 /// subagent files and project them as content-hashed `file` inventory components,
 /// tagged `edamame:scope=workspace`. Mirrors
 /// [`discover_agent_instruction_components`] but roots the walk at a project
-/// directory (`<root>/.cursor`, `<root>/.claude`, and top-level `AGENTS.md` /
-/// `CLAUDE.md` / `.github/copilot-instructions.md`). Bounded (depth + count +
-/// size) and limited to the same allowlist, so transcript / session stores are
-/// never scanned. Bodies are hashed, never stored (invariant I5).
+/// directory (`<root>/.cursor`, `<root>/.claude`, top-level `skills/` /
+/// `agents/` / `commands/`, and top-level `AGENTS.md` / `CLAUDE.md` /
+/// `.github/copilot-instructions.md`). Bounded (depth + count + size) and
+/// limited to the same allowlist, so transcript / session stores are never
+/// scanned. Bodies are hashed, never stored (invariant I5).
 pub fn discover_workspace_instruction_components(workspace_root: &Path) -> Vec<AgentComponent> {
     const MAX_FILES: usize = INSTRUCTION_MAX_FILES;
     const MAX_DEPTH: usize = INSTRUCTION_MAX_DEPTH;
@@ -3854,6 +3873,20 @@ pub fn discover_workspace_instruction_components(workspace_root: &Path) -> Vec<A
         let p = workspace_root.join(rel);
         if p.is_file() {
             found.push((p, kind));
+        }
+    }
+
+    // Workspace-root skill / agent / command libraries (e.g. `skills/burn_rate/
+    // SKILL.md`). Same collector + caps as the per-agent walk; these are the
+    // packages rules under `.cursor/rules/` typically reference by relative
+    // path, so omitting them produces false broken-reference edges.
+    for (subdir, kind) in WORKSPACE_ROOT_INSTRUCTION_SUBDIRS {
+        if found.len() >= MAX_FILES {
+            break;
+        }
+        let root = workspace_root.join(subdir);
+        if root.is_dir() {
+            collect_instruction_files(&root, kind, MAX_DEPTH, &mut found, MAX_FILES);
         }
     }
 
@@ -7620,6 +7653,14 @@ skills/gtm-report and @rules/invariants.mdc.
         std::fs::create_dir_all(&skill_dir).unwrap();
         std::fs::write(skill_dir.join("SKILL.md"), b"# demo skill\nbody").unwrap();
 
+        // Workspace-root skills library (SIFU / first-party layout). Must be
+        // indexed so rules that reference `skills/burn_rate/SKILL.md` resolve.
+        let root_skill = root.join("skills").join("burn_rate");
+        std::fs::create_dir_all(&root_skill).unwrap();
+        std::fs::write(root_skill.join("SKILL.md"), b"# burn rate\nbody").unwrap();
+        // Non-doc sidecar under the package must NOT become its own skill row.
+        std::fs::write(root_skill.join("analyze.py"), b"print('hi')\n").unwrap();
+
         // A transcript-store-looking dir MUST NOT be walked.
         let projects = root.join(".claude").join("projects");
         std::fs::create_dir_all(&projects).unwrap();
@@ -7627,14 +7668,19 @@ skills/gtm-report and @rules/invariants.mdc.
 
         let comps = discover_workspace_instruction_components(root);
 
-        // AGENTS.md + 2 rules + 1 skill == 4, and none from projects/.
-        assert_eq!(comps.len(), 4, "components: {comps:#?}");
+        // AGENTS.md + 2 rules + .claude skill + root skills/burn_rate == 5;
+        // none from projects/ and none from analyze.py.
+        assert_eq!(comps.len(), 5, "components: {comps:#?}");
         assert!(comps
             .iter()
             .all(|c| c.properties.get("edamame:scope").map(String::as_str) == Some("workspace")));
         assert!(comps
             .iter()
             .all(|c| c.properties.contains_key("edamame:size_bytes")));
+        assert!(
+            comps.iter().all(|c| c.name != "analyze.py"),
+            "non-doc sidecar leaked into inventory: {comps:#?}"
+        );
 
         let by_name = |n: &str| comps.iter().find(|c| c.name == n).unwrap();
         assert_eq!(
@@ -7649,10 +7695,16 @@ skills/gtm-report and @rules/invariants.mdc.
             by_name("scoped.mdc").properties.get("edamame:load"),
             Some(&"conditional".to_string())
         );
-        assert_eq!(
-            by_name("SKILL.md").properties.get("edamame:load"),
-            Some(&"conditional".to_string())
-        );
+        // Two SKILL.md files (`.claude/skills/demo` + `skills/burn_rate`).
+        let skill_md_count = comps.iter().filter(|c| c.name == "SKILL.md").count();
+        assert_eq!(skill_md_count, 2, "components: {comps:#?}");
+        assert!(comps.iter().any(|c| {
+            c.name == "SKILL.md"
+                && c.properties
+                    .get("edamame:relpath")
+                    .map(|p| p.contains("skills/burn_rate"))
+                    .unwrap_or(false)
+        }));
         // The workspace label is the project dir name on every component.
         let ws = root.file_name().unwrap().to_string_lossy().to_string();
         assert!(comps

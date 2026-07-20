@@ -866,13 +866,23 @@ pub async fn utility_run_agent_cli_insight(agent_type: &str, args_json: &str) ->
         .await
 }
 
-/// Spawn a user-confirmed fix run in a workspace through a detected agent
-/// CLI (detached; the resulting session is recorded by the transcript
-/// observer). `arg1` is the agent type; `arg2` is a JSON object
+/// Launch an **interactive** fix run in a real terminal window through a
+/// detected agent CLI. This opens a user-visible terminal in the target user's
+/// desktop session, seeds the prompt, and lets the agent's native approval UI
+/// gate every tool call -- so the operator reads and confirms each step. On
+/// Windows the helper runs as SYSTEM and crosses into the active console
+/// session via `WTSQueryUserToken` + `CreateProcessAsUserW`; on macOS/Linux it
+/// drops from root into the target user's session.
+///
+/// `arg1` is the agent type; `arg2` is a JSON object
 /// `{"workspace_path": "...", "prompt": "...", "home": "..."}`. Returns the
-/// JSON-serialized `AgentCliFixSpawn` confirmation.
+/// JSON-serialized `AgentCliFixSpawn` confirmation (interactive launches are
+/// watched live in the operator's terminal, so there is no captured log file).
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
-pub async fn utility_run_agent_cli_fix(agent_type: &str, args_json: &str) -> Result<String> {
+pub async fn utility_run_agent_cli_fix_interactive(
+    agent_type: &str,
+    args_json: &str,
+) -> Result<String> {
     #[derive(serde::Deserialize)]
     struct Args {
         workspace_path: String,
@@ -881,23 +891,23 @@ pub async fn utility_run_agent_cli_fix(agent_type: &str, args_json: &str) -> Res
         home: String,
     }
 
-    let args: Args = serde_json::from_str(args_json)
-        .map_err(|e| anyhow::anyhow!("Failed to parse run_agent_cli_fix args: {}", e))?;
+    let args: Args = serde_json::from_str(args_json).map_err(|e| {
+        anyhow::anyhow!("Failed to parse run_agent_cli_fix_interactive args: {}", e)
+    })?;
     let home_path = if args.home.is_empty() {
         crate::agent_plugin::real_home_dir()
     } else {
         Some(std::path::PathBuf::from(args.home))
     };
 
-    let spawn = crate::agent_cli_insight::run_agent_cli_fix(
+    let spawn = crate::agent_cli_insight::run_agent_cli_fix_interactive(
         agent_type,
         &args.workspace_path,
         &args.prompt,
         home_path.as_deref(),
-    )
-    .await?;
+    )?;
     serde_json::to_string(&spawn)
-        .map_err(|e| anyhow::anyhow!("Failed to serialize fix spawn confirmation: {}", e))
+        .map_err(|e| anyhow::anyhow!("Failed to serialize interactive fix launch confirmation: {}", e))
 }
 
 /// Build the structural agent-visibility bundle (MCP inventory + risk findings,

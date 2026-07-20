@@ -7,10 +7,12 @@
 //!   text answer from the CLI's structured stdout. Used ONLY when no
 //!   `LLMClient` provider is configured -- the observed agent grades its own
 //!   homework, which the caller must badge visibly.
-//! - **Fix** (`run_agent_cli_fix`): user-initiated, workspace cwd, normal
-//!   tool permissions, session persistence ON (the resulting session is
-//!   recorded and re-graded by the transcript observer like any other).
-//!   Spawns detached and returns the spawn confirmation, never the output.
+//! - **Fix** (`run_agent_cli_fix_interactive`): user-initiated, workspace cwd,
+//!   normal tool permissions, session persistence ON (the resulting session is
+//!   recorded and re-graded by the transcript observer like any other). Opens
+//!   the agent's interactive TUI in the operator's GUI session -- the agent's
+//!   own approval UI gates every tool call -- and returns the spawn
+//!   confirmation, never the output.
 //!
 //! Both standalone core and the helper daemon converge on these functions per
 //! the Standalone vs Helper Dispatch Pattern.
@@ -124,10 +126,10 @@ pub fn detect_agent_clis(agent_types: &[String], home: Option<&Path>) -> Vec<Str
         .collect()
 }
 
-/// Spawn confirmation for a detached fix run. The resulting session also
-/// shows up in the transcript observer and gets graded by the normal
-/// pipeline; separately, the run's combined stdout/stderr is captured to
-/// `log_path` so the operator can watch what the agent did.
+/// Spawn confirmation for an interactive fix run. The resulting session shows
+/// up in the transcript observer and gets graded by the normal pipeline; the
+/// run's live output is watched by the operator directly in the terminal
+/// window opened in their desktop session (there is no captured log file).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentCliFixSpawn {
     pub agent_type: String,
@@ -137,22 +139,6 @@ pub struct AgentCliFixSpawn {
     /// The exact argv (binary + args) shown to the user in the confirmation
     /// dialog and logged for the audit trail.
     pub command: Vec<String>,
-    /// Absolute path of the file capturing the run's combined stdout/stderr.
-    /// Empty when the log file could not be created (the run still proceeds,
-    /// detached, exactly as before).
-    pub log_path: String,
-}
-
-/// Resolve the directory where detached fix-run logs are written:
-/// `<home>/.edamame/agent-fix-logs/` (uniform across platforms; the real,
-/// un-sandboxed home is passed in), falling back to the system temp dir when
-/// no home is known. Best-effort: the caller degrades to no-capture when this
-/// or the file open fails.
-fn fix_log_dir(home: Option<&Path>) -> PathBuf {
-    match home {
-        Some(h) => h.join(".edamame").join("agent-fix-logs"),
-        None => std::env::temp_dir().join("edamame-agent-fix-logs"),
-    }
 }
 
 /// Sanitize an arbitrary string into a filesystem-safe log filename fragment
@@ -202,37 +188,6 @@ fn chown_fix_log_to_user(path: &Path, home: Option<&Path>) {
 #[cfg(not(unix))]
 fn chown_fix_log_to_user(_path: &Path, _home: Option<&Path>) {}
 
-/// Best-effort prune so the fix-log directory does not grow without bound:
-/// keep the newest `keep` `.log` files, delete the rest. Any error is ignored.
-fn prune_fix_logs(dir: &Path, keep: usize) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    let mut logs: Vec<(std::time::SystemTime, PathBuf)> = entries
-        .flatten()
-        .filter_map(|e| {
-            let path = e.path();
-            if path.extension().and_then(|x| x.to_str()) != Some("log") {
-                return None;
-            }
-            let mtime = e
-                .metadata()
-                .ok()
-                .and_then(|m| m.modified().ok())
-                .unwrap_or(std::time::UNIX_EPOCH);
-            Some((mtime, path))
-        })
-        .collect();
-    if logs.len() <= keep {
-        return;
-    }
-    // Newest first, then drop everything past `keep`.
-    logs.sort_by(|a, b| b.0.cmp(&a.0));
-    for (_, path) in logs.into_iter().skip(keep) {
-        let _ = std::fs::remove_file(path);
-    }
-}
-
 fn insight_args(agent_type: &str) -> Vec<String> {
     match agent_type {
         // Prompt on stdin, JSON result on stdout, no session persistence,
@@ -273,28 +228,525 @@ fn insight_args(agent_type: &str) -> Vec<String> {
     }
 }
 
-fn fix_args(agent_type: &str, prompt: &str) -> Vec<String> {
+/// Interactive (human-in-the-loop) CLI invocation for a fix run. These
+/// intentionally OMIT any auto-approve / print-mode flags (`-p`, `--force`,
+/// `--trust`, `exec`) so the agent launches its normal interactive TUI and its
+/// own approval UI gates each tool call. Returns the flag list (the prompt is
+/// NOT included -- the launching app seeds it) and how the prompt should be
+/// delivered: `"arg"` (trailing positional) or `"stdin"`. Returns `None` for
+/// agent types with no interactive invocation.
+fn interactive_fix_args(agent_type: &str) -> Option<(Vec<String>, &'static str)> {
     match agent_type {
-        // Session persistence stays ON: the fix session IS recorded so the
-        // same pipeline grades it.
-        "claude_code" => vec!["-p".into(), prompt.to_string()],
-        "codex" => vec![
-            "exec".into(),
-            "--skip-git-repo-check".into(),
-            prompt.to_string(),
-        ],
-        // Print mode with full tool access; `--force` allows command
-        // execution and `--trust` skips the workspace-trust prompt (the run
-        // is detached with stdin closed, so any interactive prompt would
-        // wedge it). The workspace itself is already user-confirmed and
-        // report-guardrailed by the caller.
-        "cursor" => vec![
-            "-p".into(),
-            "--force".into(),
-            "--trust".into(),
-            prompt.to_string(),
-        ],
-        _ => Vec::new(),
+        // `claude "<prompt>"` opens the interactive REPL seeded with the
+        // initial turn; dropping `-p` keeps it interactive.
+        "claude_code" => Some((Vec::new(), "arg")),
+        // `codex "<prompt>"` (no `exec`) opens the interactive TUI seeded with
+        // the prompt.
+        "codex" => Some((Vec::new(), "arg")),
+        // `cursor-agent "<prompt>"` (no `-p/--force/--trust`) opens the
+        // interactive TUI; the native trust + per-action approval prompts then
+        // gate the run.
+        "cursor" => Some((Vec::new(), "arg")),
+        _ => None,
+    }
+}
+
+/// Directory for interactive fix-run launch assets (the seeded prompt file and
+/// the generated launcher script): `<home>/.edamame/agent-fix-runs/`, falling
+/// back to the system temp dir when no home is known. The prompt is written
+/// here and read back by the launcher script at launch time, so a multi-line
+/// prompt never has to be embedded in a command line (side-stepping every
+/// shell / PowerShell escaping hazard).
+fn fix_run_dir(home: Option<&Path>) -> PathBuf {
+    match home {
+        Some(h) => h.join(".edamame").join("agent-fix-runs"),
+        None => std::env::temp_dir().join("edamame-agent-fix-runs"),
+    }
+}
+
+/// Single-quote a string for safe inclusion in a POSIX shell script.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn sh_single_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// Single-quote a string for safe inclusion in a PowerShell script.
+#[cfg(target_os = "windows")]
+fn ps_single_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "''"))
+}
+
+/// When running as root (`uid == 0`, the helper daemon / a sudo'd standalone
+/// posture), return the uid that owns `home` -- i.e. the human operator whose
+/// GUI session we must cross back into to open a terminal. Returns `None` when
+/// we are already the (non-root) interactive user, in which case the launch
+/// happens directly in the current session.
+#[cfg(unix)]
+fn root_target_uid(home: Option<&Path>) -> Option<u32> {
+    use std::os::unix::fs::MetadataExt;
+    if unsafe { libc::getuid() } != 0 {
+        return None;
+    }
+    let home = home?;
+    std::fs::metadata(home).ok().map(|m| m.uid())
+}
+
+/// Launch an INTERACTIVE fix run for `agent_type` in `workspace_path`, seeded
+/// with `prompt`. This opens a real terminal window IN THE OPERATOR'S GUI SESSION
+/// and starts the agent's normal interactive TUI, so the agent's own approval
+/// UI gates every tool call -- the operator reads and confirms each step.
+///
+/// Called from the privileged side only (the helper daemon in app mode, or
+/// `edamame_posture` in standalone mode), NEVER from the sandboxed app. A root
+/// LaunchDaemon (macOS), a SYSTEM service (Windows, session-0 isolated), and a
+/// `User=root` systemd unit (Linux) are all OUTSIDE the operator's GUI session,
+/// so each platform crosses back into it:
+///
+/// - **macOS**: `launchctl asuser <uid> /usr/bin/open -a Terminal <script>`
+///   (root daemon -> Aqua session); a direct `open` when already the user.
+/// - **Linux**: a detected terminal emulator, via `sudo -u <user> env
+///   DISPLAY=.. XAUTHORITY=..` when root; a direct launch when already the user.
+/// - **Windows**: `WTSQueryUserToken` + `CreateProcessAsUserW` into
+///   `winsta0\default` when running as SYSTEM; a `CREATE_NEW_CONSOLE` spawn when
+///   `WTSQueryUserToken` is denied (the standalone-user case).
+///
+/// The prompt is written to a file and read back by the launcher script, so it
+/// never crosses a command line. Returns an [`AgentCliFixSpawn`] whose `pid` is
+/// the launcher's (interactive output lives in the operator's terminal, not a
+/// captured file). Observer grading is unchanged: the resulting session is
+/// recorded on disk like any other run.
+pub fn run_agent_cli_fix_interactive(
+    agent_type: &str,
+    workspace_path: &str,
+    prompt: &str,
+    home: Option<&Path>,
+) -> Result<AgentCliFixSpawn> {
+    let binary = resolve_agent_cli_binary(agent_type, home)
+        .ok_or_else(|| anyhow!("No CLI detected for agent type '{}'", agent_type))?;
+    let workspace = Path::new(workspace_path);
+    if !workspace.is_dir() {
+        return Err(anyhow!(
+            "Workspace path '{}' is not a directory",
+            workspace_path
+        ));
+    }
+    let (extra_argv, prompt_via) = interactive_fix_args(agent_type).ok_or_else(|| {
+        anyhow!(
+            "Agent type '{}' has no interactive CLI invocation",
+            agent_type
+        )
+    })?;
+
+    // Write the seeded prompt into a user-owned assets dir.
+    let run_dir = fix_run_dir(home);
+    std::fs::create_dir_all(&run_dir)
+        .map_err(|e| anyhow!("Failed to create fix-run dir {}: {}", run_dir.display(), e))?;
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let slug = sanitize_log_fragment(agent_type);
+    let prompt_path = run_dir.join(format!("{}-{}.prompt.txt", slug, ts));
+    std::fs::write(&prompt_path, prompt)
+        .map_err(|e| anyhow!("Failed to write prompt file: {}", e))?;
+    chown_fix_log_to_user(&run_dir, home);
+    chown_fix_log_to_user(&prompt_path, home);
+
+    let binary_str = binary.to_string_lossy().to_string();
+    let human_command = {
+        let mut c = vec![binary_str.clone()];
+        c.extend(extra_argv.iter().cloned());
+        c.push("<seeded prompt>".to_string());
+        c
+    };
+
+    let pid = launch_interactive_terminal(LaunchCtx {
+        binary: &binary_str,
+        extra_argv: &extra_argv,
+        prompt_via,
+        workspace,
+        prompt_path: &prompt_path,
+        run_dir: &run_dir,
+        slug: &slug,
+        ts,
+        home,
+    })?;
+
+    info!(
+        "Launched interactive fix run: agent={} pid={} workspace={} binary={}",
+        agent_type, pid, workspace_path, binary_str
+    );
+
+    Ok(AgentCliFixSpawn {
+        agent_type: agent_type.to_string(),
+        binary: binary_str,
+        workspace_path: workspace_path.to_string(),
+        pid,
+        command: human_command,
+    })
+}
+
+/// Bundle of resolved parameters handed to the per-platform terminal launcher
+/// (avoids a `too_many_arguments` signature across the `#[cfg]` variants).
+struct LaunchCtx<'a> {
+    binary: &'a str,
+    extra_argv: &'a [String],
+    prompt_via: &'a str,
+    workspace: &'a Path,
+    prompt_path: &'a Path,
+    run_dir: &'a Path,
+    slug: &'a str,
+    ts: u64,
+    // Operator home: the macOS/Linux launchers read it to chown launch artifacts
+    // and resolve the target uid for root->session crossing. The Windows launcher
+    // crosses into the active console session via its user token (WTSQueryUserToken)
+    // rather than a home path, so it never reads this field.
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
+    home: Option<&'a Path>,
+}
+
+/// Write a POSIX `#!/bin/bash` launcher script that `cd`s into the workspace,
+/// reads the seeded prompt back from its file, and `exec`s the agent CLI with
+/// the operator's interactive TUI. Returns the script path (0755, chowned to
+/// the user when created as root). Shared by the macOS and Linux launchers.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn write_posix_launch_script(ctx: &LaunchCtx, ext: &str) -> Result<PathBuf> {
+    let mut argv_str = sh_single_quote(ctx.binary);
+    for a in ctx.extra_argv {
+        argv_str.push(' ');
+        argv_str.push_str(&sh_single_quote(a));
+    }
+    let prompt_q = sh_single_quote(&ctx.prompt_path.to_string_lossy());
+    let invoke = if ctx.prompt_via == "stdin" {
+        format!("exec {} < {}", argv_str, prompt_q)
+    } else {
+        format!("exec {} \"$(cat {})\"", argv_str, prompt_q)
+    };
+    let body = format!(
+        "#!/bin/bash\ncd {} || {{ echo 'EDAMAME: workspace not found'; exec \"$SHELL\"; }}\nclear\necho 'EDAMAME interactive fix run -- review each step; the agent asks before acting.'\necho\n{}\n",
+        sh_single_quote(&ctx.workspace.to_string_lossy()),
+        invoke,
+    );
+    let script = ctx.run_dir.join(format!("{}-{}.{}", ctx.slug, ctx.ts, ext));
+    std::fs::write(&script, body).map_err(|e| anyhow!("Failed to write launch script: {}", e))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755));
+    }
+    chown_fix_log_to_user(&script, ctx.home);
+    Ok(script)
+}
+
+#[cfg(target_os = "macos")]
+fn launch_interactive_terminal(ctx: LaunchCtx) -> Result<u32> {
+    let script = write_posix_launch_script(&ctx, "command")?;
+    let script_str = script.to_string_lossy().to_string();
+    // Cross into the user's Aqua session when running as root (helper daemon).
+    let uid = root_target_uid(ctx.home);
+    let mut cmd = std::process::Command::new(if uid.is_some() {
+        "/bin/launchctl"
+    } else {
+        "/usr/bin/open"
+    });
+    if let Some(uid) = uid {
+        cmd.arg("asuser").arg(uid.to_string()).arg("/usr/bin/open");
+    }
+    cmd.arg("-a").arg("Terminal").arg(&script_str);
+    let child = cmd
+        .spawn()
+        .map_err(|e| anyhow!("Failed to open Terminal: {}", e))?;
+    Ok(child.id())
+}
+
+#[cfg(target_os = "linux")]
+fn launch_interactive_terminal(ctx: LaunchCtx) -> Result<u32> {
+    let script = write_posix_launch_script(&ctx, "sh")?;
+    let script_str = script.to_string_lossy().to_string();
+    let (term_bin, exec_flag) = detect_linux_terminal().ok_or_else(|| {
+        anyhow!("No terminal emulator found (tried x-terminal-emulator, gnome-terminal, konsole, xfce4-terminal, alacritty, xterm)")
+    })?;
+
+    let mut cmd = if root_target_uid(ctx.home).is_some() {
+        // root -> user's graphical session: sudo -u <user> env DISPLAY/XAUTHORITY.
+        let user = ctx
+            .home
+            .and_then(user_name_from_home)
+            .ok_or_else(|| anyhow!("Cannot resolve target user for interactive launch"))?;
+        let display = detect_user_display().unwrap_or_else(|| ":0".to_string());
+        let mut c = std::process::Command::new("sudo");
+        c.arg("-u").arg(&user).arg("env").arg(format!("DISPLAY={}", display));
+        if let Some(home) = ctx.home {
+            let xauth = home.join(".Xauthority");
+            if xauth.is_file() {
+                c.arg(format!("XAUTHORITY={}", xauth.to_string_lossy()));
+            }
+        }
+        c.arg(term_bin).arg(exec_flag).arg(&script_str);
+        c
+    } else {
+        let mut c = std::process::Command::new(term_bin);
+        c.arg(exec_flag).arg(&script_str);
+        c
+    };
+    let child = cmd
+        .spawn()
+        .map_err(|e| anyhow!("Failed to launch terminal '{}': {}", term_bin, e))?;
+    Ok(child.id())
+}
+
+/// First installed terminal emulator + its "run this command" flag.
+#[cfg(target_os = "linux")]
+fn detect_linux_terminal() -> Option<(&'static str, &'static str)> {
+    const CANDIDATES: &[(&str, &str)] = &[
+        ("x-terminal-emulator", "-e"),
+        ("gnome-terminal", "--"),
+        ("konsole", "-e"),
+        ("xfce4-terminal", "-x"),
+        ("alacritty", "-e"),
+        ("xterm", "-e"),
+    ];
+    CANDIDATES
+        .iter()
+        .find(|(bin, _)| which_in_path(bin).is_some())
+        .map(|(bin, flag)| (*bin, *flag))
+}
+
+/// Locate an executable on `$PATH` plus the usual absolute fallbacks a minimal
+/// root systemd `PATH` might omit.
+#[cfg(target_os = "linux")]
+fn which_in_path(bin: &str) -> Option<PathBuf> {
+    if let Some(path_env) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path_env) {
+            let p = dir.join(bin);
+            if p.is_file() {
+                return Some(p);
+            }
+        }
+    }
+    for fixed in ["/usr/bin", "/bin", "/usr/local/bin"] {
+        let p = Path::new(fixed).join(bin);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    None
+}
+
+/// Best-effort DISPLAY for the active graphical session (via logind), so a root
+/// launcher can target the console user's X/Wayland display. Falls back to the
+/// inherited `$DISPLAY`, then `None`.
+#[cfg(target_os = "linux")]
+fn detect_user_display() -> Option<String> {
+    if let Ok(d) = std::env::var("DISPLAY") {
+        if !d.is_empty() {
+            return Some(d);
+        }
+    }
+    let list = std::process::Command::new("loginctl")
+        .args(["list-sessions", "--no-legend"])
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&list.stdout);
+    for line in text.lines() {
+        let Some(sid) = line.split_whitespace().next() else {
+            continue;
+        };
+        let Ok(show) = std::process::Command::new("loginctl")
+            .args(["show-session", sid, "-p", "Display", "-p", "Active"])
+            .output()
+        else {
+            continue;
+        };
+        let s = String::from_utf8_lossy(&show.stdout);
+        let mut display = None;
+        let mut active = false;
+        for l in s.lines() {
+            if let Some(v) = l.strip_prefix("Display=") {
+                if !v.is_empty() {
+                    display = Some(v.to_string());
+                }
+            }
+            if l.trim() == "Active=yes" {
+                active = true;
+            }
+        }
+        if active {
+            if let Some(d) = display {
+                return Some(d);
+            }
+        }
+    }
+    None
+}
+
+/// Resolve the account name that owns `home` (the target of `sudo -u`).
+#[cfg(target_os = "linux")]
+fn user_name_from_home(home: &Path) -> Option<String> {
+    use std::os::unix::fs::MetadataExt;
+    let uid = std::fs::metadata(home).ok()?.uid();
+    users::get_user_by_uid(uid).map(|u| u.name().to_string_lossy().to_string())
+}
+
+#[cfg(target_os = "windows")]
+fn launch_interactive_terminal(ctx: LaunchCtx) -> Result<u32> {
+    // PowerShell launcher: cd, read the seeded prompt from its file, invoke the
+    // agent. `-NoExit` keeps the window open after the agent exits so the
+    // operator can read the final output.
+    let mut invoke = format!("& {}", ps_single_quote(ctx.binary));
+    for a in ctx.extra_argv {
+        invoke.push(' ');
+        invoke.push_str(&ps_single_quote(a));
+    }
+    let prompt_read = format!(
+        "$EdamamePrompt = Get-Content -Raw -LiteralPath {}",
+        ps_single_quote(&ctx.prompt_path.to_string_lossy())
+    );
+    let call = if ctx.prompt_via == "stdin" {
+        format!("$EdamamePrompt | {}", invoke)
+    } else {
+        format!("{} $EdamamePrompt", invoke)
+    };
+    let body = format!(
+        "Set-Location -LiteralPath {}\r\nWrite-Host 'EDAMAME interactive fix run -- review each step; the agent asks before acting.'\r\n{}\r\n{}\r\n",
+        ps_single_quote(&ctx.workspace.to_string_lossy()),
+        prompt_read,
+        call,
+    );
+    let script = ctx.run_dir.join(format!("{}-{}.ps1", ctx.slug, ctx.ts));
+    std::fs::write(&script, body).map_err(|e| anyhow!("Failed to write launch script: {}", e))?;
+    let script_str = script.to_string_lossy().to_string();
+    let workspace_str = ctx.workspace.to_string_lossy().to_string();
+    let cmdline = format!(
+        "powershell.exe -NoExit -NoProfile -ExecutionPolicy Bypass -File \"{}\"",
+        script_str
+    );
+
+    // SYSTEM (helper service) -> active console session via a duplicated user
+    // token. When WTSQueryUserToken is denied we are already the interactive
+    // user (standalone posture), so fall back to a plain new-console spawn.
+    match launch_in_active_session_windows(&cmdline, &workspace_str) {
+        Ok(pid) => Ok(pid),
+        Err(e) => {
+            info!(
+                "Interactive launch: session-crossing unavailable ({}); spawning in current session",
+                e
+            );
+            use std::os::windows::process::CommandExt;
+            const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+            let child = std::process::Command::new("powershell.exe")
+                .args([
+                    "-NoExit",
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    &script_str,
+                ])
+                .current_dir(ctx.workspace)
+                .creation_flags(CREATE_NEW_CONSOLE)
+                .spawn()
+                .map_err(|e| anyhow!("Failed to launch PowerShell console: {}", e))?;
+            Ok(child.id())
+        }
+    }
+}
+
+/// Launch `cmdline` in the active console session's `winsta0\default` desktop
+/// using the console user's duplicated primary token. Only succeeds for a
+/// caller holding `SeTcbPrivilege` (SYSTEM); returns `Err` otherwise so the
+/// caller can fall back to a same-session spawn.
+#[cfg(target_os = "windows")]
+fn launch_in_active_session_windows(cmdline: &str, workdir: &str) -> Result<u32> {
+    use windows::core::{PCWSTR, PWSTR};
+    use windows::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows::Win32::Security::{
+        DuplicateTokenEx, SecurityImpersonation, TokenPrimary, TOKEN_ALL_ACCESS,
+    };
+    use windows::Win32::System::Environment::{CreateEnvironmentBlock, DestroyEnvironmentBlock};
+    use windows::Win32::System::RemoteDesktop::{WTSGetActiveConsoleSessionId, WTSQueryUserToken};
+    use windows::Win32::System::Threading::{
+        CreateProcessAsUserW, CREATE_NEW_CONSOLE, CREATE_UNICODE_ENVIRONMENT, PROCESS_INFORMATION,
+        STARTUPINFOW,
+    };
+
+    unsafe {
+        let session_id = WTSGetActiveConsoleSessionId();
+        if session_id == 0xFFFF_FFFF {
+            return Err(anyhow!("No active console session"));
+        }
+        let mut user_token = HANDLE(std::ptr::null_mut());
+        WTSQueryUserToken(session_id, &mut user_token)
+            .map_err(|e| anyhow!("WTSQueryUserToken failed: {}", e))?;
+
+        // Duplicate into a primary token usable by CreateProcessAsUserW.
+        let mut primary = HANDLE(std::ptr::null_mut());
+        let dup = DuplicateTokenEx(
+            user_token,
+            TOKEN_ALL_ACCESS,
+            None,
+            SecurityImpersonation,
+            TokenPrimary,
+            &mut primary,
+        );
+        let _ = CloseHandle(user_token);
+        dup.map_err(|e| anyhow!("DuplicateTokenEx failed: {}", e))?;
+
+        // User environment block so PATH etc. resolve for the launched agent.
+        let mut env_block: *mut core::ffi::c_void = std::ptr::null_mut();
+        let have_env = CreateEnvironmentBlock(&mut env_block, Some(primary), false).is_ok();
+
+        let mut cmd_wide: Vec<u16> = cmdline.encode_utf16().chain(std::iter::once(0)).collect();
+        let workdir_wide: Vec<u16> = workdir.encode_utf16().chain(std::iter::once(0)).collect();
+        let mut desktop: Vec<u16> = "winsta0\\default"
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+
+        let si = STARTUPINFOW {
+            cb: std::mem::size_of::<STARTUPINFOW>() as u32,
+            lpDesktop: PWSTR(desktop.as_mut_ptr()),
+            ..Default::default()
+        };
+        let mut pi = PROCESS_INFORMATION::default();
+
+        let mut flags = CREATE_NEW_CONSOLE;
+        if have_env {
+            flags |= CREATE_UNICODE_ENVIRONMENT;
+        }
+
+        let result = CreateProcessAsUserW(
+            Some(primary),
+            PCWSTR::null(),
+            Some(PWSTR(cmd_wide.as_mut_ptr())),
+            None,
+            None,
+            false,
+            flags,
+            if have_env {
+                Some(env_block as *const core::ffi::c_void)
+            } else {
+                None
+            },
+            PCWSTR(workdir_wide.as_ptr()),
+            &si,
+            &mut pi,
+        );
+
+        if have_env {
+            let _ = DestroyEnvironmentBlock(env_block);
+        }
+        let _ = CloseHandle(primary);
+
+        match result {
+            Ok(()) => {
+                let pid = pi.dwProcessId;
+                let _ = CloseHandle(pi.hThread);
+                let _ = CloseHandle(pi.hProcess);
+                Ok(pid)
+            }
+            Err(e) => Err(anyhow!("CreateProcessAsUserW failed: {}", e)),
+        }
     }
 }
 
@@ -385,137 +837,6 @@ pub async fn run_agent_cli_insight(
         return Err(anyhow!("Agent CLI produced no extractable output"));
     }
     Ok(text)
-}
-
-/// Spawn a user-confirmed fix run in the given workspace and return the
-/// spawn confirmation immediately (detached -- output is not captured).
-pub async fn run_agent_cli_fix(
-    agent_type: &str,
-    workspace_path: &str,
-    prompt: &str,
-    home: Option<&Path>,
-) -> Result<AgentCliFixSpawn> {
-    let binary = resolve_agent_cli_binary(agent_type, home)
-        .ok_or_else(|| anyhow!("No CLI detected for agent type '{}'", agent_type))?;
-    let workspace = Path::new(workspace_path);
-    if !workspace.is_dir() {
-        return Err(anyhow!(
-            "Workspace path '{}' is not a directory",
-            workspace_path
-        ));
-    }
-    let args = fix_args(agent_type, prompt);
-    if args.is_empty() {
-        return Err(anyhow!(
-            "Agent type '{}' has no fix CLI invocation",
-            agent_type
-        ));
-    }
-
-    let mut argv = vec![binary.to_string_lossy().to_string()];
-    argv.extend(args.clone());
-
-    let mut command = Command::new(&binary);
-    command.args(&args).current_dir(workspace);
-    configure_command(&mut command, home);
-    command.stdin(Stdio::null());
-
-    // Capture the detached run's combined stdout/stderr into a per-run log file
-    // so the operator can "view log". Best-effort: any failure falls back to
-    // the previous detached-to-null behavior, and the run still proceeds.
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let ws_slug = sanitize_log_fragment(
-        workspace
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("workspace"),
-    );
-    let log_dir = fix_log_dir(home);
-    let mut log_path = String::new();
-    if std::fs::create_dir_all(&log_dir).is_ok() {
-        let file_path = log_dir.join(format!(
-            "{}-{}-{}.log",
-            sanitize_log_fragment(agent_type),
-            ws_slug,
-            ts
-        ));
-        match std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&file_path)
-        {
-            Ok(file) => {
-                // Header first so the log has context even before the agent
-                // emits anything. `&File` implements `Write`, so this shares
-                // the file offset the child inherits (Unix dup / Windows
-                // handle inheritance both append correctly).
-                {
-                    use std::io::Write as _;
-                    let mut w = &file;
-                    let _ = writeln!(w, "=== EDAMAME agent fix run ===");
-                    let _ = writeln!(w, "agent:     {}", agent_type);
-                    let _ = writeln!(w, "workspace: {}", workspace_path);
-                    let _ = writeln!(w, "command:   {}", argv.join(" "));
-                    let _ = writeln!(w, "started:   unix {}", ts);
-                    let _ = writeln!(w, "=============================");
-                    let _ = w.flush();
-                }
-                match file.try_clone() {
-                    Ok(err_file) => {
-                        command
-                            .stdout(Stdio::from(file))
-                            .stderr(Stdio::from(err_file));
-                        log_path = file_path.to_string_lossy().to_string();
-                    }
-                    Err(_) => {
-                        command.stdout(Stdio::null()).stderr(Stdio::null());
-                    }
-                }
-            }
-            Err(_) => {
-                command.stdout(Stdio::null()).stderr(Stdio::null());
-            }
-        }
-    } else {
-        command.stdout(Stdio::null()).stderr(Stdio::null());
-    }
-
-    let child = command
-        .spawn()
-        .map_err(|e| anyhow!("Failed to spawn {}: {}", binary.display(), e))?;
-    let pid = child.id().unwrap_or(0);
-
-    // Hand the log file (and dir) back to the real user when the helper daemon
-    // created them as root, then keep the log dir bounded. Both best-effort.
-    if !log_path.is_empty() {
-        chown_fix_log_to_user(&log_dir, home);
-        chown_fix_log_to_user(Path::new(&log_path), home);
-        prune_fix_logs(&log_dir, 40);
-    }
-
-    info!(
-        "Spawned fix run: agent={} pid={} workspace={} log={}",
-        agent_type,
-        pid,
-        workspace_path,
-        if log_path.is_empty() {
-            "<none>"
-        } else {
-            log_path.as_str()
-        }
-    );
-
-    Ok(AgentCliFixSpawn {
-        agent_type: agent_type.to_string(),
-        binary: binary.to_string_lossy().to_string(),
-        workspace_path: workspace_path.to_string(),
-        pid,
-        command: argv,
-        log_path,
-    })
 }
 
 /// Extract the model's text answer from the CLI's structured stdout.
@@ -696,32 +1017,31 @@ mod tests {
     }
 
     #[test]
-    fn fix_args_keep_session_persistence_and_normal_tools() {
-        // The fix run must be recorded and re-graded by the transcript
-        // observer, so the ephemeral/read-only insight flags must NOT leak in.
-        let claude = fix_args("claude_code", "do the fix");
-        assert_eq!(claude, vec!["-p".to_string(), "do the fix".to_string()]);
-        assert!(!claude.contains(&"--no-session-persistence".to_string()));
-        assert!(!claude.contains(&"--tools".to_string()));
-
-        let codex = fix_args("codex", "do the fix");
-        assert!(codex.contains(&"do the fix".to_string()));
-        assert!(!codex.contains(&"--sandbox".to_string()));
-        assert!(!codex.contains(&"--ephemeral".to_string()));
-
-        let cursor = fix_args("cursor", "do the fix");
-        assert!(cursor.contains(&"--force".to_string()));
-        assert!(cursor.contains(&"do the fix".to_string()));
-        assert!(!cursor.contains(&"ask".to_string()));
-
-        assert!(fix_args("hermes", "x").is_empty());
+    fn interactive_fix_args_are_human_in_the_loop() {
+        // The interactive invocation must OMIT the auto-approve / print-mode
+        // flags so the agent's own approval UI gates every tool call. The
+        // prompt is delivered as a trailing positional ("arg"), never a flag.
+        for agent in ["claude_code", "codex", "cursor"] {
+            let (argv, prompt_via) = interactive_fix_args(agent)
+                .unwrap_or_else(|| panic!("{agent} should have an interactive invocation"));
+            assert_eq!(prompt_via, "arg");
+            assert!(!argv.iter().any(|a| a == "-p"));
+            assert!(!argv.iter().any(|a| a == "--force"));
+            assert!(!argv.iter().any(|a| a == "--trust"));
+            assert!(!argv.iter().any(|a| a == "exec"));
+        }
+        assert!(interactive_fix_args("hermes").is_none());
     }
 
-    #[tokio::test]
-    async fn fix_spawn_rejects_undetected_agent() {
-        let err = run_agent_cli_fix("hermes", "/tmp", "fix it", Some(Path::new("/nonexistent")))
-            .await
-            .unwrap_err();
+    #[test]
+    fn interactive_fix_rejects_undetected_agent() {
+        let err = run_agent_cli_fix_interactive(
+            "hermes",
+            "/tmp",
+            "fix it",
+            Some(Path::new("/nonexistent")),
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("No CLI detected"), "got: {}", err);
     }
 }

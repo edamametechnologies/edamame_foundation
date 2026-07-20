@@ -53,7 +53,7 @@ pub const UTILITY_ORDER_NAMES: &[&str] = &[
     "provision_agent_plugin",
     "read_instruction_content",
     "restart_capture",
-    "run_agent_cli_fix",
+    "run_agent_cli_fix_interactive",
     "run_agent_cli_insight",
     "scan_secret_content",
     "set_custom_blacklists",
