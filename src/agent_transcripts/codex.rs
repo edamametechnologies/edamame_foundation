@@ -305,11 +305,7 @@ pub(crate) fn build_payload(
                     // shared ~/.codex home so CLI sessions without a SQLite
                     // index still join the Codex Path node (desktop SQLite
                     // threads recover a real cwd in thread_row_to_session).
-                    workspace_hint: codex_workspace_hint(
-                        None,
-                        &resolve_codex_home(home),
-                        home,
-                    ),
+                    workspace_hint: codex_workspace_hint(None, &resolve_codex_home(home), home),
                 }
             },
         ) {
@@ -829,11 +825,7 @@ fn thread_row_to_session(
         // cwds stay as the workspace signal; desktop sandbox cwds under
         // ~/Documents/Codex collapse onto ~/.codex so Path shows one Codex
         // node for both Codex.app and the CLI store.
-        workspace_hint: codex_workspace_hint(
-            cwd.as_deref(),
-            codex_home,
-            Path::new(workspace_root),
-        ),
+        workspace_hint: codex_workspace_hint(cwd.as_deref(), codex_home, Path::new(workspace_root)),
     })
 }
 
@@ -1037,7 +1029,11 @@ mod sqlite_tests {
         let home = Path::new("/Users/me");
         let codex_home = home.join(".codex");
         assert_eq!(
-            codex_workspace_hint(Some("/Users/me/Programming/edamame_core"), &codex_home, home),
+            codex_workspace_hint(
+                Some("/Users/me/Programming/edamame_core"),
+                &codex_home,
+                home
+            ),
             "/Users/me/Programming/edamame_core"
         );
         assert_eq!(

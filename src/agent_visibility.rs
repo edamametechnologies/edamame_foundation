@@ -5738,7 +5738,6 @@ bob ALL=(ALL) NOPASSWD: ALL
         assert!(srt.detected, "srt CLI in home bin should be detected");
     }
 
-
     #[test]
     fn detect_agent_harnesses_finds_windows_appdata_config_dir() {
         let tmp = tempfile::TempDir::new().unwrap();
@@ -8137,10 +8136,7 @@ skills/gtm-report and @rules/invariants.mdc.
 
     #[test]
     fn label_from_workspace_slug_maps_fleet_homes() {
-        assert_eq!(
-            label_from_workspace_slug("-Users-me-.openclaw"),
-            "OpenClaw"
-        );
+        assert_eq!(label_from_workspace_slug("-Users-me-.openclaw"), "OpenClaw");
         assert_eq!(label_from_workspace_slug("-Users-me-.codex"), "Codex");
         assert_eq!(
             label_from_workspace_slug("-Users-me-Documents-Codex-2026-07-21-do"),
