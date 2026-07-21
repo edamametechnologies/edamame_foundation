@@ -858,6 +858,39 @@ fn encode_icon_file(path: &Path) -> Option<(String, String)> {
     }
 }
 
+fn registry_entry_from_definition(definition: &AgentPluginDef) -> AgentPluginStatus {
+    let icon_payload = embedded_icon_payload(&definition.agent_type).or_else(|| {
+        supported_agents::registry_dir()
+            .and_then(|registry_dir| definition.registry_icon_path(&registry_dir))
+            .filter(|path| path.is_file())
+            .and_then(|path| encode_icon_file(&path))
+    });
+    let (icon_base64, icon_mime_type) = icon_payload.unwrap_or_default();
+
+    AgentPluginStatus {
+        agent_type: definition.agent_type.clone(),
+        display_name: definition.display_name.clone(),
+        description: definition.description.clone(),
+        installed: false,
+        version: String::new(),
+        install_path: String::new(),
+        repo_url: repo_url(&definition.repo_name),
+        strategy_kind: definition.strategy_kind.clone(),
+        sort_order: definition.sort_order,
+        icon_base64,
+        icon_mime_type,
+    }
+}
+
+/// Read-only supported-agent registry metadata for UI surfaces (icons,
+/// display names, sort order). Does not probe on-disk plugin installs.
+pub fn list_agent_registry() -> Vec<AgentPluginStatus> {
+    supported_agents::ordered_supported_agents()
+        .iter()
+        .map(registry_entry_from_definition)
+        .collect()
+}
+
 fn status_from_definition(definition: &AgentPluginDef, home: &Path) -> AgentPluginStatus {
     let data_dir = data_dir_for_home(home);
     let install_path = definition

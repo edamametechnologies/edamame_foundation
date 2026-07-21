@@ -283,12 +283,54 @@ fn ps_single_quote(s: &str) -> String {
 /// happens directly in the current session.
 #[cfg(unix)]
 fn root_target_uid(home: Option<&Path>) -> Option<u32> {
+    root_target_ids(home).map(|(uid, _)| uid)
+}
+
+/// Root helper case: `(uid, gid)` of the operator that owns `home`. `None`
+/// when not root or home metadata is unavailable. Used by both the interactive
+/// terminal launcher and the non-interactive insight spawn (so Claude/Codex
+/// can read the user's keychain / config instead of failing as root).
+#[cfg(unix)]
+fn root_target_ids(home: Option<&Path>) -> Option<(u32, u32)> {
     use std::os::unix::fs::MetadataExt;
     if unsafe { libc::getuid() } != 0 {
         return None;
     }
     let home = home?;
-    std::fs::metadata(home).ok().map(|m| m.uid())
+    let meta = std::fs::metadata(home).ok()?;
+    Some((meta.uid(), meta.gid()))
+}
+
+/// Account name for `USER` / `LOGNAME` when dropping to the home owner.
+#[cfg(unix)]
+fn user_name_for_uid(uid: u32) -> Option<String> {
+    users::get_user_by_uid(uid).map(|u| u.name().to_string_lossy().to_string())
+}
+
+/// Format a failed insight CLI exit so operators see useful diagnostics.
+/// Many agent CLIs print auth/flag errors on stdout and leave stderr empty;
+/// always include both streams (truncated) plus the binary path.
+fn format_insight_cli_failure(
+    binary: &Path,
+    status: &std::process::ExitStatus,
+    stdout: &str,
+    stderr: &str,
+) -> String {
+    let trim = |s: &str| -> String {
+        let t = s.trim();
+        if t.is_empty() {
+            "(empty)".to_string()
+        } else {
+            t.chars().take(500).collect()
+        }
+    };
+    format!(
+        "Agent CLI {} exited with {}: stderr={} stdout={}",
+        binary.display(),
+        status,
+        trim(stderr),
+        trim(stdout)
+    )
 }
 
 /// Launch an INTERACTIVE fix run for `agent_type` in `workspace_path`, seeded
@@ -769,6 +811,18 @@ fn configure_command(command: &mut Command, home: Option<&Path>) {
             }
         }
     }
+    // Helper daemon runs as root/SYSTEM. Drop to the operator that owns
+    // `home` so the CLI can read user auth (keychain, ~/.claude, etc.).
+    // Without this, Claude/Codex often exit 1 with an empty stderr.
+    #[cfg(unix)]
+    if let Some((uid, gid)) = root_target_ids(home) {
+        command.uid(uid);
+        command.gid(gid);
+        if let Some(name) = user_name_for_uid(uid) {
+            command.env("USER", &name);
+            command.env("LOGNAME", &name);
+        }
+    }
     #[cfg(target_os = "windows")]
     command.creation_flags(0x08000000); // CREATE_NO_WINDOW
 }
@@ -828,16 +882,21 @@ pub async fn run_agent_cli_insight(
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow!(
-            "Agent CLI exited with {}: {}",
-            output.status,
-            stderr.chars().take(500).collect::<String>()
-        ));
+        return Err(anyhow!(format_insight_cli_failure(
+            &binary,
+            &output.status,
+            &stdout,
+            &stderr,
+        )));
     }
 
     let text = parse_agent_cli_output(agent_type, &stdout);
     if text.trim().is_empty() {
-        return Err(anyhow!("Agent CLI produced no extractable output"));
+        return Err(anyhow!(
+            "Agent CLI {} produced no extractable output (stdout truncated): {}",
+            binary.display(),
+            stdout.chars().take(300).collect::<String>()
+        ));
     }
     Ok(text)
 }
@@ -1046,5 +1105,43 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("No CLI detected"), "got: {}", err);
+    }
+
+    #[test]
+    fn insight_failure_includes_stdout_when_stderr_empty() {
+        // Synthetic ExitStatus via a real short-lived process so we exercise
+        // the Display shape agents emit (`exit status: 1`).
+        let status = std::process::Command::new("sh")
+            .args(["-c", "exit 1"])
+            .status()
+            .expect("spawn sh");
+        assert!(!status.success());
+        let msg = format_insight_cli_failure(
+            Path::new("/usr/local/bin/claude"),
+            &status,
+            "Error: Not logged in. Run /login",
+            "",
+        );
+        assert!(
+            msg.contains("stdout=Error: Not logged in"),
+            "expected stdout in failure, got: {msg}"
+        );
+        assert!(
+            msg.contains("stderr=(empty)"),
+            "expected empty-stderr marker, got: {msg}"
+        );
+        assert!(
+            msg.contains("/usr/local/bin/claude"),
+            "expected binary path, got: {msg}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn root_target_ids_none_when_not_root() {
+        // Unit tests do not run as uid 0; privilege drop must be a no-op.
+        if unsafe { libc::getuid() } != 0 {
+            assert!(root_target_ids(Some(Path::new("/tmp"))).is_none());
+        }
     }
 }

@@ -675,6 +675,14 @@ const KNOWN_AGENT_HARNESSES: &[(&str, &str, &[&str], &[&str])] = &[
     // that validates every proposed agent action against business rules before
     // it executes (local SDK + CLI footprint).
     ("rippletide", "Rippletide", &[], &["rippletide"]),
+    // nono (Apache-2.0): least-privilege OS sandbox for coding agents and
+    // delegated tools. Preferred local prevention layer after the EDAMAME
+    // tool-call firewall was retired in 1.7.0.
+    ("nono", "nono", &[".nono"], &["nono"]),
+    // Anthropic Sandbox Runtime (srt, Apache-2.0): OS-level filesystem and
+    // network restrictions (sandbox-exec / Bubblewrap / Windows primitives).
+    // Beta research preview; detected via the `srt` CLI when installed.
+    ("srt", "Anthropic Sandbox Runtime", &[".srt"], &["srt"]),
 ];
 
 /// Standard per-user "bin" directories (relative to `$HOME`) where a harness
@@ -2835,6 +2843,13 @@ fn path_is_instruction_artifact(path: &Path) -> bool {
     if classify_toplevel_instruction(name).is_some() {
         return true;
     }
+    // Canonical Claude / agentfield skill entry files: always instruction-
+    // shaped even when a symlink resolve lands outside a `skills/` ancestor
+    // (defense in depth alongside the segment checks below).
+    let name_lower = name.to_ascii_lowercase();
+    if name_lower == "skill.md" || name_lower == "description.md" {
+        return true;
+    }
     // Lower-cased ancestor directory segments, computed once.
     let segments: Vec<String> = path
         .components()
@@ -2842,10 +2857,14 @@ fn path_is_instruction_artifact(path: &Path) -> bool {
         .collect();
     // A skill folder bundles supporting files (scripts / assets / fixtures) the
     // agent reads as part of running the skill; allow any extension under it.
-    if segments
-        .iter()
-        .any(|s| s.as_str() == "skills" || s.as_str() == "skills-cursor")
-    {
+    // `.agentfield` is the shared physical store behind Claude/Cursor skill
+    // manager symlinks (`~/.claude/skills/<name>` -> `~/.agentfield/...`).
+    if segments.iter().any(|s| {
+        matches!(
+            s.as_str(),
+            "skills" | "skills-cursor" | ".agentfield" | "agentfield"
+        )
+    }) {
         return true;
     }
     // Other instruction subdirs (rules / commands / prompts / ...) are doc-only:
@@ -4252,22 +4271,104 @@ pub fn workspace_root_and_slug_for_session(
     None
 }
 
-/// Short display label for a resolved workspace root. Agent-home instruction
-/// roots use the product name ("OpenClaw", "Claude Desktop") so the
-/// Augmentation / Enlightenment strip never shows a raw dotdir leaf like
-/// `.openclaw` or a bare `Claude` Application Support folder name.
-fn workspace_display_label(root: &Path) -> String {
-    let leaf = root
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| "workspace".to_string());
-    match leaf.to_ascii_lowercase().as_str() {
-        ".openclaw" | "openclaw" => "OpenClaw".to_string(),
-        // `~/Library/Application Support/Claude`, `%AppData%/Claude`,
-        // `~/.config/Claude` -- the Claude Desktop instruction root.
-        "claude" => "Claude Desktop".to_string(),
-        _ => leaf,
+/// Short display label for a resolved workspace root. Fleet-workspace
+/// instruction roots use the product name ("OpenClaw", "Codex", "Claude
+/// Desktop") so the Augmentation / Enlightenment strip never shows a raw
+/// dotdir leaf like `.openclaw` / `.codex` or a bare `Claude` Application
+/// Support folder name.
+pub fn workspace_display_label(root: &Path) -> String {
+    if let Some(agent) = agent_type_for_fleet_workspace_ref(&root.to_string_lossy()) {
+        if let Some(name) = crate::supported_agents::fleet_workspace_display_name(agent) {
+            return name.to_string();
+        }
     }
+    root.file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "workspace".to_string())
+}
+
+/// Best-effort display label for a workspace slug that did not resolve to an
+/// on-disk inventory root. Prefers fleet-workspace product names, then the
+/// trailing path segment of a dash-encoded absolute path
+/// (`Users-me-code-edamame_core` -> `edamame_core`).
+pub fn label_from_workspace_slug(slug: &str) -> String {
+    let s = slug.trim();
+    if s.is_empty() {
+        return String::new();
+    }
+    if let Some(agent) = agent_type_for_fleet_workspace_ref(s) {
+        if let Some(name) = crate::supported_agents::fleet_workspace_display_name(agent) {
+            return name.to_string();
+        }
+    }
+    if s.contains('/') || s.contains('\\') {
+        return s
+            .split(['/', '\\'])
+            .filter(|p| !p.is_empty())
+            .next_back()
+            .unwrap_or(s)
+            .to_string();
+    }
+    let trimmed = s.trim_start_matches('-');
+    trimmed
+        .rsplit('-')
+        .next()
+        .filter(|p| !p.is_empty())
+        .unwrap_or(trimmed)
+        .to_string()
+}
+
+/// Infer a fleet-workspace agent type from a root path, dash-encoded slug, or
+/// product label. Used by inventory labelling and Path attribution for idle
+/// seeds. Returns `None` for ordinary project workspaces.
+pub fn agent_type_for_fleet_workspace_ref(path_or_slug: &str) -> Option<&'static str> {
+    let hay = path_or_slug.trim().to_ascii_lowercase().replace('\\', "/");
+    if hay.is_empty() {
+        return None;
+    }
+    // Already-pretty product labels (inventory / prior seed rows).
+    match hay.as_str() {
+        "openclaw" => return Some("openclaw"),
+        "codex" => return Some("codex"),
+        "claude desktop" => return Some("claude_desktop"),
+        _ => {}
+    }
+    if hay.contains("/.openclaw")
+        || hay.ends_with("/.openclaw")
+        || hay.ends_with("-.openclaw")
+        || hay.ends_with("-openclaw")
+        || hay == ".openclaw"
+    {
+        return Some("openclaw");
+    }
+    // Shared Codex store (`~/.codex`) and desktop sandbox cwd under
+    // `~/Documents/Codex/...` (collapsed onto the store by the transcript
+    // adapter; still recognised here for stale usage-only slugs).
+    if hay.contains("/.codex")
+        || hay.ends_with("/.codex")
+        || hay.ends_with("-.codex")
+        || hay.ends_with("-codex")
+        || hay == ".codex"
+        || hay.contains("/documents/codex/")
+        || hay.ends_with("/documents/codex")
+        || hay.contains("-documents-codex-")
+        || hay.ends_with("-documents-codex")
+    {
+        return Some("codex");
+    }
+    // Claude Desktop app-support / Roaming / `.config` -- never bare `~/.claude`
+    // (Claude Code), or every Claude Code workspace collapses to Desktop.
+    if hay.contains("/application support/claude")
+        || hay.contains("/appdata/roaming/claude")
+        || hay.ends_with("/.config/claude")
+        || hay.contains("/.config/claude/")
+        || hay.contains("-application support-claude")
+        || hay.contains("-appdata-roaming-claude")
+        || (hay.ends_with("-claude") && hay.contains("library"))
+    {
+        return Some("claude_desktop");
+    }
+    None
 }
 
 /// A single workspace repository's discovered instruction inventory.
@@ -5617,6 +5718,26 @@ bob ALL=(ALL) NOPASSWD: ALL
         assert!(af.detected);
         assert!(af.evidence.iter().any(|e| e.contains("on PATH")));
     }
+
+    #[test]
+    fn detect_agent_harnesses_finds_nono_and_srt_clis() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let bin_dir = tmp.path().join(".local").join("bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        #[cfg(windows)]
+        let names = ["nono.exe", "srt.exe"];
+        #[cfg(not(windows))]
+        let names = ["nono", "srt"];
+        for name in names {
+            std::fs::write(bin_dir.join(name), b"#!/bin/sh\n").unwrap();
+        }
+        let harnesses = detect_agent_harnesses_with(tmp.path(), &[]);
+        let nono = harnesses.iter().find(|h| h.slug == "nono").unwrap();
+        let srt = harnesses.iter().find(|h| h.slug == "srt").unwrap();
+        assert!(nono.detected, "nono CLI in home bin should be detected");
+        assert!(srt.detected, "srt CLI in home bin should be detected");
+    }
+
 
     #[test]
     fn detect_agent_harnesses_finds_windows_appdata_config_dir() {
@@ -7265,6 +7386,48 @@ skills/gtm-report and @rules/invariants.mdc.
         );
     }
 
+    // Dogfood Claude layout: `~/.claude/skills/<name>` is a directory symlink
+    // into `~/.agentfield/skills/<name>/current`, and `SKILL.md` lives at the
+    // resolved target. Preview must follow the symlink and return the body.
+    #[cfg(unix)]
+    #[test]
+    fn read_instruction_content_follows_agentfield_style_skill_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+
+        let physical = home
+            .join(".agentfield")
+            .join("skills")
+            .join("agentfield")
+            .join("0.4.0");
+        std::fs::create_dir_all(&physical).unwrap();
+        let body = "# Agentfield\n\nA Claude skill installed via agentfield.\n";
+        std::fs::write(physical.join("SKILL.md"), body.as_bytes()).unwrap();
+        symlink("0.4.0", physical.parent().unwrap().join("current")).unwrap();
+
+        let claude_skills = home.join(".claude").join("skills");
+        std::fs::create_dir_all(&claude_skills).unwrap();
+        symlink(
+            home.join(".agentfield")
+                .join("skills")
+                .join("agentfield")
+                .join("current"),
+            claude_skills.join("agentfield"),
+        )
+        .unwrap();
+
+        let link_path = claude_skills.join("agentfield").join("SKILL.md");
+        let res = read_instruction_content(&link_path, home, "forensic_full_content");
+        assert!(
+            res.found,
+            "agentfield-style Claude SKILL.md must be readable: {:?}",
+            res.error
+        );
+        assert_eq!(res.content, body);
+    }
+
     #[test]
     fn agent_instruction_discovery_uses_real_config_dir_and_isolates_agents() {
         let tmp = tempfile::TempDir::new().unwrap();
@@ -7953,12 +8116,64 @@ skills/gtm-report and @rules/invariants.mdc.
             "OpenClaw"
         );
         assert_eq!(
+            workspace_display_label(Path::new("/Users/me/.codex")),
+            "Codex"
+        );
+        assert_eq!(
             workspace_display_label(Path::new("/Users/me/Library/Application Support/Claude")),
             "Claude Desktop"
+        );
+        // Claude Code's `~/.claude` config dir must NOT inherit the Desktop label
+        // (leaf is `.claude`, not the Desktop app-support `Claude` folder).
+        assert_eq!(
+            workspace_display_label(Path::new("/Users/me/.claude")),
+            ".claude"
         );
         assert_eq!(
             workspace_display_label(Path::new("/Users/me/code/edamame_core")),
             "edamame_core"
+        );
+    }
+
+    #[test]
+    fn label_from_workspace_slug_maps_fleet_homes() {
+        assert_eq!(
+            label_from_workspace_slug("-Users-me-.openclaw"),
+            "OpenClaw"
+        );
+        assert_eq!(label_from_workspace_slug("-Users-me-.codex"), "Codex");
+        assert_eq!(
+            label_from_workspace_slug("-Users-me-Documents-Codex-2026-07-21-do"),
+            "Codex"
+        );
+        assert_eq!(
+            label_from_workspace_slug("-Users-me-Library-Application Support-Claude"),
+            "Claude Desktop"
+        );
+        assert_eq!(
+            label_from_workspace_slug("-Users-me-code-edamame_core"),
+            "edamame_core"
+        );
+    }
+
+    #[test]
+    fn agent_type_for_fleet_workspace_ref_classifies_homes() {
+        assert_eq!(
+            agent_type_for_fleet_workspace_ref("/Users/me/.codex"),
+            Some("codex")
+        );
+        assert_eq!(
+            agent_type_for_fleet_workspace_ref("/Users/me/Documents/Codex/2026-07-21/do"),
+            Some("codex")
+        );
+        assert_eq!(
+            agent_type_for_fleet_workspace_ref("/Users/me/Programming/edamame_core"),
+            None
+        );
+        assert_eq!(agent_type_for_fleet_workspace_ref("Codex"), Some("codex"));
+        assert_eq!(
+            agent_type_for_fleet_workspace_ref("/Users/me/.claude"),
+            None
         );
     }
 

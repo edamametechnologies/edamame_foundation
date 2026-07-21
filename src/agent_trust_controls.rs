@@ -99,12 +99,10 @@ struct TrustControlCatalogEntry {
 
 /// The full trustcontrols.ai catalog with EDAMAME grading. Ordered by domain
 /// then id (the published order). Grading is grounded in the same shipped
-/// primitives as the OWASP catalog: pre-execution tool-call gating is wired
-/// only where an agent plugin ships the hook (Claude Code today) and the
-/// firewall default is `recommend`; there is no traffic firewall (egress is
-/// detected, not blocked); response actions pause-agent / confirm-all-calls
-/// are wired while quarantine / kill-egress / disable-agent / rotate-secret
-/// record intent only.
+/// primitives as the OWASP catalog: EDAMAME observes and evidences; there is
+/// no in-product pre-execution tool-call gate (prevention is third-party
+/// host sandboxes such as nono / Anthropic srt); there is no traffic firewall
+/// (egress is detected, not blocked).
 const TRUST_CONTROLS_CATALOG: &[TrustControlCatalogEntry] = &[
     // -- Agent Identity & Authority ------------------------------------------
     TrustControlCatalogEntry {
@@ -144,9 +142,9 @@ const TRUST_CONTROLS_CATALOG: &[TrustControlCatalogEntry] = &[
         framework: "ISO/IEC 42001:2023",
         framework_mapping: "A.9.4 Intended use of the AI system",
         grade: Strong,
-        coverage_rationale: "The capability graph inventories every observed tool grant with privilege classes, and the tool-call firewall evaluates invocations against that surface; excessive-agency findings flag grants beyond the observed need.",
+        coverage_rationale: "The capability graph inventories every observed tool grant with privilege classes; excessive-agency findings flag grants beyond the observed need.",
         enforcement: PartialEnforcement,
-        enforcement_note: "Pre-execution gating is live only where the agent plugin wires the hook (Claude Code today); revoking a paired MCP client's grant is wired, broader grant revocation records intent.",
+        enforcement_note: "Revoking a paired MCP client's grant is wired; broader grant revocation records intent. Destructive-command prevention is delegated to host sandboxes (nono/srt).",
         owasp_refs: &["ASI03", "LLM06"],
     },
     TrustControlCatalogEntry {
@@ -172,9 +170,9 @@ const TRUST_CONTROLS_CATALOG: &[TrustControlCatalogEntry] = &[
         framework: "ISO/IEC 42001:2023",
         framework_mapping: "A.6.2.8 AI system recording of event logs",
         grade: Strong,
-        coverage_rationale: "Hash-chained action receipts and run provenance record acting agent, verdict, policy basis, and execution context per observed tool call -- tamper-evident and independent of the agent's own logging.",
+        coverage_rationale: "Run provenance records acting agent, policy basis, and execution context per observed session -- independent of the agent's own logging.",
         enforcement: PartialEnforcement,
-        enforcement_note: "Receipts are recorded for tool calls EDAMAME observes (transcript/hook surface); actions outside that surface are not attested.",
+        enforcement_note: "Provenance covers sessions EDAMAME observes via the host transcript observer; actions outside that surface are not attested.",
         owasp_refs: &["ASI03", "ASI09"],
     },
     TrustControlCatalogEntry {
@@ -229,9 +227,9 @@ const TRUST_CONTROLS_CATALOG: &[TrustControlCatalogEntry] = &[
         framework: "ISO/IEC 42001:2023",
         framework_mapping: "A.6.2.4 AI system verification and validation",
         grade: Strong,
-        coverage_rationale: "The tool-call firewall is exactly this layer: a deterministic verdict ladder (allow / recommend / confirm / block) with policy packs and tamper-evident receipts, never relying on model judgment.",
+        coverage_rationale: "Host-sandbox harness detection (nono/srt) is the prevention layer when installed; EDAMAME supplies independent observation, capability-graph privilege classes, and post-hoc attack-pattern scoring.",
         enforcement: PartialEnforcement,
-        enforcement_note: "Pre-execution gating is live only on agents whose plugin wires the hook (Claude Code today); elsewhere calls are scored post-hoc, and the default mode is recommend.",
+        enforcement_note: "In-product pre-execution tool-call gating was retired; install a host sandbox for prevention. EDAMAME continues to observe and score post-hoc.",
         owasp_refs: &["ASI02", "LLM06"],
     },
     TrustControlCatalogEntry {
@@ -257,9 +255,9 @@ const TRUST_CONTROLS_CATALOG: &[TrustControlCatalogEntry] = &[
         framework: "ISO/IEC 42001:2023",
         framework_mapping: "A.6.2.4 AI system verification and validation",
         grade: Partial,
-        coverage_rationale: "Where the pre-execution hook is wired, the firewall evaluates each call's privilege class, target scope, and policy before it runs; full schema/type/range validation of arbitrary tool parameters is the tool layer's job.",
-        enforcement: PartialEnforcement,
-        enforcement_note: "Policy/scope evaluation gates pre-execution on hook-wired agents only (Claude Code today); no generic parameter-schema validator.",
+        coverage_rationale: "EDAMAME inventories tool privilege classes on the capability graph and scores out-of-policy effects post-hoc; full schema/type/range validation of arbitrary tool parameters is the tool layer's job (or a host sandbox).",
+        enforcement: MonitoringOnly,
+        enforcement_note: "No in-product pre-execution parameter gate; install a host sandbox (nono/srt) for blocking.",
         owasp_refs: &["ASI02"],
     },
     TrustControlCatalogEntry {
@@ -285,9 +283,9 @@ const TRUST_CONTROLS_CATALOG: &[TrustControlCatalogEntry] = &[
         framework: "ISO/IEC 42001:2023",
         framework_mapping: "A.6.2.6 AI system operation and monitoring",
         grade: Partial,
-        coverage_rationale: "Reversible-first response actions exist outside the agent's control loop: pause-agent and confirm-all-calls are wired, triggered from drift/recursion/budget thresholds EDAMAME computes independently.",
+        coverage_rationale: "Operators can pause the host transcript observer per agent without the agent's cooperation; drift/recursion/budget thresholds surface independently for triage.",
         enforcement: PartialEnforcement,
-        enforcement_note: "Pause-agent and confirm-all-calls are wired and reversible; hard containment (disable agent, kill egress session) records intent without a wired primitive yet.",
+        enforcement_note: "Observer pause is wired; hard process kill / egress kill are not. Pair with a host sandbox for containment.",
         owasp_refs: &["ASI08", "ASI10"],
     },
     TrustControlCatalogEntry {
@@ -299,9 +297,9 @@ const TRUST_CONTROLS_CATALOG: &[TrustControlCatalogEntry] = &[
         framework: "ISO 27001:2022",
         framework_mapping: "A.8.3 Information access restriction",
         grade: Partial,
-        coverage_rationale: "Policy packs let the deployer declare environment-specific rules that the firewall and policy-pack evaluation assess against observed behavior; narrowing the agent's own configuration remains the deployer's act.",
+        coverage_rationale: "EDAMAME inventories the live tool/MCP surface and scores risk findings; narrowing the agent's own configuration and host-sandbox policy remains the deployer's act.",
         enforcement: MonitoringOnly,
-        enforcement_note: "Declared policy is evaluated and violations alert; EDAMAME does not rewrite the agent's tool configuration.",
+        enforcement_note: "EDAMAME does not rewrite the agent's tool configuration or enforce environment-specific action allowlists in-product.",
         owasp_refs: &["LLM06"],
     },
     TrustControlCatalogEntry {
@@ -498,7 +496,7 @@ const TRUST_CONTROLS_CATALOG: &[TrustControlCatalogEntry] = &[
         framework: "ISO/IEC 42001:2023",
         framework_mapping: "A.9.2 Processes for responsible use of AI",
         grade: Partial,
-        coverage_rationale: "Delegation depth and structure are tracked per run, cross-zone promotion requests are logged with decisions, and drift escalation fires on runaway chains; per-hop authority attenuation inside the framework is not visible.",
+        coverage_rationale: "Delegation depth and structure are tracked per run, cross-zone edges on the A2A / capability graphs are observed, and drift escalation fires on runaway chains; per-hop authority attenuation inside the framework is not visible.",
         enforcement: MonitoringOnly,
         enforcement_note: "Chain structure and escalation are detected; authority attenuation is the framework's to enforce.",
         owasp_refs: &["ASI07", "ASI08"],
@@ -541,9 +539,9 @@ const TRUST_CONTROLS_CATALOG: &[TrustControlCatalogEntry] = &[
         framework: "ISO/IEC 42001:2023",
         framework_mapping: "A.5.2 AI system impact assessment process",
         grade: Partial,
-        coverage_rationale: "Trust zones classify agents and policy packs express tier rules over observed behavior; the firewall's verdict ladder escalates by privilege class. Autonomy ceilings inside the agent are the developer's.",
+        coverage_rationale: "Trust zones classify agents by observed footprint and privilege class on the capability graph. Autonomy ceilings inside the agent are the developer's.",
         enforcement: MonitoringOnly,
-        enforcement_note: "Tier violations are evaluated and alerted; the agent's own autonomy ceiling is not set by EDAMAME.",
+        enforcement_note: "Tier violations are observed and alerted; the agent's own autonomy ceiling is not set by EDAMAME.",
         owasp_refs: &["LLM06"],
     },
     TrustControlCatalogEntry {
@@ -555,9 +553,9 @@ const TRUST_CONTROLS_CATALOG: &[TrustControlCatalogEntry] = &[
         framework: "ISO/IEC 42001:2023",
         framework_mapping: "A.6.2.3 Documentation of AI system design and development",
         grade: Partial,
-        coverage_rationale: "The firewall's confirm verdict is exactly this: policy-selected calls pause for operator resolution, with the pending-call queue and receipts recording the decision.",
-        enforcement: PartialEnforcement,
-        enforcement_note: "Confirm-gating escalates calls to a human where the pre-execution hook is wired (Claude Code today); the default firewall mode is recommend.",
+        coverage_rationale: "Alertable findings, first-seen acknowledgment, and observer pause give the operator independent escalation points; pre-execution human confirm gating is not shipped in-product.",
+        enforcement: MonitoringOnly,
+        enforcement_note: "Operators triage via the app; install a host sandbox when pre-execution escalation is required.",
         owasp_refs: &["LLM06", "ASI09"],
     },
     TrustControlCatalogEntry {
@@ -583,9 +581,9 @@ const TRUST_CONTROLS_CATALOG: &[TrustControlCatalogEntry] = &[
         framework: "ISO 27001:2022",
         framework_mapping: "A.8.15 Logging",
         grade: Partial,
-        coverage_rationale: "Operator resolutions on gated calls, response-action requests, and dismissals are logged tamper-evidently with their context; decisions made inside the agent's own approval UI are not visible.",
+        coverage_rationale: "Operator dismissals, first-seen acknowledgments, and observer pause/resume decisions are logged tamper-evidently with their context; decisions made inside the agent's own approval UI are not visible.",
         enforcement: PartialEnforcement,
-        enforcement_note: "Decisions mediated through EDAMAME's own confirm/approve surfaces are logged; review-quality analytics are the organization's.",
+        enforcement_note: "Decisions mediated through EDAMAME's own operator surfaces are logged; review-quality analytics are the organization's.",
         owasp_refs: &["ASI09"],
     },
     // -- Runtime Behavioral Monitoring ----------------------------------------
@@ -640,9 +638,9 @@ const TRUST_CONTROLS_CATALOG: &[TrustControlCatalogEntry] = &[
         framework: "ISO/IEC 42001:2023",
         framework_mapping: "A.6.1.3 Processes for responsible design and development of AI systems",
         grade: Partial,
-        coverage_rationale: "The pre-execution tool-call hook and the response-action surface are this instrumentation; today only the Claude Code plugin wires the hook, so the gate exists but its agent coverage is narrow.",
-        enforcement: PartialEnforcement,
-        enforcement_note: "The hook and response surface are shipped; wiring beyond Claude Code is pending per-agent plugin support.",
+        coverage_rationale: "EDAMAME exposes host blast-radius evidence and harness detection so an external sandbox (nono/srt) can gate actions; in-product pre-execution tool-call hooks and the ADR response-action surface were retired in 1.7.0.",
+        enforcement: MonitoringOnly,
+        enforcement_note: "Install a host sandbox for pre-execution gating; EDAMAME continues to observe and score post-hoc.",
         owasp_refs: &["ASI02", "LLM06"],
     },
     TrustControlCatalogEntry {
@@ -668,9 +666,9 @@ const TRUST_CONTROLS_CATALOG: &[TrustControlCatalogEntry] = &[
         framework: "ISO 27001:2022",
         framework_mapping: "A.8.16 Monitoring activities",
         grade: Partial,
-        coverage_rationale: "The reversible-first response catalog exists for exactly this; pause-agent and confirm-all-calls are wired, while the hard-containment primitives are not yet.",
+        coverage_rationale: "Operators can pause the host transcript observer per agent without the agent's cooperation; hard process/egress containment is not wired in-product.",
         enforcement: PartialEnforcement,
-        enforcement_note: "Pause-agent / confirm-all-calls are wired and reversible; quarantine-memory, kill-egress, disable-agent, and rotate-secret record operator intent only.",
+        enforcement_note: "Observer pause is wired; install a host sandbox (nono/srt) for stronger runtime containment.",
         owasp_refs: &["ASI10", "ASI08"],
     },
     TrustControlCatalogEntry {
@@ -1308,7 +1306,7 @@ mod tests {
         // The user-facing canonical example: egress is monitored, not firewalled.
         let tue07 = by_id("TUE-07");
         assert_eq!(tue07.enforcement, EnforcementStatus::MonitoringOnly);
-        // The tool-call firewall makes deterministic guardrails partial.
+        // Deterministic guardrails are partial: observation in-product, prevention via host sandbox.
         assert_eq!(by_id("TUE-01").enforcement, EnforcementStatus::Partial);
         // Monitoring-is-the-control rows are actively delivered.
         assert_eq!(by_id("RBM-01").enforcement, EnforcementStatus::Enforced);

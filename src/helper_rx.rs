@@ -744,11 +744,6 @@ pub async fn rpc_run(
             ))]
             "clear_file_events" => utility_clear_file_events().await,
             "scan_secret_content" => utility_scan_secret_content(arg1).await,
-            "provision_agent_plugin" => utility_provision_agent_plugin(arg1, arg2).await,
-            "get_agent_plugin_status" => utility_get_agent_plugin_status(arg1, arg2).await,
-            "list_agent_plugins" => utility_list_agent_plugins(arg1).await,
-            "uninstall_agent_plugin" => utility_uninstall_agent_plugin(arg1, arg2).await,
-            "test_agent_plugin" => utility_test_agent_plugin(arg1, arg2).await,
             "collect_agent_transcripts" => utility_collect_agent_transcripts(arg1, arg2).await,
             #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
             "detect_agent_clis" => utility_detect_agent_clis(arg1, arg2).await,

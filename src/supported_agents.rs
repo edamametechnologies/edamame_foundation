@@ -26,6 +26,7 @@ pub struct SupportedAgentDefinition {
     pub strategy_kind: String,
     pub sort_order: u32,
     pub requires_workspace_arg: bool,
+    #[serde(default)]
     pub repo_scripts: AgentRepoScripts,
     pub install_layout: AgentInstallLayout,
     pub mcp: Option<AgentMcpConfig>,
@@ -33,12 +34,13 @@ pub struct SupportedAgentDefinition {
     pub registry_icon_relpath: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AgentRepoScripts {
     pub install_unix: Option<String>,
     pub install_windows: Option<String>,
     pub uninstall_unix: Option<String>,
     pub uninstall_windows: Option<String>,
+    #[serde(default)]
     pub healthcheck_relpath: String,
 }
 
@@ -105,7 +107,11 @@ impl SupportedAgentDefinition {
     }
 
     pub fn healthcheck_relpath(&self) -> &str {
-        &self.repo_scripts.healthcheck_relpath
+        if self.repo_scripts.healthcheck_relpath.is_empty() {
+            "service/healthcheck_cli.mjs"
+        } else {
+            &self.repo_scripts.healthcheck_relpath
+        }
     }
 
     pub fn resolve_install_path_with_home(&self, home: &Path, data_dir: &Path) -> Option<PathBuf> {
@@ -180,6 +186,14 @@ impl SupportedAgentDefinition {
             }
             _ => None,
         }
+    }
+
+    /// True when this agent's instruction root is itself the single fleet-wide
+    /// workspace on the Augmentation / Enlightenment strip (idle seed target
+    /// and session-collapse home). Multi-project config dirs such as
+    /// `~/.cursor` / `~/.claude` return false -- they parent many workspaces.
+    pub fn instruction_root_is_fleet_workspace(&self) -> bool {
+        instruction_root_is_fleet_workspace(&self.agent_type)
     }
 
     pub fn resolve_state_dir_with_home(&self, home: &Path) -> Option<PathBuf> {
@@ -334,6 +348,44 @@ pub fn find_supported_agent(agent_type: &str) -> Option<SupportedAgentDefinition
     ordered_supported_agents()
         .into_iter()
         .find(|agent| agent.agent_type == agent_type)
+}
+
+/// See [`SupportedAgentDefinition::instruction_root_is_fleet_workspace`].
+pub fn instruction_root_is_fleet_workspace(agent_type: &str) -> bool {
+    matches!(agent_type, "openclaw" | "codex" | "claude_desktop")
+}
+
+/// Short product label for a fleet-workspace agent (`"Codex"`, `"OpenClaw"`,
+/// `"Claude Desktop"`). Distinct from registry `display_name` (plugin marketing
+/// strings such as `"EDAMAME for Codex CLI"`).
+pub fn fleet_workspace_display_name(agent_type: &str) -> Option<&'static str> {
+    match agent_type {
+        "openclaw" => Some("OpenClaw"),
+        "codex" => Some("Codex"),
+        "claude_desktop" => Some("Claude Desktop"),
+        _ => None,
+    }
+}
+
+/// Instruction roots to inject into the Path inventory pass so single-workspace
+/// agents stay on the strip when the report window has no sessions. Callers
+/// dedupe against live session workspace hints.
+pub fn fleet_workspace_seed_roots(home: &Path) -> Vec<(String, PathBuf)> {
+    ordered_supported_agents()
+        .into_iter()
+        .filter(|a| a.instruction_root_is_fleet_workspace())
+        .filter_map(|a| {
+            a.resolve_instruction_root_with_home(home)
+                .map(|root| (a.agent_type, root))
+        })
+        .collect()
+}
+
+/// Encode an idle fleet-workspace seed for
+/// [`crate::agent_visibility::collect_workspace_inventories`]: empty source
+/// path + tab + instruction-root hint.
+pub fn fleet_workspace_seed_source_entry(root: &Path) -> String {
+    format!("\t{}", root.to_string_lossy())
 }
 
 pub fn registry_dir() -> Option<PathBuf> {
@@ -759,5 +811,33 @@ fn platform_state_dir_for_slug(home: &Path, slug: &str) -> PathBuf {
             .ok()
             .map(|state_home| PathBuf::from(state_home).join(slug))
             .unwrap_or_else(|| home.join(".local/state").join(slug))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fleet_workspace_seed_roots_covers_single_workspace_agents_only() {
+        let home = Path::new("/Users/me");
+        let roots = fleet_workspace_seed_roots(home);
+        let types: Vec<&str> = roots.iter().map(|(t, _)| t.as_str()).collect();
+        assert!(types.contains(&"openclaw"));
+        assert!(types.contains(&"codex"));
+        assert!(types.contains(&"claude_desktop"));
+        assert!(!types.contains(&"cursor"));
+        assert!(!types.contains(&"claude_code"));
+        assert!(!types.contains(&"hermes"));
+
+        let codex = roots.iter().find(|(t, _)| t == "codex").unwrap();
+        assert_eq!(codex.1, home.join(".codex"));
+        assert_eq!(
+            fleet_workspace_seed_source_entry(&codex.1),
+            "\t/Users/me/.codex"
+        );
+        assert_eq!(fleet_workspace_display_name("codex"), Some("Codex"));
+        assert!(instruction_root_is_fleet_workspace("codex"));
+        assert!(!instruction_root_is_fleet_workspace("cursor"));
     }
 }

@@ -174,7 +174,14 @@ const AGENT_IDENTITY_NEEDLES: &[(&str, &str)] = &[
     // OpenClaw.
     ("openclaw", "openclaw"),
     (".openclaw", "openclaw"),
-    // Codex (anchored to avoid matching unrelated repos).
+    // Codex CLI + desktop app (anchored to avoid matching unrelated repos).
+    // `codex.app` / `com.openai.codex` cover the Electron desktop tree;
+    // `.codex` / `codex-cli` cover the shared store and npm CLI binary.
+    ("codex.app", "codex"),
+    ("com.openai.codex", "codex"),
+    ("codex (service)", "codex"),
+    ("codex (renderer)", "codex"),
+    ("codex app-server", "codex"),
     (".codex", "codex"),
     ("codex-cli", "codex"),
     ("openai-codex", "codex"),
@@ -817,6 +824,24 @@ mod tests {
         assert_eq!(
             agent_type_for_identity("/home/me/.openclaw/plugins/edamame"),
             Some("openclaw")
+        );
+        assert_eq!(
+            agent_type_for_identity("/applications/codex.app/contents/macos/codex"),
+            Some("codex")
+        );
+        assert_eq!(
+            agent_type_for_identity(
+                "/applications/codex.app/contents/frameworks/codex (service).app/contents/macos/codex (service)"
+            ),
+            Some("codex")
+        );
+        assert_eq!(
+            agent_type_for_identity("/users/me/.local/bin/codex-cli"),
+            Some("codex")
+        );
+        assert_eq!(
+            agent_type_for_identity("/users/me/.codex/sessions/rollout.jsonl"),
+            Some("codex")
         );
         assert_eq!(agent_type_for_identity("/usr/bin/ssh /bin/bash"), None);
     }

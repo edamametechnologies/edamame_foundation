@@ -105,9 +105,9 @@ pub enum EnforcementStatus {
     /// EDAMAME actively delivers the control's required function today
     /// (detection controls where monitoring IS the control, wired containment).
     Enforced,
-    /// An enforcement path is wired but with material gaps: pre-execution
-    /// tool-call gating is live only on agents whose plugin wires the hook
-    /// (Claude Code today), and the firewall default mode is `recommend`.
+    /// An enforcement path is partial: EDAMAME monitors and evidences;
+    /// destructive-command prevention is delegated to third-party OS sandboxes
+    /// (nono, Anthropic Sandbox Runtime) when present on the host.
     Partial,
     /// The control requires blocking/gating that EDAMAME does not perform yet;
     /// EDAMAME observes, scores, and evidences only (e.g. no traffic firewall,
@@ -151,11 +151,10 @@ use EnforcementStatus::{MonitoringOnly, NotApplicable};
 /// `enforcement` is the honest enforcement status (see [`EnforcementStatus`]):
 /// coverage grades detection/evidence reach; enforcement grades whether EDAMAME
 /// can actively gate/contain the risk today. Grounded in the shipped
-/// primitives: pre-execution tool-call gating is wired only where an agent
-/// plugin ships the hook (Claude Code today) and the firewall default is
-/// `recommend`; there is no traffic firewall (egress is detected, not
-/// blocked); response actions QuarantineMemoryNamespace / KillEgressSession /
-/// DisableAgent / RotateExposedSecret record intent but are not wired.
+/// primitives: EDAMAME observes and evidences; pre-execution prevention is
+/// delegated to host sandboxes (nono / Anthropic srt) when installed; there is
+/// no traffic firewall (egress is detected, not blocked); the retired
+/// tool-call firewall / ADR response catalog / policy-pack surfaces are gone.
 const OWASP_CATALOG: &[(
     &str,
     OwaspFramework,
@@ -180,16 +179,16 @@ const OWASP_CATALOG: &[(
         Agentic,
         "Tool Misuse and Exploitation",
         Strong,
-        "The tool-call firewall scores every call (allow / recommend / confirm / block) with tamper-evident receipts; a bent legitimate tool also trips file-system-tampering or sandbox-exploitation.",
+        "Attack-pattern detection and data-flow evidence catch bent legitimate tools (file-system-tampering, sandbox-exploitation, sensitive egress); prevention of destructive commands is delegated to host sandboxes (nono/srt) when installed.",
         PartialEnforcement,
-        "Pre-execution gating is live only on agents whose plugin wires the hook (Claude Code today); other agents are scored post-hoc and the firewall default mode is recommend.",
+        "EDAMAME observes and scores post-hoc; pre-execution blocking is not shipped -- install a host sandbox (nono or Anthropic srt) for prevention.",
     ),
     (
         "ASI03",
         Agentic,
         "Identity and Privilege Abuse",
         Strong,
-        "MCP discovery and the agent component inventory map the real capability/identity surface, trust zones gate privilege boundaries, and out-of-scope credential use is caught by credential-harvest / token-exfiltration.",
+        "MCP discovery and the agent component inventory map the real capability/identity surface, trust zones classify privilege boundaries on the capability graph, and out-of-scope credential use is caught by credential-harvest / token-exfiltration.",
         PartialEnforcement,
         "Revoking a paired MCP client's grant is wired; broader credential rotation and privilege revocation record operator intent without an active primitive yet.",
     ),
@@ -218,7 +217,7 @@ const OWASP_CATALOG: &[(
         Partial,
         "On-host memory / context-poisoning heuristics and a provenance DAG ship, but external vector-store connectors (Pinecone, Qdrant, Weaviate, Mem0) and per-run retrieval drill-down are still pending, so a managed vector DB is not yet introspected end to end.",
         MonitoringOnly,
-        "Poisoning heuristics alert; the quarantine-memory-namespace response action records intent but its primitive is not wired yet.",
+        "Poisoning heuristics alert; EDAMAME does not quarantine or roll back poisoned memory stores.",
     ),
     (
         "ASI07",
@@ -236,7 +235,7 @@ const OWASP_CATALOG: &[(
         Strong,
         "Recursion and delegation detection tracks depth and loops and emits an explicit cascading-failure finding from the same alertable drift event; cascades deeper than delegation structure stay bounded by what the host observer sees.",
         MonitoringOnly,
-        "Runaway recursion is detected and alerted; the circuit-breaker / disable-agent containment primitives are not wired yet.",
+        "Runaway recursion is detected and alerted; EDAMAME does not auto-suspend or kill the agent process.",
     ),
     (
         "ASI09",
@@ -252,9 +251,9 @@ const OWASP_CATALOG: &[(
         Agentic,
         "Rogue Agents",
         Strong,
-        "A rogue agent is exactly what the two-plane model catches -- divergence verdict, drift, policy-pack evaluation, and reversible-first response -- and observer-independence guarantees it cannot dismiss its own findings.",
+        "A rogue agent is exactly what the two-plane model catches -- divergence verdict, drift, and attack-pattern findings -- and observer-independence guarantees it cannot dismiss its own findings.",
         PartialEnforcement,
-        "Pause-agent and confirm-all-calls responses are wired and reversible; hard containment (disable agent, kill egress session) records intent without a wired primitive yet.",
+        "Operators can pause the host transcript observer per agent; hard process containment and egress kill are not wired. Pair with a host sandbox (nono/srt) for prevention.",
     ),
     // OWASP Top 10 for LLM Applications (2025).
     (
@@ -298,7 +297,7 @@ const OWASP_CATALOG: &[(
         Llm,
         "Improper Output Handling",
         Indirect,
-        "EDAMAME does not sanitize LLM output strings; it catches the downstream effect when mishandled output triggers a dangerous action (a firewall verdict, file-system-tampering or sandbox-exploitation). Effect-level, not string-level.",
+        "EDAMAME does not sanitize LLM output strings; it catches the downstream effect when mishandled output triggers a dangerous action (file-system-tampering or sandbox-exploitation). Effect-level, not string-level.",
         MonitoringOnly,
         "Downstream effects are detected; output strings are not sanitized or blocked before consumption.",
     ),
@@ -307,9 +306,9 @@ const OWASP_CATALOG: &[(
         Llm,
         "Excessive Agency",
         Strong,
-        "The direct enforcement answer: the tool-call firewall verdict ladder, the capability graph with privilege classes, policy packs, and reversible-first response.",
+        "The direct answer: capability graph with privilege classes and host sandbox harness detection (nono/srt).",
         PartialEnforcement,
-        "The firewall verdict ladder is live but gates pre-execution only where the agent plugin wires the hook (Claude Code today), and the default mode is recommend.",
+        "Pre-execution gating is not shipped in-product; operators should deploy a host sandbox (nono/srt) alongside EDAMAME observation.",
     ),
     (
         "LLM07",
@@ -656,8 +655,8 @@ mod tests {
             );
         }
         // Spot-check the honest grading: no traffic firewall means sensitive
-        // disclosure stays monitoring-only; the tool-call firewall hook makes
-        // tool misuse partial; misinformation has nothing to enforce.
+        // disclosure stays monitoring-only; tool misuse is partial via host
+        // sandbox harnesses; misinformation has nothing to enforce.
         let by_id = |id: &str| {
             sc.agentic_rows
                 .iter()
@@ -669,9 +668,9 @@ mod tests {
         assert_eq!(by_id("LLM02"), EnforcementStatus::MonitoringOnly);
         assert_eq!(by_id("ASI02"), EnforcementStatus::Partial);
         assert_eq!(by_id("LLM09"), EnforcementStatus::NotApplicable);
-        // Nothing is graded fully Enforced yet -- the firewall default is
-        // recommend and the hook is wired on one agent only. If a primitive
-        // graduates, update the catalog AND this expectation deliberately.
+        // Nothing is graded fully Enforced yet -- prevention is delegated to
+        // host sandboxes. If a primitive graduates, update the catalog AND
+        // this expectation deliberately.
         assert!(sc
             .agentic_rows
             .iter()

@@ -26,7 +26,6 @@ pub const UTILITY_ORDER_NAMES: &[&str] = &[
     "confirm_absent_instruction_paths",
     "create_custom_whitelists",
     "detect_agent_clis",
-    "get_agent_plugin_status",
     "get_blacklisted_sessions",
     "get_blacklisted_status",
     "get_blacklists",
@@ -47,10 +46,8 @@ pub const UTILITY_ORDER_NAMES: &[&str] = &[
     "helper_check",
     "helper_flags",
     "is_capturing",
-    "list_agent_plugins",
     "mdns_resolve",
     "merge_custom_whitelists",
-    "provision_agent_plugin",
     "read_instruction_content",
     "reveal_path_in_file_manager",
     "restart_capture",
@@ -65,8 +62,6 @@ pub const UTILITY_ORDER_NAMES: &[&str] = &[
     "start_file_monitor",
     "stop_capture",
     "stop_file_monitor",
-    "test_agent_plugin",
-    "uninstall_agent_plugin",
 ];
 
 // Version

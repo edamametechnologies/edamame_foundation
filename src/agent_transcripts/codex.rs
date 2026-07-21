@@ -51,6 +51,16 @@ const CODEX_SCOPE_PARENT_PATHS: &[&str] = &[
     "*/flatpak/",
     "*/nix/store/",
     "*/codex_edamame_mcp.mjs",
+    // Desktop app (Codex.app) -- shares ~/.codex with the CLI but runs as a
+    // distinct Electron helper tree under /Applications (or Program Files).
+    "*/Codex.app/*",
+    "*/Codex.app/Contents/MacOS/Codex",
+    "*/Codex (Service)*",
+    "*/Codex (Renderer)*",
+    "*/codex app-server",
+    "*/com.openai.codex/*",
+    "*\\Codex\\*",
+    "*\\OpenAI\\Codex\\*",
 ];
 
 pub fn collect(home: &Path, options: &CollectOptions) -> anyhow::Result<CollectResult> {
@@ -110,6 +120,43 @@ fn resolve_codex_home(home: &Path) -> std::path::PathBuf {
         .map(std::path::PathBuf::from)
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or_else(|| home.join(".codex"))
+}
+
+/// True when `cwd` is the Codex desktop sandbox tree (`~/Documents/Codex/...`).
+/// Those sessions share the same `~/.codex` store as the CLI but should land
+/// on the Codex agent-home Path node rather than a per-day "do" workspace.
+fn is_codex_desktop_sandbox_cwd(cwd: &str, home: &Path) -> bool {
+    let norm = cwd.replace('\\', "/").to_ascii_lowercase();
+    let trimmed = norm.trim_end_matches('/');
+    if trimmed.ends_with("/documents/codex") || trimmed.contains("/documents/codex/") {
+        return true;
+    }
+    let documents_codex = home
+        .join("Documents")
+        .join("Codex")
+        .to_string_lossy()
+        .replace('\\', "/")
+        .to_ascii_lowercase();
+    if documents_codex.is_empty() {
+        return false;
+    }
+    let docs = documents_codex.trim_end_matches('/');
+    trimmed == docs || trimmed.starts_with(&(docs.to_string() + "/"))
+}
+
+/// Workspace hint for a Codex session.
+///
+/// - Desktop sandbox cwd (`~/Documents/Codex/...`) → `~/.codex` so Path collapses
+///   onto the shared agent-home (same strip node for Codex.app + idle seed).
+/// - Real CLI project cwd → keep the project path (multi-workspace strip).
+/// - Missing cwd → `~/.codex` so legacy JSONL rollouts still join the Codex node.
+fn codex_workspace_hint(cwd: Option<&str>, codex_home: &Path, home: &Path) -> String {
+    let codex_home_s = codex_home.to_string_lossy().to_string();
+    match cwd.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(cwd) if is_codex_desktop_sandbox_cwd(cwd, home) => codex_home_s,
+        Some(cwd) => cwd.to_string(),
+        None => codex_home_s,
+    }
 }
 
 /// Presence-based discovery for a Codex install. Pure filesystem checks, so it
@@ -254,10 +301,15 @@ pub(crate) fn build_payload(
                     context_tokens_used: None,
                     context_token_limit: None,
                     context_usage_percent: None,
-                    // Legacy JSONL rollout files carry no separate cwd; the
-                    // SQLite thread path (thread_row_to_session) is the one that
-                    // recovers the real working directory.
-                    workspace_hint: String::new(),
+                    // Legacy JSONL rollouts carry no cwd. Anchor them on the
+                    // shared ~/.codex home so CLI sessions without a SQLite
+                    // index still join the Codex Path node (desktop SQLite
+                    // threads recover a real cwd in thread_row_to_session).
+                    workspace_hint: codex_workspace_hint(
+                        None,
+                        &resolve_codex_home(home),
+                        home,
+                    ),
                 }
             },
         ) {
@@ -773,11 +825,15 @@ fn thread_row_to_session(
         context_usage_percent: None,
         // Codex records the real per-thread working directory in its SQLite
         // index but writes rollout transcripts under ~/.codex/sessions/, so
-        // source_path never carries a projects/<slug> segment. Preserve the cwd
-        // as the workspace signal so attribution can derive a workspace slug
-        // (workspace_slug_for_session) instead of dropping the session into the
-        // agent-home bucket.
-        workspace_hint: cwd.clone().unwrap_or_default(),
+        // source_path never carries a projects/<slug> segment. CLI project
+        // cwds stay as the workspace signal; desktop sandbox cwds under
+        // ~/Documents/Codex collapse onto ~/.codex so Path shows one Codex
+        // node for both Codex.app and the CLI store.
+        workspace_hint: codex_workspace_hint(
+            cwd.as_deref(),
+            codex_home,
+            Path::new(workspace_root),
+        ),
     })
 }
 
@@ -824,6 +880,7 @@ mod sqlite_tests {
         title: &str,
         first_user_message: &str,
         preview: &str,
+        cwd: &str,
         rollout_path: &str,
         updated_at_ms: i64,
     ) {
@@ -837,7 +894,7 @@ mod sqlite_tests {
                 title,
                 first_user_message,
                 preview,
-                "/work/project",
+                cwd,
                 "gpt-5-codex",
                 rollout_path,
                 updated_at_ms,
@@ -898,6 +955,7 @@ mod sqlite_tests {
             "Deploy staging",
             "deploy staging please",
             "running deploy",
+            "/work/project",
             &rollout.to_string_lossy(),
             now_ms(),
         );
@@ -910,6 +968,8 @@ mod sqlite_tests {
         assert!(session.user_text.contains("deploy staging via"));
         assert!(session.assistant_text.contains("running deploy"));
         assert_eq!(session.source_path, rollout.to_string_lossy());
+        // CLI project cwd is preserved so Path can show a real workspace disc.
+        assert_eq!(session.workspace_hint, "/work/project");
     }
 
     #[test]
@@ -926,6 +986,7 @@ mod sqlite_tests {
             "Audit DB",
             "audit the production database for leaked secrets",
             "scanning tables",
+            "/work/project",
             "",
             now_ms(),
         );
@@ -939,6 +1000,58 @@ mod sqlite_tests {
             "audit the production database for leaked secrets"
         );
         assert!(session.assistant_text.contains("scanning tables"));
+    }
+
+    #[test]
+    fn sqlite_ingest_collapses_desktop_sandbox_cwd_onto_codex_home() {
+        // Codex.app sessions use ~/Documents/Codex/<date>/<slug> as cwd while
+        // sharing ~/.codex with the CLI. Path must collapse those onto the
+        // agent-home hint, not a per-day "do" workspace disc.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let home = temp.path();
+        let codex_home = home.join(".codex");
+        let db = create_state_db(&codex_home);
+        let desktop_cwd = home.join("Documents/Codex/2026-07-21/do");
+
+        insert_thread(
+            &db,
+            "thread-desktop",
+            "Check workspace access",
+            "list files",
+            "done",
+            &desktop_cwd.to_string_lossy(),
+            "",
+            now_ms(),
+        );
+
+        let sessions = collect_sqlite_sessions(&codex_home, home, &CollectOptions::default());
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(
+            sessions[0].workspace_hint,
+            codex_home.to_string_lossy().to_string()
+        );
+    }
+
+    #[test]
+    fn codex_workspace_hint_keeps_cli_project_and_collapses_desktop() {
+        let home = Path::new("/Users/me");
+        let codex_home = home.join(".codex");
+        assert_eq!(
+            codex_workspace_hint(Some("/Users/me/Programming/edamame_core"), &codex_home, home),
+            "/Users/me/Programming/edamame_core"
+        );
+        assert_eq!(
+            codex_workspace_hint(
+                Some("/Users/me/Documents/Codex/2026-07-21/do"),
+                &codex_home,
+                home
+            ),
+            "/Users/me/.codex"
+        );
+        assert_eq!(
+            codex_workspace_hint(None, &codex_home, home),
+            "/Users/me/.codex"
+        );
     }
 
     #[test]
@@ -969,6 +1082,7 @@ mod sqlite_tests {
             "Old work",
             "old intent",
             "old preview",
+            "/work/project",
             "",
             two_hours_ago,
         );
@@ -993,6 +1107,7 @@ mod sqlite_tests {
             "End to end",
             "refactor the auth module",
             "done",
+            "/work/project",
             "",
             now_ms(),
         );
