@@ -1028,6 +1028,9 @@ mod sqlite_tests {
     fn codex_workspace_hint_keeps_cli_project_and_collapses_desktop() {
         let home = Path::new("/Users/me");
         let codex_home = home.join(".codex");
+        // Compare against Path::join display so Windows CI (which may render
+        // `/Users/me/.codex` as `/Users/me\.codex`) does not flake.
+        let codex_home_s = codex_home.to_string_lossy().to_string();
         assert_eq!(
             codex_workspace_hint(
                 Some("/Users/me/Programming/edamame_core"),
@@ -1042,11 +1045,11 @@ mod sqlite_tests {
                 &codex_home,
                 home
             ),
-            "/Users/me/.codex"
+            codex_home_s
         );
         assert_eq!(
             codex_workspace_hint(None, &codex_home, home),
-            "/Users/me/.codex"
+            codex_home.to_string_lossy()
         );
     }
 

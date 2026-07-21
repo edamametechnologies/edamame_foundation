@@ -831,10 +831,12 @@ mod tests {
         assert!(!types.contains(&"hermes"));
 
         let codex = roots.iter().find(|(t, _)| t == "codex").unwrap();
-        assert_eq!(codex.1, home.join(".codex"));
+        let expected_codex_home = home.join(".codex");
+        assert_eq!(codex.1, expected_codex_home);
+        // Path display is host-separator-aware (`\` on Windows CI).
         assert_eq!(
             fleet_workspace_seed_source_entry(&codex.1),
-            "\t/Users/me/.codex"
+            format!("\t{}", expected_codex_home.to_string_lossy())
         );
         assert_eq!(fleet_workspace_display_name("codex"), Some("Codex"));
         assert!(instruction_root_is_fleet_workspace("codex"));
