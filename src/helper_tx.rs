@@ -52,6 +52,7 @@ pub const UTILITY_ORDER_NAMES: &[&str] = &[
     "merge_custom_whitelists",
     "provision_agent_plugin",
     "read_instruction_content",
+    "reveal_path_in_file_manager",
     "restart_capture",
     "run_agent_cli_fix_interactive",
     "run_agent_cli_insight",

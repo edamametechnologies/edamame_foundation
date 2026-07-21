@@ -996,6 +996,27 @@ pub async fn utility_read_instruction_content(tier: &str, args_json: &str) -> Re
         .map_err(|e| anyhow::anyhow!("Failed to serialize instruction content result: {}", e))
 }
 
+/// Reveal a path in the operator's file manager. Crosses the macOS sandbox
+/// boundary so transcript / instruction folders under the real home are
+/// openable from the sandboxed app. `arg1` is the path (absolute or
+/// dash-encoded workspace slug); `arg2` is the target user home (may be
+/// empty -- helper then uses `real_home_dir()`).
+pub async fn utility_reveal_path_in_file_manager(path: &str, user_home: &str) -> Result<String> {
+    if path.trim().is_empty() {
+        return Err(anyhow::anyhow!("reveal_path_in_file_manager: empty path"));
+    }
+    let home_path = if user_home.is_empty() {
+        crate::agent_plugin::real_home_dir().ok_or_else(|| {
+            anyhow::anyhow!("Unable to resolve real_home_dir for reveal_path_in_file_manager")
+        })?
+    } else {
+        std::path::PathBuf::from(user_home)
+    };
+    let result = crate::file_reveal::reveal_path_in_file_manager(path, &home_path);
+    serde_json::to_string(&result)
+        .map_err(|e| anyhow::anyhow!("Failed to serialize reveal result: {}", e))
+}
+
 /// Resolve the distinct workspace roots referenced by a set of transcript
 /// `source_paths` and collect each root's project-scoped instruction inventory
 /// (`.cursor/rules`, `.claude/skills`, top-level `AGENTS.md`, ...). Like

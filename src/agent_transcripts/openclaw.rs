@@ -62,6 +62,16 @@ pub fn collect(home: &Path, options: &CollectOptions) -> anyhow::Result<CollectR
 
     let agent_instance_id = observer_agent_instance_id("openclaw", home);
     let now = Utc::now();
+    // One fleet-wide workspace for host-resident OpenClaw: `~/.openclaw`.
+    // Sessions under `agents/<name>/sessions/` have no `projects/<slug>`
+    // segment, so without a hint they never join the Augmentation /
+    // Enlightenment workspace strip (regression after the workspace-only
+    // selector retired the per-agent filter).
+    let workspace_hint = crate::supported_agents::find_supported_agent("openclaw")
+        .and_then(|a| a.resolve_instruction_root_with_home(home))
+        .filter(|p| p.is_dir())
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
 
     let mut candidates: Vec<GenericTranscriptCandidate> = Vec::new();
     for root in &accessible_roots {
@@ -149,9 +159,7 @@ pub fn collect(home: &Path, options: &CollectOptions) -> anyhow::Result<CollectR
                     context_tokens_used: None,
                     context_token_limit: None,
                     context_usage_percent: None,
-                    // OpenClaw session files carry the workspace in source_path;
-                    // no separate cwd hint is needed.
-                    workspace_hint: String::new(),
+                    workspace_hint: workspace_hint.clone(),
                 }
             },
         ) {

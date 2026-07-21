@@ -4158,17 +4158,49 @@ pub fn slug_from_workspace_dir(dir: &str) -> String {
     format!("-{}", comps.join("-"))
 }
 
-/// Resolve a session's workspace slug, preferring the `projects/<slug>` segment
-/// decoded from `source_path` and falling back to a slug derived from
-/// `workspace_hint` (the agent's recorded `cwd`, e.g. Codex). Pure string work,
-/// no filesystem access -- safe to call from the sandboxed core. Returns `None`
-/// when neither signal yields a slug (a chat session with no working directory).
+/// True when `path` is the same as `dir` or a descendant of it (string-prefix
+/// match on normalised `/` separators). Used to decide whether a
+/// `workspace_hint` naming an agent-home / instruction root should collapse
+/// nested `projects/<slug>` transcript paths (Claude Desktop's local-agent
+/// mode nests under `Application Support/Claude/.../projects/...`) into one
+/// fleet-wide workspace. Pure string work -- no filesystem access.
+fn path_is_under_dir(path: &str, dir: &str) -> bool {
+    let p = path.replace('\\', "/").trim_end_matches('/').to_string();
+    let d = dir.replace('\\', "/").trim_end_matches('/').to_string();
+    if p.is_empty() || d.is_empty() {
+        return false;
+    }
+    p == d || p.starts_with(&(d.clone() + "/"))
+}
+
+/// Resolve a session's workspace slug.
+///
+/// Order of preference:
+/// 1. When `workspace_hint` is non-empty AND `source_path` lives under that
+///    directory (Claude Desktop / OpenClaw instruction-root hints, or a Codex
+///    cwd that happens to contain the transcript): slug from the hint. This
+///    collapses nested `projects/<slug>` paths under a single-workspace agent
+///    home into one strip node.
+/// 2. Else the `projects/<slug>` segment decoded from `source_path` (Cursor /
+///    Claude Code).
+/// 3. Else a slug derived from `workspace_hint` alone (Codex rollout under
+///    `~/.codex/sessions/` with a recorded cwd outside that tree).
+///
+/// Pure string work, no filesystem access -- safe to call from the sandboxed
+/// core. Returns `None` when neither signal yields a slug.
 pub fn workspace_slug_for_session(source_path: &str, workspace_hint: &str) -> Option<String> {
+    let hint = workspace_hint.trim();
+    if !hint.is_empty() && path_is_under_dir(source_path, hint) {
+        let slug = slug_from_workspace_dir(hint);
+        if !slug.is_empty() {
+            return Some(slug);
+        }
+    }
     if let Some(slug) = project_slug_from_source_path(source_path) {
         return Some(slug);
     }
-    if !workspace_hint.trim().is_empty() {
-        let slug = slug_from_workspace_dir(workspace_hint);
+    if !hint.is_empty() {
+        let slug = slug_from_workspace_dir(hint);
         if !slug.is_empty() {
             return Some(slug);
         }
@@ -4180,31 +4212,62 @@ pub fn workspace_slug_for_session(source_path: &str, workspace_hint: &str) -> Op
 /// scanning, honouring `workspace_hint`. Requires filesystem access, so it runs
 /// only on the unsandboxed path (standalone core / helper daemon).
 ///
-/// - When `source_path` carries a `projects/<slug>` segment: identical to
-///   [`workspace_root_from_source_path`] -- resolve the slug back to an on-disk
-///   directory. This preserves today's behaviour for Cursor / Claude exactly.
-/// - Otherwise, when `workspace_hint` names an existing directory (Codex's
-///   recorded `cwd`): that directory IS the root, and the slug is
-///   [`slug_from_workspace_dir`].
-/// - Otherwise `None`.
+/// Preference mirrors [`workspace_slug_for_session`]:
+/// - Hint wins when `source_path` is under the hint directory (single-workspace
+///   agent homes) and the hint path exists on disk.
+/// - Else a resolvable `projects/<slug>` segment from `source_path`.
+/// - Else an existing `workspace_hint` directory (Codex cwd).
+/// - An unresolved `projects/<slug>` falls through to the hint rather than
+///   aborting the whole resolve (Desktop's nested sandbox slugs often do not
+///   decode to a real project directory).
 pub fn workspace_root_and_slug_for_session(
     source_path: &str,
     workspace_hint: &str,
 ) -> Option<(PathBuf, String)> {
-    if let Some(slug) = project_slug_from_source_path(source_path) {
-        let root = resolve_slug_to_existing_dir(&slug)?;
-        return Some((root, slug));
-    }
-    if !workspace_hint.trim().is_empty() {
-        let dir = Path::new(workspace_hint);
+    let hint = workspace_hint.trim();
+    if !hint.is_empty() && path_is_under_dir(source_path, hint) {
+        let dir = Path::new(hint);
         if dir.is_dir() {
-            let slug = slug_from_workspace_dir(workspace_hint);
+            let slug = slug_from_workspace_dir(hint);
+            if !slug.is_empty() {
+                return Some((dir.to_path_buf(), slug));
+            }
+        }
+    }
+    if let Some(slug) = project_slug_from_source_path(source_path) {
+        if let Some(root) = resolve_slug_to_existing_dir(&slug) {
+            return Some((root, slug));
+        }
+        // Unresolved projects slug: fall through to hint (do not hard-fail).
+    }
+    if !hint.is_empty() {
+        let dir = Path::new(hint);
+        if dir.is_dir() {
+            let slug = slug_from_workspace_dir(hint);
             if !slug.is_empty() {
                 return Some((dir.to_path_buf(), slug));
             }
         }
     }
     None
+}
+
+/// Short display label for a resolved workspace root. Agent-home instruction
+/// roots use the product name ("OpenClaw", "Claude Desktop") so the
+/// Augmentation / Enlightenment strip never shows a raw dotdir leaf like
+/// `.openclaw` or a bare `Claude` Application Support folder name.
+fn workspace_display_label(root: &Path) -> String {
+    let leaf = root
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "workspace".to_string());
+    match leaf.to_ascii_lowercase().as_str() {
+        ".openclaw" | "openclaw" => "OpenClaw".to_string(),
+        // `~/Library/Application Support/Claude`, `%AppData%/Claude`,
+        // `~/.config/Claude` -- the Claude Desktop instruction root.
+        "claude" => "Claude Desktop".to_string(),
+        _ => leaf,
+    }
 }
 
 /// A single workspace repository's discovered instruction inventory.
@@ -4263,10 +4326,7 @@ pub fn collect_workspace_inventories(source_paths: &[String]) -> Vec<WorkspaceIn
         if !seen.insert(root.clone()) {
             continue;
         }
-        let label = root
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "workspace".to_string());
+        let label = workspace_display_label(&root);
         let components = discover_workspace_instruction_components(&root);
         out.push(WorkspaceInventory {
             slug,
@@ -7838,14 +7898,32 @@ skills/gtm-report and @rules/invariants.mdc.
     }
 
     #[test]
-    fn workspace_slug_for_session_prefers_source_path_over_hint() {
+    fn workspace_slug_for_session_prefers_source_path_over_unrelated_hint() {
         // A Cursor-style transcript already carries the workspace in its
-        // `projects/<slug>` segment; the cwd hint must never override it.
+        // `projects/<slug>` segment; an unrelated cwd hint must never override
+        // it (hint is not an ancestor of the transcript path).
         let slug = workspace_slug_for_session(
             "/home/.cursor/projects/-Users-me-proj/agent-transcripts/a.jsonl",
             "/some/other/dir",
         );
         assert_eq!(slug.as_deref(), Some("-Users-me-proj"));
+    }
+
+    #[test]
+    fn workspace_slug_for_session_prefers_hint_when_source_under_hint() {
+        // Claude Desktop local-agent-mode nests a `projects/<slug>` segment
+        // under the app-support instruction root. The one-workspace hint must
+        // win so the strip shows a single "Claude Desktop" node, not a
+        // per-session sandbox slug.
+        let hint = "/Users/me/Library/Application Support/Claude";
+        let source = format!(
+            "{hint}/local-agent-mode-sessions/ab/cd/.claude/projects/-sessions-zealous/a.jsonl"
+        );
+        let slug = workspace_slug_for_session(&source, hint);
+        assert_eq!(
+            slug.as_deref(),
+            Some("-Users-me-Library-Application Support-Claude")
+        );
     }
 
     #[test]
@@ -7866,6 +7944,24 @@ skills/gtm-report and @rules/invariants.mdc.
         let slug =
             workspace_slug_for_session("/home/me/.codex/sessions/2026/07/16/rollout-abc.jsonl", "");
         assert_eq!(slug, None);
+    }
+
+    #[test]
+    fn workspace_display_label_maps_agent_homes() {
+        assert_eq!(
+            workspace_display_label(Path::new("/Users/me/.openclaw")),
+            "OpenClaw"
+        );
+        assert_eq!(
+            workspace_display_label(Path::new(
+                "/Users/me/Library/Application Support/Claude"
+            )),
+            "Claude Desktop"
+        );
+        assert_eq!(
+            workspace_display_label(Path::new("/Users/me/code/edamame_core")),
+            "edamame_core"
+        );
     }
 
     #[test]

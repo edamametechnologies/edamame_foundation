@@ -32,6 +32,7 @@ pub mod cve_detection_params_db;
     feature = "fim"
 ))]
 pub mod fim_support;
+pub mod file_reveal;
 pub mod health;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub mod helper_proto;

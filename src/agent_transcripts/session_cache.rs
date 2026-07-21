@@ -150,14 +150,19 @@ impl LruCache {
 
 static CACHE: Lazy<Mutex<LruCache>> = Lazy::new(|| Mutex::new(LruCache::new()));
 
+/// Bump when `CollectedRawSession` shape or adapter-derived fields (e.g.
+/// `workspace_hint` for Desktop/OpenClaw) change so stale entries rebuild.
+const SESSION_CACHE_SCHEMA: u8 = 2;
+
 fn cache_key(path: &Path, mtime_nanos: u128, len: u64, is_jsonl: bool) -> String {
     // Unit-separator joins so no field value can collide across boundaries.
     format!(
-        "{}\u{1f}{}\u{1f}{}\u{1f}{}",
+        "{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
         path.to_string_lossy(),
         mtime_nanos,
         len,
-        is_jsonl as u8
+        is_jsonl as u8,
+        SESSION_CACHE_SCHEMA
     )
 }
 

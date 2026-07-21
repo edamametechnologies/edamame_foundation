@@ -69,6 +69,15 @@ pub fn collect(home: &Path, options: &CollectOptions) -> anyhow::Result<CollectR
 
     let agent_instance_id = observer_agent_instance_id("claude_desktop", home);
     let now = Utc::now();
+    // One fleet-wide workspace for the chat surface: the Claude app-support
+    // instruction root (Codex-style workspace_hint). Without this, sessions
+    // carry an empty slug and drop out of the Augmentation / Enlightenment
+    // workspace strip after the workspace-only selector migration.
+    let workspace_hint = crate::supported_agents::find_supported_agent("claude_desktop")
+        .and_then(|a| a.resolve_instruction_root_with_home(home))
+        .filter(|p| p.is_dir())
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
 
     let mut candidates: Vec<GenericTranscriptCandidate> = Vec::new();
     if cowork_root.is_dir() {
@@ -154,9 +163,7 @@ pub fn collect(home: &Path, options: &CollectOptions) -> anyhow::Result<CollectR
                     context_tokens_used: None,
                     context_token_limit: None,
                     context_usage_percent: None,
-                    // Claude Desktop is a chat surface with no per-session
-                    // working directory; there is no workspace to augment.
-                    workspace_hint: String::new(),
+                    workspace_hint: workspace_hint.clone(),
                 }
             },
         ) {
