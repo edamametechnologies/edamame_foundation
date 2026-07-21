@@ -27,12 +27,12 @@ pub mod agent_visibility_params_db;
 pub mod backend;
 pub mod cloud_model_fallback;
 pub mod cve_detection_params_db;
+pub mod file_reveal;
 #[cfg(all(
     any(target_os = "macos", target_os = "windows", target_os = "linux"),
     feature = "fim"
 ))]
 pub mod fim_support;
-pub mod file_reveal;
 pub mod health;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub mod helper_proto;

@@ -7953,9 +7953,7 @@ skills/gtm-report and @rules/invariants.mdc.
             "OpenClaw"
         );
         assert_eq!(
-            workspace_display_label(Path::new(
-                "/Users/me/Library/Application Support/Claude"
-            )),
+            workspace_display_label(Path::new("/Users/me/Library/Application Support/Claude")),
             "Claude Desktop"
         );
         assert_eq!(

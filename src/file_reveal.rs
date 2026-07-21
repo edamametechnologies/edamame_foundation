@@ -51,11 +51,7 @@ pub fn reveal_path_in_file_manager(path: &str, home: &Path) -> RevealPathResult 
     match resolve_reveal_target(path, home) {
         Ok(target) => match open_in_file_manager(&target, home) {
             Ok(()) => {
-                info!(
-                    "file_reveal: opened {} (input={})",
-                    target.display(),
-                    path
-                );
+                info!("file_reveal: opened {} (input={})", target.display(), path);
                 RevealPathResult::ok(target.to_string_lossy())
             }
             Err(e) => RevealPathResult::err(target.to_string_lossy(), e.to_string()),
@@ -70,9 +66,8 @@ fn resolve_reveal_target(path: &str, home: &Path) -> Result<PathBuf> {
         return Err(anyhow!("empty path"));
     }
 
-    let looks_like_slug = trimmed.starts_with('-')
-        && !trimmed.contains('/')
-        && !trimmed.contains('\\');
+    let looks_like_slug =
+        trimmed.starts_with('-') && !trimmed.contains('/') && !trimmed.contains('\\');
 
     if looks_like_slug {
         for rel in [
@@ -107,19 +102,12 @@ fn resolve_reveal_target(path: &str, home: &Path) -> Result<PathBuf> {
             return ensure_under_home(parent.to_path_buf(), home);
         }
     }
-    Err(anyhow!(
-        "path not found under home: {}",
-        abs.display()
-    ))
+    Err(anyhow!("path not found under home: {}", abs.display()))
 }
 
 fn ensure_under_home(path: PathBuf, home: &Path) -> Result<PathBuf> {
-    let home_canon = home
-        .canonicalize()
-        .unwrap_or_else(|_| home.to_path_buf());
-    let path_canon = path
-        .canonicalize()
-        .unwrap_or_else(|_| path.clone());
+    let home_canon = home.canonicalize().unwrap_or_else(|_| home.to_path_buf());
+    let path_canon = path.canonicalize().unwrap_or_else(|_| path.clone());
     if !path_canon.starts_with(&home_canon) {
         return Err(anyhow!(
             "refusing to reveal path outside home: {}",
@@ -146,7 +134,9 @@ fn open_in_file_manager(path: &Path, home: &Path) -> Result<()> {
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         let _ = (path, home);
-        Err(anyhow!("reveal_path_in_file_manager unsupported on this platform"))
+        Err(anyhow!(
+            "reveal_path_in_file_manager unsupported on this platform"
+        ))
     }
 }
 

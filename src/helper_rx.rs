@@ -760,9 +760,7 @@ pub async fn rpc_run(
             }
             "collect_agent_visibility" => utility_collect_agent_visibility(arg1, arg2).await,
             "read_instruction_content" => utility_read_instruction_content(arg1, arg2).await,
-            "reveal_path_in_file_manager" => {
-                utility_reveal_path_in_file_manager(arg1, arg2).await
-            }
+            "reveal_path_in_file_manager" => utility_reveal_path_in_file_manager(arg1, arg2).await,
             "collect_workspace_inventory" => utility_collect_workspace_inventory(arg1, arg2).await,
             "confirm_absent_instruction_paths" => {
                 utility_confirm_absent_instruction_paths(arg1, arg2).await
