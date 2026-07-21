@@ -5666,9 +5666,9 @@ bob ALL=(ALL) NOPASSWD: ALL
         assert!(harnesses
             .iter()
             .all(|h| !h.detected && h.evidence.is_empty()));
-        // Stable, sorted slugs.
+        // Stable, sorted slugs (matches KNOWN_AGENT_HARNESSES after sort).
         let slugs: Vec<&str> = harnesses.iter().map(|h| h.slug.as_str()).collect();
-        assert_eq!(slugs, vec!["agentfield", "rippletide"]);
+        assert_eq!(slugs, vec!["agentfield", "nono", "rippletide", "srt"]);
     }
 
     #[test]
