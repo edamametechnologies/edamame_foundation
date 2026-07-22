@@ -3543,17 +3543,22 @@ pub fn is_ci_runner_workspace_committed_dotenv(path: &str) -> bool {
         .any(|p| !p.is_empty() && normalized.contains(p))
 }
 
-/// Returns true when BOTH `process_path` and `parent_process_path`
-/// lie inside one of the configured per-platform build-output trees
-/// (cargo `target/`, Flutter `build/<platform>/`, Gradle
-/// `build/outputs/`, Lima `edamame_posture_build/release/`, ...).
+/// Returns true when a process under a known build-output tree was
+/// launched in a benign CI/install shape (FP-CI-6):
 ///
-/// Used by the `sandbox_exploitation` detector to demote bare-lineage
-/// HIGH findings to LOW when the binary that just got spawned is
-/// clearly the freshly-built output of the parent build tool whose
-/// own staging tree it lives in (FP-CI-6). Both halves of the
-/// conjunction must match -- a single half is not enough to rule out
-/// a malicious dropper that happens to live in `/tmp/`.
+/// 1. **Self-spawn:** BOTH `process_path` AND `parent_process_path`
+///    match `build_output_tree_self_spawn_patterns` (cargo/flutter/
+///    gradle/Lima trees), OR
+/// 2. **Trusted launcher:** `process_path` matches a build-output
+///    pattern AND `parent_process_path` is an exact system privilege
+///    launcher (`/usr/bin/sudo`, `/bin/sudo`, `/usr/bin/doas`, ...).
+///    CI routinely runs just-built binaries via
+///    `sudo /tmp/.../target/release/edamame_posture`; requiring the
+///    parent to also live in the build tree missed that shape.
+///
+/// A `bash` from `/tmp/.hidden/` invoking a target binary still
+/// returns false -- parent is neither a build-tree path nor a
+/// trusted system launcher.
 ///
 /// Matching is case-insensitive and `\` is folded to `/` before the
 /// substring check, so a single canonical forward-slash form covers
@@ -3584,7 +3589,26 @@ pub fn is_build_output_tree_self_spawn(
             .any(|list| list.iter().any(|p| !p.is_empty() && path.contains(p)))
     };
 
-    path_matches(&proc) && path_matches(&parent)
+    if !path_matches(&proc) {
+        return false;
+    }
+    path_matches(&parent) || is_trusted_system_launcher_path(&parent)
+}
+
+/// Exact system privilege-launcher paths used to elevate a just-built
+/// CI binary. Path-exact (not basename) so a dropper named `sudo`
+/// under `/tmp/.hidden/` cannot inherit the carve-out.
+fn is_trusted_system_launcher_path(parent_path: &str) -> bool {
+    matches!(
+        parent_path,
+        "/usr/bin/sudo"
+            | "/bin/sudo"
+            | "/usr/bin/doas"
+            | "/usr/bin/runuser"
+            | "/usr/bin/systemd-run"
+            | "/bin/su"
+            | "/usr/bin/su"
+    )
 }
 
 /// Returns true if `egress_destination_domain` and/or
@@ -5623,6 +5647,22 @@ mod tests {
         assert!(!is_package_manager_temp_writer("bash"));
         assert!(!is_package_manager_temp_writer("powershell.exe"));
         assert!(!is_package_manager_temp_writer(""));
+    }
+
+    #[test]
+    fn test_build_output_tree_sudo_launcher() {
+        assert!(is_build_output_tree_self_spawn(
+            Some("/tmp/edamame_posture/target/release/edamame_posture"),
+            Some("/usr/bin/sudo"),
+        ));
+        assert!(is_build_output_tree_self_spawn(
+            Some("/tmp/edamame_posture/target/release/edamame_posture"),
+            Some("/tmp/edamame_posture/target/release/edamame_posture"),
+        ));
+        assert!(!is_build_output_tree_self_spawn(
+            Some("/tmp/edamame_posture/target/release/edamame_posture"),
+            Some("/tmp/.hidden/bash"),
+        ));
     }
 
     #[test]
