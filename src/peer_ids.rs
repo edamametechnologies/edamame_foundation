@@ -234,7 +234,7 @@ async fn discover_netbird() -> Vec<(String, String)> {
 async fn discover_netskope() -> Vec<(String, String)> {
     debug!("Checking for Netskope...");
     let nsconfig_path = if cfg!(target_os = "windows") {
-        r"C:\\ProgramData\\netskopestagent\\nsconfig.json"
+        r"C:\ProgramData\netskopestagent\nsconfig.json"
     } else if cfg!(target_os = "macos") {
         "/Library/Application Support/Netskope/STAgent/nsconfig.json"
     } else {
@@ -242,6 +242,10 @@ async fn discover_netskope() -> Vec<(String, String)> {
     };
 
     let mut out = Vec::new();
+    // Track the user key so we can assemble Netskope's composite device
+    // identifier (`<userkey>_<nsdeviceuid>`) once the provisioning device UID is
+    // discovered below.
+    let mut user_key: Option<String> = None;
 
     if Path::new(nsconfig_path).exists() {
         debug!("Netskope config file found: {}", nsconfig_path);
@@ -250,13 +254,14 @@ async fn discover_netskope() -> Vec<(String, String)> {
                 debug!("Netskope config file read: {}", nsconfig_path);
                 match serde_json::from_str::<Value>(&config_content) {
                     Ok(config) => {
-                        if let Some(user_key) = config
+                        if let Some(uk) = config
                             .get("clientConfig")
                             .and_then(|cc| cc.get("userkey"))
                             .and_then(|k| k.as_str())
                         {
-                            if !user_key.is_empty() {
-                                out.push(("netskope/userkey".into(), user_key.into()));
+                            if !uk.is_empty() {
+                                out.push(("netskope/userkey".into(), uk.into()));
+                                user_key = Some(uk.to_string());
                                 debug!("Found Netskope user key");
                             }
                         }
@@ -300,7 +305,115 @@ async fn discover_netskope() -> Vec<(String, String)> {
         debug!("Netskope config file not found: {}", nsconfig_path);
     }
 
+    // The provisioning "device UID" lives in a platform-specific store that is
+    // separate from nsconfig.json (macOS plist / Windows registry). Combined
+    // with the user key it forms Netskope's composite device identifier
+    // (`<userkey>_<nsdeviceuid>`), the value the Netskope backend keys devices on.
+    if let Some(device_uid) = discover_netskope_device_uid().await {
+        out.push(("netskope/nsdeviceuid".into(), device_uid.clone()));
+        debug!("Found Netskope device UID");
+        if let Some(user_key) = user_key.as_ref() {
+            out.push((
+                "netskope/device_id".into(),
+                format!("{}_{}", user_key, device_uid),
+            ));
+            debug!("Assembled Netskope composite device_id");
+        }
+    }
+
     out
+}
+
+/// Discover the Netskope provisioning **device UID** (`nsdeviceuid`).
+///
+/// This value is stored in a platform-specific *provisioning* store, distinct
+/// from `nsconfig.json` (which carries the user key, hostname and serial):
+///
+/// | Platform | Location | Field |
+/// |----------|----------|-------|
+/// | macOS    | `/Library/Preferences/com.netskope.provisioning.plist`   | `nsdeviceuid`   |
+/// | Windows  | `HKLM\SOFTWARE\NetSkope\Provisioning` (or WOW6432Node)   | `nsdeviceidnew` |
+/// | Linux    | not exposed by the Netskope client                       | (none)          |
+///
+/// Combined with the user key from `nsconfig.json`, `<userkey>_<nsdeviceuid>` is
+/// the composite device identifier Netskope uses on its backend.
+async fn discover_netskope_device_uid() -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        let plist_path = "/Library/Preferences/com.netskope.provisioning.plist";
+        if !Path::new(plist_path).exists() {
+            debug!("Netskope provisioning plist not found: {}", plist_path);
+            return None;
+        }
+        // `defaults` reads both binary and XML plists; the domain argument is the
+        // plist path WITHOUT the `.plist` suffix. No personation is required for a
+        // global /Library/Preferences store (get_peer_ids already gates on admin).
+        let cmd = "defaults read /Library/Preferences/com.netskope.provisioning nsdeviceuid";
+        match run_cli(cmd, "", false, Some(20)).await {
+            Ok(uid) => {
+                let uid = uid.trim().to_string();
+                if uid.is_empty() {
+                    debug!("Netskope nsdeviceuid present but empty (macOS)");
+                    None
+                } else {
+                    debug!("Found Netskope device UID (macOS provisioning plist)");
+                    Some(uid)
+                }
+            }
+            Err(e) => {
+                debug!("Netskope nsdeviceuid not readable (macOS plist): {}", e);
+                None
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        // Only spawn PowerShell if the Netskope client is actually installed.
+        let installed = Path::new(r"C:\ProgramData\netskopestagent").exists()
+            || Path::new(r"C:\ProgramData\Netskope").exists();
+        if !installed {
+            debug!("Netskope ProgramData directory not found; skipping registry probe");
+            return None;
+        }
+        // The Netskope client stores the provisioning device UID in the registry
+        // as `nsdeviceidnew`. A 32-bit client is redirected under WOW6432Node, so
+        // probe both the native and WOW64 views.
+        let cmd = r#"$v = $null
+foreach ($p in @('HKLM:\SOFTWARE\NetSkope\Provisioning','HKLM:\SOFTWARE\WOW6432Node\NetSkope\Provisioning')) {
+  try { $v = (Get-ItemProperty -Path $p -Name nsdeviceidnew -ErrorAction Stop).nsdeviceidnew } catch { }
+  if ($v) { break }
+}
+if ($v) { Write-Output $v } else { exit 1 }"#;
+        match run_cli(cmd, "", false, Some(20)).await {
+            Ok(uid) => {
+                let uid = uid.trim().to_string();
+                if uid.is_empty() {
+                    debug!("Netskope nsdeviceidnew present but empty (Windows)");
+                    None
+                } else {
+                    debug!("Found Netskope device UID (Windows registry)");
+                    Some(uid)
+                }
+            }
+            Err(e) => {
+                debug!(
+                    "Netskope nsdeviceidnew not readable (Windows registry): {}",
+                    e
+                );
+                None
+            }
+        }
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        // The Netskope Linux client does not expose a provisioning store for the
+        // device UID (only classification data under
+        // /opt/netskope/stagent/data/nsdeviceid.json), so there is nothing to read.
+        debug!("Netskope device UID discovery not supported on this platform");
+        None
+    }
 }
 
 /* -------------------------------------------------------------------------- */
