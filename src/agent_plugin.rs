@@ -241,7 +241,7 @@ async fn download_zipball(repo_name: &str) -> anyhow::Result<Vec<u8>> {
     let url = zipball_url(repo_name);
     info!("Downloading {} zipball from {}", repo_name, url);
 
-    let client = reqwest::Client::builder()
+    let client = threatmodels_rs::tls::client_builder()
         .user_agent("edamame-core/1.0")
         .redirect(reqwest::redirect::Policy::limited(10))
         .timeout(std::time::Duration::from_secs(120))

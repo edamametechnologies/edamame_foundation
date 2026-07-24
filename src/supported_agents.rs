@@ -430,7 +430,7 @@ fn try_load_remote_registry() -> Option<LoadedSupportedAgents> {
 }
 
 fn fetch_remote_registry(url: &str) -> Option<LoadedSupportedAgents> {
-    let client = match reqwest::blocking::Client::builder()
+    let client = match threatmodels_rs::tls::blocking_client_builder()
         .user_agent("edamame-foundation-supported-agents/1.0")
         .build()
     {

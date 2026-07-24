@@ -8,7 +8,12 @@ license = "Apache-2.0"
 async_fn_in_trait = "allow"
 
 [features]
-default = []
+default = ["platform_certs"]
+# Trust the OS/platform certificate store (system CAs, including enterprise
+# TLS-inspection proxies such as Netskope or Zscaler) for outbound HTTPS, via
+# the shared threatmodels_rs::tls helper. Propagates to flodbadd and covers
+# agent-plugin downloads and the supported-agent registry fetch. No-op on Android.
+platform_certs = ["threatmodels_rs/platform_certs", "flodbadd/platform_certs"]
 tokio-console = []
 packetcapture = [ "flodbadd/packetcapture" ]
 fim = [ "flodbadd/fim" ]
@@ -31,11 +36,11 @@ edamame_backend = { git = "https://github.com/edamametechnologies/edamame_backen
 #undeadlock = { path = "../undeadlock" }
 undeadlock = { git = "https://github.com/edamametechnologies/undeadlock", branch = "main" }
 # Local copy in order to allow rapid development/debug
-#flodbadd = { path = "../flodbadd" }
-flodbadd = { git = "https://github.com/edamametechnologies/flodbadd", branch = "main" }
+#flodbadd = { path = "../flodbadd", default-features = false }
+flodbadd = { git = "https://github.com/edamametechnologies/flodbadd", branch = "main", default-features = false }
 # Local copy in order to allow rapid development/debug
-#threatmodels_rs = { path = "../threatmodels-rs" }
-threatmodels_rs = { git = "https://github.com/edamametechnologies/threatmodels-rs", branch = "main" }
+#threatmodels_rs = { path = "../threatmodels-rs", default-features = false, features = ["blocking"] }
+threatmodels_rs = { git = "https://github.com/edamametechnologies/threatmodels-rs", branch = "main", default-features = false, features = ["blocking"] }
 
 # Sentry
 # Beware it will use reqwest with native-tls by default, not rustls
