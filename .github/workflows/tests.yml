@@ -597,6 +597,13 @@ jobs:
       - name: Manual checkout for containers
         shell: bash
         run: |
+          # Empty the working directory first so the clone is idempotent even
+          # when the container's workdir is a persistent bind mount (self-hosted
+          # runners) and a cancelled predecessor left a partial checkout behind.
+          # A bare `git clone . ` otherwise fails with "destination path '.'
+          # already exists and is not an empty directory" (exit 128). No-op on
+          # github-hosted ephemeral runners where the workdir is already empty.
+          find . -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
           git clone https://github.com/${{ github.repository }}.git .
           git checkout "${{ github.head_ref || github.ref_name }}"
 
