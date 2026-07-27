@@ -947,7 +947,8 @@ mod tests {
             let path = dir.join(name);
             let file = File::create(&path).unwrap();
             if aged {
-                file.set_times(FileTimes::new().set_modified(stale)).unwrap();
+                file.set_times(FileTimes::new().set_modified(stale))
+                    .unwrap();
             }
             path
         };
@@ -964,9 +965,18 @@ mod tests {
 
         assert!(!old.exists(), "aged log of a dead PID should be pruned");
         assert!(recent.exists(), "log inside the retention window must stay");
-        assert!(mine.exists(), "the current PID's own log must never be pruned");
-        assert!(other_stem.exists(), "another executable type must be left alone");
-        assert!(not_a_pid.exists(), "non-PID segment must not match the stem");
+        assert!(
+            mine.exists(),
+            "the current PID's own log must never be pruned"
+        );
+        assert!(
+            other_stem.exists(),
+            "another executable type must be left alone"
+        );
+        assert!(
+            not_a_pid.exists(),
+            "non-PID segment must not match the stem"
+        );
 
         // The "edamame" stem must not sweep the longer "edamame_posture_*"
         // names that share its prefix.
