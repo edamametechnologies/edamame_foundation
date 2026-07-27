@@ -5,12 +5,12 @@ use sentry_tracing::EventFilter;
 use std::{
     collections::{HashMap, VecDeque},
     env::{current_exe, var},
-    fs::{create_dir_all, File},
+    fs::{create_dir_all, read_dir, remove_file, File},
     io::{self, Write},
     mem::forget,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex, Once},
-    time::Instant,
+    time::{Duration, Instant, SystemTime},
 };
 use tracing::Level;
 #[cfg(target_os = "android")]
@@ -22,6 +22,70 @@ use tracing_subscriber::fmt;
 use tracing_subscriber::prelude::*;
 
 const MAX_LOG_LINES: usize = 20000;
+
+/// Days of rolling log history to keep, matching the `max_log_files` window
+/// on the daily appender below.
+const LOG_RETENTION_DAYS: u64 = 7;
+
+/// Delete this executable type's rolling log files older than
+/// [`LOG_RETENTION_DAYS`], regardless of which PID wrote them.
+///
+/// `RollingFileAppender::max_log_files` only prunes files matching the
+/// appender's own `filename_prefix`, and that prefix carries the PID. Each
+/// process therefore sees exactly one file and can never reclaim what earlier
+/// PIDs left behind, so a host that restarts the daemon often accumulates them
+/// without bound -- a CI runner starting one per job reached 7234 files and
+/// 17 GB in a week. The appender's own window still covers the single
+/// long-lived process that spans more than a week.
+fn prune_stale_logs(log_dir: &Path, stem: &str, current_pid: u32) {
+    let cutoff = match SystemTime::now()
+        .checked_sub(Duration::from_secs(LOG_RETENTION_DAYS * 24 * 60 * 60))
+    {
+        Some(cutoff) => cutoff,
+        None => return,
+    };
+    let entries = match read_dir(log_dir) {
+        Ok(entries) => entries,
+        Err(_) => return,
+    };
+
+    for entry in entries.flatten() {
+        let file_name = entry.file_name();
+        let file_name = match file_name.to_str() {
+            Some(name) => name,
+            None => continue,
+        };
+
+        // The appender writes "{stem}_{pid}.{YYYY-MM-DD}". Requiring a
+        // digits-only PID segment rather than a bare prefix match keeps the
+        // "edamame" stem from sweeping "edamame_posture_*" when both land in
+        // the same directory.
+        let head = match file_name.split('.').next() {
+            Some(head) => head,
+            None => continue,
+        };
+        let pid_segment = match head.strip_prefix(stem).and_then(|r| r.strip_prefix('_')) {
+            Some(pid_segment) => pid_segment,
+            None => continue,
+        };
+        if pid_segment.is_empty() || !pid_segment.bytes().all(|b| b.is_ascii_digit()) {
+            continue;
+        }
+        if pid_segment.parse::<u32>() == Ok(current_pid) {
+            continue;
+        }
+
+        // Another daemon may be pruning the same directory concurrently, so a
+        // file vanishing between the scan and the unlink is expected. Logging
+        // is not up yet either, so every failure here stays silent.
+        match entry.metadata().and_then(|m| m.modified()) {
+            Ok(modified) if modified < cutoff => {
+                let _ = remove_file(entry.path());
+            }
+            _ => {}
+        }
+    }
+}
 
 lazy_static! {
     static ref LOGGER: Mutex<Option<Arc<Logger>>> = Mutex::new(None);
@@ -594,6 +658,7 @@ pub fn init_logger(
         };
         // Add the PID to the basename
         let pid = std::process::id();
+        prune_stale_logs(&log_dir, basename, pid);
         let basename = format!("{}_{}", basename, pid);
         match RollingFileAppender::builder()
             .rotation(Rotation::DAILY)
@@ -868,6 +933,51 @@ pub fn get_all_logs() -> String {
 mod tests {
     use super::*;
     use tracing::{debug, error, info, trace, warn};
+
+    #[test]
+    fn test_prune_stale_logs() {
+        use std::fs::{self, FileTimes};
+
+        let dir = std::env::temp_dir().join(format!("edamame_prune_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let stale = SystemTime::now() - Duration::from_secs((LOG_RETENTION_DAYS + 1) * 86_400);
+        let write = |name: &str, aged: bool| {
+            let path = dir.join(name);
+            let file = File::create(&path).unwrap();
+            if aged {
+                file.set_times(FileTimes::new().set_modified(stale)).unwrap();
+            }
+            path
+        };
+
+        let old = write("edamame_posture_111.2026-01-01", true);
+        let recent = write("edamame_posture_222.2026-07-27", false);
+        let mine = write(&format!("edamame_posture_{}.2026-01-01", 999), true);
+        // A different executable type sharing the directory, and a name whose
+        // segment after the stem is not a PID: neither is ours to delete.
+        let other_stem = write("edamame_helper_333.2026-01-01", true);
+        let not_a_pid = write("edamame_posture_backup.2026-01-01", true);
+
+        prune_stale_logs(&dir, "edamame_posture", 999);
+
+        assert!(!old.exists(), "aged log of a dead PID should be pruned");
+        assert!(recent.exists(), "log inside the retention window must stay");
+        assert!(mine.exists(), "the current PID's own log must never be pruned");
+        assert!(other_stem.exists(), "another executable type must be left alone");
+        assert!(not_a_pid.exists(), "non-PID segment must not match the stem");
+
+        // The "edamame" stem must not sweep the longer "edamame_posture_*"
+        // names that share its prefix.
+        prune_stale_logs(&dir, "edamame", 0);
+        assert!(
+            not_a_pid.exists() && other_stem.exists(),
+            "shorter stem must not cross-match longer executable names"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn test_logger_functionality() {
