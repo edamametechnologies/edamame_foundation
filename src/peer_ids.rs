@@ -19,7 +19,7 @@ fn binary_exists(binary_name: &str) -> bool {
             // Also check with .exe extension on Windows
             #[cfg(target_os = "windows")]
             {
-                let exe_path = p.join(format!("'{}.exe'", binary_name.trim_end_matches(".exe")));
+                let exe_path = p.join(format!("{}.exe", binary_name.trim_end_matches(".exe")));
                 if exe_path.exists() {
                     return true;
                 }
@@ -276,17 +276,6 @@ async fn discover_netskope() -> Vec<(String, String)> {
                                 debug!("Found Netskope hostname: {}", hostname);
                             }
                         }
-                        if let Some(serial) = config
-                            .get("cache")
-                            .and_then(|cache| cache.get("device"))
-                            .and_then(|device| device.get("serial_num"))
-                            .and_then(|s| s.as_str())
-                        {
-                            if !serial.is_empty() {
-                                out.push(("netskope/serial".into(), serial.into()));
-                                debug!("Found Netskope serial: {}", serial);
-                            }
-                        }
                     }
                     Err(e) => {
                         warn!("Failed to parse Netskope config JSON: {}", e);
@@ -327,7 +316,7 @@ async fn discover_netskope() -> Vec<(String, String)> {
 /// Discover the Netskope provisioning **device UID** (`nsdeviceuid`).
 ///
 /// This value is stored in a platform-specific *provisioning* store, distinct
-/// from `nsconfig.json` (which carries the user key, hostname and serial):
+/// from `nsconfig.json` (which carries the user key and hostname):
 ///
 /// | Platform | Location | Field |
 /// |----------|----------|-------|
@@ -421,10 +410,21 @@ if ($v) { Write-Output $v } else { exit 1 }"#;
 /* -------------------------------------------------------------------------- */
 
 /// Try to discover peer- or gateway-IDs for the VPN / ZTNA agents that may be
-/// installed on the local host.  Runs entirely from userspace, never needs
-/// elevation; any missing binary, socket or registry key is simply skipped.
+/// installed on the local host. Any missing binary, socket or registry key is
+/// simply skipped.
 ///
-/// The tuple returned is always (vendor_tag, peer_or_gateway_id).
+/// **Requires elevation.** Several of the underlying stores are root-owned
+/// (`/Library/Preferences/com.netskope.provisioning.plist`, `HKLM\SOFTWARE\NetSkope`,
+/// the NetBird daemon socket), so a non-admin process returns an empty vec without
+/// probing anything. That is indistinguishable downstream from "no VPN client
+/// installed": the device simply never gets an ID, and the conditional-access
+/// trigger that matches on it silently skips the device.
+///
+/// The tuple returned is always (vendor_tag, peer_or_gateway_id). Every tag here is
+/// half of a wire contract -- the other half is the key the trigger engine reads
+/// (`edamame-services/adapters/accesscontrol/engine_trigger/src/internal/*.rs`) and
+/// the key list the Hub offers for exception policies. Renaming or removing a tag
+/// breaks matching silently, with no error on either side.
 pub async fn get_peer_ids(username: &str) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
 
