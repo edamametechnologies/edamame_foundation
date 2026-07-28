@@ -377,7 +377,8 @@ fn derive_findings(agent_type: &str, edges: &[DataFlowEdge]) -> Vec<VisibilityFi
             .with_evidence("sink_zone", top.sink_zone.as_str())
             .with_evidence("sink_auth", top.sink_auth.clone())
             .with_evidence("observed", top.observed.to_string())
-            .with_owasp(),
+            .with_owasp()
+            .with_atlas(),
         );
     }
     findings

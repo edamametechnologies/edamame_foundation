@@ -3,6 +3,7 @@
 pub mod admin;
 pub mod advisor;
 pub mod agent_a2a;
+pub mod agent_atlas;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub mod agent_cli_insight;
 pub mod agent_dataflow;

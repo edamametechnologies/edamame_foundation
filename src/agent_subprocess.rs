@@ -608,7 +608,10 @@ fn finding_for_observation(o: &AgentSubprocessObservation) -> VisibilityFinding 
     .with_evidence("criticality", o.criticality.as_str())
     .with_evidence("count", o.count.to_string())
     .with_evidence("source", o.source.as_str())
-    .with_evidence("owasp_refs", o.owasp_refs.as_str());
+    // OWASP refs come from the CloudModel category entry; ATLAS refs are derived
+    // in code from the `subprocess_<category>` rule_id.
+    .with_evidence("owasp_refs", o.owasp_refs.as_str())
+    .with_atlas();
     if !o.process_path.is_empty() {
         f = f.with_evidence("process_path", o.process_path.as_str());
     }

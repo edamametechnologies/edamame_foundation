@@ -327,7 +327,8 @@ fn derive_findings(peers: &[A2aPeer], edges: &[ConfusedDeputyEdge]) -> Vec<Visib
             .with_evidence("matched_on", p.matched_on.clone())
             .with_evidence("exposure", p.exposure.clone())
             .with_evidence("auth", p.auth.clone())
-            .with_owasp(),
+            .with_owasp()
+            .with_atlas(),
         );
     }
     // One rollup finding for confused-deputy edges (kept MEDIUM by design, so
@@ -349,7 +350,8 @@ fn derive_findings(peers: &[A2aPeer], edges: &[ConfusedDeputyEdge]) -> Vec<Visib
             )
             .with_evidence("src_zone", top.src_zone.clone())
             .with_evidence("dst_zone", top.dst_zone.clone())
-            .with_owasp(),
+            .with_owasp()
+            .with_atlas(),
         );
     }
     findings

@@ -512,7 +512,8 @@ fn derive_findings(
             .with_evidence("drift_score", format!("{:.2}", top.drift_score))
             .with_evidence("category", top.category.as_str())
             .with_evidence("event_id", top.event_id.clone())
-            .with_owasp(),
+            .with_owasp()
+            .with_atlas(),
         );
     }
 
@@ -545,7 +546,8 @@ fn derive_findings(
             .with_evidence("agent_type", agent_type)
             .with_evidence("drift_score", drift_score.clone())
             .with_evidence("event_id", deleg.event_id.clone())
-            .with_owasp(),
+            .with_owasp()
+            .with_atlas(),
         );
 
         // OWASP-ASI08 (cascading failures): deep / looping delegation can
@@ -565,7 +567,8 @@ fn derive_findings(
             .with_evidence("loop_detected", loop_detected.clone())
             .with_evidence("drift_score", drift_score.clone())
             .with_evidence("event_id", deleg.event_id.clone())
-            .with_owasp(),
+            .with_owasp()
+            .with_atlas(),
         );
 
         // OWASP-LLM10 (unbounded consumption): deep / looping delegation drives
@@ -585,7 +588,8 @@ fn derive_findings(
             .with_evidence("loop_detected", loop_detected)
             .with_evidence("drift_score", drift_score)
             .with_evidence("event_id", deleg.event_id.clone())
-            .with_owasp(),
+            .with_owasp()
+            .with_atlas(),
         );
     }
 

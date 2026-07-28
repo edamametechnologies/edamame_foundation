@@ -278,7 +278,8 @@ fn derive_findings(stores: &[MemoryStore]) -> Vec<VisibilityFinding> {
             .with_evidence("product", s.product.clone())
             .with_evidence("exposure", s.exposure.clone())
             .with_evidence("auth", s.auth.clone())
-            .with_owasp(),
+            .with_owasp()
+            .with_atlas(),
         );
     }
     findings

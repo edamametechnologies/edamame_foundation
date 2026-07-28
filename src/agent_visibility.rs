@@ -118,6 +118,20 @@ impl VisibilityFinding {
         }
         self
     }
+
+    /// Attach the MITRE ATLAS technique cross-reference tags for this finding's
+    /// `rule_id` as a metadata-only `atlas_refs` evidence entry (no-op when the
+    /// rule has no mapping). Same labeling-only contract as `with_owasp`: ATLAS
+    /// tags never change a finding's severity, the alertable gate, or the
+    /// finding key. Append `.with_atlas()` last in the builder chain at each
+    /// emitter site so it tags whatever rule the finding carries.
+    pub fn with_atlas(mut self) -> Self {
+        if let Some(refs) = atlas_refs_for_rule(&self.rule_id) {
+            self.evidence
+                .insert("atlas_refs".to_string(), refs.to_string());
+        }
+        self
+    }
 }
 
 /// Central mapping from a visibility `rule_id` to its OWASP GenAI
@@ -139,6 +153,103 @@ pub(crate) fn owasp_refs_for_rule(rule_id: &str) -> Option<&'static str> {
         _ if rule_id.starts_with("a2a_") => Some("OWASP-ASI07,OWASP-ASI08"),
         _ => None,
     }
+}
+
+/// Central mapping from a visibility `rule_id` to its MITRE ATLAS technique
+/// identifiers. Metadata only: consumed by `VisibilityFinding::with_atlas` to
+/// populate the `atlas_refs` evidence entry, which
+/// `agent_atlas::build_atlas_scorecard` then attributes to catalog rows.
+/// Returning `None` leaves a finding untagged rather than inventing a mapping.
+///
+/// Only techniques present in `agent_atlas::ATLAS_TECHNIQUES` may be emitted
+/// here -- `atlas_refs_resolve_against_catalog` enforces that, so a typo or an
+/// out-of-scope technique fails the build rather than silently producing a
+/// finding that no scorecard row can claim.
+///
+/// The `subprocess_*` arms are derived in code from the subprocess category
+/// rather than from `agent-visibility-params-db.json`: the category set is a
+/// closed enum owned by `agent_subprocess`, so mapping it here avoids widening
+/// the CloudModel schema for a value that cannot vary independently.
+pub(crate) fn atlas_refs_for_rule(rule_id: &str) -> Option<&'static str> {
+    match rule_id {
+        // Declared intent vs observed behavior mismatch: the runtime signature
+        // of a successful prompt injection or jailbreak.
+        "drift_goal_divergence" | "drift_recursion_escalation" => {
+            Some("AML.T0051,AML.T0054")
+        }
+        // Runaway agent loops burn provider quota and host resources.
+        "cascading_failure" | "unbounded_consumption" => Some("AML.T0034"),
+        "dataflow_sensitive_egress" => Some("AML.T0025,AML.T0057"),
+        "memory_poisoning_surface" => Some("AML.T0080"),
+        // An exposed MCP endpoint is a public-facing agent application whose
+        // tool surface is directly invocable.
+        _ if rule_id.starts_with("mcp_") => Some("AML.T0049,AML.T0053"),
+        _ if rule_id.starts_with("recursion_") => Some("AML.T0034"),
+        // Peer agents reachable across a trust boundary enable token reuse and
+        // agent-mediated command and control.
+        _ if rule_id.starts_with("a2a_") => Some("AML.T0091,AML.T0108"),
+        // Subprocess categories (closed set, see `agent_subprocess`).
+        "subprocess_remote_access" => Some("AML.T0072,AML.T0091"),
+        "subprocess_raw_network" => Some("AML.T0072,AML.T0025"),
+        "subprocess_http_fetch" => Some("AML.T0025,AML.T0075"),
+        "subprocess_shell" | "subprocess_interpreter" => Some("AML.T0050"),
+        "subprocess_vcs" => Some("AML.T0037,AML.T0025"),
+        "subprocess_package_manager" => Some("AML.T0010,AML.T0011"),
+        "subprocess_container" => Some("AML.T0105,AML.T0097"),
+        _ => None,
+    }
+}
+
+/// The closed universe of `rule_id`s any visibility domain can emit, including
+/// the `subprocess_<category>` set built in `agent_subprocess`. Adding a new
+/// emitter without adding it here fails
+/// `atlas_refs_cover_every_emitted_rule_and_tag_is_metadata_only`.
+#[cfg(test)]
+pub(crate) const EMITTED_VISIBILITY_RULE_IDS: &[&str] = &[
+    "mcp_public_no_strong_auth",
+    "mcp_remote_cleartext_transport",
+    "mcp_remote_saas_endpoint",
+    "mcp_lan_privileged_no_auth",
+    "mcp_unclassified_transport",
+    "recursion_same_purpose_loop",
+    "recursion_excessive_depth",
+    "recursion_excessive_fanout",
+    "drift_goal_divergence",
+    "drift_recursion_escalation",
+    "cascading_failure",
+    "unbounded_consumption",
+    "dataflow_sensitive_egress",
+    "memory_poisoning_surface",
+    "a2a_exposed_peer",
+    "a2a_confused_deputy",
+    "subprocess_remote_access",
+    "subprocess_raw_network",
+    "subprocess_http_fetch",
+    "subprocess_shell",
+    "subprocess_interpreter",
+    "subprocess_vcs",
+    "subprocess_package_manager",
+    "subprocess_container",
+];
+
+/// Every ATLAS technique ID reachable from a visibility finding, de-duplicated.
+///
+/// Used by `agent_atlas` to assert that no catalog row claims shipped
+/// (`Strong`) detection it cannot actually receive, and that no tag points at a
+/// technique the catalog does not carry.
+#[cfg(test)]
+pub(crate) fn all_atlas_tagged_ids() -> Vec<&'static str> {
+    let mut ids: Vec<&'static str> = Vec::new();
+    for rule in EMITTED_VISIBILITY_RULE_IDS {
+        if let Some(refs) = atlas_refs_for_rule(rule) {
+            for token in refs.split(',') {
+                if !ids.contains(&token) {
+                    ids.push(token);
+                }
+            }
+        }
+    }
+    ids
 }
 
 // ---------------------------------------------------------------------------
@@ -2319,7 +2430,8 @@ pub fn assess_mcp_risk(endpoints: &[McpEndpoint]) -> Vec<VisibilityFinding> {
                 .with_evidence("auth", format!("{:?}", ep.auth_strength))
                 .with_evidence("privilege_classes", privilege_summary.clone())
                 .with_evidence("config_path", ep.config_path.clone())
-                .with_owasp(),
+                .with_owasp()
+                .with_atlas(),
             );
         }
 
@@ -2360,7 +2472,8 @@ pub fn assess_mcp_risk(endpoints: &[McpEndpoint]) -> Vec<VisibilityFinding> {
                     .with_evidence("auth", format!("{:?}", ep.auth_strength))
                     .with_evidence("privilege_classes", privilege_summary.clone())
                     .with_evidence("config_path", ep.config_path.clone())
-                    .with_owasp(),
+                    .with_owasp()
+                    .with_atlas(),
                 );
             } else {
                 let severity = if high_priv && matches!(ep.auth_strength, AuthStrength::None) {
@@ -2386,7 +2499,8 @@ pub fn assess_mcp_risk(endpoints: &[McpEndpoint]) -> Vec<VisibilityFinding> {
                     .with_evidence("auth", format!("{:?}", ep.auth_strength))
                     .with_evidence("privilege_classes", privilege_summary.clone())
                     .with_evidence("config_path", ep.config_path.clone())
-                    .with_owasp(),
+                    .with_owasp()
+                    .with_atlas(),
                 );
             }
         }
@@ -2412,7 +2526,8 @@ pub fn assess_mcp_risk(endpoints: &[McpEndpoint]) -> Vec<VisibilityFinding> {
                 .with_evidence("agent_type", ep.agent_type.clone())
                 .with_evidence("privilege_classes", privilege_summary.clone())
                 .with_evidence("config_path", ep.config_path.clone())
-                .with_owasp(),
+                .with_owasp()
+                .with_atlas(),
             );
         }
 
@@ -2433,7 +2548,8 @@ pub fn assess_mcp_risk(endpoints: &[McpEndpoint]) -> Vec<VisibilityFinding> {
                 .with_evidence("server_name", ep.server_name.clone())
                 .with_evidence("agent_type", ep.agent_type.clone())
                 .with_evidence("config_path", ep.config_path.clone())
-                .with_owasp(),
+                .with_owasp()
+                .with_atlas(),
             );
         }
     }
@@ -5331,7 +5447,8 @@ pub fn analyze_delegation(
             .with_evidence("max_depth", tree.max_depth.to_string())
             .with_evidence("max_repeat", max_repeat.to_string())
             .with_evidence("total_nodes", tree.total_nodes.to_string())
-            .with_owasp(),
+            .with_owasp()
+            .with_atlas(),
         );
     } else if tree.max_depth >= thresholds.depth_high {
         tree.findings.push(
@@ -5348,7 +5465,8 @@ pub fn analyze_delegation(
             )
             .with_evidence("agent_type", agent_type.to_string())
             .with_evidence("max_depth", tree.max_depth.to_string())
-            .with_owasp(),
+            .with_owasp()
+            .with_atlas(),
         );
     } else if fan_out >= thresholds.fanout_high {
         tree.findings.push(
@@ -5366,7 +5484,8 @@ pub fn analyze_delegation(
             .with_evidence("agent_type", agent_type.to_string())
             .with_evidence("fan_out", fan_out.to_string())
             .with_evidence("max_depth", tree.max_depth.to_string())
-            .with_owasp(),
+            .with_owasp()
+            .with_atlas(),
         );
     }
 
@@ -6129,6 +6248,61 @@ bob ALL=(ALL) NOPASSWD: ALL
         )
         .with_owasp();
         assert!(!untagged.evidence.contains_key("owasp_refs"));
+    }
+
+    #[test]
+    fn atlas_refs_cover_every_emitted_rule_and_tag_is_metadata_only() {
+        // Twin of the OWASP test above: every rule_id emitted by a visibility
+        // domain MUST resolve to an ATLAS mapping, including the closed set of
+        // `subprocess_<category>` rules built in `agent_subprocess`.
+        for rule in EMITTED_VISIBILITY_RULE_IDS.iter().copied() {
+            let refs = atlas_refs_for_rule(rule)
+                .unwrap_or_else(|| panic!("rule_id '{}' has no ATLAS mapping", rule));
+            // Every emitted token must be a well-formed parent technique ID so it
+            // joins a scorecard row rather than silently dropping out.
+            for token in refs.split(',') {
+                assert!(
+                    token.starts_with("AML.T") && token.len() == "AML.T0000".len(),
+                    "rule_id '{}' emits malformed ATLAS token '{}'",
+                    rule,
+                    token
+                );
+            }
+        }
+        // An unmapped rule_id stays untagged rather than getting a bogus mapping.
+        assert!(atlas_refs_for_rule("definitely_unmapped_rule_xyz").is_none());
+
+        // `with_atlas` is metadata-only: it adds the `atlas_refs` evidence entry
+        // and changes nothing else, so the ATLAS tag is never a new alert source.
+        let base = VisibilityFinding::new(
+            "drift",
+            "cascading_failure",
+            VisibilitySeverity::High,
+            "subj-1",
+            "t",
+            "d",
+        );
+        let key_before = base.finding_key.clone();
+        let sev_before = base.severity;
+        let tagged = base.with_atlas();
+        assert_eq!(
+            tagged.evidence.get("atlas_refs").map(String::as_str),
+            Some("AML.T0034")
+        );
+        assert_eq!(tagged.finding_key, key_before);
+        assert_eq!(tagged.severity, sev_before);
+
+        // Unmapped rule_id -> no `atlas_refs` key inserted (pure no-op).
+        let untagged = VisibilityFinding::new(
+            "graph",
+            "definitely_unmapped_rule_xyz",
+            VisibilitySeverity::Low,
+            "subj-2",
+            "t",
+            "d",
+        )
+        .with_atlas();
+        assert!(!untagged.evidence.contains_key("atlas_refs"));
     }
 
     #[test]
