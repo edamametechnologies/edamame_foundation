@@ -322,7 +322,11 @@ async fn discover_netskope() -> Vec<(String, String)> {
 /// |----------|----------|-------|
 /// | macOS    | `/Library/Preferences/com.netskope.provisioning.plist`   | `nsdeviceuid`   |
 /// | Windows  | `HKLM\SOFTWARE\NetSkope\Provisioning` (or WOW6432Node)   | `nsdeviceidnew` |
-/// | Linux    | not exposed by the Netskope client                       | (none)          |
+/// | Linux    | `/opt/netskope/stagent/provisioning`                     | `nsdeviceid`    |
+///
+/// Three spellings of the same value; only the Linux store is a flat
+/// `key=value` file. All three are root-owned, which is part of why
+/// `get_peer_ids` gates on elevation.
 ///
 /// Combined with the user key from `nsconfig.json`, `<userkey>_<nsdeviceuid>` is
 /// the composite device identifier Netskope uses on its backend.
@@ -397,11 +401,47 @@ if ($v) { Write-Output $v } else { exit 1 }"#;
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
-        // The Netskope Linux client does not expose a provisioning store for the
-        // device UID (only classification data under
-        // /opt/netskope/stagent/data/nsdeviceid.json), so there is nothing to read.
-        debug!("Netskope device UID discovery not supported on this platform");
-        None
+        // Flat `key=value` file, root-owned 0600, written by stAgentSvc at install
+        // time from the DMI serial -- so it is present before the client enrolls,
+        // and independent of whether it ever does.
+        //
+        // Not to be confused with /opt/netskope/stagent/data/nsdeviceid.json, which
+        // despite the name holds device *classification* rules, not this value.
+        let provisioning_path = "/opt/netskope/stagent/provisioning";
+        if !Path::new(provisioning_path).exists() {
+            debug!(
+                "Netskope provisioning file not found: {}",
+                provisioning_path
+            );
+            return None;
+        }
+        match read_file_with_timeout(provisioning_path).await {
+            Ok(contents) => {
+                let uid = contents.lines().find_map(|line| {
+                    line.trim()
+                        .strip_prefix("nsdeviceid=")
+                        .map(str::trim)
+                        .filter(|uid| !uid.is_empty())
+                });
+                match uid {
+                    Some(uid) => {
+                        debug!("Found Netskope device UID (Linux provisioning file)");
+                        Some(uid.to_string())
+                    }
+                    None => {
+                        debug!("Netskope provisioning file has no non-empty nsdeviceid (Linux)");
+                        None
+                    }
+                }
+            }
+            Err(e) => {
+                debug!(
+                    "Netskope provisioning file not readable ({}): {}",
+                    provisioning_path, e
+                );
+                None
+            }
+        }
     }
 }
 

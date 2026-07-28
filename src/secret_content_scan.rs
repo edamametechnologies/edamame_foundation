@@ -199,9 +199,15 @@ pub fn inspect_secret_like_file(path: &str) -> Option<SecretContentFileMatch> {
     })
 }
 
-/// Result of scanning agent transcript text for secret exposure (BR-1).
-/// Carries only labels and hit counts -- NEVER the matched content itself
-/// (transcript bodies must not leave the parser; I5 invariant).
+/// Result of scanning agent transcript text for secret exposure (BR-1) or
+/// prompt-injection bait (BR-2).
+///
+/// Carries labels, hit counts, and (for prompt-injection only) the matched
+/// signature marker phrases. Transcript bodies / surrounding excerpts NEVER
+/// leave the parser (I5). Matched markers are taken from the public CloudModel
+/// signature list itself (e.g. `"do not tell the user"`), not from transcript
+/// content, so operators and agents can grep for the exact bait without a
+/// blind rediscovery pass.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TranscriptSecretExposure {
     /// Sorted, deduplicated signature labels that matched
@@ -209,6 +215,11 @@ pub struct TranscriptSecretExposure {
     pub labels: Vec<String>,
     /// Total signature hits (weighted per the signature's `hits` field).
     pub hits: u64,
+    /// Sorted, deduplicated signature marker phrases that matched. Populated
+    /// only by the prompt-injection scan; always empty for secret scans
+    /// (value-prefix markers sit next to credentials). These are the tunable
+    /// marker strings themselves, never a transcript excerpt.
+    pub matched_markers: Vec<String>,
 }
 
 /// Scan raw agent transcript text for high-precision secret markers (BR-1
@@ -230,6 +241,7 @@ pub fn scan_transcript_text_for_secrets(text: &str) -> TranscriptSecretExposure 
     match_signatures_in_text(
         text,
         &crate::agent_visibility_params::transcript_secret_signatures(),
+        false, // never surface markers next to credential values (I5)
     )
 }
 
@@ -243,13 +255,17 @@ pub fn scan_transcript_text_for_secrets(text: &str) -> TranscriptSecretExposure 
 /// hit means bait text entered the agent's context window -- the
 /// precondition for a successful injection. Consequence detection
 /// (divergence verdicts, cross-boundary egress) remains the durable
-/// backstop; this is the deterministic leading indicator. Labels only --
-/// the matched content never leaves the parser. Same pure single-pass
-/// matching as the secret scan.
+/// backstop; this is the deterministic leading indicator.
+///
+/// Returns the matched signature marker phrases (from the public tunable
+/// list) so the UI / remediation prompt can point at the exact bait without
+/// rediscovering it. Surrounding transcript excerpts still never leave the
+/// parser (I5). Same pure single-pass matching as the secret scan.
 pub fn scan_transcript_text_for_prompt_injection(text: &str) -> TranscriptSecretExposure {
     match_signatures_in_text(
         text,
         &crate::agent_visibility_params::prompt_injection_signatures(),
+        true, // surface which public bait phrases matched
     )
 }
 
@@ -338,15 +354,22 @@ fn marker_present(normalized: &str, marker: &str) -> bool {
 /// prompt-injection scans: one lowercase pass + literal `contains` per marker
 /// (value-prefix markers additionally require a real token body via
 /// [`marker_present`]), no I/O, no regex.
+///
+/// When `capture_markers` is true, every individual marker phrase that
+/// matched is recorded in [`TranscriptSecretExposure::matched_markers`]
+/// (sorted, deduped). Those strings come from the signature list itself --
+/// never a transcript excerpt.
 fn match_signatures_in_text(
     text: &str,
     signatures: &[vuln_detector_params::SecretContentSignatureJSON],
+    capture_markers: bool,
 ) -> TranscriptSecretExposure {
     if text.is_empty() {
         return TranscriptSecretExposure::default();
     }
     let normalized = text.to_ascii_lowercase();
     let mut labels = BTreeSet::new();
+    let mut matched_markers = BTreeSet::new();
     let mut hits: u64 = 0;
     for signature in signatures {
         if signature.markers.is_empty() {
@@ -371,16 +394,27 @@ fn match_signatures_in_text(
                 if marker_present(&normalized, marker.as_str()) {
                     labels.insert(signature.label.clone());
                     hits += signature.hits as u64;
+                    if capture_markers {
+                        matched_markers.insert(marker.clone());
+                    }
                 }
             }
         } else {
             labels.insert(signature.label.clone());
             hits += signature.hits as u64;
+            if capture_markers {
+                for marker in &signature.markers {
+                    if marker_present(&normalized, marker.as_str()) {
+                        matched_markers.insert(marker.clone());
+                    }
+                }
+            }
         }
     }
     TranscriptSecretExposure {
         labels: labels.into_iter().collect(),
         hits,
+        matched_markers: matched_markers.into_iter().collect(),
     }
 }
 

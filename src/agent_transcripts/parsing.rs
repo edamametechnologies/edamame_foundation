@@ -1930,6 +1930,7 @@ pub fn parse_session_economics(
         secret_exposure_hits: secret_exposure.hits,
         prompt_injection_labels: prompt_injection.labels,
         prompt_injection_hits: prompt_injection.hits,
+        prompt_injection_markers: prompt_injection.matched_markers,
         prompt_maturity_constraints: craft.prompt_maturity_constraints,
         prompt_maturity_success_criteria: craft.prompt_maturity_success_criteria,
         prompt_maturity_verification: craft.prompt_maturity_verification,
@@ -3085,6 +3086,20 @@ mod economics_tests {
             ]
         );
         assert!(econ.prompt_injection_hits >= 3);
+        // Matched markers are the public signature phrases themselves so the
+        // remediation prompt can point at the exact bait (not a blind hunt).
+        assert!(econ
+            .prompt_injection_markers
+            .iter()
+            .any(|m| m == "ignore all previous instructions"));
+        assert!(econ
+            .prompt_injection_markers
+            .iter()
+            .any(|m| m == "reveal your system prompt"));
+        assert!(econ
+            .prompt_injection_markers
+            .iter()
+            .any(|m| m == "do not tell the user"));
     }
 
     #[test]
@@ -3096,5 +3111,6 @@ mod economics_tests {
         let econ = parse_session_economics("p2", "/tmp/p2.jsonl", jsonl);
         assert!(econ.prompt_injection_labels.is_empty());
         assert_eq!(econ.prompt_injection_hits, 0);
+        assert!(econ.prompt_injection_markers.is_empty());
     }
 }

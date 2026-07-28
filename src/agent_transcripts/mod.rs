@@ -479,11 +479,17 @@ pub struct SessionEconomics {
     /// `system_prompt_exfil`, `covert_instruction`, `role_override`).
     /// Matching uses the deterministic `prompt_injection_signatures` tunable.
     /// Non-empty means injection bait ENTERED the agent's context window --
-    /// the OWASP ASI01/LLM01 leading indicator (BR-2). Labels only, never
-    /// content.
+    /// the OWASP ASI01/LLM01 leading indicator (BR-2).
     pub prompt_injection_labels: Vec<String>,
     /// Total prompt-injection signature hits behind `prompt_injection_labels`.
     pub prompt_injection_hits: u64,
+    /// Sorted, deduplicated signature marker phrases that matched
+    /// (e.g. `"do not tell the user"`, `"ignore all previous instructions"`).
+    /// These are the public tunable marker strings themselves -- NOT a
+    /// transcript excerpt (I5). Empty when no injection bait matched.
+    /// Surfaced so the UI / remediation prompt can point at the exact bait
+    /// without a blind rediscovery pass.
+    pub prompt_injection_markers: Vec<String>,
 
     // ---- Craft heuristics (prompt / workflow quality; deterministic) --------
     //
