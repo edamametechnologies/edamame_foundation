@@ -174,9 +174,7 @@ pub(crate) fn atlas_refs_for_rule(rule_id: &str) -> Option<&'static str> {
     match rule_id {
         // Declared intent vs observed behavior mismatch: the runtime signature
         // of a successful prompt injection or jailbreak.
-        "drift_goal_divergence" | "drift_recursion_escalation" => {
-            Some("AML.T0051,AML.T0054")
-        }
+        "drift_goal_divergence" | "drift_recursion_escalation" => Some("AML.T0051,AML.T0054"),
         // Runaway agent loops burn provider quota and host resources.
         "cascading_failure" | "unbounded_consumption" => Some("AML.T0034"),
         "dataflow_sensitive_egress" => Some("AML.T0025,AML.T0057"),

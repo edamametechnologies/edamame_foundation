@@ -909,11 +909,7 @@ mod tests {
     #[test]
     fn every_row_declares_its_primary_tactic_first() {
         for e in ATLAS_CATALOG {
-            assert!(
-                !e.tactics.is_empty(),
-                "{} declares no tactics",
-                e.id
-            );
+            assert!(!e.tactics.is_empty(), "{} declares no tactics", e.id);
             assert_eq!(
                 e.tactics[0], e.tactic,
                 "{} groups under {} but lists {} first",
@@ -1115,7 +1111,10 @@ mod tests {
         assert_eq!(card.techniques_with_findings, 0);
         assert_eq!(card.tactics.len(), EXPECTED_TACTIC_ORDER.len());
         let rows: usize = card.tactics.iter().map(|t| t.rows.len()).sum();
-        assert_eq!(rows, 39, "every catalog row must render even with no findings");
+        assert_eq!(
+            rows, 39,
+            "every catalog row must render even with no findings"
+        );
         for t in &card.tactics {
             for r in &t.rows {
                 assert_eq!(r.worst_severity, "NONE");
