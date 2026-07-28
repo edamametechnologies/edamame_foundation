@@ -84,6 +84,7 @@ jobs:
           edamame_pin: ${{ secrets.EDAMAME_POSTURE_PIN }}
           edamame_id: ${{ github.run_id }}
           checkout: true
+          wait_for_api: true
           packet_capture: true
           vulnerability_detection: true
           vulnerability_detection_interval: "60"
