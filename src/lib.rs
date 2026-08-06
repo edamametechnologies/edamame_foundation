@@ -20,6 +20,7 @@ pub mod agent_trust_controls;
 pub mod agent_visibility;
 pub mod agent_visibility_params;
 pub mod agent_visibility_params_db;
+pub mod ai_failure_facts;
 pub mod backend;
 pub mod cloud_model_fallback;
 pub mod cve_detection_params_db;

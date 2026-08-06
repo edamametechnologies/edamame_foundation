@@ -794,6 +794,15 @@ const KNOWN_AGENT_HARNESSES: &[(&str, &str, &[&str], &[&str])] = &[
     ("srt", "Anthropic Sandbox Runtime", &[".srt"], &["srt"]),
 ];
 
+/// Stable slugs for every known harness row (detected or not). Used by AI
+/// Governance `expected_harness` failure facts.
+pub const KNOWN_AGENT_HARNESS_SLUGS: &[&str] = &["agentfield", "rippletide", "nono", "srt"];
+
+/// Iterator-friendly access to [`KNOWN_AGENT_HARNESS_SLUGS`].
+pub fn known_agent_harness_slugs() -> impl Iterator<Item = &'static str> {
+    KNOWN_AGENT_HARNESS_SLUGS.iter().copied()
+}
+
 /// Standard per-user "bin" directories (relative to `$HOME`) where a harness
 /// CLI may live without being on the privileged process's `$PATH` -- so the
 /// helper running as root can still find a binary the user installed under
@@ -2552,6 +2561,53 @@ pub fn assess_mcp_risk(endpoints: &[McpEndpoint]) -> Vec<VisibilityFinding> {
         }
     }
     findings
+}
+
+/// One alertable MCP exposure, reduced to the metadata the `mcp_risk` score
+/// threat and its Hub failure facts need.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct McpRiskEndpoint {
+    /// Rule that fired (`mcp_public_no_strong_auth`, …).
+    pub rule_id: String,
+    /// Configured MCP server name, as written in the agent config.
+    pub server_name: String,
+    /// Agent declaring this server.
+    pub agent_type: String,
+    /// True when the finding graded CRITICAL rather than HIGH.
+    pub critical: bool,
+}
+
+/// Reduce a visibility bundle's findings to the alertable MCP exposures that
+/// drive the `mcp_risk` internal threat. The deterministic rule lives here
+/// rather than in `edamame_core` (invariant I3), so the score threat and the
+/// Agents-tab surface cannot disagree about what counts as an exposure.
+///
+/// Alertable means HIGH/CRITICAL, matching [`VisibilitySeverity::is_alertable`]
+/// and the attack-pattern detector's gate. Today that is
+/// `mcp_public_no_strong_auth`, `mcp_remote_cleartext_transport`, and
+/// `mcp_lan_privileged_no_auth`. The LOW/MEDIUM `mcp` rules
+/// (`mcp_remote_saas_endpoint`, `mcp_unclassified_transport`) stay visible in
+/// the Agents tab but never move the score: trusting a TLS SaaS vendor is an
+/// operator decision, and an unclassified transport is a visibility gap rather
+/// than an exposure.
+pub fn alertable_mcp_risks(findings: &[VisibilityFinding]) -> Vec<McpRiskEndpoint> {
+    let mut risks: Vec<McpRiskEndpoint> = findings
+        .iter()
+        .filter(|f| f.domain == "mcp" && f.severity.is_alertable())
+        .map(|f| McpRiskEndpoint {
+            rule_id: f.rule_id.clone(),
+            server_name: f
+                .evidence
+                .get("server_name")
+                .cloned()
+                .unwrap_or_else(|| f.subject_id.clone()),
+            agent_type: f.evidence.get("agent_type").cloned().unwrap_or_default(),
+            critical: matches!(f.severity, VisibilitySeverity::Critical),
+        })
+        .collect();
+    risks.sort();
+    risks.dedup();
+    risks
 }
 
 // ---------------------------------------------------------------------------
@@ -6390,6 +6446,44 @@ bob ALL=(ALL) NOPASSWD: ALL
             .expect("cleartext finding present");
         assert_eq!(cleartext.severity, VisibilitySeverity::High);
         assert!(cleartext.severity.is_alertable());
+    }
+
+    #[test]
+    fn alertable_mcp_risks_keeps_only_high_and_critical() {
+        // One alertable bind-all server and one benign TLS SaaS endpoint: only
+        // the former may move the `mcp_risk` score threat.
+        let findings = assess_mcp_risk(&[
+            endpoint_from_json(
+                "cursor",
+                "localsrv",
+                r#"{"url":"http://0.0.0.0:8080/mcp","type":"http"}"#,
+            ),
+            endpoint_from_json(
+                "claude_code",
+                "vendor",
+                r#"{"url":"https://api.example.com/mcp","type":"http"}"#,
+            ),
+        ]);
+        let risks = alertable_mcp_risks(&findings);
+        assert_eq!(risks.len(), 1);
+        assert_eq!(risks[0].rule_id, "mcp_public_no_strong_auth");
+        assert_eq!(risks[0].server_name, "localsrv");
+        assert_eq!(risks[0].agent_type, "cursor");
+        assert!(!risks[0].critical);
+    }
+
+    #[test]
+    fn alertable_mcp_risks_marks_high_privilege_as_critical() {
+        // Bind-all + high-privilege tooling grades CRITICAL upstream; the
+        // reduction must carry that through for the evidence string.
+        let findings = assess_mcp_risk(&[endpoint_from_json(
+            "cursor",
+            "shell",
+            r#"{"url":"http://0.0.0.0:8080/mcp","type":"http"}"#,
+        )]);
+        let risks = alertable_mcp_risks(&findings);
+        assert_eq!(risks.len(), 1);
+        assert!(risks[0].critical);
     }
 
     #[test]
