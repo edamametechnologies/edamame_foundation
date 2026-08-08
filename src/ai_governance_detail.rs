@@ -86,8 +86,7 @@ impl EvidenceBuilder {
         }
         selectors.sort();
         selectors.dedup();
-        self.causes
-            .push(FailureCauseBackend::new(scope, selectors));
+        self.causes.push(FailureCauseBackend::new(scope, selectors));
     }
 
     fn context(&mut self, kind: CheckContextKindBackend, key: &str, scope: &str) {
@@ -215,7 +214,10 @@ fn push_blast_radius_causes(
             if processes.is_empty() {
                 // Observed but unattributed: the amplifier is the only name we
                 // have for the condition.
-                builder.cause(&scope, vec![(Kind::Amplifier, "critical_subprocess".into())]);
+                builder.cause(
+                    &scope,
+                    vec![(Kind::Amplifier, "critical_subprocess".into())],
+                );
             } else {
                 for process in processes {
                     // Pairing the leaf with the amplifier is what makes
@@ -501,7 +503,10 @@ mod tests {
             ("cursor".to_string(), noisy),
             ("codex".to_string(), vec!["ssh".to_string()]),
         ]);
-        let agents = vec![agent("cursor", false, true, &[]), agent("codex", false, true, &[])];
+        let agents = vec![
+            agent("cursor", false, true, &[]),
+            agent("codex", false, true, &[]),
+        ];
         let evidence = detail_for_blast_radius(&agents, &procs);
 
         assert_eq!(evidence.causes.len(), MAX_FAILURE_CAUSES);
@@ -599,7 +604,10 @@ mod tests {
             &BTreeMap::new(),
         );
 
-        assert_eq!(tokens(&evidence.causes[0]), vec!["amplifier:passwordless_root"]);
+        assert_eq!(
+            tokens(&evidence.causes[0]),
+            vec!["amplifier:passwordless_root"]
+        );
         let context: Vec<String> = evidence.context.iter().map(|c| c.token()).collect();
         assert_eq!(context, vec!["harness:nono", "harness:srt"]);
         // A harness cannot be whitelisted, so it must not look like a selector.
@@ -618,7 +626,10 @@ mod tests {
             &[agent("cursor", true, false, &[])],
             &BTreeMap::new(),
         );
-        assert_eq!(tokens(cause_for(&evidence, "codex", "harness_state:diverging").unwrap()).len(), 1);
+        assert_eq!(
+            tokens(cause_for(&evidence, "codex", "harness_state:diverging").unwrap()).len(),
+            1
+        );
     }
 
     #[test]
