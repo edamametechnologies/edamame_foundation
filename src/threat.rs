@@ -1,4 +1,4 @@
-use edamame_backend::detail_backend::FailureFactBackend;
+use edamame_backend::detail_backend::CheckDetailBackend;
 use edamame_backend::threat_backend::*;
 use serde::{Deserialize, Serialize};
 use threatmodels_rs::CloudDate;
@@ -162,13 +162,15 @@ pub struct ThreatMetric {
     pub status: ThreatStatus,
     // Track the output of the order (not exported to the backend)
     pub output: String,
-    /// Structured AI failure facts for Active AI posture checks. Empty when
-    /// Inactive/Unknown or non-AI. Not a CloudModel field, and not carried on
-    /// [`ThreatMetricBackend`]: the Hub receives facts collated per domain in
-    /// `DetailedScoreBackend.details`, where consent gates them in one place.
-    pub failure_facts: Vec<FailureFactBackend>,
-    /// True when emit-time capping dropped additional facts.
-    pub failure_facts_truncated: bool,
+    /// Governance evidence for this check, cached at capture time so the report
+    /// carries what was observed then rather than whatever the runners hold when
+    /// the report is finally sent. `None` for non-AI checks and for AI checks
+    /// that are not Active.
+    ///
+    /// Not a CloudModel field, and not carried on [`ThreatMetricBackend`]: the
+    /// Hub receives this collated per domain in `DetailedScoreBackend.details`,
+    /// where consent gates it in one place.
+    pub ai_detail: Option<CheckDetailBackend>,
 }
 
 impl ThreatMetric {
@@ -178,15 +180,8 @@ impl ThreatMetric {
             timestamp: "".to_string(),
             status: ThreatStatus::Unknown,
             output: "".to_string(),
-            failure_facts: Vec::new(),
-            failure_facts_truncated: false,
+            ai_detail: None,
         }
-    }
-
-    /// Clear failure facts (check flipped Inactive, or re-evaluated).
-    pub fn clear_failure_facts(&mut self) {
-        self.failure_facts.clear();
-        self.failure_facts_truncated = false;
     }
 }
 

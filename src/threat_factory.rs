@@ -109,8 +109,7 @@ impl ThreatMetrics {
                 timestamp: "".to_string(),
                 status: ThreatStatus::Unknown,
                 output: "".to_string(),
-                failure_facts: Vec::new(),
-                failure_facts_truncated: false,
+                ai_detail: None,
             };
             metrics.push(metric);
         }
