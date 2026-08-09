@@ -25,11 +25,19 @@
 //! See `edamame_core/AIGOVERNANCE.md`.
 
 use crate::agent_subprocess::normalize_process_basename;
-use crate::agent_visibility::{BlastRadiusAgent, McpRiskEndpoint};
+use crate::agent_visibility::{
+    AgentHarness, AgentSandbox, AuthStrength, BlastRadiusAgent, ExposureScope, HostPrivilege,
+    McpEndpoint, McpRiskEndpoint, VisibilityFinding, VisibilitySeverity,
+};
 use edamame_backend::detail_backend::{
-    CheckContextBackend, CheckContextKindBackend, CheckDetailBackend, CoverageKindBackend,
-    CoverageRowBackend, FailureCauseBackend, FailureSelectorBackend, FailureSelectorKindBackend,
-    MAX_FAILURE_CAUSES,
+    AiAgentInventoryBackend, AiAmplifiersInventoryBackend, AiHarnessInventoryBackend,
+    AiHostInventoryBackend, AiInventoryBackend, AiMcpServerInventoryBackend,
+    AiSandboxInventoryBackend, CheckContextBackend, CheckContextKindBackend, CheckDetailBackend,
+    CoverageKindBackend, CoverageRowBackend, FailureCauseBackend, FailureSelectorBackend,
+    FailureSelectorKindBackend, MAX_FAILURE_CAUSES, MAX_INVENTORY_AGENTS,
+    MAX_INVENTORY_CRITICAL_PROCESSES_PER_AGENT, MAX_INVENTORY_HARNESSES,
+    MAX_INVENTORY_MCP_SERVERS_PER_AGENT, MAX_INVENTORY_RULE_IDS_PER_SERVER,
+    MAX_INVENTORY_SECRET_LABELS_PER_AGENT,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -399,6 +407,317 @@ pub fn agent_coverage_rows(
         .collect()
 }
 
+// ---------------------------------------------------------------------------
+// Always-on posture inventory
+// ---------------------------------------------------------------------------
+
+/// Everything `build_ai_inventory` needs, gathered from the visibility bundle
+/// and the agent-observer state at capture time.
+pub struct AiInventoryInputs<'a> {
+    pub host_privilege: &'a HostPrivilege,
+    /// Full known harness roster (detected and not).
+    pub harnesses: &'a [AgentHarness],
+    pub sandboxes: &'a [AgentSandbox],
+    pub mcp_endpoints: &'a [McpEndpoint],
+    /// Visibility findings; only those whose `subject_id` is an endpoint id are
+    /// used, so passing the whole set is safe.
+    pub mcp_findings: &'a [VisibilityFinding],
+    pub discovered: &'a BTreeMap<String, bool>,
+    pub observer_enabled: &'a BTreeMap<String, bool>,
+    /// Critical subprocess basenames per agent (unfiltered).
+    pub critical_processes: &'a BTreeMap<String, Vec<String>>,
+    /// Secret-exposure labels per agent (unfiltered).
+    pub secret_labels: &'a BTreeMap<String, Vec<String>>,
+}
+
+/// Always-on AI posture snapshot, emitted whether or not any check is failing.
+///
+/// Every key here uses the *same* normalization as [`FailureCauseBackend`]
+/// scopes and [`FailureSelectorBackend`] values, so the Hub can join an
+/// inventory row to the cause an Accept would resolve -- inventory itself is
+/// never the matched surface (see `checks[]`), only the authoring surface.
+///
+/// Blast radius is derivable from what is reported: an agent is in blast radius
+/// exactly when `amplifiers.unsandboxed` and at least one other amplifier hold.
+pub fn build_ai_inventory(inputs: AiInventoryInputs<'_>) -> AiInventoryBackend {
+    let mut truncated = false;
+
+    let host = AiHostInventoryBackend {
+        assessed: inputs.host_privilege.assessed,
+        passwordless_root: inputs.host_privilege.passwordless_root,
+        admin_user: inputs.host_privilege.admin_user,
+        elevated_session: inputs.host_privilege.elevated_session,
+        user: inputs.host_privilege.user.trim().to_string(),
+        platform: norm(&inputs.host_privilege.platform),
+    };
+
+    let mut harnesses: Vec<AiHarnessInventoryBackend> = inputs
+        .harnesses
+        .iter()
+        .filter_map(|harness| {
+            let slug = norm(&harness.slug);
+            if slug.is_empty() {
+                return None;
+            }
+            Some(AiHarnessInventoryBackend {
+                slug,
+                display_name: harness.display_name.trim().to_string(),
+                detected: harness.detected,
+            })
+        })
+        .collect();
+    harnesses.sort();
+    harnesses.dedup();
+    if harnesses.len() > MAX_INVENTORY_HARNESSES {
+        harnesses.truncate(MAX_INVENTORY_HARNESSES);
+        truncated = true;
+    }
+
+    let critical_processes = normalize_agent_map(inputs.critical_processes, true);
+    let secret_labels = normalize_agent_map(inputs.secret_labels, false);
+    let sandboxes = normalize_sandboxes(inputs.sandboxes);
+    let (mut mcp_by_agent, mcp_truncated) =
+        normalize_mcp_servers(inputs.mcp_endpoints, inputs.mcp_findings);
+    truncated |= mcp_truncated;
+
+    // Union of every source so an agent stays visible even when only one
+    // subsystem knows about it.
+    let mut keys: BTreeSet<String> = BTreeSet::new();
+    for raw in inputs
+        .discovered
+        .keys()
+        .chain(inputs.observer_enabled.keys())
+    {
+        let key = norm(raw);
+        if !key.is_empty() {
+            keys.insert(key);
+        }
+    }
+    keys.extend(critical_processes.keys().cloned());
+    keys.extend(secret_labels.keys().cloned());
+    keys.extend(sandboxes.keys().cloned());
+    keys.extend(mcp_by_agent.keys().cloned());
+
+    if keys.len() > MAX_INVENTORY_AGENTS {
+        truncated = true;
+    }
+
+    let host_passwordless_root =
+        inputs.host_privilege.assessed && inputs.host_privilege.passwordless_root;
+
+    let agents = keys
+        .into_iter()
+        .take(MAX_INVENTORY_AGENTS)
+        .map(|key| {
+            let sandbox = sandboxes.get(&key).cloned().unwrap_or_default();
+            let mut processes = critical_processes.get(&key).cloned().unwrap_or_default();
+            if processes.len() > MAX_INVENTORY_CRITICAL_PROCESSES_PER_AGENT {
+                processes.truncate(MAX_INVENTORY_CRITICAL_PROCESSES_PER_AGENT);
+                truncated = true;
+            }
+            let mut labels = secret_labels.get(&key).cloned().unwrap_or_default();
+            if labels.len() > MAX_INVENTORY_SECRET_LABELS_PER_AGENT {
+                labels.truncate(MAX_INVENTORY_SECRET_LABELS_PER_AGENT);
+                truncated = true;
+            }
+            let mcp_servers = mcp_by_agent.remove(&key).unwrap_or_default();
+
+            AiAgentInventoryBackend {
+                present: lookup_flag(inputs.discovered, &key).unwrap_or(false),
+                // Absent means enabled, matching the `unsecured_<agent>` check.
+                monitored: lookup_flag(inputs.observer_enabled, &key).unwrap_or(true),
+                amplifiers: AiAmplifiersInventoryBackend {
+                    unsandboxed: sandbox.sandboxed == Some(false),
+                    passwordless_root: host_passwordless_root,
+                    critical_subprocess: !processes.is_empty(),
+                    secret_exposure: !labels.is_empty(),
+                },
+                key,
+                sandbox,
+                critical_processes: processes,
+                secret_exposure_labels: labels,
+                mcp_servers,
+            }
+        })
+        .collect();
+
+    AiInventoryBackend {
+        host,
+        harnesses,
+        agents,
+        truncated,
+    }
+}
+
+/// Re-key a per-agent map by normalized agent slug, normalizing the values too.
+fn normalize_agent_map(
+    raw: &BTreeMap<String, Vec<String>>,
+    basename: bool,
+) -> BTreeMap<String, Vec<String>> {
+    let mut merged: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for (agent, values) in raw {
+        let key = norm(agent);
+        if key.is_empty() {
+            continue;
+        }
+        merged
+            .entry(key)
+            .or_default()
+            .extend(normalized_set(values, basename));
+    }
+    merged
+        .into_iter()
+        .map(|(key, values)| (key, values.into_iter().collect()))
+        .collect()
+}
+
+fn normalize_sandboxes(sandboxes: &[AgentSandbox]) -> BTreeMap<String, AiSandboxInventoryBackend> {
+    sandboxes
+        .iter()
+        .filter_map(|sandbox| {
+            let key = norm(&sandbox.agent_type);
+            if key.is_empty() {
+                return None;
+            }
+            Some((
+                key,
+                AiSandboxInventoryBackend {
+                    sandboxed: sandbox.sandboxed,
+                    mechanism: norm(&sandbox.mechanism),
+                    file_access_scope: norm(&sandbox.file_access_scope),
+                },
+            ))
+        })
+        .collect()
+}
+
+/// Per-agent MCP rows, merging every endpoint that normalizes to the same
+/// identity so `rule_ids` / `max_severity` describe the whole server row the
+/// Hub would offer an Accept on.
+fn normalize_mcp_servers(
+    endpoints: &[McpEndpoint],
+    findings: &[VisibilityFinding],
+) -> (BTreeMap<String, Vec<AiMcpServerInventoryBackend>>, bool) {
+    // endpoint id -> (rule ids, max severity rank)
+    let mut by_endpoint: BTreeMap<&str, (BTreeSet<String>, u8)> = BTreeMap::new();
+    for finding in findings {
+        let entry = by_endpoint
+            .entry(finding.subject_id.as_str())
+            .or_insert_with(|| (BTreeSet::new(), 0));
+        let rule = norm(&finding.rule_id);
+        if !rule.is_empty() {
+            entry.0.insert(rule);
+        }
+        entry.1 = entry.1.max(severity_rank(finding.severity));
+    }
+
+    // (agent, server_name, transport, exposure, auth, is_edamame) -> merged findings
+    type RowKey = (String, String, String, String, String, bool);
+    let mut rows: BTreeMap<RowKey, (BTreeSet<String>, u8)> = BTreeMap::new();
+    for endpoint in endpoints {
+        let agent = norm(&endpoint.agent_type);
+        let server_name = norm(&endpoint.server_name);
+        if agent.is_empty() || server_name.is_empty() {
+            continue;
+        }
+        let key = (
+            agent,
+            server_name,
+            norm(&endpoint.transport),
+            exposure_scope_slug(endpoint.exposure_scope).to_string(),
+            auth_strength_slug(endpoint.auth_strength).to_string(),
+            endpoint.is_edamame_server,
+        );
+        let entry = rows.entry(key).or_insert_with(|| (BTreeSet::new(), 0));
+        if let Some((rules, rank)) = by_endpoint.get(endpoint.id.as_str()) {
+            entry.0.extend(rules.iter().cloned());
+            entry.1 = entry.1.max(*rank);
+        }
+    }
+
+    let mut truncated = false;
+    let mut by_agent: BTreeMap<String, Vec<AiMcpServerInventoryBackend>> = BTreeMap::new();
+    for (
+        (agent, server_name, transport, exposure_scope, auth_strength, is_edamame),
+        (rules, rank),
+    ) in rows
+    {
+        let bucket = by_agent.entry(agent).or_default();
+        if bucket.len() >= MAX_INVENTORY_MCP_SERVERS_PER_AGENT {
+            truncated = true;
+            continue;
+        }
+        let mut rule_ids: Vec<String> = rules.into_iter().collect();
+        if rule_ids.len() > MAX_INVENTORY_RULE_IDS_PER_SERVER {
+            rule_ids.truncate(MAX_INVENTORY_RULE_IDS_PER_SERVER);
+            truncated = true;
+        }
+        bucket.push(AiMcpServerInventoryBackend {
+            server_name,
+            transport,
+            exposure_scope,
+            auth_strength,
+            is_edamame_server: is_edamame,
+            max_severity: severity_slug(rank).to_string(),
+            alertable: rank >= severity_rank(VisibilitySeverity::High),
+            rule_ids,
+        });
+    }
+    (by_agent, truncated)
+}
+
+/// Read a per-agent flag by normalized slug, tolerating unnormalized keys.
+fn lookup_flag(map: &BTreeMap<String, bool>, key: &str) -> Option<bool> {
+    map.get(key).copied().or_else(|| {
+        map.iter()
+            .find(|(raw, _)| norm(raw) == key)
+            .map(|(_, v)| *v)
+    })
+}
+
+/// Rank so severities merge deterministically; `0` means "no finding".
+fn severity_rank(severity: VisibilitySeverity) -> u8 {
+    match severity {
+        VisibilitySeverity::Info => 1,
+        VisibilitySeverity::Low => 2,
+        VisibilitySeverity::Medium => 3,
+        VisibilitySeverity::High => 4,
+        VisibilitySeverity::Critical => 5,
+    }
+}
+
+fn severity_slug(rank: u8) -> &'static str {
+    match rank {
+        1 => "info",
+        2 => "low",
+        3 => "medium",
+        4 => "high",
+        5 => "critical",
+        _ => "",
+    }
+}
+
+fn exposure_scope_slug(scope: ExposureScope) -> &'static str {
+    match scope {
+        ExposureScope::Stdio => "stdio",
+        ExposureScope::Loopback => "loopback",
+        ExposureScope::Lan => "lan",
+        ExposureScope::Remote => "remote",
+        ExposureScope::Public => "public",
+        ExposureScope::Unknown => "unknown",
+    }
+}
+
+fn auth_strength_slug(auth: AuthStrength) -> &'static str {
+    match auth {
+        AuthStrength::None => "none",
+        AuthStrength::Shared => "shared",
+        AuthStrength::OAuth => "oauth",
+        AuthStrength::Mtls => "mtls",
+        AuthStrength::Unknown => "unknown",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -675,5 +994,275 @@ mod tests {
         assert_eq!(slugs, vec!["cursor", "openclaw"]);
         // openclaw is known only to the observer map: paused but not discovered.
         assert_eq!(rows[1].state(), "absent");
+    }
+
+    // -- inventory ---------------------------------------------------------
+
+    fn host(assessed: bool, passwordless_root: bool) -> HostPrivilege {
+        HostPrivilege {
+            elevated_session: false,
+            admin_user: true,
+            passwordless_root,
+            evidence: vec![],
+            platform: "macOS".to_string(),
+            user: "alice".to_string(),
+            assessed,
+        }
+    }
+
+    fn sandbox(agent_type: &str, sandboxed: Option<bool>) -> AgentSandbox {
+        AgentSandbox {
+            agent_type: agent_type.to_string(),
+            sandboxed,
+            mechanism: if sandboxed == Some(true) {
+                "app-sandbox".to_string()
+            } else {
+                "none".to_string()
+            },
+            detail: String::new(),
+            file_access_scope: "user_files".to_string(),
+            file_access_detail: String::new(),
+            can_launch_arbitrary_commands: None,
+            command_execution_detail: String::new(),
+        }
+    }
+
+    fn endpoint(id: &str, agent_type: &str, server_name: &str) -> McpEndpoint {
+        McpEndpoint {
+            id: id.to_string(),
+            agent_type: agent_type.to_string(),
+            server_name: server_name.to_string(),
+            transport: "stdio".to_string(),
+            command: None,
+            args: vec![],
+            url: None,
+            bind_host: None,
+            exposure_scope: ExposureScope::Stdio,
+            auth_strength: AuthStrength::None,
+            oauth_metadata_uri: None,
+            tool_privilege_classes: vec![],
+            is_edamame_server: false,
+            config_path: String::new(),
+            env_keys: vec![],
+        }
+    }
+
+    fn finding(subject_id: &str, rule_id: &str, severity: VisibilitySeverity) -> VisibilityFinding {
+        VisibilityFinding::new("mcp", rule_id, severity, subject_id, "t", "d")
+    }
+
+    fn inputs<'a>(
+        host_privilege: &'a HostPrivilege,
+        sandboxes: &'a [AgentSandbox],
+        endpoints: &'a [McpEndpoint],
+        findings: &'a [VisibilityFinding],
+        discovered: &'a BTreeMap<String, bool>,
+        observer_enabled: &'a BTreeMap<String, bool>,
+        critical_processes: &'a BTreeMap<String, Vec<String>>,
+        secret_labels: &'a BTreeMap<String, Vec<String>>,
+    ) -> AiInventoryInputs<'a> {
+        AiInventoryInputs {
+            host_privilege,
+            harnesses: &[],
+            sandboxes,
+            mcp_endpoints: endpoints,
+            mcp_findings: findings,
+            discovered,
+            observer_enabled,
+            critical_processes,
+            secret_labels,
+        }
+    }
+
+    #[test]
+    fn inventory_reports_green_agents_with_no_findings() {
+        let host = host(true, false);
+        let sandboxes = [sandbox("cursor", Some(true))];
+        let discovered = BTreeMap::from([("cursor".to_string(), true)]);
+        let inventory = build_ai_inventory(inputs(
+            &host,
+            &sandboxes,
+            &[],
+            &[],
+            &discovered,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        ));
+
+        assert!(!inventory.truncated);
+        assert_eq!(inventory.agents.len(), 1);
+        let agent = &inventory.agents[0];
+        assert_eq!(agent.key, "cursor");
+        assert!(agent.present);
+        // Absent from the observer map means running, not paused.
+        assert!(agent.monitored);
+        assert_eq!(agent.sandbox.sandboxed, Some(true));
+        assert_eq!(agent.amplifiers, AiAmplifiersInventoryBackend::default());
+    }
+
+    #[test]
+    fn inventory_amplifiers_make_blast_radius_derivable() {
+        let host = host(true, true);
+        let sandboxes = [sandbox("cursor", Some(false)), sandbox("codex", Some(true))];
+        let discovered =
+            BTreeMap::from([("cursor".to_string(), true), ("codex".to_string(), true)]);
+        let critical = BTreeMap::from([("cursor".to_string(), vec!["/usr/bin/ssh".to_string()])]);
+        let secrets = BTreeMap::from([("cursor".to_string(), vec!["AWS_Credentials".to_string()])]);
+        let inventory = build_ai_inventory(inputs(
+            &host,
+            &sandboxes,
+            &[],
+            &[],
+            &discovered,
+            &BTreeMap::new(),
+            &critical,
+            &secrets,
+        ));
+
+        let cursor = &inventory.agents[1];
+        assert_eq!(cursor.key, "cursor");
+        assert!(cursor.amplifiers.unsandboxed);
+        assert!(cursor.amplifiers.passwordless_root);
+        assert!(cursor.amplifiers.critical_subprocess);
+        assert!(cursor.amplifiers.secret_exposure);
+        // Selector-key parity with checks[].causes.
+        assert_eq!(cursor.critical_processes, vec!["ssh".to_string()]);
+        assert_eq!(
+            cursor.secret_exposure_labels,
+            vec!["aws_credentials".to_string()]
+        );
+
+        // Sandboxed agent inherits the host condition but is not in blast radius.
+        let codex = &inventory.agents[0];
+        assert!(!codex.amplifiers.unsandboxed);
+        assert!(codex.amplifiers.passwordless_root);
+    }
+
+    #[test]
+    fn inventory_omits_host_amplifier_when_unassessed() {
+        let host = host(false, true);
+        let discovered = BTreeMap::from([("cursor".to_string(), true)]);
+        let inventory = build_ai_inventory(inputs(
+            &host,
+            &[],
+            &[],
+            &[],
+            &discovered,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        ));
+        assert!(!inventory.host.assessed);
+        assert!(!inventory.agents[0].amplifiers.passwordless_root);
+    }
+
+    #[test]
+    fn inventory_lists_every_mcp_server_and_merges_findings() {
+        let host = host(true, false);
+        let endpoints = [
+            endpoint("e1", "cursor", "filesystem"),
+            endpoint("e2", "cursor", "Quiet"),
+        ];
+        let findings = [
+            finding("e1", "mcp_public_no_auth", VisibilitySeverity::High),
+            finding("e1", "mcp_shell_tools", VisibilitySeverity::Low),
+        ];
+        let inventory = build_ai_inventory(inputs(
+            &host,
+            &[],
+            &endpoints,
+            &findings,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        ));
+
+        let servers = &inventory.agents[0].mcp_servers;
+        assert_eq!(servers.len(), 2);
+        let fs = servers
+            .iter()
+            .find(|s| s.server_name == "filesystem")
+            .expect("filesystem row");
+        assert_eq!(fs.max_severity, "high");
+        assert!(fs.alertable);
+        assert_eq!(
+            fs.rule_ids,
+            vec![
+                "mcp_public_no_auth".to_string(),
+                "mcp_shell_tools".to_string()
+            ]
+        );
+        // A server with no finding is still listed, quiet.
+        let quiet = servers
+            .iter()
+            .find(|s| s.server_name == "quiet")
+            .expect("quiet row");
+        assert!(quiet.max_severity.is_empty());
+        assert!(!quiet.alertable);
+        assert!(quiet.rule_ids.is_empty());
+    }
+
+    #[test]
+    fn inventory_caps_agents_and_flags_truncated() {
+        let host = host(true, false);
+        let discovered: BTreeMap<String, bool> = (0..MAX_INVENTORY_AGENTS + 5)
+            .map(|i| (format!("agent{:03}", i), true))
+            .collect();
+        let inventory = build_ai_inventory(inputs(
+            &host,
+            &[],
+            &[],
+            &[],
+            &discovered,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        ));
+        assert_eq!(inventory.agents.len(), MAX_INVENTORY_AGENTS);
+        assert!(inventory.truncated);
+    }
+
+    #[test]
+    fn inventory_normalizes_harness_roster() {
+        let host = host(true, false);
+        let harnesses = vec![
+            AgentHarness {
+                slug: " NoNo ".to_string(),
+                display_name: "nono".to_string(),
+                detected: true,
+                evidence: vec![],
+                identity: None,
+            },
+            AgentHarness {
+                slug: "srt".to_string(),
+                display_name: "SRT".to_string(),
+                detected: false,
+                evidence: vec![],
+                identity: None,
+            },
+        ];
+        let empty_flags = BTreeMap::new();
+        let empty_lists = BTreeMap::new();
+        let inventory = build_ai_inventory(AiInventoryInputs {
+            host_privilege: &host,
+            harnesses: &harnesses,
+            sandboxes: &[],
+            mcp_endpoints: &[],
+            mcp_findings: &[],
+            discovered: &empty_flags,
+            observer_enabled: &empty_flags,
+            critical_processes: &empty_lists,
+            secret_labels: &empty_lists,
+        });
+        let slugs: Vec<&str> = inventory
+            .harnesses
+            .iter()
+            .map(|h| h.slug.as_str())
+            .collect();
+        // Undetected harnesses stay on the roster so the Hub can show coverage.
+        assert_eq!(slugs, vec!["nono", "srt"]);
+        assert!(inventory.harnesses[0].detected);
     }
 }
