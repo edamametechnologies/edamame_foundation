@@ -184,10 +184,15 @@ fn resolve_hermes_home(home: &Path) -> PathBuf {
     let default = home.join(".hermes");
     #[cfg(target_os = "windows")]
     {
-        if !default.exists() {
+        // Fall back on "the default holds no store", not merely "the default is
+        // missing": anything that touches `~/.hermes` (an installer, a
+        // credentials file) makes the directory exist while the real store
+        // still lives under `%LOCALAPPDATA%`, and the stricter test would pin
+        // us to the empty one.
+        if !store_markers_under(&default, STORE_PROBE_DEPTH) {
             if let Ok(localappdata) = std::env::var("LOCALAPPDATA") {
                 let alt = PathBuf::from(localappdata).join("hermes");
-                if alt.exists() {
+                if store_markers_under(&alt, STORE_PROBE_DEPTH) {
                     return alt;
                 }
             }
@@ -220,19 +225,36 @@ fn hermes_store_present(hermes_home: &Path) -> bool {
     if !hermes_home.exists() {
         return false;
     }
-    if hermes_home.join("sessions").is_dir() {
+    store_markers_under(hermes_home, STORE_PROBE_DEPTH)
+}
+
+/// How far below the Hermes home to look for store markers. Hermes' own
+/// installers do not agree on a layout -- the Windows PowerShell installer
+/// clones into `~/.hermes/hermes-agent/` and keeps the session store beside
+/// that checkout, so a probe pinned to the top level sees an apparently empty
+/// `~/.hermes`. Two levels covers every layout shipped so far without turning
+/// discovery into a full recursive walk of an arbitrarily large home.
+const STORE_PROBE_DEPTH: usize = 2;
+
+fn store_markers_under(dir: &Path, depth: usize) -> bool {
+    if dir.join("sessions").is_dir()
+        || dir.join("projects").is_dir()
+        || dir.join("sessions.json").is_file()
+        || dir.join("config.yaml").is_file()
+        || dir.join("config.yml").is_file()
+        || has_sqlite_db(dir)
+    {
         return true;
     }
-    if hermes_home.join("projects").is_dir() {
-        return true;
+    if depth == 0 {
+        return false;
     }
-    if hermes_home.join("sessions.json").is_file() {
-        return true;
-    }
-    if hermes_home.join("config.yaml").is_file() || hermes_home.join("config.yml").is_file() {
-        return true;
-    }
-    has_sqlite_db(hermes_home) || has_sqlite_db(&hermes_home.join("sessions"))
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        entry.path().is_dir() && store_markers_under(&entry.path(), depth.saturating_sub(1))
+    })
 }
 
 fn has_sqlite_db(dir: &Path) -> bool {

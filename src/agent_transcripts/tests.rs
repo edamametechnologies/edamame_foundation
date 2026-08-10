@@ -436,6 +436,37 @@ fn hermes_discovered_via_config_even_without_transcripts() {
 
 #[test]
 #[serial]
+fn hermes_discovered_when_store_is_nested_below_home() {
+    // The Windows installer clones Hermes into `~/.hermes/hermes-agent/` and
+    // leaves the session store beside that checkout, so a probe pinned to the
+    // top level reads a real install as absent. `unsecured_hermes` keys off
+    // that flag, so the whole threat silently disappears for those hosts.
+    let saved_hermes_home = std::env::var("HERMES_HOME").ok();
+    std::env::remove_var("HERMES_HOME");
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let home = temp.path();
+    let nested = home.join(".hermes/hermes-agent/sessions");
+    let line_user =
+        "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"audit the deploy script\"}]}}";
+    write(&nested.join("session-1.jsonl"), &format!("{}\n", line_user));
+
+    let result = collect("hermes", home, &options()).expect("hermes collect");
+
+    match saved_hermes_home {
+        Some(value) => std::env::set_var("HERMES_HOME", value),
+        None => std::env::remove_var("HERMES_HOME"),
+    }
+
+    assert!(
+        result.diagnostics.transcripts_root_accessible,
+        "a Hermes store one level below ~/.hermes must still count as discovered"
+    );
+    assert_eq!(result.payload.sessions.len(), 1);
+}
+
+#[test]
+#[serial]
 fn hermes_collects_jsonl_sessions() {
     let saved_hermes_home = std::env::var("HERMES_HOME").ok();
     std::env::remove_var("HERMES_HOME");
