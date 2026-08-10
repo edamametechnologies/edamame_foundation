@@ -7,8 +7,10 @@ use tracing::warn;
 
 const CACHE_TTL: Duration = Duration::from_secs(60);
 const EXPECTED_SCHEMA_VERSION: u32 = 1;
+// This crate owns the canonical registry; agent_security is frozen and no
+// longer receives registry updates.
 const DEFAULT_REGISTRY_URL: &str =
-    "https://raw.githubusercontent.com/edamametechnologies/agent_security/main/supported_agents/index.json";
+    "https://raw.githubusercontent.com/edamametechnologies/edamame_foundation/main/supported_agents/index.json";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SupportedAgentsIndex {

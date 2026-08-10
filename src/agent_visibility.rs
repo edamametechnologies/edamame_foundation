@@ -8868,4 +8868,95 @@ skills/gtm-report and @rules/invariants.mdc.
                 .collect::<Vec<_>>()
         );
     }
+
+    /// Host-dependent MCP audit: run the REAL `build_mcp_inventory` against this
+    /// machine's home and cross-check it against an independent re-read of every
+    /// supported agent's own global MCP config:
+    ///
+    ///   * MISS: a server key present in an agent's config map that discovery
+    ///     did not return for that agent.
+    ///   * PHANTOM: an endpoint attributed to a config path that no longer
+    ///     parses to that server key. OpenClaw is exempt -- its tools come from
+    ///     `openclaw.plugin.json` extension manifests, not an MCP config map.
+    ///
+    /// Ignored by default because it reads the developer's own agent dirs:
+    ///   cargo test -p edamame_foundation --lib \
+    ///     local_host_mcp_discovery_consistency -- --ignored --nocapture
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+    #[test]
+    #[ignore = "host-dependent: reads the developer's real agent MCP configs"]
+    fn local_host_mcp_discovery_consistency() {
+        let home = match std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+            Some(h) => PathBuf::from(h),
+            None => {
+                eprintln!("[mcp-audit] no HOME/USERPROFILE; skipping");
+                return;
+            }
+        };
+
+        let inventory = build_mcp_inventory(&home);
+        eprintln!("[mcp-audit] home={}", home.display());
+        eprintln!("[mcp-audit] agent            found  expect   miss  servers");
+
+        let mut misses: Vec<String> = Vec::new();
+        for def in supported_agents::ordered_supported_agents() {
+            let agent = def.agent_type.as_str();
+            let found: Vec<&McpEndpoint> = inventory
+                .endpoints
+                .iter()
+                .filter(|e| e.agent_type == agent)
+                .collect();
+
+            // Independent re-read of the same config files discovery consumed.
+            let mut expected: BTreeSet<String> = BTreeSet::new();
+            for config_path in def.resolve_global_mcp_configs(&home) {
+                let body = match std::fs::read_to_string(&config_path) {
+                    Ok(b) => b,
+                    Err(_) => continue,
+                };
+                for raw in parse_mcp_config(&body, &config_path.to_string_lossy()) {
+                    expected.insert(raw.name);
+                }
+            }
+
+            let found_names: BTreeSet<String> =
+                found.iter().map(|e| e.server_name.clone()).collect();
+            let missing: Vec<&String> = expected.difference(&found_names).collect();
+            if !missing.is_empty() {
+                misses.push(format!("{agent}: {missing:?}"));
+            }
+
+            if found.is_empty() && expected.is_empty() {
+                continue;
+            }
+            eprintln!(
+                "[mcp-audit] {:<16} {:>5}  {:>6} {:>6}  {}",
+                agent,
+                found.len(),
+                expected.len(),
+                missing.len(),
+                found
+                    .iter()
+                    .map(|e| if e.is_edamame_server {
+                        format!("{}(edamame)", e.server_name)
+                    } else {
+                        e.server_name.clone()
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+
+        eprintln!(
+            "[mcp-audit] SUMMARY endpoints={} findings={} misses={}",
+            inventory.endpoints.len(),
+            inventory.findings.len(),
+            misses.len()
+        );
+
+        assert!(
+            misses.is_empty(),
+            "configured MCP servers not surfaced by discovery: {misses:?}"
+        );
+    }
 }
