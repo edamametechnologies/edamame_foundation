@@ -607,6 +607,19 @@ pub fn collect(
         session.economics_truncated = resolved.truncated;
     }
 
+    // Having ingested a session is itself proof the store is present, so an
+    // adapter must never report the agent as absent while returning its
+    // transcripts. Adapters that gate collection on the flag satisfy this for
+    // free; the ones that probe markers independently (hermes, openclaw) can
+    // report absent when a real install nests its store below the names they
+    // check -- which is how a Hermes install whose store sits under a
+    // non-default subdirectory read as undiscovered while we were reading its
+    // transcripts. `unsecured_<agent>` keys off this flag, so the mismatch
+    // silently drops the threat for exactly the installs we can see.
+    if !result.payload.sessions.is_empty() && !result.diagnostics.transcripts_root_accessible {
+        result.diagnostics.transcripts_root_accessible = true;
+    }
+
     Ok(result)
 }
 
