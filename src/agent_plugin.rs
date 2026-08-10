@@ -81,6 +81,15 @@ fn chown_to_home_owner(_path: &Path, _home: &Path) -> anyhow::Result<()> {
 
 const GITHUB_ORG: &str = "edamametechnologies";
 
+/// Directory name of EDAMAME's own OpenClaw extension under
+/// `~/.openclaw/extensions/`, and the `id` its `openclaw.plugin.json` declares.
+///
+/// OpenClaw has no `mcpServers` config map, so this is the only way to tell our
+/// own bridge apart from a third-party extension when building the MCP
+/// inventory (see `agent_visibility::discover_openclaw_extension_endpoints`).
+/// Must stay in sync with `edamame_openclaw/setup/install.{sh,ps1}`.
+pub const OPENCLAW_EDAMAME_EXTENSION_ID: &str = "edamame";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentPluginProvisionResult {
     pub success: bool,
@@ -1241,7 +1250,9 @@ fn uninstall_openclaw(home: &Path) -> anyhow::Result<()> {
     chown_to_home_owner(&openclaw_dir, home)?;
 
     let dirs_to_remove = [
-        openclaw_dir.join("extensions/edamame"),
+        openclaw_dir
+            .join("extensions")
+            .join(OPENCLAW_EDAMAME_EXTENSION_ID),
         // Legacy: edamame-extrapolator skill was removed in favour of the
         // compiled extrapolator_run_cycle plugin tool plus EDAMAME's
         // host-side transcript observer. Kept here so uninstall still

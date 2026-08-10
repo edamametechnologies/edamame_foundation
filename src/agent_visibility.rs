@@ -1561,7 +1561,9 @@ fn read_capped(path: &Path, max_bytes: u64) -> std::io::Result<String> {
 /// `~/.cursor/mcp.json`). Those are discovered separately via
 /// `discover_cursor_plugin_mcp_endpoints` and merged in (deduped by id) so a
 /// plugin like Notion / Slack / Sentry declaring a remote MCP endpoint is not
-/// invisible on the exposure surface.
+/// invisible on the exposure surface. OpenClaw is handled the same way: it has
+/// no `mcpServers` map at all, so its tool surface is discovered from the
+/// installed extension manifests via `discover_openclaw_extension_endpoints`.
 pub fn discover_mcp_endpoints(home: &Path) -> Vec<McpEndpoint> {
     let mut endpoints = Vec::new();
     'agents: for def in supported_agents::ordered_supported_agents() {
@@ -1597,11 +1599,16 @@ pub fn discover_mcp_endpoints(home: &Path) -> Vec<McpEndpoint> {
         }
     }
     // Cursor marketplace plugins ship their own `mcp.json` under
-    // `~/.cursor/plugins/**`. Merge those endpoints in, deduped by id so a
-    // server also present in `~/.cursor/mcp.json` is not double-counted.
+    // `~/.cursor/plugins/**`, and OpenClaw extensions register tools in-process
+    // from `~/.openclaw/extensions/*/openclaw.plugin.json`. Neither is reachable
+    // from a registry `config_target`. Merge both in, deduped by id so a server
+    // also present in a global config is not double-counted.
     if endpoints.len() < MAX_MCP_ENDPOINTS {
         let mut seen: BTreeSet<String> = endpoints.iter().map(|e| e.id.clone()).collect();
-        for ep in discover_cursor_plugin_mcp_endpoints(home) {
+        let extra = discover_cursor_plugin_mcp_endpoints(home)
+            .into_iter()
+            .chain(discover_openclaw_extension_endpoints(home));
+        for ep in extra {
             if endpoints.len() >= MAX_MCP_ENDPOINTS {
                 break;
             }
@@ -1688,6 +1695,77 @@ fn discover_cursor_plugin_mcp_endpoints(home: &Path) -> Vec<McpEndpoint> {
                 }
             }
         }
+    }
+    endpoints
+}
+
+/// Discover tool surfaces contributed by OpenClaw extensions.
+///
+/// OpenClaw has no `mcpServers` config map: an extension is installed as
+/// `~/.openclaw/extensions/<id>/openclaw.plugin.json` and its tools are loaded
+/// in-process by the agent. That is still a tool-exposure surface -- a
+/// third-party extension can register arbitrary tools into the agent -- so it
+/// belongs on the inventory rather than being invisible.
+///
+/// Extensions carry no transport: they are modelled as `stdio`, the same
+/// local/no-network trust profile a stdio MCP server has. EDAMAME's own
+/// extension is identified by `agent_plugin::OPENCLAW_EDAMAME_EXTENSION_ID`,
+/// since the OpenClaw registry entry carries no `server_key`.
+fn discover_openclaw_extension_endpoints(home: &Path) -> Vec<McpEndpoint> {
+    let extensions_root = home.join(".openclaw").join("extensions");
+    let read_dir = match std::fs::read_dir(&extensions_root) {
+        Ok(rd) => rd,
+        Err(_) => return Vec::new(),
+    };
+    let mut endpoints: Vec<McpEndpoint> = Vec::new();
+    for entry in read_dir.flatten() {
+        if endpoints.len() >= MAX_MCP_ENDPOINTS {
+            break;
+        }
+        let manifest = entry.path().join("openclaw.plugin.json");
+        if !manifest.is_file() {
+            continue;
+        }
+        let raw = match read_capped(&manifest, MAX_MCP_CONFIG_BYTES) {
+            Ok(text) => text,
+            Err(_) => continue,
+        };
+        // The manifest id is authoritative; fall back to the directory name so a
+        // malformed or id-less manifest still surfaces rather than disappearing.
+        let id = serde_json::from_str::<serde_json::Value>(&raw)
+            .ok()
+            .and_then(|v| {
+                v.get("id")
+                    .and_then(|id| id.as_str())
+                    .map(|id| id.to_string())
+            })
+            .or_else(|| {
+                entry
+                    .path()
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|n| n.to_string())
+            });
+        let Some(id) = id.filter(|id| !id.is_empty()) else {
+            continue;
+        };
+        let is_edamame = id == crate::agent_plugin::OPENCLAW_EDAMAME_EXTENSION_ID;
+        endpoints.push(build_endpoint(
+            "openclaw",
+            RawMcpServer {
+                name: id,
+                command: None,
+                args: Vec::new(),
+                url: None,
+                env_keys: Vec::new(),
+                explicit_type: Some("stdio".to_string()),
+                has_auth_header: false,
+                has_oauth: false,
+                has_tls_client_cert: false,
+            },
+            &manifest.to_string_lossy(),
+            is_edamame,
+        ));
     }
     endpoints
 }
@@ -6616,6 +6694,324 @@ command = "uvx"
         let github = servers.iter().find(|s| s.name == "github").unwrap();
         assert_eq!(github.command.as_deref(), Some("npx"));
         assert!(github.env_keys.contains(&"GITHUB_TOKEN".to_string()));
+    }
+
+    // --- Per-agent end-to-end MCP discovery ----------------------------------
+    //
+    // The tests above cover the parsers in isolation. These drive the real
+    // `discover_mcp_endpoints` entry point against a synthetic HOME so a config
+    // path that silently stops resolving (renamed target, changed platform
+    // layout, agent added to the registry without discovery wiring) fails here
+    // instead of going unnoticed as a blind spot on the exposure surface.
+
+    /// Write a synthetic single-server MCP config in the format implied by the
+    /// file extension, creating parent directories as needed.
+    fn write_synthetic_mcp_config(path: &Path, server_name: &str) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        let lower = path.to_string_lossy().to_ascii_lowercase();
+        let contents = if lower.ends_with(".toml") {
+            format!("[mcp_servers.{server_name}]\ncommand = \"npx\"\n")
+        } else if lower.ends_with(".yaml") || lower.ends_with(".yml") {
+            format!("mcp_servers:\n  {server_name}:\n    command: npx\n")
+        } else {
+            format!(r#"{{ "mcpServers": {{ "{server_name}": {{ "command": "npx" }} }} }}"#)
+        };
+        std::fs::write(path, contents).unwrap();
+    }
+
+    /// Claude Desktop's app config only resolves when its parent directory
+    /// already exists (the check that keeps an uninstalled Desktop off the
+    /// inventory), so create it before resolving paths.
+    fn precreate_claude_desktop_dir(home: &Path) {
+        #[cfg(target_os = "macos")]
+        let dir = home.join("Library/Application Support/Claude");
+        #[cfg(target_os = "linux")]
+        let dir = home.join(".config/Claude");
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        let dir = home.join("Claude");
+        std::fs::create_dir_all(dir).unwrap();
+    }
+
+    fn discovered_names(endpoints: &[McpEndpoint], agent_type: &str) -> Vec<String> {
+        endpoints
+            .iter()
+            .filter(|e| e.agent_type == agent_type)
+            .map(|e| e.server_name.clone())
+            .collect()
+    }
+
+    #[test]
+    fn mcp_discovery_covers_cursor_user_config() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        write_synthetic_mcp_config(&home.join(".cursor/mcp.json"), "github");
+
+        let endpoints = discover_mcp_endpoints(home);
+        let cursor = endpoints
+            .iter()
+            .find(|e| e.agent_type == "cursor" && e.server_name == "github")
+            .expect("cursor ~/.cursor/mcp.json server discovered");
+        assert_eq!(cursor.transport, "stdio");
+        assert!(!cursor.is_edamame_server);
+    }
+
+    #[test]
+    fn mcp_discovery_covers_claude_code_cli_config() {
+        // Claude Code declares MCP servers in the top-level `mcpServers` map of
+        // `~/.claude.json`, alongside unrelated CLI state keys.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        std::fs::write(
+            home.join(".claude.json"),
+            r#"{
+                "numStartups": 12,
+                "installMethod": "brew",
+                "mcpServers": {
+                    "github": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"] },
+                    "notion": { "type": "http", "url": "https://mcp.notion.com/mcp" }
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let endpoints = discover_mcp_endpoints(home);
+        let names = discovered_names(&endpoints, "claude_code");
+        assert!(
+            names.contains(&"github".to_string()) && names.contains(&"notion".to_string()),
+            "claude_code servers not discovered: {names:?}",
+        );
+        let notion = endpoints
+            .iter()
+            .find(|e| e.agent_type == "claude_code" && e.server_name == "notion")
+            .unwrap();
+        assert_eq!(notion.transport, "http");
+        assert_eq!(notion.bind_host.as_deref(), Some("mcp.notion.com"));
+    }
+
+    #[test]
+    fn mcp_discovery_covers_claude_desktop_app_config() {
+        // Claude Desktop keeps its own config separate from the Claude Code CLI
+        // one; a server declared only there must still be attributed to
+        // `claude_desktop`.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        precreate_claude_desktop_dir(home);
+
+        let desktop_paths: Vec<PathBuf> = supported_agents::ordered_supported_agents()
+            .into_iter()
+            .filter(|d| d.agent_type == "claude_desktop")
+            .flat_map(|d| d.resolve_global_mcp_configs(home))
+            .filter(|p| p.starts_with(home) && p.file_name().is_some_and(|n| n != ".claude.json"))
+            .collect();
+        if desktop_paths.is_empty() {
+            // Windows resolves this through %APPDATA%, which points outside the
+            // synthetic HOME; covered by the platform's own integration path.
+            return;
+        }
+        for path in &desktop_paths {
+            write_synthetic_mcp_config(path, "filesystem");
+        }
+
+        let endpoints = discover_mcp_endpoints(home);
+        assert!(
+            discovered_names(&endpoints, "claude_desktop").contains(&"filesystem".to_string()),
+            "claude_desktop app config server not discovered",
+        );
+    }
+
+    #[test]
+    fn mcp_discovery_covers_codex_toml_config() {
+        if std::env::var_os("CODEX_HOME").is_some() {
+            // An externally set CODEX_HOME redirects resolution outside the
+            // synthetic HOME; do not write into the developer's real config.
+            return;
+        }
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        write_synthetic_mcp_config(&home.join(".codex/config.toml"), "github");
+
+        let endpoints = discover_mcp_endpoints(home);
+        assert!(
+            discovered_names(&endpoints, "codex").contains(&"github".to_string()),
+            "codex config.toml server not discovered",
+        );
+    }
+
+    #[test]
+    fn mcp_discovery_covers_hermes_yaml_config() {
+        if std::env::var_os("HERMES_HOME").is_some() {
+            return;
+        }
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        write_synthetic_mcp_config(&home.join(".hermes/config.yaml"), "github");
+
+        let endpoints = discover_mcp_endpoints(home);
+        assert!(
+            discovered_names(&endpoints, "hermes").contains(&"github".to_string()),
+            "hermes config.yaml server not discovered",
+        );
+    }
+
+    #[test]
+    fn mcp_discovery_covers_openclaw_extensions() {
+        // OpenClaw exposes tools through in-process extensions declared by
+        // `~/.openclaw/extensions/<id>/openclaw.plugin.json`, not through an
+        // `mcpServers` config map. They are still a tool-exposure surface and
+        // must appear in the inventory.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        let ext = home.join(".openclaw/extensions/notion");
+        std::fs::create_dir_all(&ext).unwrap();
+        std::fs::write(
+            ext.join("openclaw.plugin.json"),
+            r#"{ "id": "notion", "name": "Notion Tools", "version": "1.0.0" }"#,
+        )
+        .unwrap();
+
+        let endpoints = discover_mcp_endpoints(home);
+        let notion = endpoints
+            .iter()
+            .find(|e| e.agent_type == "openclaw" && e.server_name == "notion")
+            .expect("openclaw extension discovered");
+        assert_eq!(notion.transport, "stdio");
+        assert!(!notion.is_edamame_server);
+    }
+
+    #[test]
+    fn mcp_discovery_flags_openclaw_edamame_extension_as_our_own() {
+        // OpenClaw carries no registry `server_key`, so our own extension is
+        // recognised by its install directory / manifest id instead. If that
+        // ever drifts from `edamame_openclaw/setup/install.sh`, EDAMAME starts
+        // scoring its own bridge as a third-party extension.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        let id = crate::agent_plugin::OPENCLAW_EDAMAME_EXTENSION_ID;
+        let ext = home.join(".openclaw/extensions").join(id);
+        std::fs::create_dir_all(&ext).unwrap();
+        std::fs::write(
+            ext.join("openclaw.plugin.json"),
+            format!(r#"{{ "id": "{id}", "name": "EDAMAME MCP Tools", "version": "1.7.3" }}"#),
+        )
+        .unwrap();
+
+        let endpoints = discover_mcp_endpoints(home);
+        let ours = endpoints
+            .iter()
+            .find(|e| e.agent_type == "openclaw" && e.server_name == id)
+            .expect("openclaw edamame extension discovered");
+        assert!(ours.is_edamame_server);
+    }
+
+    #[test]
+    fn openclaw_extension_without_manifest_id_falls_back_to_directory_name() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        let ext = home.join(".openclaw/extensions/legacy-tools");
+        std::fs::create_dir_all(&ext).unwrap();
+        std::fs::write(ext.join("openclaw.plugin.json"), "{ not valid json").unwrap();
+
+        let endpoints = discover_mcp_endpoints(home);
+        assert!(
+            discovered_names(&endpoints, "openclaw").contains(&"legacy-tools".to_string()),
+            "malformed manifest must still surface the extension",
+        );
+    }
+
+    #[test]
+    fn mcp_discovery_flags_each_agents_own_edamame_bridge() {
+        // The EDAMAME bridge is never the subject of a risk finding, so the
+        // per-agent `server_key` must match exactly. A registry rename that is
+        // not mirrored here would silently start scoring our own server.
+        for def in supported_agents::ordered_supported_agents() {
+            let Some(key) = def.mcp_server_key().map(|k| k.to_string()) else {
+                continue;
+            };
+            let tmp = tempfile::TempDir::new().unwrap();
+            let home = tmp.path();
+            precreate_claude_desktop_dir(home);
+            let paths: Vec<PathBuf> = def
+                .resolve_global_mcp_configs(home)
+                .into_iter()
+                .filter(|p| p.starts_with(home))
+                .collect();
+            if paths.is_empty() {
+                continue;
+            }
+            for path in &paths {
+                write_synthetic_mcp_config(path, &key);
+            }
+            let endpoints = discover_mcp_endpoints(home);
+            let own = endpoints
+                .iter()
+                .find(|e| e.agent_type == def.agent_type && e.server_name == key)
+                .unwrap_or_else(|| {
+                    panic!("{} bridge server `{key}` not discovered", def.agent_type)
+                });
+            assert!(
+                own.is_edamame_server,
+                "{} server `{key}` must be flagged as the EDAMAME bridge",
+                def.agent_type,
+            );
+        }
+    }
+
+    #[test]
+    fn every_supported_agent_with_mcp_config_is_discoverable() {
+        // Coverage gate: every registry agent that declares MCP config targets
+        // must actually yield endpoints from those targets. Adding an agent
+        // (or a config target) without wiring discovery fails here.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        precreate_claude_desktop_dir(home);
+
+        // Config paths are NOT agent-exclusive: `claude_code` and
+        // `claude_desktop` both read `~/.claude.json`, and a shared file must
+        // yield one endpoint per agent that claims it. So the probe server name
+        // is keyed by path, not by agent -- keying it by agent would make the
+        // second writer clobber the first.
+        let mut probe_by_path: BTreeMap<PathBuf, String> = BTreeMap::new();
+        let mut expected: Vec<(String, String)> = Vec::new();
+        let mut agents_with_mcp = 0usize;
+        for def in supported_agents::ordered_supported_agents() {
+            if def.mcp_server_key().is_none() {
+                continue;
+            }
+            agents_with_mcp += 1;
+            for path in def
+                .resolve_global_mcp_configs(home)
+                .into_iter()
+                .filter(|p| p.starts_with(home))
+            {
+                let next = probe_by_path.len();
+                let server = probe_by_path
+                    .entry(path.clone())
+                    .or_insert_with(|| format!("probe-{next}"))
+                    .clone();
+                write_synthetic_mcp_config(&path, &server);
+                expected.push((def.agent_type.clone(), server));
+            }
+        }
+        assert!(
+            agents_with_mcp >= 5,
+            "registry lost MCP-capable agents: only {agents_with_mcp} declare config targets",
+        );
+        assert!(
+            !expected.is_empty(),
+            "no MCP config target resolved inside the synthetic HOME",
+        );
+
+        let endpoints = discover_mcp_endpoints(home);
+        for (agent_type, server) in &expected {
+            assert!(
+                endpoints
+                    .iter()
+                    .any(|e| &e.agent_type == agent_type && &e.server_name == server),
+                "{agent_type} config target produced no endpoint for `{server}`",
+            );
+        }
     }
 
     #[test]
