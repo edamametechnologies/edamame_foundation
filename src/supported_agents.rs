@@ -531,6 +531,10 @@ fn local_registry_candidates() -> Vec<PathBuf> {
     if let Ok(current_dir) = std::env::current_dir() {
         for ancestor in current_dir.ancestors() {
             candidates.push(ancestor.join("supported_agents/index.json"));
+            // This crate now owns the canonical registry. The agent_security
+            // probe stays for the deprecation window: released daemons still
+            // resolve from there.
+            candidates.push(ancestor.join("edamame_foundation/supported_agents/index.json"));
             candidates.push(ancestor.join("agent_security/supported_agents/index.json"));
         }
     }
