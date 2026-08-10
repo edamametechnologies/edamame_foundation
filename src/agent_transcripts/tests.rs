@@ -927,3 +927,99 @@ fn collect_to_json_round_trips() {
         traffic
     );
 }
+
+/// Live probe against the operator's REAL home directory.
+///
+/// The synthetic tests above prove each adapter parses the layout we
+/// believe an agent writes. They cannot prove that belief still matches
+/// what the agent ships today -- an agent that changes its on-disk
+/// layout silently turns the observer into a no-op while every unit
+/// test stays green.
+///
+/// This probe closes that gap by running the real collector against the
+/// real home and reporting, per agent, whether a transcript root exists
+/// and how many sessions come back. It is `#[ignore]`d because its
+/// result depends on which agents the operator actually has installed
+/// and has used recently, which is not a CI-stable property.
+///
+/// Run it when diagnosing "the observer sees nothing" reports:
+///
+/// ```text
+/// cargo test --lib agent_transcripts::tests::live_probe -- --ignored --nocapture
+/// ```
+///
+/// Interpretation:
+/// - root absent          -> agent not installed. Expected, not a bug.
+/// - root present, 0      -> either no activity inside the active window,
+///                           or a layout drift. Re-run with a wide window
+///                           (see `EDAMAME_LIVE_PROBE_WINDOW_MINS`); if it
+///                           is still 0 with recent files on disk, the
+///                           adapter has drifted from the agent's layout.
+/// - root present, N > 0  -> observer healthy for that agent.
+#[test]
+#[ignore = "depends on which agents the operator has installed; run manually"]
+fn live_probe_reports_session_counts_per_installed_agent() {
+    let Some(home) = dirs::home_dir() else {
+        eprintln!("live probe: no home directory; skipping");
+        return;
+    };
+
+    // Default to a deliberately wide window so "no recent activity" does
+    // not get confused with "adapter cannot see the files at all".
+    let window_mins = std::env::var("EDAMAME_LIVE_PROBE_WINDOW_MINS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(60 * 24);
+
+    let opts = CollectOptions {
+        limit: 10,
+        active_window_minutes: window_mins,
+        project_hints: Vec::new(),
+    };
+
+    println!(
+        "live probe: home={} window={}min",
+        home.display(),
+        window_mins
+    );
+
+    let mut any_root_present = false;
+    for agent in &[
+        "cursor",
+        "claude_code",
+        "claude_desktop",
+        "codex",
+        "hermes",
+        "openclaw",
+    ] {
+        let result = collect(agent, &home, &opts).expect("collect must not error");
+        let diag = &result.diagnostics;
+        let sessions = result.payload.sessions.len();
+        if diag.transcripts_root_accessible {
+            any_root_present = true;
+        }
+        println!(
+            "  {:<15} root_accessible={:<5} sessions={}",
+            agent, diag.transcripts_root_accessible, sessions
+        );
+        for s in result.payload.sessions.iter().take(3) {
+            println!(
+                "      session={} user_text={}B assistant_text={}B",
+                s.session_key,
+                s.user_text.len(),
+                s.assistant_text.len()
+            );
+        }
+    }
+
+    // The only hard assertion: the machine running this probe is a
+    // developer workstation, so at least one supported agent must have a
+    // transcript root on disk. If none do, either the probe is running
+    // somewhere unexpected or every adapter's root resolution broke at
+    // once -- both worth failing on.
+    assert!(
+        any_root_present,
+        "no supported agent has an accessible transcript root under {}",
+        home.display()
+    );
+}
