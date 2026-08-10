@@ -1,0 +1,182 @@
+{
+  "schema_version": 1,
+  "default_agent_type": "openclaw",
+  "agents": [
+    {
+      "agent_type": "cursor",
+      "display_name": "EDAMAME for Cursor",
+      "description": "Cursor workstation integration with transcript ingest, pairing, verdicts, and health checks.",
+      "repo_name": "edamame_cursor",
+      "strategy_kind": "workstation_stdio_mcp",
+      "sort_order": 10,
+      "requires_workspace_arg": true,
+      "install_layout": {
+        "install_base": "data_dir",
+        "install_relative_path": "cursor-edamame/current",
+        "config_kind": "platform_config_slug",
+        "config_slug": "cursor-edamame",
+        "state_kind": "platform_state_slug",
+        "state_slug": "cursor-edamame",
+        "bundle_icon_relpath": "assets/plugin_cursor.png"
+      },
+      "mcp": {
+        "server_key": "edamame",
+        "config_targets": [
+          "cursor_user_mcp"
+        ]
+      },
+      "e2e": {
+        "repo_env_var": "CURSOR_REPO",
+        "intent_script": "tests/e2e_inject_intent.sh",
+        "intent_timeout_seconds": 900
+      },
+      "registry_icon_relpath": "cursor/icon.svg"
+    },
+    {
+      "agent_type": "claude_code",
+      "display_name": "EDAMAME for Claude Code",
+      "description": "Claude Code workstation integration with transcript ingest, pairing, verdicts, and health checks.",
+      "repo_name": "edamame_claude_code",
+      "strategy_kind": "workstation_stdio_mcp",
+      "sort_order": 20,
+      "requires_workspace_arg": true,
+      "install_layout": {
+        "install_base": "data_dir",
+        "install_relative_path": "claude-code-edamame/current",
+        "config_kind": "platform_config_slug",
+        "config_slug": "claude-code-edamame",
+        "state_kind": "platform_state_slug",
+        "state_slug": "claude-code-edamame",
+        "bundle_icon_relpath": "assets/plugin_claude_code.png"
+      },
+      "mcp": {
+        "server_key": "edamame-code",
+        "config_targets": [
+          "claude_cli_config"
+        ]
+      },
+      "e2e": {
+        "repo_env_var": "CLAUDE_REPO",
+        "intent_script": "tests/e2e_inject_intent.sh",
+        "intent_timeout_seconds": 900
+      },
+      "registry_icon_relpath": "claude_code/icon.svg"
+    },
+    {
+      "agent_type": "claude_desktop",
+      "display_name": "EDAMAME for Claude Desktop",
+      "description": "Claude Desktop workstation integration with transcript ingest, pairing, verdicts, and desktop-specific MCP registration.",
+      "repo_name": "edamame_claude_desktop",
+      "strategy_kind": "claude_desktop_dual_mcp",
+      "sort_order": 30,
+      "requires_workspace_arg": true,
+      "install_layout": {
+        "install_base": "data_dir",
+        "install_relative_path": "claude-desktop-edamame/current",
+        "config_kind": "platform_config_slug",
+        "config_slug": "claude-desktop-edamame",
+        "state_kind": "platform_state_slug",
+        "state_slug": "claude-desktop-edamame",
+        "bundle_icon_relpath": "assets/plugin_claude_desktop.png"
+      },
+      "mcp": {
+        "server_key": "edamame",
+        "config_targets": [
+          "claude_cli_config",
+          "claude_desktop_app_config"
+        ]
+      },
+      "e2e": {
+        "repo_env_var": "CLAUDE_DESKTOP_REPO",
+        "intent_script": "tests/e2e_inject_intent.sh",
+        "intent_timeout_seconds": 900
+      },
+      "registry_icon_relpath": "claude_desktop/icon.svg"
+    },
+    {
+      "agent_type": "codex",
+      "display_name": "EDAMAME for Codex CLI",
+      "description": "OpenAI Codex CLI workstation integration with transcript ingest, pairing, verdicts, and health checks.",
+      "repo_name": "edamame_codex",
+      "strategy_kind": "workstation_stdio_mcp",
+      "sort_order": 35,
+      "requires_workspace_arg": true,
+      "install_layout": {
+        "install_base": "data_dir",
+        "install_relative_path": "codex-edamame/current",
+        "config_kind": "platform_config_slug",
+        "config_slug": "codex-edamame",
+        "state_kind": "platform_state_slug",
+        "state_slug": "codex-edamame",
+        "bundle_icon_relpath": "assets/plugin_codex.png"
+      },
+      "mcp": {
+        "server_key": "edamame-codex",
+        "config_targets": [
+          "codex_cli_config"
+        ]
+      },
+      "e2e": {
+        "repo_env_var": "CODEX_REPO",
+        "intent_script": "tests/e2e_inject_intent.sh",
+        "intent_timeout_seconds": 900
+      },
+      "registry_icon_relpath": "codex/icon.svg"
+    },
+    {
+      "agent_type": "hermes",
+      "display_name": "EDAMAME for Hermes",
+      "description": "Hermes Agent workstation integration with transcript ingest, pairing, verdicts, and health checks.",
+      "repo_name": "edamame_hermes",
+      "strategy_kind": "workstation_stdio_mcp",
+      "sort_order": 37,
+      "requires_workspace_arg": false,
+      "install_layout": {
+        "install_base": "data_dir",
+        "install_relative_path": "hermes-edamame/current",
+        "config_kind": "platform_config_slug",
+        "config_slug": "hermes-edamame",
+        "state_kind": "platform_state_slug",
+        "state_slug": "hermes-edamame",
+        "bundle_icon_relpath": "assets/plugin_hermes.png"
+      },
+      "mcp": {
+        "server_key": "edamame",
+        "config_targets": [
+          "hermes_config_yaml"
+        ]
+      },
+      "e2e": {
+        "repo_env_var": "HERMES_REPO",
+        "intent_script": "tests/e2e_inject_intent.sh",
+        "intent_timeout_seconds": 900
+      },
+      "registry_icon_relpath": "hermes/icon.svg"
+    },
+    {
+      "agent_type": "openclaw",
+      "display_name": "EDAMAME for OpenClaw",
+      "description": "OpenClaw plugin bundle with skills, health checks, and local plugin enablement.",
+      "repo_name": "edamame_openclaw",
+      "strategy_kind": "openclaw_plugin_bundle",
+      "sort_order": 40,
+      "requires_workspace_arg": false,
+      "install_layout": {
+        "install_base": "home",
+        "install_relative_path": ".openclaw/edamame-openclaw",
+        "config_kind": "none",
+        "config_slug": null,
+        "state_kind": "none",
+        "state_slug": null,
+        "bundle_icon_relpath": "assets/plugin_openclaw.png"
+      },
+      "mcp": null,
+      "e2e": {
+        "repo_env_var": "OPENCLAW_REPO",
+        "intent_script": "tests/e2e_inject_intent.sh",
+        "intent_timeout_seconds": 600
+      },
+      "registry_icon_relpath": "openclaw/icon.svg"
+    }
+  ]
+}
