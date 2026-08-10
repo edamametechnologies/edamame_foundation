@@ -7015,6 +7015,58 @@ command = "uvx"
     }
 
     #[test]
+    fn every_supported_agent_has_a_discoverable_tool_surface() {
+        // Companion gate to the one above. That gate only walks agents that
+        // declare `mcp` config targets, so an agent whose tools come from some
+        // other mechanism (OpenClaw's `openclaw.plugin.json` extensions today)
+        // is invisible to it. This one asserts the stronger property: EVERY
+        // registry agent yields at least one endpoint from SOME tool-exposure
+        // surface. A seventh agent with a novel mechanism fails here instead of
+        // silently shipping with zero MCP visibility.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        precreate_claude_desktop_dir(home);
+
+        let mut uncovered: Vec<String> = Vec::new();
+        for def in supported_agents::ordered_supported_agents() {
+            let mut seeded = false;
+            for path in def
+                .resolve_global_mcp_configs(home)
+                .into_iter()
+                .filter(|p| p.starts_with(home))
+            {
+                write_synthetic_mcp_config(&path, "surface-probe");
+                seeded = true;
+            }
+            if !seeded && def.agent_type == "openclaw" {
+                let ext = home.join(".openclaw/extensions/surface-probe");
+                std::fs::create_dir_all(&ext).unwrap();
+                std::fs::write(
+                    ext.join("openclaw.plugin.json"),
+                    r#"{ "id": "surface-probe", "name": "probe", "version": "0" }"#,
+                )
+                .unwrap();
+                seeded = true;
+            }
+            if !seeded {
+                uncovered.push(format!("{} (no seedable surface)", def.agent_type));
+            }
+        }
+
+        let endpoints = discover_mcp_endpoints(home);
+        for def in supported_agents::ordered_supported_agents() {
+            if !endpoints.iter().any(|e| e.agent_type == def.agent_type) {
+                uncovered.push(format!("{} (seeded but not discovered)", def.agent_type));
+            }
+        }
+
+        assert!(
+            uncovered.is_empty(),
+            "supported agents with no discoverable MCP/tool surface: {uncovered:?}",
+        );
+    }
+
+    #[test]
     fn inventory_projects_app_and_services() {
         let ep = endpoint_from_json("cursor", "fs", r#"{"command":"npx"}"#);
         let inventories = build_agent_component_inventories_from_endpoints(&[ep]);
