@@ -190,6 +190,37 @@ impl SupportedAgentDefinition {
         }
     }
 
+    /// True when the agent PRODUCT itself has a footprint under `home`.
+    ///
+    /// This is a third, independent signal alongside the two the agent
+    /// inventory already carries:
+    /// - `installed`  -- the EDAMAME plugin is registered in the agent's MCP config
+    /// - `discovered` -- the agent has written session transcripts we can read
+    ///
+    /// An agent can be installed and in daily use while both of those are
+    /// false. Claude Code only creates `~/.claude/projects` once it has
+    /// recorded a project session, and Claude Desktop only creates its
+    /// local-agent-mode session store for certain session types. Without this
+    /// signal such an agent is reported as absent, or dropped from the
+    /// inventory entirely by the presence gate.
+    pub fn detect_host_install_with_home(&self, home: &Path) -> bool {
+        self.host_install_markers(home)
+            .iter()
+            .any(|marker| marker_has_content(marker))
+    }
+
+    /// On-disk markers consulted by [`detect_host_install_with_home`]: the
+    /// agent's own instruction / config root, then its global MCP config files.
+    /// Home-relative only, so discovery stays hermetic under tests.
+    pub fn host_install_markers(&self, home: &Path) -> Vec<PathBuf> {
+        let mut markers = Vec::new();
+        if let Some(root) = self.resolve_instruction_root_with_home(home) {
+            markers.push(root);
+        }
+        markers.extend(self.resolve_global_mcp_configs(home));
+        markers
+    }
+
     /// True when this agent's instruction root is itself the single fleet-wide
     /// workspace on the Augmentation / Enlightenment strip (idle seed target
     /// and session-collapse home). Multi-project config dirs such as
@@ -350,6 +381,26 @@ pub fn find_supported_agent(agent_type: &str) -> Option<SupportedAgentDefinition
     ordered_supported_agents()
         .into_iter()
         .find(|agent| agent.agent_type == agent_type)
+}
+
+/// See [`SupportedAgentDefinition::detect_host_install_with_home`].
+pub fn detect_host_install(agent_type: &str, home: &Path) -> bool {
+    find_supported_agent(agent_type)
+        .map(|agent| agent.detect_host_install_with_home(home))
+        .unwrap_or(false)
+}
+
+/// A marker counts only when it carries content: a non-empty file, or a
+/// directory with at least one entry. An empty leftover directory is not
+/// evidence that the agent product is installed.
+fn marker_has_content(path: &Path) -> bool {
+    match std::fs::metadata(path) {
+        Ok(meta) if meta.is_dir() => std::fs::read_dir(path)
+            .map(|mut entries| entries.next().is_some())
+            .unwrap_or(false),
+        Ok(meta) => meta.len() > 0,
+        Err(_) => false,
+    }
 }
 
 /// See [`SupportedAgentDefinition::instruction_root_is_fleet_workspace`].

@@ -1477,6 +1477,11 @@ pub struct VisibilityBundle {
     /// one entry per known harness. All-undetected means agents here
     /// run without a harness (the `agents_without_harness` gap).
     pub harnesses: Vec<AgentHarness>,
+    /// Agent types whose PRODUCT has an on-disk footprint under the user's home
+    /// (see `SupportedAgentDefinition::detect_host_install_with_home`). Carried
+    /// on the bundle because the sandboxed app cannot read `~/.claude` itself --
+    /// this rides the one helper round-trip the bundle already pays for.
+    pub host_installed_agents: Vec<String>,
 }
 
 /// Build the full structural visibility bundle for a host in a single
@@ -1492,6 +1497,11 @@ pub fn build_visibility_bundle(home: &Path) -> VisibilityBundle {
     let host_privilege = assess_host_privilege(home);
     let agent_sandboxes = assess_agent_sandboxes(home);
     let harnesses = detect_agent_harnesses(home);
+    let host_installed_agents = crate::supported_agents::ordered_supported_agents()
+        .iter()
+        .filter(|agent| agent.detect_host_install_with_home(home))
+        .map(|agent| agent.agent_type.clone())
+        .collect();
     let inventory = McpInventory {
         generated_at: now,
         endpoints,
@@ -1505,6 +1515,7 @@ pub fn build_visibility_bundle(home: &Path) -> VisibilityBundle {
         host_privilege,
         agent_sandboxes,
         harnesses,
+        host_installed_agents,
     }
 }
 
@@ -1632,12 +1643,29 @@ pub fn discover_mcp_endpoints(home: &Path) -> Vec<McpEndpoint> {
 /// Plugin `mcp.json` files come in two shapes: the standard
 /// `{ "mcpServers": { ... } }` wrapper AND a bare object whose top-level keys
 /// are server names (`{ "notion": { "type": "http", "url": "..." } }`). Both
-/// are handled by `parse_mcp_json_with_bare_fallback`.
+/// are handled by `parse_mcp_json_with_bare_fallback`. The file name also
+/// varies by publisher (`mcp.json`, `.mcp.json`, `.cursor-mcp.json`), so the
+/// match is on the `mcp.json` suffix rather than an exact name -- see
+/// `is_plugin_mcp_config_name`.
 ///
 /// Traversal is bounded on three axes (depth, files parsed, and the global
 /// `MAX_MCP_ENDPOINTS` cap) and prunes `node_modules` / `.git` subtrees, so a
 /// large or adversarial plugin cache cannot stall discovery. All endpoints are
 /// attributed to the `cursor` agent and are never the EDAMAME bridge.
+/// Whether a plugin-tree file is an MCP server declaration.
+///
+/// Publishers do not agree on one name: the same Cursor marketplace cache holds
+/// `mcp.json` (Notion, Sentry) alongside `.mcp.json` and `.cursor-mcp.json`
+/// (Slack). Matching the `mcp.json` suffix covers all observed spellings and any
+/// future `<prefix>-mcp.json` without another hardcoded name list, while still
+/// rejecting unrelated JSON (`package.json`, `manifest.json`).
+fn is_plugin_mcp_config_name(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| n.to_ascii_lowercase().ends_with("mcp.json"))
+        .unwrap_or(false)
+}
+
 fn discover_cursor_plugin_mcp_endpoints(home: &Path) -> Vec<McpEndpoint> {
     let plugins_root = home.join(".cursor").join("plugins");
     if !plugins_root.is_dir() {
@@ -1676,9 +1704,7 @@ fn discover_cursor_plugin_mcp_endpoints(home: &Path) -> Vec<McpEndpoint> {
                 if !skip {
                     stack.push((path, depth + 1));
                 }
-            } else if file_type.is_file()
-                && path.file_name().map(|n| n == "mcp.json").unwrap_or(false)
-            {
+            } else if file_type.is_file() && is_plugin_mcp_config_name(&path) {
                 files_parsed += 1;
                 let raw = match read_capped(&path, MAX_MCP_CONFIG_BYTES) {
                     Ok(text) => text,
@@ -2694,27 +2720,13 @@ pub fn alertable_mcp_risks(findings: &[VisibilityFinding]) -> Vec<McpRiskEndpoin
 
 /// Best-effort "is this agent installed on this host?" check used to decide
 /// whether an agent with an otherwise-empty surface (no MCP servers, no
-/// instruction/skill files) still deserves a minimal inventory. An agent counts
-/// as installed when any of its resolved global MCP config files exists on disk
-/// (even if it declares zero servers) or its instruction/config root directory
-/// exists. This mirrors the "present on host" intent so an installed-but-empty
-/// agent (e.g. Claude Desktop) yields a valid, minimal inventory with just the
-/// application root component instead of being dropped entirely.
+/// instruction/skill files) still deserves a minimal inventory. So an
+/// installed-but-empty agent (e.g. Claude Desktop) yields a valid, minimal
+/// inventory with just the application root component instead of being dropped
+/// entirely. Same predicate the inventory's `installed_on_host` field reports,
+/// so the two cannot drift.
 fn agent_installed_on_host(home: &Path, agent_type: &str) -> bool {
-    let Some(def) = supported_agents::find_supported_agent(agent_type) else {
-        return false;
-    };
-    if def
-        .resolve_global_mcp_configs(home)
-        .iter()
-        .any(|p| p.exists())
-    {
-        return true;
-    }
-    match def.resolve_instruction_root_with_home(home) {
-        Some(root) => root.is_dir(),
-        None => false,
-    }
+    supported_agents::detect_host_install(agent_type, home)
 }
 
 /// Build one component inventory per discovered agent type from the live MCP
@@ -5107,6 +5119,11 @@ pub struct AgentInventoryEntry {
     pub classification: AgentClassification,
     /// EDAMAME plugin installed in the agent's MCP config.
     pub installed: bool,
+    /// The agent product itself has an on-disk footprint under the user's home
+    /// (its config / instruction root or a global MCP config). Independent of
+    /// both `installed` and `discovered`: an agent in daily use can have
+    /// neither an EDAMAME plugin nor any transcripts written yet.
+    pub installed_on_host: bool,
     /// Transcript root present on disk.
     pub discovered: bool,
     /// Host-side transcript observer enabled for this agent.
@@ -6160,6 +6177,10 @@ bob ALL=(ALL) NOPASSWD: ALL
     /// Write a Cursor plugin `mcp.json` at the marketplace cache layout depth
     /// (`plugins/cache/<publisher>/<name>/<hash>/mcp.json`).
     fn write_cursor_plugin_mcp(home: &Path, name: &str, contents: &str) {
+        write_cursor_plugin_mcp_named(home, name, "mcp.json", contents);
+    }
+
+    fn write_cursor_plugin_mcp_named(home: &Path, name: &str, file: &str, contents: &str) {
         let dir = home
             .join(".cursor")
             .join("plugins")
@@ -6168,7 +6189,7 @@ bob ALL=(ALL) NOPASSWD: ALL
             .join(name)
             .join("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef");
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("mcp.json"), contents).unwrap();
+        std::fs::write(dir.join(file), contents).unwrap();
     }
 
     #[test]
@@ -6244,6 +6265,65 @@ bob ALL=(ALL) NOPASSWD: ALL
     }
 
     #[test]
+    fn cursor_plugin_dotted_mcp_config_names_are_discovered() {
+        // Publishers do not agree on one file name: the Slack plugin ships
+        // `.mcp.json` / `.cursor-mcp.json` where Notion and Sentry ship
+        // `mcp.json`. All of them must surface.
+        for file in [".mcp.json", ".cursor-mcp.json"] {
+            assert!(is_plugin_mcp_config_name(Path::new(file)), "{file}");
+            let tmp = tempfile::TempDir::new().unwrap();
+            let home = tmp.path();
+            write_cursor_plugin_mcp_named(
+                home,
+                "slack",
+                file,
+                r#"{ "mcpServers": { "slack": { "url": "https://mcp.slack.com/mcp" } } }"#,
+            );
+            let endpoints = discover_mcp_endpoints(home);
+            assert!(
+                endpoints.iter().any(|e| e.server_name == "slack"),
+                "plugin server in {file} must be discovered",
+            );
+        }
+        // Unrelated plugin JSON is still ignored.
+        assert!(!is_plugin_mcp_config_name(Path::new("package.json")));
+        assert!(!is_plugin_mcp_config_name(Path::new("manifest.json")));
+    }
+
+    #[test]
+    fn host_install_is_independent_of_transcripts_and_plugin() {
+        // Claude Code in daily use before it has ever written
+        // `~/.claude/projects`: no transcripts (not `discovered`), no EDAMAME
+        // plugin (not `installed`), yet the product is plainly on the host.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        assert!(!agent_installed_on_host(home, "claude_code"));
+        std::fs::write(home.join(".claude.json"), r#"{ "numStartups": 7 }"#).unwrap();
+        assert!(agent_installed_on_host(home, "claude_code"));
+        assert!(!home.join(".claude/projects").exists());
+
+        // An empty leftover directory is not evidence of an install.
+        let tmp2 = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp2.path().join(".claude")).unwrap();
+        assert!(!agent_installed_on_host(tmp2.path(), "claude_code"));
+    }
+
+    #[test]
+    fn visibility_bundle_carries_host_installed_agents() {
+        // The sandboxed app cannot read `~/.claude` itself, so the bundle is
+        // what carries host-install presence across the helper boundary.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        std::fs::write(home.join(".claude.json"), r#"{ "numStartups": 1 }"#).unwrap();
+        let bundle = build_visibility_bundle(home);
+        assert!(bundle
+            .host_installed_agents
+            .iter()
+            .any(|a| a == "claude_code"));
+        assert!(!bundle.host_installed_agents.iter().any(|a| a == "cursor"));
+    }
+
+    #[test]
     fn bare_fallback_ignores_non_server_top_level_objects() {
         // A global-style JSON object with unrelated top-level keys (the shape of
         // `~/.claude.json`) must NOT be misparsed as a flat server map.
@@ -6260,12 +6340,13 @@ bob ALL=(ALL) NOPASSWD: ALL
 
     #[test]
     fn installed_empty_agent_gets_minimal_inventory_uninstalled_skipped() {
-        // Cursor is "installed" (its ~/.cursor root exists) but has no MCP
-        // servers and no skills -> it still gets a minimal application-only
+        // Cursor is "installed" (its ~/.cursor root carries a config) but has no
+        // MCP servers and no skills -> it still gets a minimal application-only
         // inventory. Claude Code has no footprint at all -> it stays skipped.
         let tmp = tempfile::TempDir::new().unwrap();
         let home = tmp.path();
         std::fs::create_dir_all(home.join(".cursor")).unwrap();
+        std::fs::write(home.join(".cursor/mcp.json"), r#"{ "mcpServers": {} }"#).unwrap();
 
         assert!(agent_installed_on_host(home, "cursor"));
         assert!(!agent_installed_on_host(home, "claude_code"));
