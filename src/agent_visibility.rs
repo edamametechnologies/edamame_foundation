@@ -5032,91 +5032,21 @@ fn is_high_privilege_label(label: &str) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// Agent inventory & classification (INC-10, C1)
+// Agent inventory (INC-10, C1)
 // ---------------------------------------------------------------------------
 
-/// Operator-facing classification of a discovered agent, framed as a
-/// first-seen tripwire rather than a governance allow-list. The deterministic
-/// rule lives in `classify_agent`; core assembles the inputs from the
-/// transcript-observer status, the MCP/component discovery, and the operator
-/// acknowledgment set. Precedence (most → least specific):
-/// `acknowledged` > `shadow` > `new`.
-///
-/// "Acknowledged" replaces the former "approved": a one-tap "yes, this is me"
-/// confirmation that the operator recognizes the agent. Everything not yet
-/// acknowledged (`new`, `shadow`) is an unexpected first-seen footprint that
-/// raises the new-agent alarm.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AgentClassification {
-    /// Operator tapped "yes, this is me" for this agent type -- a recognized,
-    /// expected footprint. Observer health is surfaced separately (the
-    /// `unsecured_<agent>` internal threat), not by this class.
-    Acknowledged,
-    /// Present/discovered but its observer is disabled/paused -- a newly-seen
-    /// agent running unobserved. Unacknowledged AND a blind spot: the
-    /// evasion-shaped, highest-risk first-seen class.
-    Shadow,
-    /// Newly discovered footprint (present, typically observed) that the
-    /// operator has not acknowledged yet. The one-tap "yes, this is me"
-    /// tripwire target.
-    New,
-}
-
-impl AgentClassification {
-    pub fn slug(&self) -> &'static str {
-        match self {
-            AgentClassification::Acknowledged => "acknowledged",
-            AgentClassification::Shadow => "shadow",
-            AgentClassification::New => "new",
-        }
-    }
-
-    pub fn label(&self) -> &'static str {
-        match self {
-            AgentClassification::Acknowledged => "Acknowledged",
-            AgentClassification::Shadow => "Shadow",
-            AgentClassification::New => "New",
-        }
-    }
-
-    /// True for classes the operator should review -- every not-yet-acknowledged
-    /// first-seen footprint (`new`, `shadow`). Drives the new-agent alarm.
-    pub fn needs_review(&self) -> bool {
-        !matches!(self, AgentClassification::Acknowledged)
-    }
-}
-
-/// Deterministic first-seen classification rule. `present` means the agent has
-/// any structural footprint (discovered on disk, plugin installed, or declared
-/// MCP endpoints). Precedence is acknowledgment-first, then evasion-biased: an
-/// acknowledged agent is `acknowledged` regardless of observer state, an
-/// unacknowledged present agent whose observer is off is `shadow`, and any
-/// other unacknowledged footprint is `new`.
-pub fn classify_agent(
-    acknowledged: bool,
-    discovered: bool,
-    observer_enabled: bool,
-    present: bool,
-) -> AgentClassification {
-    if acknowledged {
-        return AgentClassification::Acknowledged;
-    }
-    // Newly seen and we are not even observing it -> shadow (blind spot).
-    if (discovered || present) && !observer_enabled {
-        return AgentClassification::Shadow;
-    }
-    // Newly seen, unacknowledged -> first-seen tripwire.
-    AgentClassification::New
-}
-
 /// One row of the operator agent inventory (INC-10). Pure data container;
-/// core fills it by joining observer status + MCP/component discovery + allow-list.
+/// core fills it by joining observer status + MCP/component discovery.
+///
+/// There is no operator classification axis. The observer is enabled by
+/// default for every agent, so the only operator-relevant state a row can be
+/// in is "discovered on disk but not observed" -- derived at render time from
+/// `discovered && !observer_enabled` and reported as the `unsecured_<agent>`
+/// internal threat.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentInventoryEntry {
     pub agent_type: String,
     pub display_name: String,
-    pub classification: AgentClassification,
     /// EDAMAME plugin installed in the agent's MCP config.
     pub installed: bool,
     /// The agent product itself has an on-disk footprint under the user's home
@@ -5128,14 +5058,21 @@ pub struct AgentInventoryEntry {
     pub discovered: bool,
     /// Host-side transcript observer enabled for this agent.
     pub observer_enabled: bool,
-    /// Operator tapped "yes, this is me" -- this agent type is acknowledged.
-    pub acknowledged: bool,
     /// Count of MCP endpoints declared by this agent.
     pub mcp_endpoint_count: u32,
     /// Count of discovered components attributed to this agent.
     pub component_count: u32,
     /// Count of high-or-critical visibility findings touching this agent.
     pub alertable_finding_count: u32,
+}
+
+impl AgentInventoryEntry {
+    /// The agent has an on-disk footprint but its transcript observer is off,
+    /// so EDAMAME is blind to what it does. This is the only operator-facing
+    /// state the inventory flags, and it mirrors `unsecured_<agent>`.
+    pub fn is_unobserved(&self) -> bool {
+        (self.discovered || self.installed_on_host) && !self.observer_enabled
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -7559,36 +7496,37 @@ some normal line
     }
 
     #[test]
-    fn classify_agent_precedence() {
-        // acknowledged wins over everything (even observer off).
-        assert_eq!(
-            classify_agent(true, true, false, true),
-            AgentClassification::Acknowledged
-        );
-        // unacknowledged + present + observer off -> shadow (blind spot).
-        assert_eq!(
-            classify_agent(false, true, false, true),
-            AgentClassification::Shadow
-        );
-        // unacknowledged + discovered + observer off -> shadow.
-        assert_eq!(
-            classify_agent(false, true, false, false),
-            AgentClassification::Shadow
-        );
-        // unacknowledged + present + observed -> new (first-seen tripwire).
-        assert_eq!(
-            classify_agent(false, true, true, true),
-            AgentClassification::New
-        );
-        // unacknowledged + observed but no on-disk footprint -> new.
-        assert_eq!(
-            classify_agent(false, false, true, true),
-            AgentClassification::New
-        );
-        // every not-acknowledged class needs operator review (alarm source).
-        assert!(AgentClassification::New.needs_review());
-        assert!(AgentClassification::Shadow.needs_review());
-        assert!(!AgentClassification::Acknowledged.needs_review());
+    fn inventory_entry_is_unobserved() {
+        let base = AgentInventoryEntry {
+            agent_type: "cursor".to_string(),
+            display_name: "Cursor".to_string(),
+            installed: false,
+            installed_on_host: true,
+            discovered: true,
+            observer_enabled: true,
+            mcp_endpoint_count: 0,
+            component_count: 0,
+            alertable_finding_count: 0,
+        };
+
+        // Observed footprint -- nothing to flag.
+        assert!(!base.is_unobserved());
+
+        // Transcripts on disk but observer turned off -> blind spot.
+        let mut off = base.clone();
+        off.observer_enabled = false;
+        assert!(off.is_unobserved());
+
+        // Installed on host with no transcripts yet, observer off -> blind spot.
+        let mut host_only = off.clone();
+        host_only.discovered = false;
+        assert!(host_only.is_unobserved());
+
+        // No footprint at all -- nothing to be blind to.
+        let mut absent = off.clone();
+        absent.discovered = false;
+        absent.installed_on_host = false;
+        assert!(!absent.is_unobserved());
     }
 
     // -- Fix #4: per-(host, agent_type) instance id -------------------------
