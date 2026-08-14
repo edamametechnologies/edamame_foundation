@@ -42,7 +42,7 @@ use std::sync::Arc;
 ))]
 use std::time::Instant;
 use tokio::time::{sleep, Duration};
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 use undeadlock::CustomRwLock;
 
 #[cfg(all(
@@ -249,7 +249,7 @@ pub async fn utility_restart_capture() -> Result<String> {
 pub async fn utility_is_capturing() -> Result<String> {
     let is_capturing = CAPTURE.read().await.is_capturing().await;
     let result = is_capturing.to_string();
-    debug!("Returning is_capturing: {}", result);
+    tracing::debug!("Returning is_capturing: {}", result);
     Ok(result)
 }
 
@@ -1208,7 +1208,7 @@ pub async fn utility_get_file_events(incremental: bool) -> Result<String> {
 
     // Polled at 1 Hz, so an empty result is just a heartbeat and stays at debug.
     if payload.events.is_empty() {
-        debug!(
+        tracing::debug!(
             "Returning no FIM events, incremental: {}, size: {} bytes (bincode: {} bytes, total: {}ms)",
             incremental,
             encoded.len(),
