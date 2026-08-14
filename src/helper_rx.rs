@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::{broadcast, oneshot};
 use tonic::transport::{Certificate, Identity, Server, ServerTlsConfig};
 use tonic::{Code, Request, Response, Status};
-use tracing::{error, info, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 use undeadlock::CustomMutex;
 
 lazy_static! {
@@ -421,16 +421,17 @@ pub async fn rpc_run(
         return Err(Error::msg(msg));
     }
 
-    // Display the order and the arguments, ignore empty arguments
+    // Display the order and the arguments, ignore empty arguments.
+    // Debug level: polling orders make this the highest-volume line in the log.
     if arg1.is_empty() && arg2.is_empty() {
-        info!("Executing order {} / {}", ordertype, subordertype);
+        debug!("Executing order {} / {}", ordertype, subordertype);
     } else if arg2.is_empty() {
-        info!(
+        debug!(
             "Executing order {} / {} with arg#1 {}",
             ordertype, subordertype, arg1
         );
     } else {
-        info!(
+        debug!(
             "Executing order {} / {} with arg#1 {} and arg#2 {}",
             ordertype, subordertype, arg1, arg2
         );
