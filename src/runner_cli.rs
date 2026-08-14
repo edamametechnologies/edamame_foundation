@@ -5,7 +5,7 @@ use std::{env, path::PathBuf};
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use tokio::time::{timeout, Duration, Instant};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, warn};
 
 #[cfg(target_os = "windows")]
 use std::ffi::{c_void, OsStr, OsString};
@@ -63,7 +63,7 @@ async fn run_unix_command(
 
     if personate && !username.is_empty() {
         let home_dir = resolve_home_unix(username).await?;
-        info!(
+        debug!(
             "Setting up execution for user: {} with home: {}",
             username, home_dir
         );
@@ -89,7 +89,7 @@ async fn run_windows_ps(
         let mut script = String::new();
         if personate && !username.is_empty() {
             let context = resolve_windows_context(username)?;
-            info!(
+            debug!(
                 "Setting up execution for user: {} with home: {}, AppData: {}, LocalAppData: {}",
                 username,
                 context.home_dir.display(),
