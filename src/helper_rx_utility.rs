@@ -42,7 +42,7 @@ use std::sync::Arc;
 ))]
 use std::time::Instant;
 use tokio::time::{sleep, Duration};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use undeadlock::CustomRwLock;
 
 #[cfg(all(
@@ -249,7 +249,7 @@ pub async fn utility_restart_capture() -> Result<String> {
 pub async fn utility_is_capturing() -> Result<String> {
     let is_capturing = CAPTURE.read().await.is_capturing().await;
     let result = is_capturing.to_string();
-    info!("Returning is_capturing: {}", result);
+    debug!("Returning is_capturing: {}", result);
     Ok(result)
 }
 
@@ -1206,14 +1206,25 @@ pub async fn utility_get_file_events(incremental: bool) -> Result<String> {
     let encoded = general_purpose::STANDARD.encode(&bincode_payload);
     let elapsed_ms = start.elapsed().as_millis();
 
-    info!(
-        "Returning {} FIM events, incremental: {}, size: {} bytes (bincode: {} bytes, total: {}ms)",
-        payload.events.len(),
-        incremental,
-        encoded.len(),
-        bincode_len,
-        elapsed_ms
-    );
+    // Polled at 1 Hz, so an empty result is just a heartbeat and stays at debug.
+    if payload.events.is_empty() {
+        debug!(
+            "Returning no FIM events, incremental: {}, size: {} bytes (bincode: {} bytes, total: {}ms)",
+            incremental,
+            encoded.len(),
+            bincode_len,
+            elapsed_ms
+        );
+    } else {
+        info!(
+            "Returning {} FIM events, incremental: {}, size: {} bytes (bincode: {} bytes, total: {}ms)",
+            payload.events.len(),
+            incremental,
+            encoded.len(),
+            bincode_len,
+            elapsed_ms
+        );
+    }
 
     Ok(encoded)
 }
