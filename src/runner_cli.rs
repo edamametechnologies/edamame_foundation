@@ -119,7 +119,7 @@ async fn run_windows_ps(
         // than parsing it as a command line.
         let encoded = encode_powershell_command(&script);
 
-        let mut command = Command::new("powershell.exe");
+        let mut command = Command::new(windows_powershell_exe());
         // Windows caps a process command line at 32767 chars (CreateProcessW). The
         // longest real threat-model script encodes to ~15k Base64 chars, far under
         // the limit, but keep a temp-file fallback for any pathologically large
@@ -164,6 +164,13 @@ async fn run_windows_ps(
         // `powershell_script` crate sets internally; tokio::process::Command
         // does not pass any creation flags by default.
         command.creation_flags(0x08000000);
+        // CreateProcessW returns Access Denied (os error 5) when PATH lookup
+        // hits a directory the service account cannot list, or when the
+        // process CWD is an inaccessible profile path (LocalSystem's
+        // systemprofile). Pin the executable to System32 and the CWD to
+        // TEMP so threat-metric checks keep running under AppLocker-adjacent
+        // and service-session environments.
+        command.current_dir(env::temp_dir());
 
         debug!("Executing powershell command: {}", script);
         let result = run_command_with_timeout(command, cmd, timeout_opt).await;
@@ -193,6 +200,33 @@ async fn run_windows_ps(
 // developers' macOS/Linux machines.
 #[allow(dead_code)]
 const MAX_ENCODED_COMMAND_LEN: usize = 30000;
+
+/// Canonical Windows PowerShell 5.1 path under `%SystemRoot%`. Kept compiling
+/// on every platform so unit tests can pin the construction without a Windows
+/// host. The live Windows spawn path uses this when the file exists and falls
+/// back to PATH lookup (`powershell.exe`) otherwise.
+#[allow(dead_code)]
+fn windows_powershell_exe_from_system_root(system_root: impl AsRef<std::path::Path>) -> PathBuf {
+    system_root
+        .as_ref()
+        .join("System32")
+        .join("WindowsPowerShell")
+        .join("v1.0")
+        .join("powershell.exe")
+}
+
+#[cfg(target_os = "windows")]
+fn windows_powershell_exe() -> PathBuf {
+    let system_root = env::var_os("SystemRoot")
+        .or_else(|| env::var_os("WINDIR"))
+        .unwrap_or_else(|| OsString::from(r"C:\Windows"));
+    let candidate = windows_powershell_exe_from_system_root(&system_root);
+    if candidate.is_file() {
+        candidate
+    } else {
+        PathBuf::from("powershell.exe")
+    }
+}
 
 // Encode a PowerShell script for `powershell.exe -EncodedCommand`: Base64 of the
 // script's UTF-16LE bytes. This is the documented contract for -EncodedCommand
@@ -726,6 +760,15 @@ mod tests {
             }
         }
         None
+    }
+
+    #[test]
+    fn test_windows_powershell_exe_path_is_system32() {
+        let path = windows_powershell_exe_from_system_root("/Windows");
+        assert_eq!(
+            path,
+            PathBuf::from("/Windows/System32/WindowsPowerShell/v1.0/powershell.exe")
+        );
     }
 
     /// `encode_powershell_command` must produce a Base64 string that PowerShell's
