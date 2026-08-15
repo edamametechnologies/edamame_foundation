@@ -1,6 +1,7 @@
 use anyhow::{Error, Result};
 use edamame_backend::advisor_todos_backend::AdvisorTodosBackend;
 use edamame_backend::agentic_dismissal_report_backend::AgenticDismissalReportBackend;
+use edamame_backend::ai_whitelist_backend::AiWhitelistStatusBackend;
 use edamame_backend::feedback_info_backend::FeedbackInfoBackend;
 use edamame_backend::lanscan_device_info_backend::*;
 use edamame_backend::lanscan_dislike_device_info_backend::DislikeDeviceInfoBackend;
@@ -126,6 +127,19 @@ pub trait Backend {
         signature: &str,
         domain_name: &str,
     ) -> Result<Vec<PoliciesStatusBackend>>;
+
+    /// Ask the Hub whether this device satisfies the domain's AI whitelists.
+    ///
+    /// Resolved from the live device-report table only: the report's detail
+    /// bundle is what the whitelists are matched against, and the history
+    /// table does not carry it. A signature the Hub can only find in history
+    /// is an error rather than an answer, so an inconclusive result never
+    /// reads as compliant.
+    async fn get_ai_whitelists(
+        &self,
+        signature: &str,
+        domain_name: &str,
+    ) -> Result<AiWhitelistStatusBackend>;
 
     async fn get_remediation_lanscan(
         &self,
