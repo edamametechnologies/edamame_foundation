@@ -109,6 +109,8 @@ impl ThreatMetrics {
                 timestamp: "".to_string(),
                 status: ThreatStatus::Unknown,
                 output: "".to_string(),
+                unknown_reason: None,
+                unknown_detail: "".to_string(),
                 ai_detail: None,
             };
             metrics.push(metric);

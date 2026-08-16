@@ -154,6 +154,30 @@ pub enum ThreatStatus {
     Unknown,
 }
 
+/// Why a capture failed and left its check in [`ThreatStatus::Unknown`].
+///
+/// A bare `Unknown` is indistinguishable between "the helper is down",
+/// "host policy blocks the shell we need", and "this binary predates the
+/// check", yet those need very different actions from the user. On Windows
+/// the distinction matters most: a policy that blocks PowerShell spawn takes
+/// out every `cli`-class check at once.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Eq, PartialEq, PartialOrd)]
+pub enum ThreatUnknownReason {
+    /// The EDAMAME Helper is not reachable.
+    HelperUnavailable,
+    /// The helper is reachable but speaks a different protocol version.
+    HelperVersionMismatch,
+    /// The host refused to start the process the check needs (AppLocker,
+    /// WDAC, execution policy, inaccessible PATH or working directory).
+    PolicyBlocked,
+    /// The check needs an elevation this process does not hold.
+    ElevationUnavailable,
+    /// The cloud threat model asks for a check this binary does not implement.
+    CheckUnsupported,
+    /// Anything else -- the case that still deserves a Sentry error.
+    Other,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, PartialOrd)]
 pub struct ThreatMetric {
     pub metric: ThreatMetricJSON,
@@ -162,6 +186,15 @@ pub struct ThreatMetric {
     pub status: ThreatStatus,
     // Track the output of the order (not exported to the backend)
     pub output: String,
+    /// Set when `status` is [`ThreatStatus::Unknown`] and the capture failed,
+    /// cleared on every successful capture. Not carried on
+    /// [`ThreatMetricBackend`]: like `output`, this stays on the device.
+    #[serde(default)]
+    pub unknown_reason: Option<ThreatUnknownReason>,
+    /// Raw capture error behind `unknown_reason`, for support and the CLI.
+    /// Never shown as-is in the app -- the app renders the localized reason.
+    #[serde(default)]
+    pub unknown_detail: String,
     /// Governance evidence for this check, cached at capture time so the report
     /// carries what was observed then rather than whatever the runners hold when
     /// the report is finally sent. `None` for non-AI checks and for AI checks
@@ -170,6 +203,7 @@ pub struct ThreatMetric {
     /// Not a CloudModel field, and not carried on [`ThreatMetricBackend`]: the
     /// Hub receives this collated per domain in `DetailedScoreBackend.details`,
     /// where consent gates it in one place.
+    #[serde(default)]
     pub ai_detail: Option<CheckDetailBackend>,
 }
 
@@ -180,6 +214,8 @@ impl ThreatMetric {
             timestamp: "".to_string(),
             status: ThreatStatus::Unknown,
             output: "".to_string(),
+            unknown_reason: None,
+            unknown_detail: "".to_string(),
             ai_detail: None,
         }
     }
@@ -245,5 +281,34 @@ impl CloudDate for ThreatMetrics {
         } else {
             Some(&self.date)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A `ThreatMetric` written by an older build carries none of the optional
+    /// fields. Losing the `#[serde(default)]` on any of them makes the whole
+    /// `OrderHistory` parse fail on upgrade, and `OrderHistoryTrait::read()`
+    /// answers a parse failure by resetting to an empty history -- so the user
+    /// silently loses every recorded remediation.
+    #[test]
+    fn deserializes_a_metric_written_before_the_optional_fields_existed() {
+        let mut json = serde_json::to_value(ThreatMetric::new()).expect("serialize");
+        let object = json.as_object_mut().expect("metric serializes to an object");
+        for field in ["unknown_reason", "unknown_detail", "ai_detail"] {
+            assert!(
+                object.remove(field).is_some(),
+                "{field} is missing from the serialized shape, so this test no longer covers it"
+            );
+        }
+
+        let metric: ThreatMetric =
+            serde_json::from_value(json).expect("old-shape metric must still deserialize");
+
+        assert_eq!(metric.unknown_reason, None);
+        assert_eq!(metric.unknown_detail, "");
+        assert_eq!(metric.ai_detail, None);
     }
 }
