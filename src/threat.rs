@@ -296,7 +296,9 @@ mod tests {
     #[test]
     fn deserializes_a_metric_written_before_the_optional_fields_existed() {
         let mut json = serde_json::to_value(ThreatMetric::new()).expect("serialize");
-        let object = json.as_object_mut().expect("metric serializes to an object");
+        let object = json
+            .as_object_mut()
+            .expect("metric serializes to an object");
         for field in ["unknown_reason", "unknown_detail", "ai_detail"] {
             assert!(
                 object.remove(field).is_some(),
