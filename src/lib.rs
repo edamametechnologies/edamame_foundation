@@ -23,6 +23,8 @@ pub mod agent_visibility_params_db;
 pub mod ai_governance_detail;
 pub mod backend;
 pub mod cloud_model_fallback;
+pub mod consent_documents;
+pub mod consent_documents_db;
 pub mod cve_detection_params_db;
 pub mod file_reveal;
 #[cfg(all(

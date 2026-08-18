@@ -44,6 +44,8 @@ src/
 │ # Agentic / CVE / FIM Tunables
 ├── vuln_detector_params.rs        # CloudModel<CveDetectionParams> state and accessors
 ├── cve_detection_params_db.rs     # Embedded fallback JSON for CVE/FIM tunables
+├── consent_documents.rs           # Operator consent markdown: GitHub first, embedded snapshot fallback
+├── consent_documents_db.rs        # Generated match of consent/*.md (update-threats.sh)
 ├── fim_support.rs                 # Shared FIM watch-path/config helpers (desktop+fim only)
 ├── llm_client.rs                  # LLM provider client
 │

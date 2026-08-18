@@ -118,6 +118,71 @@ update_agent_visibility_params_db() {
         "$is_local"
 }
 
+# Consent markdown is not obfuscated: it is operator-facing policy text, not
+# a credential-stealer corpus. Source of truth is threatmodels/consent/.
+update_consent_documents() {
+    local is_local=${1:-false}
+    local dest="./consent"
+    mkdir -p "$dest"
+
+    echo "Updating consent document snapshot"
+
+    local index
+    index=$(mktemp -t edamame_consent_index.XXXXXX)
+    if [ "$is_local" = true ]; then
+        echo "  Using local ../threatmodels/consent/"
+        if [ ! -f "../threatmodels/consent/index.txt" ]; then
+            echo "ERROR: ../threatmodels/consent/index.txt is missing" >&2
+            rm -f "$index"
+            return 1
+        fi
+        cp "../threatmodels/consent/index.txt" "$index"
+    else
+        local branch
+        branch=$(current_branch)
+        echo "  Fetching consent/index.txt from threatmodels@${branch}"
+        wget --no-cache -qO "$index" \
+            "https://raw.githubusercontent.com/edamametechnologies/threatmodels/${branch}/consent/index.txt"
+        if [ ! -s "$index" ]; then
+            echo "ERROR: empty consent/index.txt from threatmodels@${branch}" >&2
+            rm -f "$index"
+            return 1
+        fi
+    fi
+
+    rm -f "$dest"/*.md
+    while IFS= read -r name; do
+        [ -z "$name" ] && continue
+        case "$name" in
+            *.md) ;;
+            *)
+                echo "ERROR: unexpected consent index entry: ${name}" >&2
+                rm -f "$index"
+                return 1
+                ;;
+        esac
+        if [ "$is_local" = true ]; then
+            cp "../threatmodels/consent/${name}" "$dest/${name}"
+        else
+            wget --no-cache -qO "$dest/${name}" \
+                "https://raw.githubusercontent.com/edamametechnologies/threatmodels/${branch}/consent/${name}"
+        fi
+        if [ ! -s "$dest/${name}" ]; then
+            echo "ERROR: empty or missing consent file ${name}" >&2
+            rm -f "$index"
+            return 1
+        fi
+    done < "$index"
+    rm -f "$index"
+
+    if [ ! "$(ls -A "$dest"/*.md 2>/dev/null)" ]; then
+        echo "ERROR: consent snapshot is empty after update" >&2
+        return 1
+    fi
+
+    python3 ./tools/generate_consent_db.py
+}
+
 # Define the array of target operating systems.
 targets=("macOS" "Linux" "Windows" "iOS" "Android")
 
@@ -146,4 +211,5 @@ else
     done
     update_cve_detection_params_db "$USE_LOCAL"
     update_agent_visibility_params_db "$USE_LOCAL"
+    update_consent_documents "$USE_LOCAL"
 fi
