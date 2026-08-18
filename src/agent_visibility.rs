@@ -1618,6 +1618,7 @@ pub fn discover_mcp_endpoints(home: &Path) -> Vec<McpEndpoint> {
         let mut seen: BTreeSet<String> = endpoints.iter().map(|e| e.id.clone()).collect();
         let extra = discover_cursor_plugin_mcp_endpoints(home)
             .into_iter()
+            .chain(discover_claude_code_project_mcp_endpoints(home))
             .chain(discover_openclaw_extension_endpoints(home));
         for ep in extra {
             if endpoints.len() >= MAX_MCP_ENDPOINTS {
@@ -1723,6 +1724,88 @@ fn discover_cursor_plugin_mcp_endpoints(home: &Path) -> Vec<McpEndpoint> {
         }
     }
     endpoints
+}
+
+/// Discover Claude Code project-scoped `.mcp.json` files.
+///
+/// `claude mcp add --scope project` writes `{project}/.mcp.json` and does
+/// not copy those servers into `~/.claude.json`. Global discovery only
+/// reads `resolve_global_mcp_configs` (`~/.claude.json` for Claude Code),
+/// so a project-scoped server is invisible to AI Governance unless we
+/// walk the projects Claude Code already knows about:
+///
+/// 1. Every key of `~/.claude.json` `projects` (authoritative unencoded paths)
+/// 2. `~/.claude/projects/<encoded>` decoded by replacing `-` with `/`, used
+///    only when that decoded path exists (hyphenated directory names are
+///    otherwise ambiguous)
+fn discover_claude_code_project_mcp_endpoints(home: &Path) -> Vec<McpEndpoint> {
+    let mut endpoints = Vec::new();
+    let mut seen_files: BTreeSet<PathBuf> = BTreeSet::new();
+
+    let claude_json = home.join(".claude.json");
+    if let Ok(raw) = read_capped(&claude_json, MAX_MCP_CONFIG_BYTES) {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) {
+            if let Some(projects) = value.get("projects").and_then(|v| v.as_object()) {
+                for proj_path in projects.keys() {
+                    collect_claude_code_project_mcp(
+                        Path::new(proj_path),
+                        &mut endpoints,
+                        &mut seen_files,
+                    );
+                }
+            }
+        }
+    }
+
+    if let Ok(read_dir) = std::fs::read_dir(home.join(".claude").join("projects")) {
+        for entry in read_dir.flatten() {
+            let Some(decoded) = decode_claude_code_project_dirname(&entry.file_name()) else {
+                continue;
+            };
+            if decoded.is_dir() {
+                collect_claude_code_project_mcp(&decoded, &mut endpoints, &mut seen_files);
+            }
+        }
+    }
+
+    endpoints
+}
+
+fn decode_claude_code_project_dirname(name: &std::ffi::OsStr) -> Option<PathBuf> {
+    let encoded = name.to_string_lossy();
+    if !encoded.starts_with('-') || encoded.len() < 2 {
+        return None;
+    }
+    Some(PathBuf::from(encoded.replace('-', "/")))
+}
+
+fn collect_claude_code_project_mcp(
+    project_root: &Path,
+    endpoints: &mut Vec<McpEndpoint>,
+    seen_files: &mut BTreeSet<PathBuf>,
+) {
+    if endpoints.len() >= MAX_MCP_ENDPOINTS {
+        return;
+    }
+    let mcp_json = project_root.join(".mcp.json");
+    if !mcp_json.is_file() {
+        return;
+    }
+    let identity = std::fs::canonicalize(&mcp_json).unwrap_or_else(|_| mcp_json.clone());
+    if !seen_files.insert(identity) {
+        return;
+    }
+    let raw = match read_capped(&mcp_json, MAX_MCP_CONFIG_BYTES) {
+        Ok(text) => text,
+        Err(_) => return,
+    };
+    let path_str = mcp_json.to_string_lossy().to_string();
+    for server in parse_mcp_json(&raw) {
+        if endpoints.len() >= MAX_MCP_ENDPOINTS {
+            return;
+        }
+        endpoints.push(build_endpoint("claude_code", server, &path_str, false));
+    }
 }
 
 /// Discover tool surfaces contributed by OpenClaw extensions.
@@ -6806,6 +6889,39 @@ command = "uvx"
             .unwrap();
         assert_eq!(notion.transport, "http");
         assert_eq!(notion.bind_host.as_deref(), Some("mcp.notion.com"));
+    }
+
+    #[test]
+    fn mcp_discovery_covers_claude_code_project_mcp_json() {
+        // `claude mcp add --scope project` writes `{project}/.mcp.json`.
+        // Those servers never appear in `~/.claude.json` `mcpServers`.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        let project = tmp.path().join("work").join("demo");
+        std::fs::create_dir_all(&project).unwrap();
+        write_synthetic_mcp_config(&project.join(".mcp.json"), "edamame-probe-fs");
+        let claude_json = serde_json::json!({
+            "projects": {
+                project.to_string_lossy().to_string(): { "mcpServers": {} }
+            }
+        });
+        std::fs::write(home.join(".claude.json"), claude_json.to_string()).unwrap();
+
+        let endpoints = discover_mcp_endpoints(home);
+        let names = discovered_names(&endpoints, "claude_code");
+        assert!(
+            names.contains(&"edamame-probe-fs".to_string()),
+            "claude_code project .mcp.json server not discovered: {names:?}",
+        );
+        let probe = endpoints
+            .iter()
+            .find(|e| e.agent_type == "claude_code" && e.server_name == "edamame-probe-fs")
+            .unwrap();
+        assert!(
+            probe.config_path.ends_with(".mcp.json"),
+            "expected project .mcp.json path, got {}",
+            probe.config_path
+        );
     }
 
     #[test]
