@@ -241,7 +241,17 @@ pub fn build_drift_timeline(
                     .iter()
                     .map(|e| severity_weight(&e.severity))
                     .fold(0.0_f64, f64::max);
-                let breadth = 0.05 * (active.len().min(5) as f64);
+                // Breadth and the onset bonus below only apply when there is
+                // already MEDIUM+ evidence. A lone LOW (or empty) observation
+                // is the ambient CLEAN<->DIVERGENCE flap shape: without this
+                // gate, `0.5 + 0.05 + 0.05` (or `0.5 + 0.1` onset) crosses
+                // the HIGH / alertable threshold for a single tick.
+                let corroborated = max_w >= 0.12;
+                let breadth = if corroborated {
+                    0.05 * (active.len().min(5) as f64)
+                } else {
+                    0.0
+                };
                 let cat = category_from_evidence(&v.evidence);
                 (0.5 + max_w + breadth, cat, "behavior diverged from intent")
             }
@@ -276,12 +286,20 @@ pub fn build_drift_timeline(
         // sharper signal than a divergence that was already ongoing. A
         // first-ever observation (prev = None) is NOT treated as onset -- we
         // have no evidence the prior state was clean, so it could be ongoing
-        // divergence we only just started observing.
+        // divergence we only just started observing. The +0.1 is applied
+        // only when active evidence is already MEDIUM+; otherwise a weak
+        // flap would become a one-tick HIGH finding.
         let onset = matches!(
             prev_kind.as_deref(),
             Some("CLEAN") | Some("CLEAN_HEARTBEAT")
         ) && kind == "DIVERGENCE";
-        if onset {
+        let onset_corroborated = onset
+            && active
+                .iter()
+                .map(|e| severity_weight(&e.severity))
+                .fold(0.0_f64, f64::max)
+                >= 0.12;
+        if onset_corroborated {
             score += 0.1;
         }
         score = score.clamp(0.0, 1.0);
@@ -490,11 +508,15 @@ fn derive_findings(
 ) -> Vec<VisibilityFinding> {
     let mut findings = Vec::new();
 
-    // Highest-severity behavioral (non-delegation) drift event.
+    // Latest behavioral (non-delegation) event, and only when that event
+    // itself is still alertable. Using the historical peak kept a ghost
+    // finding after CLEAN recovery -- the scorecard showed "goal drift on
+    // cursor" for an event that was no longer current.
     if let Some(top) = events
         .iter()
-        .filter(|e| e.category != DriftCategory::Delegation && e.severity.is_alertable())
-        .max_by(|a, b| a.drift_score.partial_cmp(&b.drift_score).unwrap())
+        .rev()
+        .find(|e| e.category != DriftCategory::Delegation)
+        .filter(|e| e.category != DriftCategory::Stability && e.severity.is_alertable())
     {
         findings.push(
             VisibilityFinding::new(
@@ -504,7 +526,7 @@ fn derive_findings(
                 agent_instance_id,
                 format!("{} drift on {}", top.category.as_str(), agent_type),
                 format!(
-                    "Observed behavior diverged from declared intent (peak drift {:.2}). {}",
+                    "Observed behavior diverged from declared intent (drift {:.2}). {}",
                     top.drift_score, top.summary
                 ),
             )
@@ -681,6 +703,55 @@ mod tests {
             .findings
             .iter()
             .any(|f| f.rule_id == "drift_goal_divergence"));
+    }
+
+    #[test]
+    fn low_evidence_onset_is_not_alertable() {
+        let verdicts = vec![
+            verdict(0, "CLEAN", vec![]),
+            verdict(60, "DIVERGENCE", vec![ev("LOW", "goal", "fk-low")]),
+        ];
+        let t = build_drift_timeline("cursor", "inst-1", &verdicts, None);
+        assert_eq!(t.events.len(), 1);
+        assert!(
+            !t.events[0].severity.is_alertable(),
+            "LOW onset must not cross HIGH (score {})",
+            t.events[0].drift_score
+        );
+        assert!(t.findings.is_empty());
+    }
+
+    #[test]
+    fn empty_onset_is_not_alertable() {
+        let verdicts = vec![
+            verdict(0, "CLEAN", vec![]),
+            verdict(60, "DIVERGENCE", vec![]),
+        ];
+        let t = build_drift_timeline("cursor", "inst-1", &verdicts, None);
+        assert_eq!(t.events.len(), 1);
+        assert!(
+            !t.events[0].severity.is_alertable(),
+            "empty onset must not cross HIGH (score {})",
+            t.events[0].drift_score
+        );
+        assert!(t.findings.is_empty());
+    }
+
+    #[test]
+    fn recovered_divergence_does_not_keep_finding() {
+        let verdicts = vec![
+            verdict(0, "CLEAN", vec![]),
+            verdict(60, "DIVERGENCE", vec![ev("HIGH", "network", "fk-1")]),
+            verdict(120, "CLEAN", vec![]),
+        ];
+        let t = build_drift_timeline("cursor", "inst-1", &verdicts, None);
+        assert!(t.events.iter().any(|e| e.severity.is_alertable()));
+        assert!(
+            !t.findings
+                .iter()
+                .any(|f| f.rule_id == "drift_goal_divergence"),
+            "CLEAN recovery must drop the scorecard finding"
+        );
     }
 
     #[test]
