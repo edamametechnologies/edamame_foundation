@@ -1540,10 +1540,18 @@ const MAX_MCP_ENDPOINTS: usize = 512;
 /// pathological plugin tree.
 const MAX_PLUGIN_SCAN_DEPTH: usize = 6;
 
-/// Maximum number of plugin `mcp.json` files parsed under `~/.cursor/plugins/`.
+/// Maximum number of plugin `mcp.json` files parsed under a plugin tree.
 /// A hard stop so a plugin cache stuffed with thousands of config files can't
 /// stall discovery. Well above any realistic installed-plugin count.
 const MAX_PLUGIN_MCP_FILES: usize = 128;
+
+/// Maximum number of directories visited across a whole plugin-tree scan.
+/// `MAX_PLUGIN_MCP_FILES` bounds only the files we *parse*, so on its own it
+/// would still let a scan walk an arbitrarily wide tree. This matters for the
+/// Claude scan in particular: its roots come from `installed_plugins.json`,
+/// which the agent (not EDAMAME) writes, so an `installPath` pointing at a huge
+/// or hostile subtree must not be able to stall discovery.
+const MAX_PLUGIN_SCAN_DIRS: usize = 4096;
 
 /// Read a file, capping the read at `max_bytes`. Returns the UTF-8 lossy
 /// contents (truncation lands on a byte boundary; lossy decoding repairs any
@@ -1567,14 +1575,24 @@ fn read_capped(path: &Path, max_bytes: u64) -> std::io::Result<String> {
 /// and the total endpoint count at `MAX_MCP_ENDPOINTS`, so the entire
 /// downstream visibility surface seeded from these endpoints stays bounded.
 ///
-/// Beyond the per-agent global configs, Cursor marketplace plugins ship their
-/// own `mcp.json` under `~/.cursor/plugins/**` (not referenced by
-/// `~/.cursor/mcp.json`). Those are discovered separately via
-/// `discover_cursor_plugin_mcp_endpoints` and merged in (deduped by id) so a
-/// plugin like Notion / Slack / Sentry declaring a remote MCP endpoint is not
-/// invisible on the exposure surface. OpenClaw is handled the same way: it has
-/// no `mcpServers` map at all, so its tool surface is discovered from the
-/// installed extension manifests via `discover_openclaw_extension_endpoints`.
+/// Beyond the per-agent global configs, an agent can acquire an MCP server
+/// WITHOUT that server ever appearing in the global config -- because a plugin
+/// or extension it installed declares its own, or because the server was added
+/// at project scope. Those surfaces are discovered separately and merged in
+/// (deduped by id), one scanner per layout:
+/// - `discover_cursor_plugin_mcp_endpoints` -- `~/.cursor/plugins/**`
+/// - `discover_claude_code_project_mcp_endpoints` -- `{project}/.mcp.json` for
+///   the projects Claude Code already knows about
+/// - `discover_claude_plugin_mcp_endpoints` -- the plugin install paths named
+///   by `~/.claude/plugins/installed_plugins.json`
+/// - `discover_claude_desktop_extension_endpoints` -- `Claude Extensions/*`
+///   desktop-extension manifests
+/// - `discover_openclaw_extension_endpoints` -- `~/.openclaw/extensions/*`
+///
+/// Without these, an agent whose servers all arrive through plugins or project
+/// scope reads as having no MCP surface at all: the global config it declares in
+/// the registry is present but empty, which is indistinguishable from "no
+/// servers".
 pub fn discover_mcp_endpoints(home: &Path) -> Vec<McpEndpoint> {
     let mut endpoints = Vec::new();
     'agents: for def in supported_agents::ordered_supported_agents() {
@@ -1609,16 +1627,16 @@ pub fn discover_mcp_endpoints(home: &Path) -> Vec<McpEndpoint> {
             }
         }
     }
-    // Cursor marketplace plugins ship their own `mcp.json` under
-    // `~/.cursor/plugins/**`, and OpenClaw extensions register tools in-process
-    // from `~/.openclaw/extensions/*/openclaw.plugin.json`. Neither is reachable
-    // from a registry `config_target`. Merge both in, deduped by id so a server
-    // also present in a global config is not double-counted.
+    // Plugin- and extension-declared servers are not reachable from any
+    // registry `config_target`. Merge them in, deduped by id so a server also
+    // present in a global config is not double-counted.
     if endpoints.len() < MAX_MCP_ENDPOINTS {
         let mut seen: BTreeSet<String> = endpoints.iter().map(|e| e.id.clone()).collect();
         let extra = discover_cursor_plugin_mcp_endpoints(home)
             .into_iter()
             .chain(discover_claude_code_project_mcp_endpoints(home))
+            .chain(discover_claude_plugin_mcp_endpoints(home))
+            .chain(discover_claude_desktop_extension_endpoints(home))
             .chain(discover_openclaw_extension_endpoints(home));
         for ep in extra {
             if endpoints.len() >= MAX_MCP_ENDPOINTS {
@@ -1632,34 +1650,14 @@ pub fn discover_mcp_endpoints(home: &Path) -> Vec<McpEndpoint> {
     endpoints
 }
 
-/// Discover MCP endpoints declared by Cursor marketplace plugins.
-///
-/// Cursor installs plugins under `~/.cursor/plugins/` (marketplace installs at
-/// `plugins/cache/<publisher>/<name>/<hash>/`, local installs elsewhere in the
-/// tree). A plugin that integrates a remote MCP service ships its own
-/// `mcp.json` there; that file is NOT referenced by the user-level
-/// `~/.cursor/mcp.json`, so without this scan a plugin-provided endpoint (e.g.
-/// Notion / Slack / Sentry) is invisible to the exposure surface.
-///
-/// Plugin `mcp.json` files come in two shapes: the standard
-/// `{ "mcpServers": { ... } }` wrapper AND a bare object whose top-level keys
-/// are server names (`{ "notion": { "type": "http", "url": "..." } }`). Both
-/// are handled by `parse_mcp_json_with_bare_fallback`. The file name also
-/// varies by publisher (`mcp.json`, `.mcp.json`, `.cursor-mcp.json`), so the
-/// match is on the `mcp.json` suffix rather than an exact name -- see
-/// `is_plugin_mcp_config_name`.
-///
-/// Traversal is bounded on three axes (depth, files parsed, and the global
-/// `MAX_MCP_ENDPOINTS` cap) and prunes `node_modules` / `.git` subtrees, so a
-/// large or adversarial plugin cache cannot stall discovery. All endpoints are
-/// attributed to the `cursor` agent and are never the EDAMAME bridge.
 /// Whether a plugin-tree file is an MCP server declaration.
 ///
 /// Publishers do not agree on one name: the same Cursor marketplace cache holds
 /// `mcp.json` (Notion, Sentry) alongside `.mcp.json` and `.cursor-mcp.json`
-/// (Slack). Matching the `mcp.json` suffix covers all observed spellings and any
-/// future `<prefix>-mcp.json` without another hardcoded name list, while still
-/// rejecting unrelated JSON (`package.json`, `manifest.json`).
+/// (Slack), and Claude Code plugins ship `.mcp.json`. Matching the `mcp.json`
+/// suffix covers all observed spellings and any future `<prefix>-mcp.json`
+/// without another hardcoded name list, while still rejecting unrelated JSON
+/// (`package.json`, `manifest.json`).
 fn is_plugin_mcp_config_name(path: &Path) -> bool {
     path.file_name()
         .and_then(|n| n.to_str())
@@ -1667,20 +1665,42 @@ fn is_plugin_mcp_config_name(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-fn discover_cursor_plugin_mcp_endpoints(home: &Path) -> Vec<McpEndpoint> {
-    let plugins_root = home.join(".cursor").join("plugins");
-    if !plugins_root.is_dir() {
-        return Vec::new();
-    }
+/// The registry-declared MCP server key for an agent, i.e. the name EDAMAME's
+/// own bridge registers under. Used to tell our bridge apart from a third-party
+/// server when both can arrive through the same plugin tree.
+fn agent_mcp_server_key(agent_type: &str) -> Option<String> {
+    supported_agents::find_supported_agent(agent_type)
+        .and_then(|def| def.mcp_server_key().map(|key| key.to_string()))
+}
+
+/// Walk `roots` looking for plugin-shipped MCP server declarations and
+/// attribute everything found to `agent_type`.
+///
+/// Plugin MCP files come in two shapes: the standard
+/// `{ "mcpServers": { ... } }` wrapper AND a bare object whose top-level keys
+/// are server names (`{ "notion": { "type": "http", "url": "..." } }`). Both
+/// are handled by `parse_mcp_json_with_bare_fallback`.
+///
+/// Traversal is bounded on four axes -- directory depth, directories visited,
+/// files parsed, and the global `MAX_MCP_ENDPOINTS` cap -- and prunes
+/// `node_modules` / `.git` subtrees, so a large or adversarial plugin tree
+/// cannot stall discovery. The depth cap also breaks any symlink cycle without
+/// tracking visited inodes.
+fn scan_plugin_trees_for_mcp_endpoints(roots: &[PathBuf], agent_type: &str) -> Vec<McpEndpoint> {
+    let server_key = agent_mcp_server_key(agent_type);
     let mut endpoints: Vec<McpEndpoint> = Vec::new();
     let mut files_parsed = 0usize;
-    // Explicit stack DFS with a depth cap; the cap also breaks any symlink
-    // cycle without needing to track visited inodes.
-    let mut stack: Vec<(PathBuf, usize)> = vec![(plugins_root, 0)];
+    let mut dirs_visited = 0usize;
+    let mut stack: Vec<(PathBuf, usize)> = roots
+        .iter()
+        .filter(|root| root.is_dir())
+        .map(|root| (root.clone(), 0))
+        .collect();
     while let Some((dir, depth)) = stack.pop() {
-        if depth > MAX_PLUGIN_SCAN_DEPTH {
+        if depth > MAX_PLUGIN_SCAN_DEPTH || dirs_visited >= MAX_PLUGIN_SCAN_DIRS {
             continue;
         }
+        dirs_visited += 1;
         let read_dir = match std::fs::read_dir(&dir) {
             Ok(rd) => rd,
             Err(_) => continue,
@@ -1716,14 +1736,29 @@ fn discover_cursor_plugin_mcp_endpoints(home: &Path) -> Vec<McpEndpoint> {
                     if endpoints.len() >= MAX_MCP_ENDPOINTS {
                         return endpoints;
                     }
-                    // Plugin-provided servers are third-party integrations, never
-                    // EDAMAME's own bridge.
-                    endpoints.push(build_endpoint("cursor", server, &path_str, false));
+                    // EDAMAME ships as a marketplace plugin too, so a
+                    // plugin-tree server can legitimately be our own bridge.
+                    // Scoring it as a third-party integration would put
+                    // EDAMAME on its own exposure surface.
+                    let is_edamame = server_key.as_deref().is_some_and(|key| server.name == key);
+                    endpoints.push(build_endpoint(agent_type, server, &path_str, is_edamame));
                 }
             }
         }
     }
     endpoints
+}
+
+/// Discover MCP endpoints declared by Cursor marketplace plugins.
+///
+/// Cursor installs plugins under `~/.cursor/plugins/` (marketplace installs at
+/// `plugins/cache/<publisher>/<name>/<hash>/`, local installs elsewhere in the
+/// tree). A plugin that integrates a remote MCP service ships its own
+/// `mcp.json` there; that file is NOT referenced by the user-level
+/// `~/.cursor/mcp.json`, so without this scan a plugin-provided endpoint (e.g.
+/// Notion / Slack / Sentry) is invisible to the exposure surface.
+fn discover_cursor_plugin_mcp_endpoints(home: &Path) -> Vec<McpEndpoint> {
+    scan_plugin_trees_for_mcp_endpoints(&[home.join(".cursor").join("plugins")], "cursor")
 }
 
 /// Discover Claude Code project-scoped `.mcp.json` files.
@@ -1800,12 +1835,183 @@ fn collect_claude_code_project_mcp(
         Err(_) => return,
     };
     let path_str = mcp_json.to_string_lossy().to_string();
+    let server_key = agent_mcp_server_key("claude_code");
     for server in parse_mcp_json(&raw) {
         if endpoints.len() >= MAX_MCP_ENDPOINTS {
             return;
         }
-        endpoints.push(build_endpoint("claude_code", server, &path_str, false));
+        // A project-scoped config can name EDAMAME's own bridge just as a
+        // plugin can, so resolve this the same way the plugin scan does rather
+        // than assuming every project server is third-party.
+        let is_edamame = server_key.as_deref().is_some_and(|key| server.name == key);
+        endpoints.push(build_endpoint("claude_code", server, &path_str, is_edamame));
     }
+}
+
+/// Discover MCP endpoints declared by installed Claude Code plugins.
+///
+/// Claude Code plugins ship their own `.mcp.json`, and installing one is now the
+/// ordinary way to acquire an MCP server -- `~/.claude.json` stays without an
+/// `mcpServers` key entirely. Reading only the registry config target therefore
+/// reports a user with live plugin-provided servers as having none.
+///
+/// Unlike Cursor, the Claude plugin tree CANNOT be walked blind. `~/.claude/
+/// plugins/` holds two very different things:
+/// - `marketplaces/<marketplace>/**` -- the fetched marketplace *catalog*,
+///   carrying a `.mcp.json` for every offered plugin whether or not the user
+///   installed it. On a stock host this is dozens of servers the user has never
+///   run; surfacing them would invent an exposure surface and emit risk
+///   findings against software that is not there.
+/// - `cache/<marketplace>/<plugin>/<version>/` -- the plugins actually
+///   installed.
+///
+/// So the roots come from `installed_plugins.json`, which names an exact
+/// `installPath` per installed plugin, rather than from the tree layout. A
+/// plugin installed from a local checkout points outside `cache/` and is still
+/// covered, because the manifest is authoritative about where it lives.
+///
+/// Enablement (`enabledPlugins` in `~/.claude/settings.json`) is deliberately
+/// NOT a filter: an installed-but-disabled server is one toggle away from live
+/// and belongs on the exposure surface, and enablement can also be set per
+/// project where a host-level scan cannot see it.
+fn discover_claude_plugin_mcp_endpoints(home: &Path) -> Vec<McpEndpoint> {
+    let roots = claude_installed_plugin_paths(home);
+    if roots.is_empty() {
+        return Vec::new();
+    }
+    scan_plugin_trees_for_mcp_endpoints(&roots, "claude_code")
+}
+
+/// Install directories of every plugin listed in
+/// `~/.claude/plugins/installed_plugins.json`.
+///
+/// Shape (`version: 2`): `plugins` maps `<plugin>@<marketplace>` to an array of
+/// install records, one per scope (`user`, `project`, ...), each carrying an
+/// absolute `installPath`. The array form matters -- the same plugin can be
+/// installed at more than one scope, from different paths.
+fn claude_installed_plugin_paths(home: &Path) -> Vec<PathBuf> {
+    let manifest = home
+        .join(".claude")
+        .join("plugins")
+        .join("installed_plugins.json");
+    let Ok(raw) = read_capped(&manifest, MAX_MCP_CONFIG_BYTES) else {
+        return Vec::new();
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return Vec::new();
+    };
+    let Some(plugins) = value.get("plugins").and_then(|v| v.as_object()) else {
+        return Vec::new();
+    };
+    let mut paths = Vec::new();
+    for records in plugins.values() {
+        // Tolerate both the `version: 2` array form and a bare object, so a
+        // manifest revision does not silently empty the scan.
+        let records = match records {
+            serde_json::Value::Array(items) => items.iter().collect::<Vec<_>>(),
+            other => vec![other],
+        };
+        for record in records {
+            let Some(install_path) = record.get("installPath").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            if install_path.is_empty() {
+                continue;
+            }
+            let path = PathBuf::from(install_path);
+            if !paths.contains(&path) {
+                paths.push(path);
+            }
+        }
+    }
+    paths
+}
+
+/// Discover MCP servers contributed by Claude Desktop extensions.
+///
+/// Desktop extensions (`.mcpb` bundles) are the Desktop analogue of Claude Code
+/// plugins: installing one registers an MCP server without ever touching
+/// `claude_desktop_config.json`, which stays at `"mcpServers": {}`. The server
+/// is declared in the extension's `manifest.json` under `server.mcp_config`,
+/// in the same shape as an `mcpServers` entry (command / args / env).
+///
+/// The extensions root sits beside the Desktop app config, so it is derived
+/// from the registry's instruction root rather than re-deriving the
+/// per-platform app-support layout here.
+fn discover_claude_desktop_extension_endpoints(home: &Path) -> Vec<McpEndpoint> {
+    let Some(extensions_root) = supported_agents::find_supported_agent("claude_desktop")
+        .and_then(|def| def.resolve_instruction_root_with_home(home))
+        .map(|root| root.join("Claude Extensions"))
+    else {
+        return Vec::new();
+    };
+    let read_dir = match std::fs::read_dir(&extensions_root) {
+        Ok(rd) => rd,
+        Err(_) => return Vec::new(),
+    };
+    let server_key = agent_mcp_server_key("claude_desktop");
+    let mut endpoints: Vec<McpEndpoint> = Vec::new();
+    for entry in read_dir.flatten() {
+        if endpoints.len() >= MAX_MCP_ENDPOINTS {
+            break;
+        }
+        let manifest = entry.path().join("manifest.json");
+        if !manifest.is_file() {
+            continue;
+        }
+        let Ok(raw) = read_capped(&manifest, MAX_MCP_CONFIG_BYTES) else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            continue;
+        };
+        // The manifest `name` is the extension's own identifier; fall back to
+        // the directory name so a name-less manifest still surfaces rather
+        // than disappearing.
+        let name = value
+            .get("name")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .or_else(|| {
+                entry
+                    .path()
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|n| n.to_string())
+            });
+        let Some(name) = name.filter(|n| !n.is_empty()) else {
+            continue;
+        };
+        let Some(server) = value.get("server") else {
+            continue;
+        };
+        // `server.mcp_config` carries the real launch spec. Without it the
+        // extension still declares a server, so fall back to the bundle's
+        // runtime `type` (`node`, `python`, `binary`) as the command -- enough
+        // to place it on the inventory as a local stdio surface.
+        let raw_server = match server.get("mcp_config") {
+            Some(config) => parse_json_server(&name, config),
+            None => {
+                let mut fallback = parse_json_server(&name, server);
+                fallback.command = fallback.command.or_else(|| {
+                    server
+                        .get("type")
+                        .and_then(|v| v.as_str())
+                        .map(String::from)
+                });
+                fallback.explicit_type = Some("stdio".to_string());
+                fallback
+            }
+        };
+        let is_edamame = server_key.as_deref().is_some_and(|key| name == key);
+        endpoints.push(build_endpoint(
+            "claude_desktop",
+            raw_server,
+            &manifest.to_string_lossy(),
+            is_edamame,
+        ));
+    }
+    endpoints
 }
 
 /// Discover tool surfaces contributed by OpenClaw extensions.
@@ -6308,6 +6514,296 @@ bob ALL=(ALL) NOPASSWD: ALL
         // Unrelated plugin JSON is still ignored.
         assert!(!is_plugin_mcp_config_name(Path::new("package.json")));
         assert!(!is_plugin_mcp_config_name(Path::new("manifest.json")));
+    }
+
+    // --- Claude Code plugin MCP discovery ------------------------------------
+
+    /// Install a Claude Code plugin the way the CLI does: the payload under
+    /// `plugins/cache/<marketplace>/<plugin>/<version>/`, and an
+    /// `installed_plugins.json` record naming that exact path.
+    fn install_claude_plugin(home: &Path, key: &str, plugin: &str, mcp_json: &str) -> PathBuf {
+        let dir = home
+            .join(".claude")
+            .join("plugins")
+            .join("cache")
+            .join("claude-plugins-official")
+            .join(plugin)
+            .join("1.3.1");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(".mcp.json"), mcp_json).unwrap();
+
+        let manifest = home
+            .join(".claude")
+            .join("plugins")
+            .join("installed_plugins.json");
+        let mut plugins = std::fs::read_to_string(&manifest)
+            .ok()
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+            .and_then(|v| v.get("plugins").cloned())
+            .and_then(|v| v.as_object().cloned())
+            .unwrap_or_default();
+        plugins.insert(
+            key.to_string(),
+            serde_json::json!([{
+                "scope": "user",
+                "installPath": dir.to_string_lossy(),
+                "version": "1.3.1",
+            }]),
+        );
+        std::fs::write(
+            &manifest,
+            serde_json::json!({ "version": 2, "plugins": plugins }).to_string(),
+        )
+        .unwrap();
+        dir
+    }
+
+    /// Write a marketplace *catalog* entry: a plugin offered for install but not
+    /// installed. Claude fetches the whole catalog, `.mcp.json` files included.
+    fn write_claude_marketplace_catalog_entry(home: &Path, plugin: &str, mcp_json: &str) {
+        let dir = home
+            .join(".claude")
+            .join("plugins")
+            .join("marketplaces")
+            .join("claude-plugins-official")
+            .join("external_plugins")
+            .join(plugin);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(".mcp.json"), mcp_json).unwrap();
+    }
+
+    #[test]
+    fn claude_plugin_mcp_server_is_discovered() {
+        // A Claude Code plugin ships its own `.mcp.json`; installing one is the
+        // ordinary way to acquire an MCP server, and it never touches
+        // `~/.claude.json`. Without the plugin scan this user reads as having no
+        // Claude MCP surface at all.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        install_claude_plugin(
+            home,
+            "postman@claude-plugins-official",
+            "postman",
+            r#"{ "mcpServers": { "postman": {
+                "type": "http",
+                "url": "https://mcp.postman.com/mcp",
+                "headers": { "X-Source": "claude-code-plugin" }
+            } } }"#,
+        );
+        // The global config target exists but carries no `mcpServers` key at
+        // all -- the exact shape that made this a blind spot.
+        std::fs::write(home.join(".claude.json"), r#"{ "numStartups": 12 }"#).unwrap();
+
+        let endpoints = discover_mcp_endpoints(home);
+        let postman = endpoints
+            .iter()
+            .find(|e| e.server_name == "postman")
+            .expect("claude plugin endpoint discovered");
+        assert_eq!(postman.agent_type, "claude_code");
+        assert_eq!(postman.transport, "http");
+        assert_eq!(postman.bind_host.as_deref(), Some("mcp.postman.com"));
+        assert!(!postman.is_edamame_server);
+        assert!(postman.config_path.contains("plugins"));
+    }
+
+    #[test]
+    fn claude_marketplace_catalog_is_not_mistaken_for_installed_plugins() {
+        // The marketplace catalog under `plugins/marketplaces/**` carries a
+        // `.mcp.json` for every OFFERED plugin. A Cursor-style blind walk of the
+        // plugin tree would invent an endpoint per catalog entry -- servers the
+        // user has never run -- and then score risk findings against them.
+        // Discovery is driven by `installed_plugins.json` instead.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        install_claude_plugin(
+            home,
+            "postman@claude-plugins-official",
+            "postman",
+            r#"{ "mcpServers": { "postman": { "type": "http", "url": "https://mcp.postman.com/mcp" } } }"#,
+        );
+        for offered in ["discord", "telegram", "gitlab"] {
+            write_claude_marketplace_catalog_entry(
+                home,
+                offered,
+                &format!(
+                    r#"{{ "mcpServers": {{ "{offered}": {{ "command": "npx", "args": ["-y", "{offered}-mcp"] }} }} }}"#
+                ),
+            );
+        }
+
+        let names = discovered_names(&discover_mcp_endpoints(home), "claude_code");
+        assert_eq!(
+            names,
+            vec!["postman".to_string()],
+            "only the installed plugin's server may surface",
+        );
+    }
+
+    #[test]
+    fn claude_plugin_installed_from_local_checkout_is_discovered() {
+        // `installPath` is authoritative: a plugin installed from a local
+        // checkout lives outside `plugins/cache/` and must still be scanned.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        let checkout = home.join("src/my-plugin");
+        std::fs::create_dir_all(&checkout).unwrap();
+        std::fs::write(
+            checkout.join(".mcp.json"),
+            r#"{ "mcpServers": { "homegrown": { "command": "node", "args": ["server.js"] } } }"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(home.join(".claude/plugins")).unwrap();
+        std::fs::write(
+            home.join(".claude/plugins/installed_plugins.json"),
+            serde_json::json!({
+                "version": 2,
+                "plugins": {
+                    "my-plugin@local": [{
+                        "scope": "user",
+                        "installPath": checkout.to_string_lossy(),
+                    }]
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        assert!(
+            discovered_names(&discover_mcp_endpoints(home), "claude_code")
+                .contains(&"homegrown".to_string())
+        );
+    }
+
+    #[test]
+    fn claude_plugin_scan_without_install_manifest_finds_nothing() {
+        // No `installed_plugins.json` -> no roots -> no endpoints, even with a
+        // populated plugin tree.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        write_claude_marketplace_catalog_entry(
+            home,
+            "discord",
+            r#"{ "mcpServers": { "discord": { "command": "npx" } } }"#,
+        );
+        assert!(discover_mcp_endpoints(home).is_empty());
+    }
+
+    #[test]
+    fn claude_plugin_edamame_bridge_is_flagged_as_our_own() {
+        // EDAMAME ships through the Claude Code marketplace too. Its bridge
+        // must not land on the exposure surface as a third-party server.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        let key = agent_mcp_server_key("claude_code").expect("claude_code declares a server key");
+        install_claude_plugin(
+            home,
+            "edamame@edamame",
+            "edamame_claude_code",
+            &format!(
+                r#"{{ "mcpServers": {{ "{key}": {{ "command": "node", "args": ["bridge.mjs"] }} }} }}"#
+            ),
+        );
+
+        let ours = discover_mcp_endpoints(home)
+            .into_iter()
+            .find(|e| e.server_name == key)
+            .expect("edamame plugin bridge discovered");
+        assert!(ours.is_edamame_server);
+    }
+
+    // --- Claude Desktop extension MCP discovery ------------------------------
+
+    /// Install a Claude Desktop extension (`.mcpb` bundle) beside the Desktop
+    /// app config, the way the app itself does.
+    fn install_claude_desktop_extension(home: &Path, id: &str, manifest: &str) -> Option<PathBuf> {
+        let root = supported_agents::find_supported_agent("claude_desktop")?
+            .resolve_instruction_root_with_home(home)?;
+        let dir = root.join("Claude Extensions").join(id);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("manifest.json"), manifest).unwrap();
+        Some(dir)
+    }
+
+    #[test]
+    fn claude_desktop_extension_mcp_server_is_discovered() {
+        // Installing a desktop extension registers an MCP server without ever
+        // touching `claude_desktop_config.json`, which stays `"mcpServers": {}`.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        let installed = install_claude_desktop_extension(
+            home,
+            "ant.dir.gh.apify.apify-mcp-server",
+            r#"{
+                "manifest_version": "0.3",
+                "name": "apify-mcp-server",
+                "display_name": "Apify",
+                "server": {
+                    "type": "node",
+                    "entry_point": "dist/stdio.js",
+                    "mcp_config": {
+                        "command": "node",
+                        "args": ["${__dirname}/dist/stdio.js"],
+                        "env": { "APIFY_TOKEN": "${user_config.apify_token}" }
+                    }
+                }
+            }"#,
+        );
+        if installed.is_none() {
+            return;
+        }
+        precreate_claude_desktop_dir(home);
+
+        let endpoints = discover_mcp_endpoints(home);
+        let apify = endpoints
+            .iter()
+            .find(|e| e.server_name == "apify-mcp-server")
+            .expect("claude desktop extension discovered");
+        assert_eq!(apify.agent_type, "claude_desktop");
+        assert_eq!(apify.transport, "stdio");
+        assert_eq!(apify.command.as_deref(), Some("node"));
+        // Env KEY names only, never values (invariant I5).
+        assert_eq!(apify.env_keys, vec!["APIFY_TOKEN".to_string()]);
+        assert!(!apify.is_edamame_server);
+    }
+
+    #[test]
+    fn claude_desktop_extension_without_mcp_config_still_surfaces() {
+        // An older/leaner manifest declares only the bundle runtime. The
+        // extension is still a tool-exposure surface and must not vanish.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        let installed = install_claude_desktop_extension(
+            home,
+            "com.example.legacy",
+            r#"{ "name": "legacy-tools", "server": { "type": "python", "entry_point": "main.py" } }"#,
+        );
+        if installed.is_none() {
+            return;
+        }
+
+        let endpoints = discover_mcp_endpoints(home);
+        let legacy = endpoints
+            .iter()
+            .find(|e| e.server_name == "legacy-tools")
+            .expect("manifest without mcp_config still surfaces");
+        assert_eq!(legacy.transport, "stdio");
+    }
+
+    #[test]
+    fn claude_desktop_extension_without_server_block_is_skipped() {
+        // A bundle that declares no server at all contributes no endpoint --
+        // it is not an MCP surface.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        let installed = install_claude_desktop_extension(
+            home,
+            "com.example.theme",
+            r#"{ "name": "just-a-theme", "manifest_version": "0.3" }"#,
+        );
+        if installed.is_none() {
+            return;
+        }
+        assert!(discovered_names(&discover_mcp_endpoints(home), "claude_desktop").is_empty());
     }
 
     #[test]
