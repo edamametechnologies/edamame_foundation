@@ -548,6 +548,169 @@ pub struct HostPrivilege {
     pub assessed: bool,
 }
 
+/// Container-name needles used to detect OS confinement for one agent.
+///
+/// Explicit per agent rather than `agent_type.split('_').next()`: that derived
+/// `"claude"` for BOTH `claude_code` and `claude_desktop`, so a single
+/// `~/Library/Containers/*claude*` entry (Desktop's) would have marked the
+/// Claude Code CLI confined too. CLI agents get an empty list -- a terminal
+/// process is never in an app-sandbox container, and matching on a GUI sibling's
+/// container is always wrong.
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
+fn sandbox_container_needles(agent_type: &str) -> &'static [&'static str] {
+    match agent_type {
+        "cursor" => &["cursor"],
+        "claude_desktop" => &["claudefordesktop", "claudedesktop", "claude-desktop"],
+        "codex" => &["codex"],
+        // CLI / headless agents: no app-sandbox container of their own.
+        "claude_code" | "hermes" | "openclaw" => &[],
+        _ => &[],
+    }
+}
+
+/// Read an agent's OWN declared confinement + approval policy from its config.
+///
+/// The OS-level assessment below answers "can this process reach the user's
+/// files"; it cannot answer "what has the agent been configured to allow",
+/// which is the knob the operator actually turns. Without this, a host reported
+/// the identical `mechanism: "none"` line whether Cursor's `sandbox.mode` was
+/// `disabled` or `enabled`.
+///
+/// Best-effort and non-fatal: an unreadable or malformed config yields an empty
+/// `DeclaredConfinement`.
+pub fn declared_confinement_for_agent(agent_type: &str, home: &Path) -> DeclaredConfinement {
+    match agent_type {
+        // `~/.cursor/cli-config.json`: {"sandbox":{"mode":"disabled"},"approvalMode":"unrestricted"}
+        "cursor" => {
+            let path = home.join(".cursor").join("cli-config.json");
+            let Some(json) = read_json_config(&path) else {
+                return DeclaredConfinement::default();
+            };
+            let confinement = json
+                .get("sandbox")
+                .and_then(|v| v.get("mode"))
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+            let approval = json
+                .get("approvalMode")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+            declared_or_default(confinement, approval, &path)
+        }
+        // `~/.claude/settings.json`: {"permissions":{"defaultMode":"..."}}
+        "claude_code" => {
+            let path = home.join(".claude").join("settings.json");
+            let Some(json) = read_json_config(&path) else {
+                return DeclaredConfinement::default();
+            };
+            let permissions = json.get("permissions");
+            let approval = permissions
+                .and_then(|v| v.get("defaultMode"))
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+            // `defaultMode` alone under-reports: a settings.json can carry an
+            // explicit allow/deny/ask ruleset and no defaultMode at all, and
+            // reading only the mode reported the agent as declaring NOTHING
+            // while it in fact granted e.g. `Bash(python3 -)` and a broad
+            // `Read(//Users/me/Programming/**)`. Summarise the ruleset so the
+            // operator surface shows that rules exist and how many.
+            let confinement = permissions.and_then(rule_counts_summary);
+            declared_or_default(confinement, approval, &path)
+        }
+        // `~/.codex/config.toml`: top-level `sandbox_mode` / `approval_policy`.
+        "codex" => {
+            let path = std::env::var("CODEX_HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| home.join(".codex"))
+                .join("config.toml");
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                return DeclaredConfinement::default();
+            };
+            let confinement = toml_top_level_string(&text, "sandbox_mode");
+            let approval = toml_top_level_string(&text, "approval_policy");
+            declared_or_default(confinement, approval, &path)
+        }
+        _ => DeclaredConfinement::default(),
+    }
+}
+
+/// Summarise a permissions object's rule lists as `"allow:2 deny:0 ask:1"`.
+///
+/// Counts only -- never the rule bodies, which can name paths the operator has
+/// not consented to expose on the visibility surface (invariant I5). `None`
+/// when no recognised list carries any entry.
+fn rule_counts_summary(permissions: &serde_json::Value) -> Option<String> {
+    let parts: Vec<String> = ["allow", "deny", "ask"]
+        .iter()
+        .filter_map(|key| {
+            let n = permissions.get(key)?.as_array()?.len();
+            (n > 0).then(|| format!("{}:{}", key, n))
+        })
+        .collect();
+    (!parts.is_empty()).then(|| parts.join(" "))
+}
+
+fn declared_or_default(
+    confinement: Option<String>,
+    approval: Option<String>,
+    path: &Path,
+) -> DeclaredConfinement {
+    if confinement.is_none() && approval.is_none() {
+        return DeclaredConfinement::default();
+    }
+    DeclaredConfinement {
+        confinement,
+        approval,
+        source: Some(path.to_string_lossy().to_string()),
+    }
+}
+
+/// Size-capped JSON config read. Agent config files are small; refusing to slurp
+/// an arbitrarily large file keeps a corrupt/hostile config from ballooning the
+/// inventory pass.
+fn read_json_config(path: &Path) -> Option<serde_json::Value> {
+    const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
+    let meta = std::fs::metadata(path).ok()?;
+    if !meta.is_file() || meta.len() > MAX_CONFIG_BYTES {
+        return None;
+    }
+    let text = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+/// Extract a top-level `key = "value"` string from a TOML document.
+///
+/// Deliberately not a full TOML parse: only lines BEFORE the first `[table]`
+/// header are considered, so `[mcp_servers.x] sandbox_mode = ...` inside a
+/// table cannot be mistaken for the document-level setting.
+fn toml_top_level_string(text: &str, key: &str) -> Option<String> {
+    for raw in text.lines() {
+        let line = raw.trim();
+        if line.starts_with('[') {
+            break;
+        }
+        if line.starts_with('#') {
+            continue;
+        }
+        let Some((lhs, rhs)) = line.split_once('=') else {
+            continue;
+        };
+        if lhs.trim() != key {
+            continue;
+        }
+        let value = rhs
+            .trim()
+            .trim_end_matches(|c: char| c == ',')
+            .trim()
+            .trim_matches(|c: char| c == '"' || c == '\'')
+            .trim();
+        if !value.is_empty() {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
 /// Per-agent OS-confinement ("sandbox") assessment. Most workstation coding
 /// agents run unconfined with the user's full file access; that is itself the
 /// high-signal case -- an unsandboxed agent combined with passwordless root is
@@ -576,13 +739,36 @@ pub struct AgentSandbox {
     pub can_launch_arbitrary_commands: Option<bool>,
     /// Human-readable process-launch detail.
     pub command_execution_detail: String,
+    /// The agent's OWN declared confinement setting, verbatim from its config
+    /// (Cursor `sandbox.mode`, Codex `sandbox_mode`, Claude Code
+    /// `permissions.defaultMode`). `None` when the agent declares nothing or
+    /// its config could not be read. This is a self-report by the agent about
+    /// what IT will enforce -- orthogonal to `sandboxed`, which is the OS-level
+    /// confinement of the process.
+    pub declared_confinement: Option<String>,
+    /// The agent's declared approval / permission policy (Cursor
+    /// `approvalMode`, Codex `approval_policy`), verbatim. `None` when absent.
+    pub declared_approval: Option<String>,
+    /// Config file the declared values were read from. `None` when nothing was
+    /// declared.
+    pub declared_source: Option<String>,
 }
 
-fn build_agent_sandbox(
+/// An agent's self-declared confinement + approval policy, read from its own
+/// config file. See [`AgentSandbox::declared_confinement`].
+#[derive(Debug, Clone, Default)]
+pub struct DeclaredConfinement {
+    pub confinement: Option<String>,
+    pub approval: Option<String>,
+    pub source: Option<String>,
+}
+
+fn build_agent_sandbox_with_declared(
     agent_type: String,
     sandboxed: Option<bool>,
     mechanism: &str,
     detail: String,
+    declared: DeclaredConfinement,
 ) -> AgentSandbox {
     let (
         file_access_scope,
@@ -618,6 +804,9 @@ fn build_agent_sandbox(
         file_access_detail: file_access_detail.to_string(),
         can_launch_arbitrary_commands,
         command_execution_detail: command_execution_detail.to_string(),
+        declared_confinement: declared.confinement,
+        declared_approval: declared.approval,
+        declared_source: declared.source,
     }
 }
 
@@ -1323,33 +1512,62 @@ fn assess_one_agent_sandbox(
     def: &supported_agents::SupportedAgentDefinition,
     home: &Path,
 ) -> AgentSandbox {
-    let token = def
-        .agent_type
-        .split('_')
-        .next()
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    let containers = home.join("Library/Containers");
-    if let Ok(entries) = std::fs::read_dir(&containers) {
-        for e in entries.flatten() {
-            let raw = e.file_name();
-            let name = raw.to_string_lossy().to_ascii_lowercase();
-            if !token.is_empty() && name.contains(&token) {
-                return build_agent_sandbox(
-                    def.agent_type.clone(),
-                    Some(true),
-                    "app-sandbox",
-                    format!("App-sandbox container present ({})", raw.to_string_lossy()),
-                );
+    let declared = declared_confinement_for_agent(&def.agent_type, home);
+    let needles = sandbox_container_needles(&def.agent_type);
+    if !needles.is_empty() {
+        let containers = home.join("Library/Containers");
+        if let Ok(entries) = std::fs::read_dir(&containers) {
+            for e in entries.flatten() {
+                let raw = e.file_name();
+                let name = raw.to_string_lossy().to_ascii_lowercase();
+                if needles.iter().any(|n| name.contains(n)) {
+                    return build_agent_sandbox_with_declared(
+                        def.agent_type.clone(),
+                        Some(true),
+                        "app-sandbox",
+                        format!("App-sandbox container present ({})", raw.to_string_lossy()),
+                        declared,
+                    );
+                }
             }
         }
     }
-    build_agent_sandbox(
+    // Claude Desktop runs its local agent inside a bundled VM rather than an
+    // app-sandbox container, so the Containers scan above never sees it. The VM
+    // image is the confinement boundary for that agent's work.
+    if let Some(bundle) = desktop_vm_bundle(&def.agent_type, home) {
+        return build_agent_sandbox_with_declared(
+            def.agent_type.clone(),
+            Some(true),
+            "vm",
+            format!("Local-agent VM bundle present ({})", bundle),
+            declared,
+        );
+    }
+    build_agent_sandbox_with_declared(
         def.agent_type.clone(),
         Some(false),
         "none",
         "Unsandboxed - full access to your user files".to_string(),
+        declared,
     )
+}
+
+/// Path of Claude Desktop's local-agent VM bundle, when present. `None` for
+/// every other agent. Desktop ships the agent runtime inside
+/// `vm_bundles/claudevm.bundle` under its app-support dir.
+#[cfg(target_os = "macos")]
+fn desktop_vm_bundle(agent_type: &str, home: &Path) -> Option<String> {
+    if agent_type != "claude_desktop" {
+        return None;
+    }
+    let bundle = home
+        .join("Library/Application Support/Claude")
+        .join("vm_bundles")
+        .join("claudevm.bundle");
+    bundle
+        .is_dir()
+        .then(|| bundle.to_string_lossy().to_string())
 }
 
 /// Linux confinement: flatpak apps store per-app data under
@@ -1360,33 +1578,33 @@ fn assess_one_agent_sandbox(
     def: &supported_agents::SupportedAgentDefinition,
     home: &Path,
 ) -> AgentSandbox {
-    let token = def
-        .agent_type
-        .split('_')
-        .next()
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    for (subdir, mechanism) in [(".var/app", "flatpak"), ("snap", "snap")] {
-        if let Ok(entries) = std::fs::read_dir(home.join(subdir)) {
-            for e in entries.flatten() {
-                let raw = e.file_name();
-                let name = raw.to_string_lossy().to_ascii_lowercase();
-                if !token.is_empty() && name.contains(&token) {
-                    return build_agent_sandbox(
-                        def.agent_type.clone(),
-                        Some(true),
-                        mechanism,
-                        format!("{}-confined ({})", mechanism, raw.to_string_lossy()),
-                    );
+    let declared = declared_confinement_for_agent(&def.agent_type, home);
+    let needles = sandbox_container_needles(&def.agent_type);
+    if !needles.is_empty() {
+        for (subdir, mechanism) in [(".var/app", "flatpak"), ("snap", "snap")] {
+            if let Ok(entries) = std::fs::read_dir(home.join(subdir)) {
+                for e in entries.flatten() {
+                    let raw = e.file_name();
+                    let name = raw.to_string_lossy().to_ascii_lowercase();
+                    if needles.iter().any(|n| name.contains(n)) {
+                        return build_agent_sandbox_with_declared(
+                            def.agent_type.clone(),
+                            Some(true),
+                            mechanism,
+                            format!("{}-confined ({})", mechanism, raw.to_string_lossy()),
+                            declared,
+                        );
+                    }
                 }
             }
         }
     }
-    build_agent_sandbox(
+    build_agent_sandbox_with_declared(
         def.agent_type.clone(),
         Some(false),
         "none",
         "Unsandboxed - full access to your user files".to_string(),
+        declared,
     )
 }
 
@@ -1400,20 +1618,22 @@ fn assess_one_agent_sandbox(
 ) -> AgentSandbox {
     #[cfg(target_os = "windows")]
     {
-        build_agent_sandbox(
+        build_agent_sandbox_with_declared(
             def.agent_type.clone(),
             Some(false),
             "none",
             "Win32 desktop app - not UWP/AppContainer-sandboxed".to_string(),
+            declared_confinement_for_agent(&def.agent_type, _home),
         )
     }
     #[cfg(not(target_os = "windows"))]
     {
-        build_agent_sandbox(
+        build_agent_sandbox_with_declared(
             def.agent_type.clone(),
             None,
             "unknown",
             "Sandbox status not assessed on this platform".to_string(),
+            DeclaredConfinement::default(),
         )
     }
 }
@@ -3212,12 +3432,52 @@ pub fn build_agent_component_inventories_from_endpoints_with_home(
 
 /// Env-var names that look like they carry a secret/credential. Used to
 /// project secret bindings into the component inventory (names only, I5).
+///
+/// Matching is `_`-token-bounded, not a bare substring test. Several needles
+/// are short enough to appear inside ordinary words -- `PAT` sits inside every
+/// `*_PATH` / `*_PATHS` variable, which made a Codex MCP server's
+/// `CODEX_CLI_PATH`, `NODE_REPL_NODE_PATH` and `NODE_REPL_TRUSTED_CODE_PATHS`
+/// (all plain filesystem paths) report as secret bindings. Requiring the needle
+/// to start and end on an `_` boundary keeps `GITHUB_PAT` / `OPENAI_API_KEY` /
+/// `AWS_SECRET_ACCESS_KEY` matching while dropping the `PATH` family.
+///
+/// Keys with no `_` at all (`githubToken`) fall back to a plain substring test,
+/// since there are no token boundaries to anchor against.
 fn is_secret_env_key(key: &str) -> bool {
     let upper = key.to_ascii_uppercase();
     // CloudModel-tunable needles (uppercased by `CveDetectionParams::new_from_json`).
     agent_visibility_params::agent_secret_env_key_needles()
         .iter()
-        .any(|n| upper.contains(n.as_str()))
+        .any(|n| needle_matches_env_key(&upper, n.as_str()))
+}
+
+/// True when `needle` occurs in `key` on `_` token boundaries (or anywhere, when
+/// `key` has no `_` to anchor against). Both inputs are expected uppercased.
+fn needle_matches_env_key(key: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return false;
+    }
+    if !key.contains('_') {
+        return key.contains(needle);
+    }
+    let bytes = key.as_bytes();
+    let mut from = 0usize;
+    while let Some(rel) = key[from..].find(needle) {
+        let start = from + rel;
+        let end = start + needle.len();
+        let left_ok = start == 0 || bytes[start - 1] == b'_';
+        let right_ok = end == bytes.len() || bytes[end] == b'_';
+        if left_ok && right_ok {
+            return true;
+        }
+        // Advance one byte past this occurrence and keep looking; `needle` is
+        // ASCII (uppercased params), so byte stepping stays on a char boundary.
+        from = start + 1;
+        if from >= key.len() {
+            break;
+        }
+    }
+    false
 }
 
 /// Subdirectories within an agent's config dir that carry agent instructions /
@@ -3750,13 +4010,18 @@ fn discover_agent_instruction_components(home: &Path, agent_type: &str) -> Vec<A
         }
     }
 
-    // Allowlisted instruction-bearing subdirectories (bounded walk).
-    for (subdir, kind) in INSTRUCTION_SUBDIRS {
-        let root = config_dir.join(subdir);
-        if !root.is_dir() {
-            continue;
+    // Allowlisted instruction-bearing subdirectories (bounded walk), under the
+    // config dir itself and under any agent-specific nested plugin roots.
+    for base in
+        std::iter::once(config_dir.clone()).chain(nested_instruction_roots(&config_dir, agent_type))
+    {
+        for (subdir, kind) in INSTRUCTION_SUBDIRS {
+            let root = base.join(subdir);
+            if !root.is_dir() {
+                continue;
+            }
+            collect_instruction_files(&root, kind, MAX_DEPTH, &mut found, MAX_FILES);
         }
-        collect_instruction_files(&root, kind, MAX_DEPTH, &mut found, MAX_FILES);
     }
 
     found.sort_by(|a, b| a.0.cmp(&b.0));
@@ -3770,6 +4035,68 @@ fn discover_agent_instruction_components(home: &Path, agent_type: &str) -> Vec<A
             out.push(comp);
         }
     }
+    out
+}
+
+/// Extra roots under an agent's config dir that hold instruction subdirectories
+/// one or more levels down, and so are missed by the flat
+/// `config_dir/<INSTRUCTION_SUBDIRS>` walk.
+///
+/// Claude Desktop is the case that motivated this: it does not keep skills in
+/// `~/Library/Application Support/Claude/skills`. It installs them per
+/// (profile, account) pair under
+/// `local-agent-mode-sessions/skills-plugin/<profile>/<account>/skills/`, so
+/// the flat walk found nothing and Desktop reported a component inventory of
+/// exactly one entry (the agent runtime itself) while a live host had 18
+/// `SKILL.md` files on disk.
+///
+/// Note this deliberately reaches INTO a `…-sessions` directory, which the
+/// `INSTRUCTION_SUBDIRS` allowlist otherwise keeps out. That is safe because
+/// the path below `skills-plugin` is fully pinned (two fixed directory levels,
+/// then the same instruction-subdir allowlist as anywhere else) -- transcripts
+/// and session state live in sibling directories that are never walked.
+///
+/// Bounded: at most `MAX_NESTED_ROOTS` roots, discovered with two `read_dir`
+/// levels and no recursion.
+fn nested_instruction_roots(config_dir: &Path, agent_type: &str) -> Vec<PathBuf> {
+    const MAX_NESTED_ROOTS: usize = 32;
+    if agent_type != "claude_desktop" {
+        return Vec::new();
+    }
+    let plugin_base = config_dir
+        .join("local-agent-mode-sessions")
+        .join("skills-plugin");
+    if !plugin_base.is_dir() {
+        return Vec::new();
+    }
+    let mut out: Vec<PathBuf> = Vec::new();
+    let Ok(profiles) = std::fs::read_dir(&plugin_base) else {
+        return out;
+    };
+    for profile in profiles.flatten() {
+        if out.len() >= MAX_NESTED_ROOTS {
+            break;
+        }
+        let profile_path = profile.path();
+        let (is_dir, _) = entry_kind_following_symlinks(&profile, &profile_path);
+        if !is_dir {
+            continue;
+        }
+        let Ok(accounts) = std::fs::read_dir(&profile_path) else {
+            continue;
+        };
+        for account in accounts.flatten() {
+            if out.len() >= MAX_NESTED_ROOTS {
+                break;
+            }
+            let account_path = account.path();
+            let (is_dir, _) = entry_kind_following_symlinks(&account, &account_path);
+            if is_dir {
+                out.push(account_path);
+            }
+        }
+    }
+    out.sort();
     out
 }
 
@@ -4723,7 +5050,56 @@ pub fn slug_from_workspace_dir(dir: &str) -> String {
     if comps.is_empty() {
         return String::new();
     }
-    format!("-{}", comps.join("-"))
+    // Route through the canonicaliser rather than joining directly: the agents'
+    // own `projects/<slug>` encoding is LOSSY (a literal `_` in a directory name
+    // is written as `-`, which is also the separator), so a slug re-derived from
+    // a real path must be flattened the same way or `/Users/me/edamame_core`
+    // yields `-Users-me-edamame_core` while the transcript path yields
+    // `-Users-me-edamame-core` and the two never join.
+    // `resolve_slug_under` disambiguates `-` back to `_`/`-` against the
+    // filesystem, so nothing is lost for path resolution.
+    canonicalize_project_slug(&comps.join("-"))
+}
+
+/// Normalise a `projects/<slug>` segment into the single canonical dash-encoded
+/// shape produced by [`slug_from_workspace_dir`] (exactly one leading `-`, no
+/// empty tokens).
+///
+/// The agents disagree on the encoding for the SAME directory: Claude Code
+/// writes `~/.claude/projects/-Users-me-code-proj` (leading `-` for the root),
+/// Cursor writes `~/.cursor/projects/Users-me-code-proj` (no leading `-`).
+/// [`resolve_slug_under`] already treats the two identically -- it splits on
+/// `-` and drops empty tokens -- so both resolve to the same root, but the raw
+/// slugs are different strings. Returning the raw slug therefore split one
+/// physical workspace into two strip nodes: the inventory-bearing one (whose
+/// slug happened to win the `collect_workspace_inventories` root dedupe) and an
+/// inventory-less twin carrying the other agent's usage rows.
+///
+/// Canonicalising here is a pure-string operation, so the sandboxed core
+/// (`workspace_slug_for_session`) and the unsandboxed inventory pass
+/// (`workspace_root_and_slug_for_session` / `collect_workspace_inventories`)
+/// agree on the join key without either needing filesystem access.
+pub fn canonicalize_project_slug(slug: &str) -> String {
+    // EVERY non-alphanumeric character folds to `-`, because that is what the
+    // agents' own `projects/<slug>` encoding does and it is lossy: a directory
+    // named `Mon Drive (frank@lyonnet.org)` is written `Mon-Drive-frank-lyonnet-org`
+    // (space, `(`, `@`, `.`, `)` all become `-`, empties dropped). Folding only
+    // the separator would leave a path-derived slug and a transcript-derived
+    // slug for the same directory as different strings, which is exactly the
+    // split this canonicalisation exists to prevent.
+    //
+    // Nothing is lost for path resolution: `resolve_slug_under` reconstructs
+    // arbitrary separator characters by scanning the parent directory
+    // (`scan_dir_for_slug_match`), so a fully flattened slug still resolves.
+    let flattened: String = slug
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let tokens: Vec<&str> = flattened.split('-').filter(|t| !t.is_empty()).collect();
+    if tokens.is_empty() {
+        return String::new();
+    }
+    format!("-{}", tokens.join("-"))
 }
 
 /// True when `path` is the same as `dir` or a descendant of it (string-prefix
@@ -4765,7 +5141,10 @@ pub fn workspace_slug_for_session(source_path: &str, workspace_hint: &str) -> Op
         }
     }
     if let Some(slug) = project_slug_from_source_path(source_path) {
-        return Some(slug);
+        let slug = canonicalize_project_slug(&slug);
+        if !slug.is_empty() {
+            return Some(slug);
+        }
     }
     if !hint.is_empty() {
         let slug = slug_from_workspace_dir(hint);
@@ -4804,7 +5183,21 @@ pub fn workspace_root_and_slug_for_session(
     }
     if let Some(slug) = project_slug_from_source_path(source_path) {
         if let Some(root) = resolve_slug_to_existing_dir(&slug) {
-            return Some((root, slug));
+            // Re-derive the slug from the resolved root rather than echoing the
+            // agent-native encoding back: `slug_from_workspace_dir` is the same
+            // canonical form `workspace_slug_for_session` produces, so a Cursor
+            // session and a Claude Code session in the same directory join on
+            // one workspace node instead of two.
+            let canonical = slug_from_workspace_dir(&root.to_string_lossy());
+            let slug = if canonical.is_empty() {
+                canonicalize_project_slug(&slug)
+            } else {
+                canonical
+            };
+            debug_assert_eq!(slug, canonicalize_project_slug(&slug));
+            if !slug.is_empty() {
+                return Some((root, slug));
+            }
         }
         // Unresolved projects slug: fall through to hint (do not hard-fail).
     }
@@ -4880,7 +5273,16 @@ pub fn agent_type_for_fleet_workspace_ref(path_or_slug: &str) -> Option<&'static
         "openclaw" => return Some("openclaw"),
         "codex" => return Some("codex"),
         "claude desktop" => return Some("claude_desktop"),
+        "hermes" => return Some("hermes"),
         _ => {}
+    }
+    if hay.contains("/.hermes")
+        || hay.ends_with("/.hermes")
+        || hay.ends_with("-.hermes")
+        || hay.ends_with("-hermes")
+        || hay == ".hermes"
+    {
+        return Some("hermes");
     }
     if hay.contains("/.openclaw")
         || hay.ends_with("/.openclaw")
@@ -4912,6 +5314,8 @@ pub fn agent_type_for_fleet_workspace_ref(path_or_slug: &str) -> Option<&'static
         || hay.ends_with("/.config/claude")
         || hay.contains("/.config/claude/")
         || hay.contains("-application support-claude")
+        // Canonical (fully dash-flattened) form of the same slug.
+        || hay.contains("-application-support-claude")
         || hay.contains("-appdata-roaming-claude")
         || (hay.ends_with("-claude") && hay.contains("library"))
     {
@@ -5979,6 +6383,9 @@ bob ALL=(ALL) NOPASSWD: ALL
             file_access_detail: String::new(),
             can_launch_arbitrary_commands: Some(true),
             command_execution_detail: String::new(),
+            declared_confinement: None,
+            declared_approval: None,
+            declared_source: None,
         }
     }
 
@@ -8023,6 +8430,15 @@ some normal line
         assert!(is_secret_env_key("GITHUB_TOKEN"));
         assert!(is_secret_env_key("db_password"));
         assert!(is_secret_env_key("AWS_SECRET_ACCESS_KEY"));
+        // `PAT` on a token boundary is a real credential name.
+        assert!(is_secret_env_key("GITHUB_PAT"));
+        // ... but must not match the `PATH` family (observed Codex MCP env).
+        assert!(!is_secret_env_key("CODEX_CLI_PATH"));
+        assert!(!is_secret_env_key("NODE_REPL_NODE_PATH"));
+        assert!(!is_secret_env_key("NODE_REPL_TRUSTED_CODE_PATHS"));
+        assert!(!is_secret_env_key("NODE_REPL_NODE_MODULE_DIRS"));
+        // Underscore-less names still fall back to a plain substring test.
+        assert!(is_secret_env_key("githubToken"));
         // Non-secret config keys are not flagged.
         assert!(!is_secret_env_key("LOG_LEVEL"));
         assert!(!is_secret_env_key("HOME"));
@@ -9417,6 +9833,209 @@ skills/gtm-report and @rules/invariants.mdc.
     }
 
     #[test]
+    fn workspace_slug_for_session_canonicalizes_cursor_and_claude_encodings() {
+        // The SAME directory, as each agent encodes it: Claude Code writes a
+        // leading `-` for the filesystem root, Cursor does not. Both must
+        // produce one join key, or the workspace splits into an
+        // inventory-bearing node plus an inventory-less twin carrying the other
+        // agent's usage rows (observed as bogus "core" / "machine" workspaces
+        // next to the real "edamame_core" / "sales_marketing_machine").
+        let claude = workspace_slug_for_session(
+            "/home/.claude/projects/-Users-me-Programming-edamame-core/a.jsonl",
+            "",
+        );
+        let cursor = workspace_slug_for_session(
+            "/home/.cursor/projects/Users-me-Programming-edamame-core/agent-transcripts/b.jsonl",
+            "",
+        );
+        assert_eq!(claude, cursor);
+        assert_eq!(
+            claude.as_deref(),
+            Some("-Users-me-Programming-edamame-core")
+        );
+    }
+
+    #[test]
+    fn canonicalize_project_slug_normalizes_leading_and_repeated_dashes() {
+        assert_eq!(canonicalize_project_slug("Users-me-proj"), "-Users-me-proj");
+        assert_eq!(
+            canonicalize_project_slug("-Users-me-proj"),
+            "-Users-me-proj"
+        );
+        assert_eq!(
+            canonicalize_project_slug("--Users--me-proj-"),
+            "-Users-me-proj"
+        );
+        assert_eq!(canonicalize_project_slug(""), "");
+        assert_eq!(canonicalize_project_slug("---"), "");
+        // Matches what `slug_from_workspace_dir` produces for the same root, so
+        // the session-side and inventory-side keys agree.
+        assert_eq!(
+            canonicalize_project_slug("Users-me-proj"),
+            slug_from_workspace_dir("/Users/me/proj")
+        );
+        // `_` folds to `-`. The agents' slug scheme writes a literal underscore
+        // as `-`, so a slug re-derived from the real path (`edamame_core`) must
+        // flatten the same way as the transcript path's (`edamame-core`) or the
+        // inventory and the sessions land on two different keys.
+        assert_eq!(
+            slug_from_workspace_dir("/Users/me/edamame_core"),
+            "-Users-me-edamame-core"
+        );
+        assert_eq!(
+            canonicalize_project_slug("Users-me-edamame-core"),
+            slug_from_workspace_dir("/Users/me/edamame_core")
+        );
+        // Every non-alphanumeric folds, not just `_`. A localized Google Drive
+        // mount is the case that exposed this: the real directory is
+        // `Mon Drive (frank@lyonnet.org)` and Cursor writes it
+        // `Mon-Drive-frank-lyonnet-org`.
+        assert_eq!(
+            slug_from_workspace_dir("/Users/me/Mon Drive (frank@lyonnet.org)/jarvis"),
+            "-Users-me-Mon-Drive-frank-lyonnet-org-jarvis"
+        );
+        assert_eq!(
+            canonicalize_project_slug("Users-me-Mon-Drive-frank-lyonnet-org-jarvis"),
+            slug_from_workspace_dir("/Users/me/Mon Drive (frank@lyonnet.org)/jarvis")
+        );
+        // Claude Desktop's app-support root (space in `Application Support`).
+        assert_eq!(
+            slug_from_workspace_dir("/Users/me/Library/Application Support/Claude"),
+            "-Users-me-Library-Application-Support-Claude"
+        );
+    }
+
+    #[test]
+    fn fleet_workspace_refs_recognized_in_canonical_slug_form() {
+        // The fleet-workspace matcher must keep working against the flattened
+        // slugs (`.codex` -> `codex`, `Application Support` -> `Application-Support`).
+        for (dir, expect) in [
+            ("/Users/me/.codex", "codex"),
+            ("/Users/me/.openclaw", "openclaw"),
+            ("/Users/me/.hermes", "hermes"),
+            (
+                "/Users/me/Library/Application Support/Claude",
+                "claude_desktop",
+            ),
+        ] {
+            let slug = slug_from_workspace_dir(dir);
+            assert_eq!(
+                agent_type_for_fleet_workspace_ref(&slug),
+                Some(expect),
+                "slug {} did not map to {}",
+                slug,
+                expect
+            );
+        }
+    }
+
+    #[test]
+    fn workspace_root_and_slug_agrees_with_pure_slug_for_underscored_dirs() {
+        // End-to-end shape of the split-workspace bug: an underscored project
+        // directory, reached through each agent's own transcript encoding. All
+        // four must collapse onto one slug.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let proj = tmp.path().join("edamame_core");
+        std::fs::create_dir_all(&proj).expect("mkdir");
+
+        let dir_slug = slug_from_workspace_dir(&proj.to_string_lossy());
+        // Rebuild each agent's on-disk project-dir name from the canonical slug
+        // (Cursor drops the leading `-`, Claude Code keeps it).
+        let claude_src = format!("/h/.claude/projects/{}/a.jsonl", dir_slug);
+        let cursor_src = format!(
+            "/h/.cursor/projects/{}/agent-transcripts/b.jsonl",
+            dir_slug.trim_start_matches('-')
+        );
+
+        assert_eq!(
+            workspace_slug_for_session(&claude_src, "").as_deref(),
+            Some(dir_slug.as_str())
+        );
+        assert_eq!(
+            workspace_slug_for_session(&cursor_src, "").as_deref(),
+            Some(dir_slug.as_str())
+        );
+        // The inventory side resolves the real root and must report the SAME key.
+        let (root, slug) = workspace_root_and_slug_for_session(
+            &format!("/h/.cursor/projects/{}/agent-transcripts/b.jsonl", "x"),
+            &proj.to_string_lossy(),
+        )
+        .expect("resolves via hint");
+        assert_eq!(root, proj);
+        assert_eq!(slug, dir_slug);
+    }
+
+    #[test]
+    fn nested_instruction_roots_finds_claude_desktop_plugin_skills() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let config_dir = tmp.path().join("Library/Application Support/Claude");
+        let account = config_dir
+            .join("local-agent-mode-sessions")
+            .join("skills-plugin")
+            .join("profile-a")
+            .join("account-b");
+        std::fs::create_dir_all(account.join("skills").join("xlsx")).expect("mkdir");
+
+        // Only Claude Desktop nests this way; every other agent gets none.
+        assert!(nested_instruction_roots(&config_dir, "claude_code").is_empty());
+        let roots = nested_instruction_roots(&config_dir, "claude_desktop");
+        assert_eq!(roots, vec![account]);
+    }
+
+    #[test]
+    fn sandbox_container_needles_do_not_collide_across_claude_agents() {
+        // `agent_type.split('_').next()` yielded "claude" for BOTH, so Desktop's
+        // container would have marked the Claude Code CLI confined too.
+        assert!(sandbox_container_needles("claude_code").is_empty());
+        assert!(!sandbox_container_needles("claude_desktop").is_empty());
+        assert!(!sandbox_container_needles("claude_desktop")
+            .iter()
+            .any(|n| *n == "claude"));
+        assert_eq!(sandbox_container_needles("cursor"), &["cursor"]);
+    }
+
+    #[test]
+    fn declared_confinement_reads_cursor_and_codex_configs() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let home = tmp.path();
+
+        std::fs::create_dir_all(home.join(".cursor")).expect("mkdir");
+        std::fs::write(
+            home.join(".cursor").join("cli-config.json"),
+            r#"{"approvalMode":"unrestricted","sandbox":{"mode":"disabled"}}"#,
+        )
+        .expect("write");
+        let cursor = declared_confinement_for_agent("cursor", home);
+        assert_eq!(cursor.confinement.as_deref(), Some("disabled"));
+        assert_eq!(cursor.approval.as_deref(), Some("unrestricted"));
+        assert!(cursor.source.is_some());
+
+        // An agent that declares nothing yields an empty packet (no source).
+        let none = declared_confinement_for_agent("hermes", home);
+        assert!(none.confinement.is_none() && none.source.is_none());
+    }
+
+    #[test]
+    fn toml_top_level_string_ignores_values_inside_tables() {
+        let doc = "\
+sandbox_mode = \"workspace-write\"
+approval_policy = \"on-request\"
+
+[mcp_servers.node_repl]
+sandbox_mode = \"danger-full-access\"
+";
+        assert_eq!(
+            toml_top_level_string(doc, "sandbox_mode").as_deref(),
+            Some("workspace-write")
+        );
+        assert_eq!(
+            toml_top_level_string(doc, "approval_policy").as_deref(),
+            Some("on-request")
+        );
+        assert_eq!(toml_top_level_string(doc, "absent_key"), None);
+    }
+
+    #[test]
     fn workspace_slug_for_session_prefers_hint_when_source_under_hint() {
         // Claude Desktop local-agent-mode nests a `projects/<slug>` segment
         // under the app-support instruction root. The one-workspace hint must
@@ -9427,9 +10046,12 @@ skills/gtm-report and @rules/invariants.mdc.
             "{hint}/local-agent-mode-sessions/ab/cd/.claude/projects/-sessions-zealous/a.jsonl"
         );
         let slug = workspace_slug_for_session(&source, hint);
+        // Canonical form: the space in `Application Support` folds to `-` like
+        // every other non-alphanumeric, so this key matches what the inventory
+        // side derives from the same root.
         assert_eq!(
             slug.as_deref(),
-            Some("-Users-me-Library-Application Support-Claude")
+            Some("-Users-me-Library-Application-Support-Claude")
         );
     }
 
@@ -9442,7 +10064,10 @@ skills/gtm-report and @rules/invariants.mdc.
             "/home/me/.codex/sessions/2026/07/16/rollout-abc.jsonl",
             "/Users/me/work/edamame_core",
         );
-        assert_eq!(slug.as_deref(), Some("-Users-me-work-edamame_core"));
+        // `_` is flattened to `-`: the canonical slug is the lossy form the
+        // agents' own `projects/<slug>` encoding produces, so a hint-derived
+        // slug joins a transcript-derived one for the same directory.
+        assert_eq!(slug.as_deref(), Some("-Users-me-work-edamame-core"));
     }
 
     #[test]

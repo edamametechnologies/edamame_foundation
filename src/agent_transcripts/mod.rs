@@ -666,12 +666,27 @@ pub fn observer_agent_instance_id(agent_type: &str, home: &Path) -> String {
     )
 }
 
-/// Best-effort hostname read. Falls back to `edamame-host` when no env var
-/// is set (some sandboxed contexts).
+/// Best-effort hostname read. Falls back to `edamame-host` only when neither
+/// the OS nor the environment can supply a name.
+///
+/// The OS query comes first on purpose. Reading `$HOSTNAME` / `$COMPUTERNAME` /
+/// `$HOST` alone is not sufficient: those are shell conveniences, not process
+/// environment guarantees, so a macOS or Linux daemon (which is how the core
+/// actually runs) sees none of them and every `agent_instance_id` on the host
+/// collapsed onto the literal `edamame-host` placeholder. `hostname::get()` is
+/// the same source the rest of the codebase already uses for device identity.
+/// The env vars stay as an override/fallback so a container that sets only
+/// `$HOSTNAME` still reports something meaningful.
 pub fn hostname_string() -> String {
-    std::env::var("HOSTNAME")
+    hostname::get()
         .ok()
+        .map(|value| value.to_string_lossy().to_string())
         .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            std::env::var("HOSTNAME")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        })
         .or_else(|| {
             std::env::var("COMPUTERNAME")
                 .ok()
@@ -735,6 +750,16 @@ fn walk_files_with_suffix_inner(
                     continue;
                 }
                 if name == "subagents" {
+                    continue;
+                }
+                // Harness scratch, not transcripts. Claude Code spills oversized
+                // tool output to `<session-uuid>/tool-results/<id>.txt`; those sit
+                // beside the real `<session-uuid>.jsonl` transcript and match the
+                // `.txt` suffix, so without this every spilled tool result was
+                // ingested as its own session -- inflating session counts with
+                // placeholder titles, empty user_text, and whatever the tool
+                // happened to print (command output, environment dumps, secrets).
+                if name == "tool-results" {
                     continue;
                 }
             }

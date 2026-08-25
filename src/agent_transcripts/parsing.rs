@@ -252,12 +252,38 @@ pub fn extract_paths(text: &str, workspace_root: &str) -> Vec<String> {
     };
 
     for m in PATH_LIKE_REGEX.find_iter(text) {
-        add(m.as_str(), false);
+        add(
+            strip_json_escape_residue(text, m.start(), m.as_str()),
+            false,
+        );
     }
     for m in WINDOWS_DRIVE_PATH_REGEX.find_iter(text) {
         add(m.as_str(), true);
     }
     out
+}
+
+/// Drop the escape LETTER left behind when a `\n` / `\t` / ... in raw JSONL
+/// runs straight into a path.
+///
+/// `.jsonl` transcripts are scanned as raw JSON text, so a newline is the two
+/// characters `\` and `n`. The path regex cannot start at the backslash, so it
+/// starts at the `n` and the match reads `nsrc/api/api_agentic.rs` -- observed
+/// live as `/Users/me/nsrc/api/api_agentic.rs` in a behavioral model. When the
+/// character immediately before the match is a backslash and the match starts
+/// with a JSON escape letter, that letter belongs to the escape, not the path.
+fn strip_json_escape_residue<'a>(text: &str, start: usize, matched: &'a str) -> &'a str {
+    if start == 0 || !text.is_char_boundary(start - 1) {
+        return matched;
+    }
+    if text.as_bytes()[start - 1] != b'\\' {
+        return matched;
+    }
+    match matched.as_bytes().first() {
+        // The JSON escapes whose letter is a plausible path character.
+        Some(b'n') | Some(b't') | Some(b'r') | Some(b'b') | Some(b'f') => &matched[1..],
+        _ => matched,
+    }
 }
 
 const MAX_PATH_TOKEN_LEN: usize = 256;
@@ -308,7 +334,58 @@ fn looks_like_plausible_path_token(token: &str, allow_backslash: bool) -> bool {
     {
         return false;
     }
+    // Shorter base64 runs slip the length gate. A Claude thinking-block
+    // signature, for example, is a `/`-bearing base64 blob whose segments are
+    // each well under MAX_PATH_SEGMENT_LEN, so it used to be harvested as a
+    // path and rooted at the workspace.
+    if token.split(['/', '\\']).any(looks_like_blob_segment) {
+        return false;
+    }
     true
+}
+
+/// True for a path segment that is almost certainly an encoded blob rather than
+/// a file name: long, and made only of base64 alphabet characters with mixed
+/// case AND digits and no `.`/`-`/`_` separator.
+///
+/// Real names that long carry a separator (`FALSEPOSITIVESFIX.md`,
+/// `var-folders-7t-sg03pq8s3cs`), and git object names are single-case hex, so
+/// both are left alone by the mixed-case requirement.
+fn looks_like_blob_segment(seg: &str) -> bool {
+    const MIN_BLOB_SEGMENT_LEN: usize = 24;
+    seg.len() >= MIN_BLOB_SEGMENT_LEN
+        && seg
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '=')
+        && seg.chars().any(|c| c.is_ascii_uppercase())
+        && seg.chars().any(|c| c.is_ascii_lowercase())
+        && seg.chars().any(|c| c.is_ascii_digit())
+}
+
+/// True when `seg` reads like a file name: a non-empty stem plus a short
+/// alphanumeric extension (`main.rs`, `palette.md`), or a dotfile (`.bashrc`).
+///
+/// Used to gate RELATIVE tokens before they are rooted at the workspace. A
+/// version string (`1.2.3`) fails because the extension must not be all digits.
+fn looks_like_file_name(seg: &str) -> bool {
+    const MAX_EXT_LEN: usize = 8;
+    if seg.is_empty() {
+        return false;
+    }
+    // Dotfile: a single leading dot and no other separator (`.bashrc`, `.env`).
+    if let Some(rest) = seg.strip_prefix('.') {
+        if !rest.is_empty() && !rest.contains('.') {
+            return true;
+        }
+    }
+    let Some((stem, ext)) = seg.rsplit_once('.') else {
+        return false;
+    };
+    !stem.is_empty()
+        && !ext.is_empty()
+        && ext.len() <= MAX_EXT_LEN
+        && ext.chars().all(|c| c.is_ascii_alphanumeric())
+        && ext.chars().any(|c| c.is_ascii_alphabetic())
 }
 
 #[cfg(test)]
@@ -325,9 +402,103 @@ mod path_extraction_tests {
             r#"{"type":"user","message":{"content":[{"type":"text","text":"also check ~/notes/todo.md and src/lib.rs"}]}}"#,
         );
         let paths = extract_paths(raw, "/Users/dev/proj");
+        // Absolute and `~/` references keep their exact form.
         assert!(paths.contains(&"/Users/dev/proj/src/main.rs".to_string()));
         assert!(paths.contains(&"~/notes/todo.md".to_string()));
-        assert!(paths.contains(&"/Users/dev/proj/src/lib.rs".to_string()));
+        // A RELATIVE reference becomes a `*/`-anchored suffix pattern: the
+        // transcript said "src/lib.rs", not which absolute file that is.
+        assert!(paths.contains(&"*/src/lib.rs".to_string()));
+    }
+
+    #[test]
+    fn rejects_prose_slash_phrases_as_paths() {
+        // Observed on a live host: skill-description prose was harvested into
+        // `expected_open_files` as `/Users/me/<prose>` entries.
+        let prose = concat!(
+            "compare OpenAI/GPT/Gemini/Llama/Mistral/Cohere/Ollama, ",
+            "or LangChain/CrewAI/AutoGen, watch CPU/RSS, ",
+            "no brittle basename/hash/IP whitelist, export PNG/PDF, ",
+            "edit settings.json/settings.local.json",
+        );
+        let paths = extract_paths(prose, "/Users/me");
+        assert!(
+            paths.is_empty(),
+            "prose leaked into extracted paths: {:?}",
+            paths
+        );
+    }
+
+    #[test]
+    fn keeps_genuine_relative_file_references_as_suffix_patterns() {
+        // The gate must not throw away real relative references -- but it must
+        // not invent an absolute path for them either. `references/palette.md`
+        // is relative to a skill directory, not to the workspace root, so
+        // rooting it at the workspace produced a path that never matches.
+        let text = "see references/palette.md and src/main.rs and .env";
+        let paths = extract_paths(text, "/Users/me/proj");
+        assert!(paths.contains(&"*/references/palette.md".to_string()));
+        assert!(paths.contains(&"*/src/main.rs".to_string()));
+        // The workspace root must not be fabricated onto any of them.
+        assert!(
+            !paths.iter().any(|p| p.starts_with("/Users/me/proj/")),
+            "relative tokens must not be rooted at the workspace: {:?}",
+            paths
+        );
+    }
+
+    #[test]
+    fn strips_jsonl_escape_letter_glued_to_a_path() {
+        // Raw JSONL: the newline is the two chars `\` + `n`, so the regex
+        // starts at `n` and the match reads `nsrc/api/api_agentic.rs`.
+        // Observed live as `/Users/me/nsrc/api/api_agentic.rs`.
+        let raw = r#"{"text":"edited
+src/api/api_agentic.rs and
+/Users/me/abs/file.rs"}"#;
+        let paths = extract_paths(raw, "/Users/me");
+        assert!(
+            paths.contains(&"*/src/api/api_agentic.rs".to_string()),
+            "escape residue not stripped: {:?}",
+            paths
+        );
+        assert!(
+            !paths.iter().any(|p| p.contains("nsrc")),
+            "escape residue leaked: {:?}",
+            paths
+        );
+        // An absolute path after an escape keeps its leading slash.
+        assert!(paths.contains(&"/Users/me/abs/file.rs".to_string()));
+    }
+
+    #[test]
+    fn rejects_base64_signature_blob_with_slashes() {
+        // A Claude thinking-block signature: `/`-bearing base64 whose segments
+        // are each under MAX_PATH_SEGMENT_LEN, so the length gate missed it.
+        let sig = concat!(
+            "CAIS2gQKpgEIERgCKkDLy0TyooRz/GR0oyLV/sptHY6K7Vl148zqhc4Mn5kbdXNsxKPLNI",
+            "/fG0IODRgPgCnOEuQpjnO9rMAZ1dnt2KZpMg1jbGF1ZGU",
+        );
+        let paths = extract_paths(sig, "/Users/me");
+        assert!(
+            paths.is_empty(),
+            "base64 signature leaked into paths: {:?}",
+            paths
+        );
+    }
+
+    #[test]
+    fn blob_and_file_name_shape_helpers() {
+        assert!(looks_like_blob_segment("CAIS2gQKpgEIERgCKkDLy0TyooRz"));
+        // Separator-bearing names and single-case hex are not blobs.
+        assert!(!looks_like_blob_segment("FALSEPOSITIVESFIX.md"));
+        assert!(!looks_like_blob_segment("var-folders-7t-sg03pq8s3cs-cdqz"));
+        assert!(!looks_like_blob_segment(
+            "e83c5163316f89bfbde7d9ab23ca2e25604af290"
+        ));
+
+        assert!(looks_like_file_name("main.rs"));
+        assert!(looks_like_file_name(".bashrc"));
+        assert!(!looks_like_file_name("GPT"));
+        assert!(!looks_like_file_name("1.2.3"));
     }
 
     #[test]
@@ -419,15 +590,55 @@ fn decode_file_path_token(token: &str, workspace_root: &str) -> Option<String> {
         return Some(candidate);
     }
     if candidate.contains('/') {
-        if !workspace_root.is_empty() {
-            let mut joined = workspace_root.trim_end_matches('/').to_string();
-            joined.push('/');
-            joined.push_str(&candidate);
-            return Some(joined);
+        // A relative token is only a path if it LOOKS like one. Accepting any
+        // `a/b` token and rooting it at the workspace turned ordinary prose into
+        // invented file paths: `OpenAI/GPT/Gemini/Llama/Mistral/Cohere/Ollama`,
+        // `LangChain/CrewAI/AutoGen`, `CPU/RSS` and `basename/hash/IP` all
+        // became `/Users/me/<prose>` entries in the behavioral model's
+        // `expected_open_files` -- the very baseline the divergence engine
+        // compares observed file access against, so the noise dilutes it.
+        if !relative_token_looks_like_path(&candidate) {
+            return None;
         }
-        return Some(candidate);
+        // Emit a `*/`-anchored SUFFIX pattern rather than joining onto
+        // `workspace_root`.
+        //
+        // A relative reference does not identify an absolute path, and rooting
+        // it at the workspace invented one: on a live host
+        // `edamame_core/FALSEPOSITIVES.md` became
+        // `/Users/me/edamame_core/FALSEPOSITIVES.md` (the file is under
+        // `Programming/`), and `references/palette.md` -- a path relative to a
+        // skill directory -- became `/Users/me/references/palette.md`. Those
+        // entries can never match the real file, so the access they were meant
+        // to explain still reads as unexplained.
+        //
+        // The rule matcher already understands `*` and generates `*/suffix`
+        // candidates itself (`candidate_rule_patterns`), and the sibling
+        // `derived_scope_*` dimensions use exactly this shape (`*/bin/claude`),
+        // so a suffix pattern matches the real file wherever it lives and says
+        // only what the transcript actually told us.
+        let _ = workspace_root;
+        return Some(format!("*/{candidate}"));
     }
     None
+}
+
+/// Gate for a relative `a/b/c` token before it is rooted at the workspace.
+///
+/// Requires the last segment to read like a file name, and every earlier
+/// segment to read like a DIRECTORY (i.e. not itself a file name) -- so
+/// `references/palette.md` and `src/main.rs` pass while the prose enumeration
+/// `settings.json/settings.local.json` does not. A trailing `/` marks an
+/// explicit directory reference and is accepted as-is.
+fn relative_token_looks_like_path(token: &str) -> bool {
+    if token.ends_with('/') {
+        return true;
+    }
+    let segments: Vec<&str> = token.split('/').filter(|s| !s.is_empty()).collect();
+    let Some((last, parents)) = segments.split_last() else {
+        return false;
+    };
+    looks_like_file_name(last) && !parents.iter().any(|seg| looks_like_file_name(seg))
 }
 
 /// Best-effort `host:port` extraction from an absolute http(s) URL. Avoids

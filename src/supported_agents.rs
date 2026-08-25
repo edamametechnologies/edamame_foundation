@@ -405,7 +405,15 @@ fn marker_has_content(path: &Path) -> bool {
 
 /// See [`SupportedAgentDefinition::instruction_root_is_fleet_workspace`].
 pub fn instruction_root_is_fleet_workspace(agent_type: &str) -> bool {
-    matches!(agent_type, "openclaw" | "codex" | "claude_desktop")
+    // Hermes belongs here for the same reason OpenClaw does: its transcripts
+    // live under `~/.hermes/sessions/` with no `projects/<slug>` segment, so
+    // without a fleet-workspace root its entire instruction surface (317 skills
+    // under `~/.hermes/skills` on a live host) is inventoried but never joins
+    // the Augmentation / Enlightenment strip.
+    matches!(
+        agent_type,
+        "openclaw" | "codex" | "claude_desktop" | "hermes"
+    )
 }
 
 /// Short product label for a fleet-workspace agent (`"Codex"`, `"OpenClaw"`,
@@ -416,6 +424,7 @@ pub fn fleet_workspace_display_name(agent_type: &str) -> Option<&'static str> {
         "openclaw" => Some("OpenClaw"),
         "codex" => Some("Codex"),
         "claude_desktop" => Some("Claude Desktop"),
+        "hermes" => Some("Hermes"),
         _ => None,
     }
 }
@@ -883,9 +892,13 @@ mod tests {
         assert!(types.contains(&"openclaw"));
         assert!(types.contains(&"codex"));
         assert!(types.contains(&"claude_desktop"));
+        // Hermes is a single-workspace agent too: its transcripts live under
+        // `~/.hermes/sessions/` with no `projects/<slug>` segment, so without a
+        // seed root its whole skill library is inventoried but never joins the
+        // workspace strip.
+        assert!(types.contains(&"hermes"));
         assert!(!types.contains(&"cursor"));
         assert!(!types.contains(&"claude_code"));
-        assert!(!types.contains(&"hermes"));
 
         let codex = roots.iter().find(|(t, _)| t == "codex").unwrap();
         let expected_codex_home = home.join(".codex");
@@ -897,6 +910,8 @@ mod tests {
         );
         assert_eq!(fleet_workspace_display_name("codex"), Some("Codex"));
         assert!(instruction_root_is_fleet_workspace("codex"));
+        assert!(instruction_root_is_fleet_workspace("hermes"));
+        assert_eq!(fleet_workspace_display_name("hermes"), Some("Hermes"));
         assert!(!instruction_root_is_fleet_workspace("cursor"));
     }
 }

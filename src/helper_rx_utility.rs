@@ -698,6 +698,26 @@ pub async fn utility_scan_secret_content(paths_json: &str) -> Result<String> {
         .map_err(|e| anyhow::anyhow!("Failed to serialize secret-content matches: {}", e))
 }
 
+/// Validate the caller-supplied home directory for an agent-surface utility
+/// order.
+///
+/// The core side is the single authority on which home these orders operate
+/// against: it resolves `real_home_dir()` once and fails there when it is
+/// unavailable, so the standalone arm and the helper arm refuse identically.
+/// The helper deliberately does NOT fall back to its own `real_home_dir()` --
+/// it runs as root/SYSTEM, so that fallback silently retargets the whole agent
+/// surface at the privileged account's home and returns a well-formed, empty
+/// result instead of an error.
+fn require_caller_home(home: &str, order: &str) -> Result<std::path::PathBuf> {
+    if home.trim().is_empty() {
+        return Err(anyhow::anyhow!(
+            "{}: caller supplied no home directory (the helper never resolves its own -- it runs privileged)",
+            order
+        ));
+    }
+    Ok(std::path::PathBuf::from(home))
+}
+
 /// Helper-side transcript collection. `arg1` is the agent type, `arg2` is a
 /// JSON object with `home` (required, helper-resolved real home of the user)
 /// and `options` (CollectOptions JSON, optional). The helper crosses the
@@ -709,31 +729,14 @@ pub async fn utility_collect_agent_transcripts(
 ) -> Result<String> {
     #[derive(serde::Deserialize)]
     struct Args {
-        #[serde(default)]
         home: String,
-        #[serde(default)]
-        options: Option<crate::agent_transcripts::CollectOptions>,
+        options: crate::agent_transcripts::CollectOptions,
     }
 
-    let args: Args = if args_json.trim().is_empty() {
-        Args {
-            home: String::new(),
-            options: None,
-        }
-    } else {
-        serde_json::from_str(args_json)
-            .map_err(|e| anyhow::anyhow!("Failed to parse collect_agent_transcripts args: {}", e))?
-    };
-
-    let home_path = if args.home.is_empty() {
-        crate::agent_plugin::real_home_dir().ok_or_else(|| {
-            anyhow::anyhow!("Unable to resolve real_home_dir for agent transcripts")
-        })?
-    } else {
-        std::path::PathBuf::from(args.home)
-    };
-    let options = args.options.unwrap_or_default();
-    crate::agent_transcripts::collect_to_json(agent_type, &home_path, &options)
+    let args: Args = serde_json::from_str(args_json)
+        .map_err(|e| anyhow::anyhow!("Failed to parse collect_agent_transcripts args: {}", e))?;
+    let home_path = require_caller_home(&args.home, "collect_agent_transcripts")?;
+    crate::agent_transcripts::collect_to_json(agent_type, &home_path, &args.options)
 }
 
 /// Which of the given agent types have a detected headless CLI on this host.
@@ -744,27 +747,16 @@ pub async fn utility_collect_agent_transcripts(
 pub async fn utility_detect_agent_clis(agent_types_json: &str, args_json: &str) -> Result<String> {
     #[derive(serde::Deserialize)]
     struct Args {
-        #[serde(default)]
         home: String,
     }
 
     let agent_types: Vec<String> = serde_json::from_str(agent_types_json)
         .map_err(|e| anyhow::anyhow!("Failed to parse detect_agent_clis agent types: {}", e))?;
-    let args: Args = if args_json.trim().is_empty() {
-        Args {
-            home: String::new(),
-        }
-    } else {
-        serde_json::from_str(args_json)
-            .map_err(|e| anyhow::anyhow!("Failed to parse detect_agent_clis args: {}", e))?
-    };
-    let home_path = if args.home.is_empty() {
-        crate::agent_plugin::real_home_dir()
-    } else {
-        Some(std::path::PathBuf::from(args.home))
-    };
+    let args: Args = serde_json::from_str(args_json)
+        .map_err(|e| anyhow::anyhow!("Failed to parse detect_agent_clis args: {}", e))?;
+    let home_path = require_caller_home(&args.home, "detect_agent_clis")?;
 
-    let detected = crate::agent_cli_insight::detect_agent_clis(&agent_types, home_path.as_deref());
+    let detected = crate::agent_cli_insight::detect_agent_clis(&agent_types, Some(&home_path));
     serde_json::to_string(&detected)
         .map_err(|e| anyhow::anyhow!("Failed to serialize detected agent CLIs: {}", e))
 }
@@ -778,19 +770,14 @@ pub async fn utility_run_agent_cli_insight(agent_type: &str, args_json: &str) ->
     #[derive(serde::Deserialize)]
     struct Args {
         prompt: String,
-        #[serde(default)]
         home: String,
     }
 
     let args: Args = serde_json::from_str(args_json)
         .map_err(|e| anyhow::anyhow!("Failed to parse run_agent_cli_insight args: {}", e))?;
-    let home_path = if args.home.is_empty() {
-        crate::agent_plugin::real_home_dir()
-    } else {
-        Some(std::path::PathBuf::from(args.home))
-    };
+    let home_path = require_caller_home(&args.home, "run_agent_cli_insight")?;
 
-    crate::agent_cli_insight::run_agent_cli_insight(agent_type, &args.prompt, home_path.as_deref())
+    crate::agent_cli_insight::run_agent_cli_insight(agent_type, &args.prompt, Some(&home_path))
         .await
 }
 
@@ -815,24 +802,19 @@ pub async fn utility_run_agent_cli_fix_interactive(
     struct Args {
         workspace_path: String,
         prompt: String,
-        #[serde(default)]
         home: String,
     }
 
     let args: Args = serde_json::from_str(args_json).map_err(|e| {
         anyhow::anyhow!("Failed to parse run_agent_cli_fix_interactive args: {}", e)
     })?;
-    let home_path = if args.home.is_empty() {
-        crate::agent_plugin::real_home_dir()
-    } else {
-        Some(std::path::PathBuf::from(args.home))
-    };
+    let home_path = require_caller_home(&args.home, "run_agent_cli_fix_interactive")?;
 
     let spawn = crate::agent_cli_insight::run_agent_cli_fix_interactive(
         agent_type,
         &args.workspace_path,
         &args.prompt,
-        home_path.as_deref(),
+        Some(&home_path),
     )?;
     serde_json::to_string(&spawn).map_err(|e| {
         anyhow::anyhow!(
@@ -855,26 +837,12 @@ pub async fn utility_run_agent_cli_fix_interactive(
 pub async fn utility_collect_agent_visibility(_domain: &str, args_json: &str) -> Result<String> {
     #[derive(serde::Deserialize)]
     struct Args {
-        #[serde(default)]
         home: String,
     }
 
-    let args: Args = if args_json.trim().is_empty() {
-        Args {
-            home: String::new(),
-        }
-    } else {
-        serde_json::from_str(args_json)
-            .map_err(|e| anyhow::anyhow!("Failed to parse collect_agent_visibility args: {}", e))?
-    };
-
-    let home_path = if args.home.is_empty() {
-        crate::agent_plugin::real_home_dir().ok_or_else(|| {
-            anyhow::anyhow!("Unable to resolve real_home_dir for agent visibility")
-        })?
-    } else {
-        std::path::PathBuf::from(args.home)
-    };
+    let args: Args = serde_json::from_str(args_json)
+        .map_err(|e| anyhow::anyhow!("Failed to parse collect_agent_visibility args: {}", e))?;
+    let home_path = require_caller_home(&args.home, "collect_agent_visibility")?;
 
     let bundle = crate::agent_visibility::build_visibility_bundle(&home_path);
     serde_json::to_string(&bundle)
@@ -894,9 +862,7 @@ pub async fn utility_collect_agent_visibility(_domain: &str, args_json: &str) ->
 pub async fn utility_read_instruction_content(tier: &str, args_json: &str) -> Result<String> {
     #[derive(serde::Deserialize)]
     struct Args {
-        #[serde(default)]
         path: String,
-        #[serde(default)]
         home: String,
     }
 
@@ -907,13 +873,7 @@ pub async fn utility_read_instruction_content(tier: &str, args_json: &str) -> Re
         return Err(anyhow::anyhow!("read_instruction_content: empty path"));
     }
 
-    let home_path = if args.home.is_empty() {
-        crate::agent_plugin::real_home_dir().ok_or_else(|| {
-            anyhow::anyhow!("Unable to resolve real_home_dir for instruction content read")
-        })?
-    } else {
-        std::path::PathBuf::from(args.home)
-    };
+    let home_path = require_caller_home(&args.home, "read_instruction_content")?;
 
     let result = crate::agent_visibility::read_instruction_content(
         std::path::Path::new(&args.path),
@@ -933,13 +893,7 @@ pub async fn utility_reveal_path_in_file_manager(path: &str, user_home: &str) ->
     if path.trim().is_empty() {
         return Err(anyhow::anyhow!("reveal_path_in_file_manager: empty path"));
     }
-    let home_path = if user_home.is_empty() {
-        crate::agent_plugin::real_home_dir().ok_or_else(|| {
-            anyhow::anyhow!("Unable to resolve real_home_dir for reveal_path_in_file_manager")
-        })?
-    } else {
-        std::path::PathBuf::from(user_home)
-    };
+    let home_path = require_caller_home(user_home, "reveal_path_in_file_manager")?;
     let result = crate::file_reveal::reveal_path_in_file_manager(path, &home_path);
     serde_json::to_string(&result)
         .map_err(|e| anyhow::anyhow!("Failed to serialize reveal result: {}", e))
@@ -962,19 +916,11 @@ pub async fn utility_collect_workspace_inventory(
 ) -> Result<String> {
     #[derive(serde::Deserialize)]
     struct Args {
-        #[serde(default)]
         source_paths: Vec<String>,
     }
 
-    let args: Args = if args_json.trim().is_empty() {
-        Args {
-            source_paths: Vec::new(),
-        }
-    } else {
-        serde_json::from_str(args_json).map_err(|e| {
-            anyhow::anyhow!("Failed to parse collect_workspace_inventory args: {}", e)
-        })?
-    };
+    let args: Args = serde_json::from_str(args_json)
+        .map_err(|e| anyhow::anyhow!("Failed to parse collect_workspace_inventory args: {}", e))?;
 
     let inventories = crate::agent_visibility::collect_workspace_inventories(&args.source_paths);
     serde_json::to_string(&inventories)
@@ -999,16 +945,12 @@ pub async fn utility_confirm_absent_instruction_paths(
         paths: Vec<String>,
     }
 
-    let args: Args = if args_json.trim().is_empty() {
-        Args { paths: Vec::new() }
-    } else {
-        serde_json::from_str(args_json).map_err(|e| {
-            anyhow::anyhow!(
-                "Failed to parse confirm_absent_instruction_paths args: {}",
-                e
-            )
-        })?
-    };
+    let args: Args = serde_json::from_str(args_json).map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to parse confirm_absent_instruction_paths args: {}",
+            e
+        )
+    })?;
 
     let absent = crate::agent_visibility::confirm_absent_instruction_paths(&args.paths);
     serde_json::to_string(&absent)

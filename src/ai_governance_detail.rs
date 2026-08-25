@@ -1024,6 +1024,9 @@ mod tests {
             file_access_detail: String::new(),
             can_launch_arbitrary_commands: None,
             command_execution_detail: String::new(),
+            declared_confinement: None,
+            declared_approval: None,
+            declared_source: None,
         }
     }
 

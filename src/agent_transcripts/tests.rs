@@ -156,6 +156,53 @@ fn active_window_excludes_stale_sessions_across_agents() {
 }
 
 #[test]
+fn claude_code_ignores_tool_results_spill() {
+    // The harness spills oversized tool output to
+    // `<session-uuid>/tool-results/<id>.txt`, beside the real transcript. Those
+    // files match the `.txt` suffix the walker accepts, so before the
+    // `tool-results` skip each one was ingested as its own session: placeholder
+    // title, empty user_text, and whatever the tool printed -- which for a
+    // process listing or an env dump means secrets in the behavioural model.
+    let temp = tempfile::tempdir().expect("tempdir");
+    let home = temp.path();
+    let projects = home.join(".claude/projects/sample");
+    let line_user =
+        "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"list the fleet\"}]}}";
+    write(
+        &projects.join("session-1.jsonl"),
+        &format!("{}\n", line_user),
+    );
+    write(
+        &projects.join("session-1/tool-results/b8ettck2b.txt"),
+        "ANTHROPIC_API_KEY=sk-ant-should-never-be-ingested\n",
+    );
+    write(
+        &projects.join("session-1/tool-results/bonsfyzoe.txt"),
+        "some other spilled tool output\n",
+    );
+
+    let result = collect("claude_code", home, &options()).expect("claude_code collect");
+    assert_eq!(
+        result.payload.sessions.len(),
+        1,
+        "only the .jsonl transcript is a session, got {:?}",
+        result
+            .payload
+            .sessions
+            .iter()
+            .map(|s| s.source_path.clone())
+            .collect::<Vec<_>>()
+    );
+    let session = &result.payload.sessions[0];
+    assert!(session.source_path.ends_with("session-1.jsonl"));
+    assert!(session.user_text.contains("list the fleet"));
+    assert!(
+        !session.raw_text.contains("sk-ant-should-never-be-ingested"),
+        "spilled tool output must not reach session text"
+    );
+}
+
+#[test]
 fn claude_code_collects_jsonl() {
     let temp = tempfile::tempdir().expect("tempdir");
     let home = temp.path();

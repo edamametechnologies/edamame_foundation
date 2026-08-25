@@ -77,6 +77,14 @@ pub fn collect(home: &Path, options: &CollectOptions) -> anyhow::Result<CollectR
     for root in &accessible_roots {
         candidates.extend(gather_jsonl_transcripts(root, options));
     }
+    // Drop `<uuid>.trajectory.jsonl` sidecars that sit next to their own
+    // `<uuid>.jsonl` transcript. The CLI writes both for the same conversation,
+    // and ingesting each as its own session double-counted those conversations
+    // in session totals and economics (the sidecar landed under the synthetic
+    // key `<uuid>.trajectory`). A trajectory file whose primary transcript is
+    // absent is still kept -- it is then the only record of that session.
+    drop_trajectory_sidecars(&mut candidates);
+
     // Re-sort across multi-agent collation so the most recent transcripts
     // win regardless of which agent subdir they came from.
     candidates.sort_by(|left, right| right.mtime_secs.cmp(&left.mtime_secs));
@@ -229,6 +237,32 @@ fn openclaw_session_roots(home: &Path) -> Vec<PathBuf> {
     roots
 }
 
+/// Remove `<stem>.trajectory.jsonl` candidates whose `<stem>.jsonl` primary is
+/// present in the same directory. See the call site for why.
+fn drop_trajectory_sidecars(candidates: &mut Vec<GenericTranscriptCandidate>) {
+    let primaries: std::collections::HashSet<PathBuf> = candidates
+        .iter()
+        .filter(|c| {
+            c.path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.ends_with(".jsonl") && !n.ends_with(".trajectory.jsonl"))
+                .unwrap_or(false)
+        })
+        .map(|c| c.path.clone())
+        .collect();
+    candidates.retain(|c| {
+        let Some(name) = c.path.file_name().and_then(|n| n.to_str()) else {
+            return true;
+        };
+        let Some(stem) = name.strip_suffix(".trajectory.jsonl") else {
+            return true;
+        };
+        let primary = c.path.with_file_name(format!("{}.jsonl", stem));
+        !primaries.contains(&primary)
+    });
+}
+
 fn is_sessions_dir(path: &Path) -> bool {
     path.is_dir() && path.file_name().and_then(|n| n.to_str()) == Some("sessions")
 }
@@ -252,4 +286,61 @@ fn first_non_empty_line(text: &str) -> Option<String> {
         .map(str::trim)
         .find(|line| !line.is_empty() && !(line.starts_with('<') && line.ends_with('>')))
         .map(str::to_string)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn candidate(path: &str) -> GenericTranscriptCandidate {
+        GenericTranscriptCandidate {
+            path: PathBuf::from(path),
+            is_jsonl: true,
+            mtime_secs: 0,
+            birthtime_secs: 0,
+        }
+    }
+
+    #[test]
+    fn trajectory_sidecar_dropped_when_primary_present() {
+        // The CLI writes `<uuid>.jsonl` and `<uuid>.trajectory.jsonl` for one
+        // conversation. Ingesting both double-counted the session (the sidecar
+        // landed under the synthetic key `<uuid>.trajectory`).
+        let mut candidates = vec![
+            candidate("/h/.openclaw/agents/main/sessions/abc.jsonl"),
+            candidate("/h/.openclaw/agents/main/sessions/abc.trajectory.jsonl"),
+            candidate("/h/.openclaw/agents/main/sessions/def.jsonl"),
+        ];
+        drop_trajectory_sidecars(&mut candidates);
+        let names: Vec<String> = candidates
+            .iter()
+            .map(|c| c.path.file_name().unwrap().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(names, vec!["abc.jsonl", "def.jsonl"]);
+    }
+
+    #[test]
+    fn orphan_trajectory_is_kept() {
+        // No `<uuid>.jsonl` sibling: the sidecar is the only record of that
+        // session, so dropping it would lose data.
+        let mut candidates = vec![candidate(
+            "/h/.openclaw/agents/main/sessions/orphan.trajectory.jsonl",
+        )];
+        drop_trajectory_sidecars(&mut candidates);
+        assert_eq!(candidates.len(), 1);
+    }
+
+    #[test]
+    fn trajectory_session_id_no_longer_collides_with_primary() {
+        // Guards the shape the dedupe relies on: the two files DO produce
+        // different session keys, which is exactly why both showed up.
+        assert_eq!(
+            transcript_session_id(Path::new("/s/abc.jsonl")),
+            "abc".to_string()
+        );
+        assert_eq!(
+            transcript_session_id(Path::new("/s/abc.trajectory.jsonl")),
+            "abc.trajectory".to_string()
+        );
+    }
 }
