@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 CONSENT_DIR = ROOT / "consent"
@@ -55,6 +56,23 @@ def main() -> None:
         lines.append(f'        "{path.name}",')
     lines.extend(["    ]", "}", ""])
     OUT.write_text("\n".join(lines), encoding="utf-8")
+
+    # Format the emitted Rust. A long document name pushes its match arm past
+    # rustfmt's max_width, and the arm is written here as a single line -- so a
+    # newly added consent doc silently produced unformatted Rust that only
+    # surfaced as a red `cargo fmt --check` in CI, one full commit_all cascade
+    # after the regeneration. Formatting here keeps the generated file
+    # check-clean by construction. Non-fatal: a missing rustfmt must not break
+    # the snapshot regen.
+    try:
+        subprocess.run(
+            ["rustfmt", "--edition", "2021", str(OUT)],
+            check=True,
+            capture_output=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        print(f"WARNING: rustfmt on {OUT} failed ({exc}); run `cargo fmt` before committing")
+
     print(f"Wrote {OUT} ({len(files)} documents)")
 
 
