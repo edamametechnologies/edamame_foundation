@@ -475,9 +475,9 @@ dependencies = [
 
 [[package]]
 name = "chacha20"
-version = "0.10.1"
+version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d524456ba66e72eb8b115ff89e01e497f8e6d11d78b70b1aa13c0fbd97540a81"
+checksum = "65c35e4b699c7e15ccbe7ee35c005e4fc0a278d22238a2857e6ce2dadeda1b06"
 dependencies = [
  "cfg-if",
  "cpufeatures 0.3.0",
@@ -1199,7 +1199,7 @@ dependencies = [
 [[package]]
 name = "flodbadd"
 version = "1.8.2"
-source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#cbca537757c61706118817b2a46b6e065a3c9432"
+source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#c6376b20129f5def2640751f76ac9828acc84151"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -3103,7 +3103,7 @@ version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c7f5fa3a058cd35567ef9bfa5e75732bee0f9e4c55fa90477bef2dfcdbc4be80"
 dependencies = [
- "chacha20 0.10.1",
+ "chacha20 0.10.2",
  "getrandom 0.4.3",
  "rand_core 0.10.1",
 ]
@@ -4048,7 +4048,7 @@ dependencies = [
 [[package]]
 name = "threatmodels_rs"
 version = "0.1.1"
-source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#3e98d6ed3ff4627f48b138a0c54f0b113215bfc8"
+source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#a102f5a45401a2e538998b28c65f4209b2e745be"
 dependencies = [
  "anyhow",
  "chrono",
