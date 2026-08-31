@@ -926,7 +926,7 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 [[package]]
 name = "edamame_backend"
 version = "0.3.5"
-source = "git+https://github.com/edamametechnologies/edamame_backend?branch=main#59cce4a608c99142df11662a8e32e3ad574c6566"
+source = "git+https://github.com/edamametechnologies/edamame_backend?branch=main#291fcfa11b5c95414f89a90e44683db07251788c"
 dependencies = [
  "anyhow",
  "blake3",
@@ -1199,7 +1199,7 @@ dependencies = [
 [[package]]
 name = "flodbadd"
 version = "1.8.3"
-source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#ba6898ebbbf2eae5027a511c0c5e2968f4c32c98"
+source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#38aa7ef7e36699fd7575724f62736d37dd82b983"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -1537,9 +1537,9 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
 name = "hermit-abi"
-version = "0.5.2"
+version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc0fef456e4baa96da950455cd02c081ca953b141298e41db3fc7e36b1da849c"
+checksum = "e17592d60ebacc7d5e169f4663c5f84f9161cc90328abcfe8456f41e4dfcb284"
 
 [[package]]
 name = "hex"
@@ -4057,7 +4057,7 @@ dependencies = [
 [[package]]
 name = "threatmodels_rs"
 version = "0.1.1"
-source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#8193db1a77b09bc572628262619a9120e6c59cd8"
+source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#af1090bf4cb4519ff94e648ee5af8afc9b543f9d"
 dependencies = [
  "anyhow",
  "chrono",
