@@ -720,19 +720,52 @@ pub fn extract_urls(text: &str) -> Vec<String> {
 pub fn extract_hostnames(text: &str) -> Vec<String> {
     let mut out = BTreeSet::new();
     for m in DOMAIN_REGEX.captures_iter(text) {
-        if let Some(domain) = m.get(1).map(|d| d.as_str().to_lowercase()) {
-            // Skip values that look like source file references (e.g. `foo.rs`).
-            let is_source_suffix = SOURCE_FILE_SUFFIXES
-                .iter()
-                .any(|suffix| domain.ends_with(suffix));
-            if is_source_suffix {
-                continue;
-            }
-            if !domain.contains('.') {
-                continue;
-            }
-            out.insert(domain);
+        let Some(g) = m.get(1) else { continue };
+        let raw = g.as_str();
+        let domain = raw.to_lowercase();
+        // Skip values that look like source file references (e.g. `foo.rs`).
+        let is_source_suffix = SOURCE_FILE_SUFFIXES
+            .iter()
+            .any(|suffix| domain.ends_with(suffix));
+        if is_source_suffix {
+            continue;
         }
+        if !domain.contains('.') {
+            continue;
+        }
+        // Transcripts quote a lot of text that LOOKS like a domain but is
+        // not a network host. Each filter below matched real garbage that a
+        // live run declared as expected egress (2026-08-31):
+        //
+        // (a) Uppercase TLD: dotted identifiers such as `System.IO` matched
+        //     the case-insensitive regex and became `system.io:443`. Real
+        //     hostnames are written with a lowercase TLD.
+        let tld = domain.rsplit('.').next().unwrap_or("");
+        let raw_tld = raw.rsplit('.').next().unwrap_or("");
+        if raw_tld != tld {
+            continue;
+        }
+        // (b) Capitalized `.app` / `.local` matches are macOS bundle names
+        //     (`Cursor.app`, `Claude.app`, `EDAMAME Security.app`), not the
+        //     gTLD (`ngrok-free.app` stays lowercase in real usage).
+        if (tld == "app" || tld == "local") && raw != domain {
+            continue;
+        }
+        // (c) Path context: `/Applications/cursor.app`,
+        //     `.claude/settings.local.json`, or a literal `\n` glued to the
+        //     token (`...\nclaude.local`) mean this is a filesystem path or
+        //     escaped-text fragment, not a host mention.
+        if matches!(text[..g.start()].chars().next_back(), Some('/' | '\\')) {
+            continue;
+        }
+        // (d) Prefix of a longer dotted token: `settings.local` inside
+        //     `settings.local.json` (the `.json` suffix filter never sees the
+        //     truncated match).
+        let mut after = text[g.end()..].chars();
+        if after.next() == Some('.') && after.next().is_some_and(|c| c.is_ascii_alphanumeric()) {
+            continue;
+        }
+        out.insert(domain);
     }
     out.into_iter().collect()
 }
@@ -3390,6 +3423,41 @@ mod host_plausibility_tests {
                 .any(|h| h.contains('$') || h.contains('{') || h.contains('}')),
             "template fragments must not become egress declarations: {traffic:?}"
         );
+    }
+
+    #[test]
+    fn hostname_extraction_skips_non_host_lookalikes() {
+        let text = r#"
+            open /Applications/Cursor.app and Google Chrome.app please
+            also /applications/cursor.app lowercase path form
+            edit .claude/settings.local.json then read System.IO docs
+            transcript glue: literal\nclaude.local token
+            real hosts: ngrok-free.app claude.ai www.github.com GitHub.com
+        "#;
+        let hosts = extract_hostnames(text);
+        for bad in [
+            "cursor.app",
+            "chrome.app",
+            "settings.local",
+            "system.io",
+            "nclaude.local",
+        ] {
+            assert!(
+                !hosts.iter().any(|h| h == bad),
+                "{bad} must not be extracted as a host: {hosts:?}"
+            );
+        }
+        for good in [
+            "ngrok-free.app",
+            "claude.ai",
+            "www.github.com",
+            "github.com",
+        ] {
+            assert!(
+                hosts.iter().any(|h| h == good),
+                "{good} must survive extraction: {hosts:?}"
+            );
+        }
     }
 
     #[test]
