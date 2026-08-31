@@ -38,13 +38,9 @@ pub struct HelperMatcherConfig {
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct PlatformHelperMatcherConfigs {
-    #[serde(default = "default_generic_git_credential_helper")]
     pub generic_git: HelperMatcherConfig,
-    #[serde(default = "default_macos_credential_helper")]
     pub macos: HelperMatcherConfig,
-    #[serde(default = "default_linux_credential_helper")]
     pub linux: HelperMatcherConfig,
-    #[serde(default = "default_windows_credential_helper")]
     pub windows: HelperMatcherConfig,
 }
 
@@ -262,31 +258,24 @@ pub struct AppSelfTempStagingJSON {
 /// - the `EvidenceWeights` runtime view shares the same shape and the
 ///   conversion is field-by-field.
 ///
-/// **Defaults policy.** Every field uses `#[serde(default = "fn")]`
-/// pointing at the named-default helper below. Per the foundation
-/// invariants (`No #[serde(default)] on CloudModel structs unless
-/// they have a named default`), this is acceptable because the
-/// defaults are meaningful initial weights, not silent zeros, and a
-/// missing field in a future CloudModel publish falls back to the
-/// calibrated initial value rather than silencing the signal.
+/// **Parse policy.** Fields are required at the CloudModel wire
+/// boundary: a published JSON missing any weight fails the update
+/// parse and falls back to the embedded snapshot (which is always
+/// complete). Runtime `Default` for `EvidenceWeightsJSON` still
+/// uses the calibrated `default_ew_*` helpers below so unit tests
+/// and in-process construction get meaningful initial weights
+/// without silent serde zeros. See the ARCH-1 "born complete"
+/// decision in the core/foundation invariants.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct EvidenceWeightsJSON {
     // ---- Attack signals ----
-    #[serde(default = "default_ew_session_is_anomalous")]
     pub session_is_anomalous: f32,
-    #[serde(default = "default_ew_session_is_blacklisted")]
     pub session_is_blacklisted: f32,
-    #[serde(default = "default_ew_destination_is_public_diagnostic")]
     pub destination_is_public_diagnostic: f32,
-    #[serde(default = "default_ew_destination_is_blacklisted")]
     pub destination_is_blacklisted: f32,
-    #[serde(default = "default_ew_sensitive_material_evidence_present")]
     pub sensitive_material_evidence_present: f32,
-    #[serde(default = "default_ew_suspicious_lineage_present")]
     pub suspicious_lineage_present: f32,
-    #[serde(default = "default_ew_process_path_matches_suspicious_lineage")]
     pub process_path_matches_suspicious_lineage: f32,
-    #[serde(default = "default_ew_is_system_binary_target")]
     pub is_system_binary_target: f32,
     /// Structural attack signal: the finding's target path is in a
     /// sensitive class (ssh private key, AWS credentials, .env file,
@@ -302,25 +291,16 @@ pub struct EvidenceWeightsJSON {
     /// `apply_crs_severity` CRITICAL guardrail ARIS floor of 50, so
     /// a FIM-only finding on a sensitive file (the canonical
     /// `cve_file_events` strict-gate shape) lands at CRITICAL alone.
-    #[serde(default = "default_ew_target_in_sensitive_path_class")]
     pub target_in_sensitive_path_class: f32,
 
     // ---- Benign signals ----
-    #[serde(default = "default_ew_destination_is_routine_vendor_backend")]
     pub destination_is_routine_vendor_backend: f32,
-    #[serde(default = "default_ew_process_in_trusted_credential_helper_list")]
     pub process_in_trusted_credential_helper_list: f32,
-    #[serde(default = "default_ew_process_in_generic_git_credential_manager_list")]
     pub process_in_generic_git_credential_manager_list: f32,
-    #[serde(default = "default_ew_process_path_matches_packaged_application")]
     pub process_path_matches_packaged_application: f32,
-    #[serde(default = "default_ew_process_in_ci_runner_internal_agent_list")]
     pub process_in_ci_runner_internal_agent_list: f32,
-    #[serde(default = "default_ew_process_in_ide_project_config_helper_list")]
     pub process_in_ide_project_config_helper_list: f32,
-    #[serde(default = "default_ew_process_in_jvm_hsperfdata_writer_list")]
     pub process_in_jvm_hsperfdata_writer_list: f32,
-    #[serde(default = "default_ew_process_name_matches_known_system_daemon_hint")]
     pub process_name_matches_known_system_daemon_hint: f32,
     /// P2 writer-equal-egresser predicate. Benign weight applied when
     /// a session-based finding fires for a process that owns its
@@ -329,7 +309,6 @@ pub struct EvidenceWeightsJSON {
     /// "OS daemon doing ambient self-access to its own backend"
     /// shape; targeted at session-based FPs (the FIM-based dogfood
     /// FP class is already covered by the system-daemon hint signal).
-    #[serde(default = "default_ew_ambient_external_egress")]
     pub ambient_external_egress: f32,
     /// P3 publisher attestation: writer process binary carries a valid
     /// platform-publisher signature (Apple Developer ID + canonical
@@ -338,7 +317,6 @@ pub struct EvidenceWeightsJSON {
     /// package signature + `/usr/bin` / `/usr/lib` path on Linux).
     /// Benign weight applied when the signature verifies AND the
     /// canonical-path predicate holds.
-    #[serde(default = "default_ew_publisher_attestation_signed_by_canonical_publisher")]
     pub publisher_attestation_signed_by_canonical_publisher: f32,
     /// P3 publisher attestation impostor: writer process binary lives
     /// under a canonical OS install path BUT lacks a valid platform-
@@ -346,7 +324,6 @@ pub struct EvidenceWeightsJSON {
     /// shape, `Stealga.HAK!MTB`-class). Attack weight applied when
     /// the binary's path matches a canonical OS install path AND its
     /// signature does NOT verify against the expected publisher.
-    #[serde(default = "default_ew_invalid_signature_in_canonical_path")]
     pub invalid_signature_in_canonical_path: f32,
     /// P4 ambient baseline credit: finding's `lineage_key` is present
     /// in the per-host `vuln_ambient_baseline.json` snapshot for at
@@ -355,13 +332,9 @@ pub struct EvidenceWeightsJSON {
     /// persistent FPs that recur day-after-day. Anti-spoofing: weight
     /// is intentionally small (15) so a single attack signal swamps
     /// it; CVE scenarios still alert on the first observation.
-    #[serde(default = "default_ew_ambient_baseline_credit")]
     pub ambient_baseline_credit: f32,
-    #[serde(default = "default_ew_attribution_full_path")]
     pub attribution_full_path: f32,
-    #[serde(default = "default_ew_attribution_name_only")]
     pub attribution_name_only: f32,
-    #[serde(default = "default_ew_attribution_missing")]
     pub attribution_missing: f32,
 }
 
@@ -525,10 +498,6 @@ fn default_ew_attribution_missing() -> f32 {
     0.0
 }
 
-fn default_evidence_weights() -> EvidenceWeightsJSON {
-    EvidenceWeightsJSON::default()
-}
-
 /// One secret-marker signature consumed by the secret-content scanner. When
 /// the (lowercased) file body matches, the signature contributes its `label`
 /// and `hits` weight to the scan result.
@@ -549,184 +518,44 @@ pub struct SecretContentSignatureJSON {
     pub markers: Vec<String>,
 }
 
-fn default_secret_content_powershell_probe_read_verbs() -> Vec<String> {
-    strings(&[
-        "get-itemproperty",
-        "get-ciminstance",
-        "get-wmiobject",
-        "get-bitlockervolume",
-        "get-netfirewallprofile",
-        "get-service",
-        "get-localuser",
-        "get-executionpolicy",
-    ])
-}
-
-fn default_secret_content_powershell_dangerous_verbs() -> Vec<String> {
-    strings(&[
-        "invoke-webrequest",
-        "invoke-restmethod",
-        "downloadstring",
-        "downloadfile",
-        "start-process",
-        "encodedcommand",
-        "frombase64string",
-        "set-itemproperty",
-        "new-itemproperty",
-        "remove-itemproperty",
-        "set-netfirewall",
-        "new-netfirewall",
-        "remove-netfirewall",
-        "set-executionpolicy",
-        "disable-localuser",
-        "enable-localuser",
-        "start-service",
-        "stop-service",
-        "reg add ",
-        "reg delete ",
-        "sc.exe config",
-        "curl ",
-        "wget ",
-        " nc ",
-        "netcat",
-    ])
-}
-
-fn secret_content_signature(
-    label: &str,
-    mode: &str,
-    hits: usize,
-    per_marker: bool,
-    markers: &[&str],
-) -> SecretContentSignatureJSON {
-    SecretContentSignatureJSON {
-        label: label.to_string(),
-        mode: mode.to_string(),
-        hits,
-        per_marker,
-        markers: strings(markers),
-    }
-}
-
-fn default_secret_content_signatures() -> Vec<SecretContentSignatureJSON> {
-    vec![
-        secret_content_signature(
-            "ssh",
-            "any",
-            2,
-            false,
-            &[
-                "-----begin openssh private key-----",
-                "-----begin rsa private key-----",
-                "-----begin ec private key-----",
-                "-----begin private key-----",
-            ],
-        ),
-        secret_content_signature(
-            "aws",
-            "any",
-            2,
-            false,
-            &["aws_access_key_id", "aws_secret_access_key", "[default]"],
-        ),
-        secret_content_signature(
-            "kube",
-            "all",
-            2,
-            false,
-            &["apiversion:", "clusters:", "server:"],
-        ),
-        secret_content_signature(
-            "git",
-            "any",
-            2,
-            false,
-            &["ghp_", "github_pat_", "github_token"],
-        ),
-        secret_content_signature(
-            "env",
-            "any",
-            1,
-            true,
-            &[
-                "api_token=",
-                "access_token=",
-                "secret=",
-                "password=",
-                "private_key=",
-                "ssh_private_key=",
-                "database_password=",
-                "token=",
-            ],
-        ),
-    ]
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct CveDetectionParamsJSON {
     pub date: String,
     pub signature: String,
     pub checks: HashMap<String, CheckMetadata>,
-    #[serde(default = "default_credential_harvest_min_labels")]
     pub credential_harvest_min_labels: usize,
     pub secret_content_scan_max_bytes: u64,
     pub secret_content_min_hits: usize,
-    #[serde(default = "default_secret_content_script_extensions")]
     pub secret_content_script_extensions: Vec<String>,
-    #[serde(default = "default_secret_content_network_command_tokens")]
     pub secret_content_network_command_tokens: Vec<String>,
-    #[serde(default = "default_secret_content_scan_excluded_path_patterns")]
     pub secret_content_scan_excluded_path_patterns: Vec<String>,
-    #[serde(default = "default_secret_content_scan_skip_extensions")]
     pub secret_content_scan_skip_extensions: Vec<String>,
     pub recent_sensitive_open_file_ttl_secs: u64,
     pub generic_reuse_tokens: Vec<String>,
     pub generic_application_tokens: Vec<String>,
     pub init_process_names: Vec<String>,
-    #[serde(default = "default_ci_runner_process_name_prefixes")]
     pub ci_runner_process_name_prefixes: Vec<String>,
-    #[serde(default = "default_ci_runner_workspace_path_patterns")]
     pub ci_runner_workspace_path_patterns: CiRunnerWorkspacePathPatternsJSON,
-    #[serde(default = "default_ci_workspace_path_patterns")]
     pub ci_workspace_path_patterns: Vec<String>,
-    #[serde(default = "default_keychain_transactional_filename_patterns")]
     pub keychain_transactional_filename_patterns: Vec<String>,
-    #[serde(default = "default_non_sensitive_browser_data_subtrees")]
     pub non_sensitive_browser_data_subtrees: BrowserDataSubtreesJSON,
-    #[serde(default = "default_browser_appdata_unknown_writer")]
     pub browser_appdata_unknown_writer: BrowserAppdataUnknownWriterJSON,
-    #[serde(default = "default_build_output_tree_self_spawn_patterns")]
     pub build_output_tree_self_spawn_patterns: PlatformStringLists,
     pub suspicious_parent_path_patterns: Vec<String>,
-    #[serde(default = "default_benign_temp_artifact_suffixes")]
     pub benign_temp_artifact_suffixes: Vec<String>,
-    #[serde(default = "default_application_storage_patterns")]
     pub application_storage_patterns: Vec<String>,
-    #[serde(default = "default_credential_store_patterns")]
     pub credential_store_patterns: PlatformStringLists,
-    #[serde(default = "default_trusted_credential_helpers")]
     pub trusted_credential_helpers: PlatformHelperMatcherConfigs,
-    #[serde(default = "default_packaged_application_contains_patterns")]
     pub packaged_application_contains_patterns: Vec<String>,
-    #[serde(default = "default_packaged_application_starts_with_patterns")]
     pub packaged_application_starts_with_patterns: Vec<String>,
-    #[serde(default = "default_packaged_application_ends_with_patterns")]
     pub packaged_application_ends_with_patterns: Vec<String>,
-    #[serde(default = "default_managed_temp_staging_patterns")]
     pub managed_temp_staging_patterns: ManagedTempStagingPatternsJSON,
-    #[serde(default = "default_trusted_build_temp_staging")]
     pub trusted_build_temp_staging: TrustedBuildTempStagingJSON,
-    #[serde(default = "default_app_self_temp_staging")]
     pub app_self_temp_staging: AppSelfTempStagingJSON,
-    #[serde(default = "default_package_manager_temp_path_patterns")]
     pub package_manager_temp_path_patterns: PlatformStringLists,
-    #[serde(default = "default_package_manager_temp_writers")]
     pub package_manager_temp_writers: PlatformStringLists,
-    #[serde(default = "default_edamame_daemon_self_telemetry_writers")]
     pub edamame_daemon_self_telemetry_writers: PlatformStringLists,
-    #[serde(default = "default_edamame_daemon_self_telemetry_install_prefixes")]
     pub edamame_daemon_self_telemetry_install_prefixes: PlatformStringLists,
-    #[serde(default = "default_cloud_provider_sdk_destinations")]
     pub cloud_provider_sdk_destinations: CloudProviderSdkDestinationsJSON,
     /// Software-distribution / self-update / CDN backends that packaged
     /// desktop applications legitimately reach to fetch updates, plugin
@@ -738,20 +567,13 @@ pub struct CveDetectionParamsJSON {
     /// app + OS-init parent + non-credential material + zero corroboration
     /// + recognized backend); recognizing a broad CDN here is safe because
     /// it never demotes on its own.
-    #[serde(default = "default_software_distribution_backends")]
     pub software_distribution_backends: CloudProviderSdkDestinationListJSON,
-    #[serde(default = "default_platform_credential_helper_routine_destinations")]
     pub platform_credential_helper_routine_destinations:
         PlatformCredentialHelperRoutineDestinationsJSON,
-    #[serde(default = "default_platform_metadata_endpoints")]
     pub platform_metadata_endpoints: PlatformStringLists,
-    #[serde(default = "default_platform_runtime_probe_filename_patterns")]
     pub platform_runtime_probe_filename_patterns: PlatformStringLists,
-    #[serde(default = "default_platform_self_state_directories")]
     pub platform_self_state_directories: PlatformStringLists,
-    #[serde(default = "default_platform_self_state_processes")]
     pub platform_self_state_processes: PlatformStringLists,
-    #[serde(default = "default_runtime_perfdata_paths")]
     pub runtime_perfdata_paths: PlatformRuntimePerfdataPathsJSON,
     /// Informational hint to the LLM adjudicator. Per-platform process
     /// names of well-known OS system daemons whose legitimate job
@@ -763,7 +585,6 @@ pub struct CveDetectionParamsJSON {
     /// is a platform credential store AND no corroboration" as benign
     /// maintenance. NOT a deterministic suppression -- a name match
     /// alone never silences a finding.
-    #[serde(default = "default_known_system_daemon_credential_maintenance_hints")]
     pub known_system_daemon_credential_maintenance_hints: PlatformStringLists,
     /// Per-platform basenames of trusted OS/vendor *self-extracting
     /// installers* that unpack a worker into `%LocalAppData%\Temp\<random>\`
@@ -779,7 +600,6 @@ pub struct CveDetectionParamsJSON {
     /// attribution, so parent-invoker attestation is impossible; the
     /// self-containment conjunction is what keeps a same-named dropper
     /// writing elsewhere alertable. See FP-WIN-3 / FP-WIN-8.
-    #[serde(default = "default_trusted_self_extracting_installers")]
     pub trusted_self_extracting_installers: PlatformStringLists,
     /// Per-platform process basenames of trusted OS *content indexer*
     /// services (Windows Search `searchindexer.exe`/`searchprotocolhost.exe`,
@@ -797,45 +617,47 @@ pub struct CveDetectionParamsJSON {
     /// credential store. A same-named impostor in `%TEMP%` or an indexer
     /// touching the OS keychain / Credential Manager / keyring stays
     /// alertable. See FP-WIN-23.
-    #[serde(default = "default_os_content_indexer_processes")]
     pub os_content_indexer_processes: PlatformStringLists,
-    #[serde(default = "default_fim_hash_size_threshold")]
+    /// Path substrings that classify a file as a credential-class
+    /// artifact for severity / adjudication floors. Distinct from
+    /// `credential_store_patterns` (platform keychain / vault paths).
+    pub credential_class_path_patterns: Vec<String>,
+    /// Path roots that classify a process binary as a system binary
+    /// (e.g. `/usr/bin/`, `/System/`, `C:/Windows/System32/`).
+    pub system_binary_path_roots: Vec<String>,
+    /// Path substrings that exclude a system-binary-root match
+    /// (e.g. user-writable trees under an otherwise-system prefix).
+    pub system_binary_path_excludes: Vec<String>,
+    /// Destination tokens that mark a remote as a public diagnostic
+    /// endpoint (e.g. `ifconfig.me`, `icanhazip.com`).
+    pub public_diagnostic_destination_tokens: Vec<String>,
+    /// Path prefixes for random temp scratch children (e.g. `/tmp/`,
+    /// `%TEMP%/`, `AppData/Local/Temp/`).
+    pub random_temp_scratch_path_prefixes: Vec<String>,
+    /// Parent shell basenames whose presence under a temp path marks
+    /// a temp-installer orchestration pattern.
+    pub temp_installer_shell_names: Vec<String>,
+    /// Identity tokens that mark a process as a packaged developer
+    /// tool (IDE / SDK / package-manager helper) for FP suppression.
+    pub packaged_developer_tool_identity_tokens: Vec<String>,
     pub fim_hash_size_threshold: u64,
     pub fim_temp_executable_patterns: Vec<String>,
     /// P1 symmetric-evidence shadow-scoring weight table. See
-    /// `EvidenceWeightsJSON` for the per-field documentation and the
-    /// CloudModel publishing policy. `#[serde(default)]` so older
-    /// CloudModel publishes (pre-P1) fall back to the embedded
-    /// defaults instead of crashing the parse and falling all the way
-    /// back to the embedded snapshot.
-    #[serde(default = "default_evidence_weights")]
+    /// `EvidenceWeightsJSON` for the per-field documentation. Required
+    /// on the CloudModel wire: a publish that omits this field fails
+    /// parse and falls back to the embedded snapshot (born complete).
     pub evidence_weights: EvidenceWeightsJSON,
     /// PowerShell read-only probe verbs. Their presence in a script body
     /// marks the file as a system-probe (recon) script for the
     /// secret-content scanner.
-    #[serde(default = "default_secret_content_powershell_probe_read_verbs")]
     pub secret_content_powershell_probe_read_verbs: Vec<String>,
     /// PowerShell / shell verbs that disqualify a script from the benign
     /// read-only-probe classification (download, exec, registry/firewall
     /// mutation, base64 decode, raw netcat, ...).
-    #[serde(default = "default_secret_content_powershell_dangerous_verbs")]
     pub secret_content_powershell_dangerous_verbs: Vec<String>,
     /// Secret-marker signatures (SSH/AWS/kube/git PEM headers, env
     /// `token=`/`secret=` markers) the secret-content scanner searches for.
-    #[serde(default = "default_secret_content_signatures")]
     pub secret_content_signatures: Vec<SecretContentSignatureJSON>,
-}
-
-fn strings(values: &[&str]) -> Vec<String> {
-    values.iter().map(|value| (*value).to_string()).collect()
-}
-
-fn platform_string_lists(macos: &[&str], linux: &[&str], windows: &[&str]) -> PlatformStringLists {
-    PlatformStringLists {
-        macos: strings(macos),
-        linux: strings(linux),
-        windows: strings(windows),
-    }
 }
 
 fn normalize_runtime_perfdata_entry(entry: &RuntimePerfdataEntryJSON) -> RuntimePerfdataEntryJSON {
@@ -854,1136 +676,6 @@ fn normalize_runtime_perfdata_entry(entry: &RuntimePerfdataEntryJSON) -> Runtime
             .iter()
             .map(|p| p.to_ascii_lowercase().replace('\\', "/"))
             .collect(),
-    }
-}
-
-fn helper_matcher_config(
-    exact_paths: &[&str],
-    path_contains: &[&str],
-    path_starts_with: &[&str],
-    path_ends_with: &[&str],
-    compact_names: &[&str],
-    compact_leaf_names: &[&str],
-    leaf_trusted_dir_prefixes: &[&str],
-) -> HelperMatcherConfig {
-    HelperMatcherConfig {
-        exact_paths: strings(exact_paths),
-        path_contains: strings(path_contains),
-        path_starts_with: strings(path_starts_with),
-        path_ends_with: strings(path_ends_with),
-        compact_names: strings(compact_names),
-        compact_leaf_names: strings(compact_leaf_names),
-        leaf_trusted_dir_prefixes: strings(leaf_trusted_dir_prefixes),
-    }
-}
-
-fn default_credential_harvest_min_labels() -> usize {
-    3
-}
-
-/// Filename suffixes that mark a file as "script-like" for the
-/// secret-content scanner (`secret_content_scan::inspect_secret_like_file`).
-/// Used by the FIM `file_system_tampering` heuristic to corroborate that
-/// a write to `/tmp/` (or `%TEMP%\`) carries an actual script payload.
-///
-/// Tunable in CloudModel so we can add new operator-script extensions
-/// (or remove ones that turn out to be ambiguous) without a release.
-fn default_secret_content_script_extensions() -> Vec<String> {
-    strings(&[
-        ".sh", ".py", ".pl", ".rb", ".ps1", ".bat", ".cmd", ".js", ".vbs",
-    ])
-}
-
-/// Substrings that mark file content as "network-command-like" for the
-/// secret-content scanner. Combined with `script_like` above they let the
-/// vulnerability detector promote a `/tmp/`-resident write that contains an
-/// outbound-fetch payload (`curl `, `wget `, `Invoke-WebRequest`, ...) from
-/// LOW to HIGH severity in `detect_file_system_tampering`.
-///
-/// Bare `http://` / `https://` are intentionally excluded from the default
-/// list: they appear inside benign log/text content (git error messages
-/// referencing https URLs, OpenSSH warnings linking to documentation,
-/// CI step summaries with permalink URLs) and were a noise driver in
-/// `FALSEPOSITIVES.md` FP-MAC-6 on `kralizec-3.local` 1.3.3. Genuine
-/// outbound-fetch payloads always pair URLs with explicit verb tokens
-/// (`curl`, `wget`, `Invoke-WebRequest`, raw socket constructors), all of
-/// which remain in the default. Tunable via CloudModel so new IOC verbs
-/// can be added without a release.
-fn default_secret_content_network_command_tokens() -> Vec<String> {
-    strings(&[
-        "curl ",
-        "wget ",
-        " nc ",
-        "netcat",
-        "invoke-webrequest",
-        "invoke-restmethod",
-        "socket.create_connection",
-    ])
-}
-
-/// Path substrings that mark a file as "in a transient build-artifact tree"
-/// and therefore NOT worth content-scanning by `inspect_secret_like_file`.
-///
-/// The vulnerability detector enriches input sessions with the live open-file
-/// list of every L7-attributed process via `flodbadd::open_files`. On CI hosts
-/// (and developer machines) those open files routinely include cargo/rustc
-/// intermediate artifacts (`target/<profile>/deps/<crate>-<hash>.d`,
-/// `.rmeta`, `.rlib`, `.o`, `.pdb`, ...), npm `node_modules/`, gradle caches,
-/// pub-cache packages, and so on. None of those artifacts carry security
-/// intent (they are produced and rewritten in tight loops by the build tool),
-/// and content-scanning them is pure waste.
-///
-/// Worse, on Windows the daemon's read momentarily races with the producer's
-/// atomic rename: rustc writes `crate.d.tmp`, atomic-renames it to `crate.d`,
-/// and immediately rewrites the file -- if the daemon has the file open via
-/// `fs::read` (default Win32 share mode lacks `FILE_SHARE_DELETE`), the
-/// producer's next `unlink` or `rename` fails with `os error 32` "process
-/// cannot access the file because it is being used by another process". This
-/// was the root cause of the Windows self-hosted runner test_windows.yml
-/// failure cluster from 2026-05-01 onward (correlated exactly with enabling
-/// `vulnerability_detection: true` on every self-hosted-runner job in
-/// `edamame_app` commit `1b7099f2`).
-///
-/// Match semantics: paths are lowercased and `\` is normalized to `/` BEFORE
-/// the substring check, so JSON entries use forward slashes only and apply
-/// to both POSIX and Windows paths transparently.
-///
-/// Tunable via CloudModel so new build-tool layouts can be added (or
-/// trimmed) without a release.
-fn default_secret_content_scan_excluded_path_patterns() -> Vec<String> {
-    strings(&[
-        // Cargo profile/triple build outputs (covers debug, release, and
-        // every cross-compile triple we ship).
-        "/target/debug/",
-        "/target/release/",
-        "/target/aarch64-",
-        "/target/x86_64-",
-        "/target/i686-",
-        "/target/armv7-",
-        "/target/riscv64-",
-        "/target/wasm32-",
-        "/target/thumbv",
-        // Cargo registry + git checkouts (downloaded crate sources/caches).
-        "/.cargo/registry/cache/",
-        "/.cargo/registry/index/",
-        "/.cargo/registry/src/",
-        "/.cargo/git/db/",
-        "/.cargo/git/checkouts/",
-        // npm / yarn / pnpm.
-        "/node_modules/",
-        // Gradle (wrapper + dep cache).
-        "/.gradle/caches/",
-        "/.gradle/wrapper/",
-        // npm + pub caches outside node_modules / .cargo.
-        "/.npm/_cacache/",
-        "/.pub-cache/",
-        // Dart / Flutter generated tool output.
-        "/.dart_tool/",
-        // Generic Android / Gradle build outputs.
-        "/build/intermediates/",
-        "/build/outputs/",
-        "/build/generated/",
-        // Flutter desktop / mobile per-platform build trees. These hold
-        // the MSVC PDB (`vc143.pdb`), MSBuild dep-info (`*.tlog`), Xcode
-        // intermediates, and CMake project caches. The demonstrated FP-CI-2
-        // root cause is Cargo/rustc atomic-renaming under `target/`; the
-        // observed C1090 PDB failures are handled as a separate MSBuild /
-        // `mspdbsrv.exe` contention family. These transient build outputs
-        // still have no value as secret content-scan candidates, so skip
-        // them up front.
-        "/build/windows/x64/",
-        "/build/macos/build/",
-        "/build/ios/build/",
-        "/build/linux/x64/",
-        "/build/web/",
-        // Xcode (DerivedData lives under the user library; the lowercase
-        // forms catch both `~/Library/Developer/Xcode/DerivedData` and
-        // per-project copies). DerivedSources is the SwiftPM equivalent.
-        "/derived data/",
-        "/derivedsources/",
-        // prost-build / tonic-build descriptor temp dirs (FP-CI-2 family).
-        // tonic-build runs prost-build during cargo build script execution
-        // and writes the protobuf descriptor to a `prost-buildXXXXXX/`
-        // mkdtemp directory under the OS temp dir
-        // (`%TEMP%\prost-buildXXX\prost-descriptor-set` on Windows,
-        //  `/tmp/prost-buildXXX/...` on Linux,
-        //  `/var/folders/.../T/prost-buildXXX/...` on macOS). The detector's
-        // open-files enumeration would otherwise race the build's atomic
-        // descriptor rewrite and trip `os error 32` on the build side.
-        "/prost-build",
-        // `cargo install --target-dir` and cargo bootstrap scratch trees.
-        // Same race shape -- build-tool transient outputs with no secret
-        // content value.
-        "/cargo-install",
-        // macOS media-app library bundles (Photos, iPhoto, Aperture, Music,
-        // TV). These bundles hold their catalog as ordinary non-media files
-        // (`.plist`, `.db`, `.sqlite`, `.album`, `.apdb`, ...) alongside the
-        // media assets, so the WHAT-it-is extension gate above does NOT drop
-        // them. But the `.photoslibrary` bundle in particular is guarded by
-        // the macOS Photos TCC service (`kTCCServicePhotos`): any
-        // `fs::metadata()` / open() the daemon performs on a file inside it
-        // triggers a user-visible "wants to access Photos" consent prompt
-        // (and re-prompts after a rebuild/re-sign, because the code identity
-        // changed). The bytes are never secret content, so a WHERE-it-lives
-        // path skip removes the prompt AND the wasted probe. Match is a
-        // lowercase substring, so the trailing `/` scopes it to files inside
-        // the bundle regardless of the (localized) bundle basename.
-        ".photoslibrary/",
-        ".photolibrary/",
-        ".migratedphotolibrary/",
-        ".aplibrary/",
-        ".musiclibrary/",
-        ".tvlibrary/",
-    ])
-}
-
-/// File extensions whose content is never worth secret-scanning because it
-/// is binary or media, not text that could carry a credential / token /
-/// script payload.
-///
-/// The vulnerability detector enriches each L7-attributed process with its
-/// live open-file list (`flodbadd::open_files::get_open_file_paths`). For a
-/// process that is playing audio, browsing photos, or watching video (Music,
-/// Photos, QuickTime, Preview, a browser, Finder QuickLook, Spotlight
-/// indexers, ...) that list includes large media assets under the user's
-/// `~/Music`, `~/Pictures`, and `~/Movies` trees. Those directories are
-/// TCC-protected on macOS, so the daemon's `fs::metadata()` +
-/// `read_file_with_shared_delete()` probe on such a candidate triggers a
-/// privacy consent prompt (and, on a freshly rebuilt / re-signed binary,
-/// re-prompts because the code identity changed). The bytes themselves are
-/// never secret content, so the probe is pure waste AND user-visible noise.
-///
-/// This list short-circuits the scan on extension BEFORE any filesystem
-/// access, so a `.mp3` / `.jpg` / `.mov` candidate is dropped without ever
-/// calling `metadata()` or opening the file. It complements the
-/// path-substring exclusion list above (build-artifact trees): that list
-/// is about WHERE the file lives; this one is about WHAT the file is.
-///
-/// Match semantics: the candidate path is lowercased and compared by
-/// suffix, so JSON entries are lowercase, dot-prefixed extensions
-/// (`.mp3`, `.jpg`, ...) and apply on every platform.
-///
-/// Tunable via CloudModel so new binary/media formats can be added (or
-/// trimmed) without a release.
-fn default_secret_content_scan_skip_extensions() -> Vec<String> {
-    strings(&[
-        // Audio.
-        ".mp3",
-        ".m4a",
-        ".m4b",
-        ".m4p",
-        ".aac",
-        ".flac",
-        ".wav",
-        ".aiff",
-        ".aif",
-        ".ogg",
-        ".oga",
-        ".opus",
-        ".wma",
-        ".alac",
-        ".mid",
-        ".midi",
-        ".amr",
-        ".caf",
-        // Images.
-        ".jpg",
-        ".jpeg",
-        ".png",
-        ".gif",
-        ".bmp",
-        ".tiff",
-        ".tif",
-        ".heic",
-        ".heif",
-        ".webp",
-        ".avif",
-        ".raw",
-        ".cr2",
-        ".cr3",
-        ".nef",
-        ".arw",
-        ".dng",
-        ".orf",
-        ".rw2",
-        ".icns",
-        ".ico",
-        ".psd",
-        // Video.
-        ".mov",
-        ".mp4",
-        ".m4v",
-        ".avi",
-        ".mkv",
-        ".wmv",
-        ".flv",
-        ".webm",
-        ".mpg",
-        ".mpeg",
-        ".3gp",
-        ".3g2",
-        ".m2ts",
-        ".mts",
-        // Fonts.
-        ".ttf",
-        ".otf",
-        ".ttc",
-        ".woff",
-        ".woff2",
-        // Archives / disk images.
-        ".zip",
-        ".gz",
-        ".tgz",
-        ".bz2",
-        ".xz",
-        ".zst",
-        ".7z",
-        ".rar",
-        ".dmg",
-        ".iso",
-        ".jar",
-        // Compiled / linked binary artifacts.
-        ".o",
-        ".a",
-        ".so",
-        ".dylib",
-        ".dll",
-        ".exe",
-        ".rlib",
-        ".rmeta",
-        ".pdb",
-        ".class",
-        ".pyc",
-        ".wasm",
-        // Databases / on-disk stores (media libraries, address books, ...).
-        ".sqlite",
-        ".sqlite3",
-        ".sqlite-wal",
-        ".sqlite-shm",
-        ".db",
-        ".db-wal",
-        ".db-shm",
-        ".musicdb",
-        ".abcddb",
-        // Documents that are container/binary, not scannable text.
-        ".pdf",
-    ])
-}
-
-/// CI runner provisioning daemons and runner agent processes that
-/// legitimately live in unusual locations on ephemeral build hosts.
-/// Without this allowlist:
-///   - the `sandbox_exploitation` detector flags `provjobd` as
-///     "suspicious parent-process path" because it lives in `/tmp`;
-///   - the `sensitive_material_egress` detector flags
-///     `Runner.Worker.exe` as a credential-exfil candidate because it
-///     simultaneously reads its own `_diag/*.log` files (which the
-///     sensitive-file FIM classifier considers sensitive) and sustains
-///     long-lived outbound connections to GitHub Actions backends.
-/// Both are pure false positives intrinsic to running CI on
-/// github-hosted runners, not indicative of compromised software.
-///
-/// These names are documented, public GitHub Actions infrastructure:
-///   - `provjobd` (Linux+Windows): the provisioning job daemon that
-///     spawns under the hosted-compute-agent / sudo on first run,
-///     lives at `/tmp/provjobdNNN` / `%TEMP%\provjobd.exeNNN`.
-///   - `Runner.Worker[.exe]`: the runner agent worker process that
-///     executes a single workflow job. Spawns under `node20/bin/` on
-///     Windows and under the runner directory on Linux/macOS. Suffixed
-///     with the run id (e.g. `Runner.Worker.exe1134032012`).
-///   - `Runner.Listener[.exe]`: the long-lived runner agent listener
-///     that polls GitHub for workflow jobs.
-fn default_ci_runner_process_name_prefixes() -> Vec<String> {
-    strings(&["provjobd", "runner.worker", "runner.listener"])
-}
-
-/// Path substrings that identify directories owned by the GitHub
-/// Actions runner agent. Files in these locations are part of the CI
-/// runtime itself (workspace checkouts, runner diagnostic logs, action
-/// caches). The `file_system_tampering` detector would otherwise flag
-/// every fresh repo checkout as a sensitive-file Create event (e.g.
-/// `actions-runner/_work/<repo>/<repo>/.env`) and every runner log
-/// rotation as suspicious.
-///
-/// Patterns include both forward-slash and backslash variants so a
-/// single normalized substring check covers Linux/macOS and Windows
-/// runners. Patterns are matched against the raw event path
-/// (case-insensitive) so callers do not need a separate normalization
-/// step. `_work/` (workflow workspace) and `_diag/` (runner logs) are
-/// the two directory namespaces that the runner manages.
-fn default_ci_workspace_path_patterns() -> Vec<String> {
-    strings(&[
-        "/actions-runner/_work/",
-        "/runner/_work/",
-        "/actions-runner/_diag/",
-        "/runner/_diag/",
-        "\\actions-runner\\_work\\",
-        "\\runner\\_work\\",
-        "\\actions-runner\\_diag\\",
-        "\\runner\\_diag\\",
-    ])
-}
-
-/// Default CI runner workspace path patterns + suppressible filename
-/// basenames (FP-CI-7).
-///
-/// The path substrings are matched against the FIM event path AFTER it
-/// has been lowercased AND `\` has been folded to `/` -- so a single
-/// canonical forward-slash form covers Linux, macOS, and Windows
-/// runners across every CI provider in the table below. The detector
-/// suppresses (demotes to LOW) `file_system_tampering` findings
-/// whose:
-///   1. resolved basename is in `suppressible_basenames`, AND
-///   2. normalized path contains one of the substrings here.
-///
-/// Coverage:
-///
-/// | Provider | Canonical workspace shape (Linux/macOS) |
-/// |---|---|
-/// | GitHub Actions self-hosted | `/actions-runner[N]/_work/<repo>/<repo>/` |
-/// | GitHub Actions hosted | `/home/runner/work/<repo>/<repo>/` |
-/// | GitLab CI | `/home/gitlab-runner/builds/<group>/<project>/` |
-/// | Jenkins | `/var/lib/jenkins[-agent]/workspace/<job>/` |
-/// | CircleCI | `/home/circleci/project/` |
-/// | Buildkite | `/var/lib/buildkite-agent/builds/...` |
-/// | Travis CI | `/home/travis/build/<owner>/<repo>/` |
-/// | TeamCity | `/opt/buildAgent/work/<id>/`, `/var/lib/teamcity/buildagent/work/` |
-/// | Azure DevOps | `/agent/_work/<id>/s/`, `/home/vsts/work/<id>/s/`, `/home/AzDevOps/agent/_work/` |
-/// | Bitbucket Pipelines | `/opt/atlassian/pipelines/agent/build/` |
-/// | Drone CI | `/drone/src/` |
-/// | Woodpecker CI | `/woodpecker/src/` |
-/// | Cirrus CI | `/tmp/cirrus-ci-build/` |
-/// | Codefresh | `/codefresh/volume/` |
-/// | Semaphore CI | `/home/semaphore/<repo>/` |
-/// | AppVeyor | `/home/appveyor/projects/<repo>/` |
-/// | Bamboo | `/home/bamboo/bamboo-agent/xml-data/build-dir/` |
-/// | GoCD | `/var/lib/go-agent/pipelines/` |
-///
-/// On Windows the same patterns match because backslashes are folded
-/// to forward slashes before the substring check (e.g. Jenkins
-/// `C:\Jenkins\workspace\Foo\` -> `c:/jenkins/workspace/foo/`).
-fn default_ci_runner_workspace_path_patterns() -> CiRunnerWorkspacePathPatternsJSON {
-    CiRunnerWorkspacePathPatternsJSON {
-        path_substrings: strings(&[
-            "/actions-runner/_work/",
-            "/actions-runner1/_work/",
-            "/actions-runner2/_work/",
-            "/actions-runner3/_work/",
-            "/actions-runner4/_work/",
-            "/runneradmin/actions-runner/_work/",
-            "/runner/_work/",
-            "/runner/work/",
-            "/gitlab-runner/builds/",
-            "/builds/runner/",
-            "/jenkins/workspace/",
-            "/jenkins-agent/workspace/",
-            "/jenkins_home/workspace/",
-            "/var/lib/jenkins/workspace/",
-            "/var/lib/jenkins-agent/workspace/",
-            "/circleci/project/",
-            "/buildkite-agent/builds/",
-            "/buildkite/builds/",
-            "/home/travis/build/",
-            "/travis/build/",
-            "/buildagent/work/",
-            "/teamcity/buildagent/work/",
-            "/var/lib/teamcity/buildagent/work/",
-            "/agent/_work/",
-            "/azdevops/agent/_work/",
-            "/vsts/work/",
-            "/atlassian/pipelines/agent/build/",
-            "/drone/src/",
-            "/woodpecker/src/",
-            "/cirrus-ci-build/",
-            "/codefresh/volume/",
-            "/home/semaphore/",
-            "/home/appveyor/projects/",
-            "/appveyor/projects/",
-            "/bamboo-agent/xml-data/build-dir/",
-            "/go-agent/pipelines/",
-        ]),
-        suppressible_basenames: strings(&[
-            ".env",
-            ".env.example",
-            ".env.local",
-            ".env.template",
-            ".env.test",
-            ".env.development",
-            ".env.production",
-            ".env.sample",
-        ]),
-    }
-}
-
-/// Filename substrings that identify macOS Keychain transactional
-/// artifacts (short-lived sandbox/transactional copies of the Keychain
-/// DB created by the Security framework on every Keychain read). Any
-/// process that touches the Keychain via the standard CFKeychain APIs
-/// causes these files to appear and disappear within seconds; the
-/// FIM/file_system_tampering classifier would otherwise flag them as
-/// sensitive-file Create events on the writer process (which can be
-/// anything from `iCloudNotificationAgent` to a packaged user app
-/// using OneDrive/iCloud sync).
-///
-/// Patterns are case-insensitive substring checks evaluated against
-/// the normalized path. Limited to filenames found *inside*
-/// `credential_store_patterns.macos` paths (`/library/keychains/`)
-/// so they are scoped to the actual Keychain directory, never to a
-/// user file that happens to share a similar name.
-fn default_keychain_transactional_filename_patterns() -> Vec<String> {
-    strings(&[".keychain-db.sb-", ".keychain-db-shm.sb-", "/.fl"])
-}
-
-/// Default browser-cache / browser-state suppression patterns. See
-/// the doc comment on [`BrowserDataSubtreesJSON`] for the suppression
-/// model. Patterns are case-insensitive substring matches against the
-/// FIM event path. Intentionally kept narrow: only directories /
-/// state files that are recomputable or that hold browser-internal
-/// configuration with no credential value. Credential-class artifacts
-/// (`Login Data`, `Cookies`, `Web Data`, `History`, `Bookmarks`,
-/// `Network/Cookies`, `Affiliation Database`) are deliberately NOT
-/// in any list here -- those keep their sensitive classification so
-/// a non-browser process touching them still fires.
-fn default_non_sensitive_browser_data_subtrees() -> BrowserDataSubtreesJSON {
-    BrowserDataSubtreesJSON {
-        chromium_family: strings(&[
-            "/code cache/",
-            "/gpucache/",
-            "/service worker/cachestorage/",
-            "/service worker/database/",
-            "/service worker/scriptcache/",
-            "/cache/cache_data/",
-            "/local storage/leveldb/",
-            "/indexeddb/",
-            "/sessionstorage/",
-            "/file system/",
-            "/blob_storage/",
-            "/crashpad/",
-            "/component_crx_cache/",
-            "/extensions/temp/",
-            "/extensions_crx_cache/",
-            "/dawn_graphite_cache/",
-            "/dawn_webgpu_cache/",
-            "/grshadercache/",
-            "/shadercache/",
-            "/optimizationhints/",
-            "/segmentation_platform/",
-            "/safe browsing/",
-            "/certificaterevocation/",
-        ]),
-        chromium_state_files_routine: strings(&[
-            "/local state",
-            "/local state.bak",
-            "/preferences",
-            "/preferences.bak",
-            "/secure preferences",
-            "/network/network persistent state",
-            "/network/transportsecurity",
-            "/network/reportingandnel",
-        ]),
-        chromium_profile_state_volatile: strings(&[
-            "/bookmarks",
-            "/bookmarks.bak",
-            "/downloadmetadata",
-            "/session storage/",
-            "/sessionstorage/",
-            "/sessions/",
-            "/sync data/",
-            "/current session",
-            "/current tabs",
-            "/last session",
-            "/last tabs",
-        ]),
-        chromium_user_data_root_markers: strings(&[
-            "/google/chrome/user data/",
-            "/google/chrome beta/user data/",
-            "/google/chrome canary/user data/",
-            "/microsoft/edge/user data/",
-            "/microsoft/edge beta/user data/",
-            "/brave-browser/user data/",
-            "/brave software/brave-browser/user data/",
-            "/vivaldi/user data/",
-            "/opera software/opera stable/",
-            "/chromium/user data/",
-        ]),
-        firefox_family_subtrees: strings(&[
-            "/cache2/",
-            "/startupcache/",
-            "/jumplistcache/",
-            "/offlinecache/",
-            "/storage/permanent/chrome/",
-            "/safebrowsing/",
-            "/datareporting/archived/",
-            "/saved-telemetry-pings/",
-        ]),
-        firefox_profile_state_volatile: strings(&["/sessionstore-backups/"]),
-        firefox_user_data_root_markers: strings(&[
-            "/mozilla/firefox/profiles/",
-            "/firefox/profiles/",
-            "/.mozilla/firefox/",
-        ]),
-    }
-}
-
-fn default_browser_appdata_unknown_writer() -> BrowserAppdataUnknownWriterJSON {
-    BrowserAppdataUnknownWriterJSON {
-        chromium_user_data_root_markers: strings(&[
-            "/google/chrome/user data/",
-            "/google/chrome beta/user data/",
-            "/google/chrome canary/user data/",
-            "/microsoft/edge/user data/",
-            "/microsoft/edge beta/user data/",
-            "/brave-browser/user data/",
-            "/brave software/brave-browser/user data/",
-            "/vivaldi/user data/",
-            "/opera software/opera stable/",
-            "/chromium/user data/",
-        ]),
-        firefox_user_data_root_markers: strings(&[
-            "/mozilla/firefox/profiles/",
-            "/firefox/profiles/",
-            "/.mozilla/firefox/",
-        ]),
-        chromium_process_names: strings(&[
-            "chrome",
-            "chrome.exe",
-            "google chrome",
-            "msedge",
-            "msedge.exe",
-            "microsoft edge",
-            "brave",
-            "brave.exe",
-            "brave browser",
-            "vivaldi",
-            "vivaldi.exe",
-            "opera",
-            "opera.exe",
-            "chromium",
-            "chromium.exe",
-        ]),
-        firefox_process_names: strings(&["firefox", "firefox.exe", "firefox-bin"]),
-        directory_target_names: strings(&[
-            "user data",
-            "default",
-            "profile 1",
-            "profile 2",
-            "profile 3",
-            "profile 4",
-            "profile 5",
-            "guest profile",
-            "system profile",
-            "network",
-            "profiles",
-        ]),
-    }
-}
-
-/// Per-platform build-output tree path substrings (FP-CI-6). Matched
-/// case-insensitively against forward-slash-normalized paths. The
-/// detector demotes `sandbox_exploitation` "bare lineage" findings
-/// (process living in `/tmp/` with no other suspicious signal) to
-/// LOW when BOTH the process binary path AND its parent process path
-/// contain one of these substrings -- i.e. the binary that just got
-/// spawned is the freshly-built output of a build tool whose own
-/// staging tree it lives in (cargo `target/`, Flutter
-/// `build/<platform>/`, Gradle `build/outputs/`, Lima
-/// `edamame_posture_build/release/`, ...).
-///
-/// Substring (not prefix/regex) matching is intentional: it makes
-/// the patterns trivial to extend across CI provider conventions
-/// without rewriting the detector.
-fn default_build_output_tree_self_spawn_patterns() -> PlatformStringLists {
-    platform_string_lists(
-        // macOS
-        &[
-            "/target/debug/",
-            "/target/release/",
-            "/build/macos/build/",
-            "/build/macos/x64/release/",
-            "/build/macos/x64/debug/",
-            "/build/macos/x64/profile/",
-            "/build/macos/arm64/release/",
-            "/build/macos/arm64/debug/",
-            "/build/macos/arm64/profile/",
-            "/build/outputs/",
-        ],
-        // Linux
-        &[
-            "/target/debug/",
-            "/target/release/",
-            "/build/outputs/",
-            "/build/linux/x64/release/",
-            "/build/linux/x64/debug/",
-            "/build/linux/x64/profile/",
-            "/build/linux/arm64/release/",
-            "/build/linux/arm64/debug/",
-            "/build/linux/arm64/profile/",
-            "/edamame_posture_build/release/",
-            "/edamame_posture_build/debug/",
-            "/edamame_posture/release/",
-            "/edamame_posture/debug/",
-        ],
-        // Windows
-        &[
-            "/target/debug/",
-            "/target/release/",
-            "/build/windows/x64/release/",
-            "/build/windows/x64/debug/",
-            "/build/windows/x64/profile/",
-            "/build/outputs/",
-        ],
-    )
-}
-
-fn default_benign_temp_artifact_suffixes() -> Vec<String> {
-    strings(&[
-        ".tmp",
-        ".temp",
-        ".swp",
-        ".swo",
-        ".part",
-        ".partial",
-        ".download",
-        ".aamdownload",
-        ".crdownload",
-        ".lock",
-        ".log",
-        ".txt",
-        ".json",
-        ".cache",
-        ".sqlite",
-        ".db",
-        ".plist",
-        ".yaml",
-        ".yml",
-        ".toml",
-        ".ini",
-    ])
-}
-
-fn default_application_storage_patterns() -> Vec<String> {
-    strings(&[
-        "/library/application support/",
-        "/library/containers/",
-        "/library/group containers/",
-        "/library/keychains/",
-        "/library/preferences/",
-        "/library/caches/",
-        "/library/webkit/",
-        "/appdata/roaming/",
-        "/appdata/local/",
-        "/programdata/",
-        "/.config/",
-        "/.cache/",
-        "/.local/share/",
-        "/.local/state/",
-        "/private/var/folders/",
-        "/var/folders/",
-    ])
-}
-
-fn default_credential_store_patterns() -> PlatformStringLists {
-    platform_string_lists(
-        &["/library/keychains/"],
-        &[
-            "/.local/share/keyrings/",
-            "/.gnome2/keyrings/",
-            "/.local/share/kwalletd/",
-            "/.kde/share/apps/kwallet/",
-        ],
-        &[
-            "/appdata/local/microsoft/credentials/",
-            "/appdata/roaming/microsoft/credentials/",
-            "/appdata/local/microsoft/vault/",
-            "/appdata/roaming/microsoft/vault/",
-            "/programdata/microsoft/vault/",
-        ],
-    )
-}
-
-fn default_generic_git_credential_helper() -> HelperMatcherConfig {
-    helper_matcher_config(
-        &[],
-        &["/git-credential-manager", "/git-credential-manager-core"],
-        &[],
-        &[],
-        &[
-            "gitcredentialmanager",
-            "gitcredentialmanagercore",
-            "gitcredentialmanagerexe",
-            "gitcredentialmanagercoreexe",
-        ],
-        &[
-            "gitcredentialmanager",
-            "gitcredentialmanagercore",
-            "gitcredentialmanagerexe",
-            "gitcredentialmanagercoreexe",
-        ],
-        &[],
-    )
-}
-
-fn default_macos_credential_helper() -> HelperMatcherConfig {
-    helper_matcher_config(
-        &["/usr/bin/security"],
-        &[
-            "/git-core/git-credential-osxkeychain",
-            "/keychain access.app/",
-        ],
-        &[],
-        &["/git-credential-osxkeychain"],
-        &[
-            "security",
-            "gitcredentialosxkeychain",
-            "keychainaccess",
-            "secd",
-            "securityd",
-            // FP-MAC-9: Apple-maintained Keychain peers and Safari
-            // platform helpers legitimately update real Keychain DB
-            // sidecars. These are trusted only by compact name and,
-            // for path matches, by the system-library prefix gate.
-            "trustedpeershelper",
-            "comapplesafariplatformsupporthelper",
-            // FP-MAC-8: xpcproxy is the launchd-spawned XPC service
-            // launcher that mediates Keychain unlocks for M365 /
-            // CloudKit / Mail.app sign-in. cloudd is the macOS
-            // CloudKit daemon that talks to icloud.com/apple.com on
-            // behalf of every iCloud-using app.
-            "xpcproxy",
-            "cloudd",
-        ],
-        &[
-            "secd",
-            "securityd",
-            "assistantd",
-            "commcenter",
-            "networkserviceproxy",
-            "trustedpeershelper",
-            "comapplesafariplatformsupporthelper",
-            // FP-MAC-8: same xpcproxy/cloudd attestation, leaf-name
-            // form. Combined with the `/system/library/` /
-            // `/usr/libexec/` prefix gate below, an impostor binary
-            // at `/tmp/xpcproxy` does NOT match.
-            "xpcproxy",
-            "cloudd",
-        ],
-        &["/system/library/", "/usr/libexec/"],
-    )
-}
-
-fn default_linux_credential_helper() -> HelperMatcherConfig {
-    helper_matcher_config(
-        &[],
-        &[
-            "/git-core/git-credential-libsecret",
-            "/gnome-keyring/gnome-keyring-daemon",
-        ],
-        &[],
-        &[
-            "/git-credential-libsecret",
-            "/secret-tool",
-            "/gnome-keyring-daemon",
-        ],
-        &[
-            "gitcredentiallibsecret",
-            "secrettool",
-            "gnomekeyringdaemon",
-            "kwalletd",
-            "kwalletd5",
-            "kwalletd6",
-            "ksecretsservice",
-            "kwalletmanager",
-            "kwalletmanager5",
-            "kwalletmanager6",
-        ],
-        &[
-            "kwalletd",
-            "kwalletd5",
-            "kwalletd6",
-            "ksecretsservice",
-            "kwalletmanager",
-            "kwalletmanager5",
-            "kwalletmanager6",
-        ],
-        &["/usr/bin/", "/usr/lib/", "/usr/libexec/"],
-    )
-}
-
-fn default_windows_credential_helper() -> HelperMatcherConfig {
-    helper_matcher_config(
-        &[],
-        &[],
-        &[],
-        &[],
-        &[
-            "cmdkey",
-            "cmdkeyexe",
-            "vaultcmd",
-            "vaultcmdexe",
-            "credentialuibroker",
-            "credentialuibrokerexe",
-            "lsass",
-            "lsassexe",
-        ],
-        &[
-            "cmdkeyexe",
-            "vaultcmdexe",
-            "credentialuibrokerexe",
-            "lsassexe",
-        ],
-        &["/windows/system32/", "/windows/syswow64/"],
-    )
-}
-
-fn default_trusted_credential_helpers() -> PlatformHelperMatcherConfigs {
-    PlatformHelperMatcherConfigs {
-        generic_git: default_generic_git_credential_helper(),
-        macos: default_macos_credential_helper(),
-        linux: default_linux_credential_helper(),
-        windows: default_windows_credential_helper(),
-    }
-}
-
-fn default_packaged_application_contains_patterns() -> Vec<String> {
-    strings(&[
-        ".app/",
-        "/applications/",
-        "/program files/",
-        "/appdata/local/programs/",
-        "/appdata/local/microsoft/",
-    ])
-}
-
-fn default_packaged_application_starts_with_patterns() -> Vec<String> {
-    strings(&["/opt/", "/usr/lib/", "/snap/", "/usr/share/"])
-}
-
-fn default_packaged_application_ends_with_patterns() -> Vec<String> {
-    strings(&[".app"])
-}
-
-/// Well-known platform metadata service endpoints. Communication
-/// to these IPs is performed by the OS-managed cloud-agent stack
-/// (Azure Wire Server, EC2/GCE Instance Metadata Service, ...) and
-/// is structurally part of the host's own life-cycle, not user
-/// network activity.
-///
-/// Used by the `sensitive_material_egress` suppression hook
-/// `should_suppress_sensitive_material_egress_as_platform_metadata_call`
-/// so that e.g. `python3 /usr/sbin/waagent` reading
-/// `/var/lib/waagent/Certificates.pem` while talking to
-/// `168.63.129.16` (Azure Wire Server) does not trip a CRITICAL
-/// finding on every Azure Linux VM the daemon runs on.
-///
-/// macOS deliberately ships an empty list -- there is no equivalent
-/// platform metadata endpoint on Apple hosts.
-fn default_platform_metadata_endpoints() -> PlatformStringLists {
-    platform_string_lists(
-        // macos
-        &[],
-        // linux
-        &["168.63.129.16", "169.254.169.254"],
-        // windows
-        &["168.63.129.16", "169.254.169.254"],
-    )
-}
-
-/// Filesystem locations whose contents belong to the platform's own
-/// cloud-agent stack. Companion to
-/// `platform_metadata_endpoints`: a sensitive-material finding is
-/// only suppressed when ALL credential/secret-like files in the
-/// finding live under one of these directories.
-///
-/// Patterns are case-insensitive substring matches against the
-/// normalized (forward-slash, lowercase) file path. Windows entries
-/// keep `\` because the FIM event paths there typically retain the
-/// original separator.
-fn default_platform_self_state_directories() -> PlatformStringLists {
-    platform_string_lists(
-        // macos
-        &[],
-        // linux
-        &[
-            "/var/lib/waagent/",
-            "/etc/cloud/",
-            "/var/lib/cloud/",
-            "/var/log/waagent/",
-            "/var/log/cloud-init/",
-        ],
-        // windows
-        &["\\windowsazure\\", "\\packages\\plugins\\microsoft.azure."],
-    )
-}
-
-/// Process basenames recognized as platform-managed cloud-agent
-/// daemons. Matched case-insensitively against the process name,
-/// parent process name, script basename, and parent-script basename
-/// of the session attribution.
-///
-/// Used as a third gate by
-/// `should_suppress_sensitive_material_egress_as_platform_metadata_call`:
-/// suppression only applies when the responsible process is one of
-/// these platform agents (so a malicious binary impersonating them
-/// from `/tmp/` or `~/.cache/` still trips the gate via the existing
-/// suspicious-lineage / suspicious-path checks).
-fn default_platform_self_state_processes() -> PlatformStringLists {
-    platform_string_lists(
-        // macos
-        &[],
-        // linux
-        &[
-            "waagent",
-            "cloud-init",
-            "cloud-init-local",
-            "azure-network-watcher-agent",
-        ],
-        // windows
-        &[
-            "windowsazureguestagent.exe",
-            "waappagent.exe",
-            "azurewatsoncrashhandler.exe",
-            "azurediagnosticshealthagent.exe",
-        ],
-    )
-}
-
-/// Per-platform routine egress destinations for trusted platform
-/// credential helpers (FP-MAC-8). The detector consults this list
-/// from `should_suppress_session_credential_helper_self_access`
-/// after confirming:
-///   1. The session's process is a trusted platform credential
-///      helper (`looks_like_trusted_platform_credential_helper_*`),
-///      AND
-///   2. Every derived sensitive file is an OS-managed credential
-///      store (`credential_store_kind_for_path`).
-///
-/// Only then does the egress destination get checked here. The check
-/// is cheap and intentionally per-platform: macOS `xpcproxy` mediating
-/// M365 sign-in legitimately egresses to Microsoft Azure, but a Linux
-/// `gnome-keyring-daemon` should not be talking to Microsoft. A
-/// helper egressing to a destination not on its platform's allowlist
-/// stays alertable.
-fn default_platform_credential_helper_routine_destinations(
-) -> PlatformCredentialHelperRoutineDestinationsJSON {
-    PlatformCredentialHelperRoutineDestinationsJSON {
-        macos: CredentialHelperDestinationListJSON {
-            asn_owners: strings(&[
-                "Microsoft Corporation",
-                "Microsoft Azure",
-                "Apple Inc",
-                "Apple Inc.",
-                "Akamai Technologies",
-                "Akamai International",
-            ]),
-            domain_patterns: strings(&[
-                ".login.microsoftonline.com",
-                ".login.live.com",
-                ".graph.microsoft.com",
-                ".outlook.office365.com",
-                ".outlook.office.com",
-                ".office365.com",
-                ".office.com",
-                ".appleid.apple.com",
-                ".icloud.com",
-                ".gsa.apple.com",
-                ".gsas.apple.com",
-                ".apple.com",
-            ]),
-            ip_prefixes: strings(&["2603:1026:", "2603:1061:"]),
-        },
-        linux: CredentialHelperDestinationListJSON::default(),
-        windows: CredentialHelperDestinationListJSON {
-            asn_owners: strings(&["Microsoft Corporation", "Microsoft Azure"]),
-            domain_patterns: strings(&[
-                ".login.microsoftonline.com",
-                ".login.live.com",
-                ".graph.microsoft.com",
-                ".outlook.office365.com",
-                ".outlook.office.com",
-                ".office365.com",
-                ".office.com",
-            ]),
-            ip_prefixes: strings(&["2603:1026:", "2603:1061:"]),
-        },
-    }
-}
-
-/// Default cloud-provider SDK control-plane destinations for the
-/// `cloud_provider_sdk_self_auth` token-exfiltration demotion. Each
-/// provider key matches a sensitive-path label string. The domain
-/// suffixes are scoped to the cloud's control-plane / auth surface
-/// (the SDKs and CLI auth flows that legitimately read the matching
-/// credential file): for AWS this covers Bedrock, STS, SSO, and the
-/// general `*.amazonaws.com` service surface; for Azure the AAD login
-/// and Azure OpenAI / Cognitive Services surface; for GCP the
-/// `*.googleapis.com` (incl. Vertex AI `aiplatform.googleapis.com`)
-/// and account-auth surface. The ASN owners are the catch-all for
-/// bare-IP sessions that arrive without reverse DNS.
-fn default_cloud_provider_sdk_destinations() -> CloudProviderSdkDestinationsJSON {
-    CloudProviderSdkDestinationsJSON {
-        aws: CloudProviderSdkDestinationListJSON {
-            asn_owners: strings(&["Amazon", "AWS"]),
-            domain_suffixes: strings(&[".amazonaws.com", ".amazonaws.com.cn", ".aws.amazon.com"]),
-            ip_prefixes: Vec::new(),
-        },
-        azure: CloudProviderSdkDestinationListJSON {
-            asn_owners: strings(&["Microsoft Azure", "Microsoft Corporation"]),
-            domain_suffixes: strings(&[
-                ".azure.com",
-                ".azure.net",
-                ".windows.net",
-                ".microsoftonline.com",
-                ".cognitiveservices.azure.com",
-                ".openai.azure.com",
-            ]),
-            ip_prefixes: Vec::new(),
-        },
-        gcp: CloudProviderSdkDestinationListJSON {
-            asn_owners: strings(&["Google"]),
-            domain_suffixes: strings(&[".googleapis.com", ".google.com"]),
-            ip_prefixes: Vec::new(),
-        },
-    }
-}
-
-/// Embedded fallback for `software_distribution_backends` (FP-MAC-14).
-/// Major CDN / update / package-distribution organizations that packaged
-/// desktop apps legitimately reach for self-update and config fetch.
-/// Org-identity matching (ASN owner substring + domain suffix), never a
-/// brittle single-IP allowlist. MUST mirror
-/// `threatmodels/cve-detection-params-db.json::software_distribution_backends`.
-fn default_software_distribution_backends() -> CloudProviderSdkDestinationListJSON {
-    CloudProviderSdkDestinationListJSON {
-        asn_owners: strings(&[
-            "FASTLY",
-            "GITHUB",
-            "CLOUDFLARENET",
-            "CLOUDFLARE",
-            "MICROSOFT",
-            "APPLE",
-            "AKAMAI",
-            "GOOGLE",
-            "AMAZON",
-            "CLOUDFRONT",
-        ]),
-        domain_suffixes: strings(&[
-            ".github.com",
-            ".githubusercontent.com",
-            ".github.io",
-            ".githubassets.com",
-            ".fastly.net",
-            ".cloudflare.com",
-            ".microsoft.com",
-            ".windowsupdate.com",
-            ".msftconnecttest.com",
-            ".apple.com",
-            ".mzstatic.com",
-            ".akamai.net",
-            ".akamaiedge.net",
-            ".gstatic.com",
-            ".cloudfront.net",
-        ]),
-        ip_prefixes: Vec::new(),
     }
 }
 
@@ -2009,579 +701,6 @@ fn lowercase_cloud_provider_sdk_destination_list(
             .map(|s| s.to_ascii_lowercase())
             .collect(),
     }
-}
-
-/// Per-platform JVM HotSpot perfdata path entries (FP-CI-5). The
-/// detector fully suppresses `file_system_tampering` findings whose
-/// artifact path contains `artifact_path_substring` AND whose writer
-/// matches one of the allowlisted JVM basenames OR install path
-/// prefixes. These are transient counter files HotSpot creates for
-/// every JVM PID, never security-relevant.
-fn default_runtime_perfdata_paths() -> PlatformRuntimePerfdataPathsJSON {
-    let java_basenames = strings(&["java"]);
-    PlatformRuntimePerfdataPathsJSON {
-        macos: vec![
-            RuntimePerfdataEntryJSON {
-                artifact_path_substring: "/private/tmp/hsperfdata_".to_string(),
-                writer_basenames: java_basenames.clone(),
-                writer_path_prefixes: strings(&[
-                    "/Library/Java/JavaVirtualMachines/",
-                    "/Applications/Android Studio.app/Contents/jbr/",
-                    "/opt/homebrew/Cellar/openjdk",
-                    "/usr/local/Cellar/openjdk",
-                ]),
-            },
-            RuntimePerfdataEntryJSON {
-                artifact_path_substring: "/tmp/hsperfdata_".to_string(),
-                writer_basenames: java_basenames.clone(),
-                writer_path_prefixes: strings(&[
-                    "/Library/Java/JavaVirtualMachines/",
-                    "/Applications/Android Studio.app/Contents/jbr/",
-                    "/opt/homebrew/Cellar/openjdk",
-                    "/usr/local/Cellar/openjdk",
-                ]),
-            },
-        ],
-        linux: vec![RuntimePerfdataEntryJSON {
-            artifact_path_substring: "/tmp/hsperfdata_".to_string(),
-            writer_basenames: java_basenames,
-            writer_path_prefixes: strings(&[
-                "/usr/lib/jvm/",
-                "/opt/temurin",
-                "/opt/openjdk",
-                "/opt/jdk",
-                "/Library/Java/JavaVirtualMachines/",
-                "/actions-runner/_work/_tool/Java_",
-                "/actions-runner1/_work/_tool/Java_",
-                "/actions-runner2/_work/_tool/Java_",
-                "/actions-runner3/_work/_tool/Java_",
-                "/actions-runner4/_work/_tool/Java_",
-                "/.sdkman/candidates/java/",
-                "/.gradle/jdks/",
-                "/.android/sdk/",
-            ]),
-        }],
-        windows: vec![],
-    }
-}
-
-/// Per-platform process names of well-known OS system daemons whose
-/// legitimate maintenance work includes touching platform credential
-/// stores. Used as an **informational hint** to the LLM adjudicator,
-/// not as a deterministic suppression switch.
-///
-/// macOS examples: `sharingd` (iCloud Keychain sync), `accountsd`
-/// (Account Authentication framework), `apsd` (Apple Push), `securityd`
-/// (Security framework), `cloudd` (CloudKit), `keychainsharingd`.
-///
-/// Linux examples: `dbus-daemon`, `accounts-daemon`,
-/// `gnome-keyring-daemon`, `kwalletd5`/`kwalletd6`, `polkitd`,
-/// `systemd`/`systemd-userdbd`.
-///
-/// Windows examples: `lsass.exe`, `services.exe`, `svchost.exe`,
-/// `vaultsvc.exe`, `dwm.exe`, `winlogon.exe`.
-///
-/// A name match alone NEVER silences a finding. The detector flags the
-/// match in `FindingEvidence::process_name_matches_known_system_daemon_hint`
-/// so the LLM can weigh it together with corroboration (anomaly,
-/// blacklist, suspicious lineage) when deciding KEEP/DEMOTE/SUPPRESS.
-fn default_known_system_daemon_credential_maintenance_hints() -> PlatformStringLists {
-    platform_string_lists(
-        &[
-            "sharingd",
-            "accountsd",
-            "apsd",
-            "securityd",
-            "cloudd",
-            "keychainsharingd",
-            "trustd",
-            "syspolicyd",
-            "amfid",
-            "com.apple.mobilesoftwareupdate.",
-            "softwareupdated",
-            "mobileassetd",
-        ],
-        &[
-            "dbus-daemon",
-            "accounts-daemon",
-            "gnome-keyring-daemon",
-            "kwalletd5",
-            "kwalletd6",
-            "polkitd",
-            "systemd",
-            "systemd-userdbd",
-            "systemd-logind",
-        ],
-        &[
-            "lsass.exe",
-            "services.exe",
-            "svchost.exe",
-            "vaultsvc.exe",
-            "dwm.exe",
-            "winlogon.exe",
-            "wininit.exe",
-            "csrss.exe",
-        ],
-    )
-}
-
-/// Default trusted self-extracting installer basenames. See
-/// [`CveDetectionParamsJSON::trusted_self_extracting_installers`] for the
-/// full contract: basename membership is a NECESSARY but not SUFFICIENT
-/// condition for `file_system_tampering` suppression -- the detector also
-/// requires structural self-containment in a temp extraction directory.
-///
-/// - `dismhost.exe`: the Windows DISM worker. `Dism.exe` / TrustedInstaller
-///   copy a self-contained `DismHost.exe` + `DismCorePS.dll` into a
-///   GUID-named subdir under `%LocalAppData%\Temp\` and run from there
-///   (FP-WIN-3).
-/// - `wixstdba.exe`: the WiX Burn Standard Bootstrapper Application,
-///   extracted into `%LocalAppData%\Temp\{GUID}\.ba\` by the bundle engine
-///   (FP-WIN-8).
-fn default_trusted_self_extracting_installers() -> PlatformStringLists {
-    platform_string_lists(
-        // macos
-        &[],
-        // linux
-        &[],
-        // windows
-        &["dismhost.exe", "wixstdba.exe"],
-    )
-}
-
-/// Default trusted OS content-indexer process basenames. See
-/// [`CveDetectionParamsJSON::os_content_indexer_processes`] for the full
-/// contract: basename membership is a NECESSARY but not SUFFICIENT
-/// condition for `file_system_tampering` demotion -- the detector also
-/// requires the writer to run from a system binary path AND the sensitive
-/// target to NOT be a platform credential store. A same-named impostor in
-/// `%TEMP%` or an indexer touching a credential store stays alertable.
-///
-/// - Windows Search: `searchindexer.exe` (the service host) plus its
-///   `searchprotocolhost.exe` / `searchfilterhost.exe` crawler workers,
-///   which touch indexed user files (incl. browser profile state) from
-///   `C:\Windows\System32\` (FP-WIN-23).
-/// - macOS Spotlight: `mds`/`mds_stores`/`mdworker`/`mdworker_shared`/
-///   `mdbulkimport` run from the CoreServices Metadata framework support
-///   dir under `/System/Library/`.
-/// - Linux: GNOME Tracker (`tracker-miner-fs[-3]`, `tracker-extract[-3]`)
-///   and KDE Baloo (`baloo_file`, `baloo_file_extractor`) run from
-///   `/usr/bin/` / `/usr/libexec/`.
-fn default_os_content_indexer_processes() -> PlatformStringLists {
-    platform_string_lists(
-        // macOS Spotlight
-        &[
-            "mds",
-            "mds_stores",
-            "mdworker",
-            "mdworker_shared",
-            "mdbulkimport",
-            "mdsync",
-        ],
-        // Linux: GNOME Tracker + KDE Baloo
-        &[
-            "tracker-miner-fs",
-            "tracker-miner-fs-3",
-            "tracker-extract",
-            "tracker-extract-3",
-            "baloo_file",
-            "baloo_file_extractor",
-        ],
-        // Windows Search
-        &[
-            "searchindexer.exe",
-            "searchprotocolhost.exe",
-            "searchfilterhost.exe",
-        ],
-    )
-}
-
-/// Path substrings that identify per-OS package-manager working
-/// directories where toolchains legitimately stage downloaded
-/// dependency archives. The `file_system_tampering` detector would
-/// otherwise flag every Flutter/dart `pub_*\<pkg>.tar.gz`,
-/// `npm_-_-_-/cache.tgz`, `pip-build-*\source.tar.gz`, etc. that a
-/// CI build downloads while the toolchain has external sessions to
-/// the registry.
-///
-/// The carve-out is conjunctive: BOTH the writer process basename
-/// (matched against `package_manager_temp_writers`) AND the path
-/// pattern (here) must match before the FIM event is suppressed.
-/// A malicious binary writing to a directory that happens to share
-/// the name of a package-manager temp dir does NOT get a free pass
-/// because its process basename will not appear in the writer
-/// allowlist.
-///
-/// Patterns are case-insensitive substring matches against the
-/// normalized (forward-slash, lowercase) FIM event path. Windows
-/// entries keep `\` for the host's native separator style; the
-/// detector normalizes both representations before matching.
-///
-/// Path patterns identifying well-known managed temp-staging
-/// directories where benign extraction / build output is written into
-/// OS temp directories during builds. One canonical Windows case is
-/// the WiX Toolset's `light.exe`, which extracts
-/// `WixToolset.BootstrapperApplications.wixext_<HASH>` into a
-/// per-build temp directory and emits `wix-ir/*.wxl` localization
-/// resources during `cargo wix` packaging on the Windows runner.
-/// Another cross-platform case is tonic/prost writing protobuf
-/// descriptor sets into `prost-buildXXXXXX/` temp trees during Cargo
-/// build-script execution.
-///
-/// Patterns are case-insensitive substring matches against the
-/// normalized (forward-slash, lowercase) FIM event path. Windows
-/// entries keep `\` for the host's native separator style; the
-/// detector normalizes both representations before matching.
-///
-/// Suppression here is path-only (no writer-process gate) because
-/// FIM events for `light.exe`-spawned `BootstrapperApplications`
-/// extraction frequently arrive with no L7 attribution. The
-/// patterns themselves are deeply specific to the WiX toolchain
-/// (`WixToolset.BootstrapperApplications.wixext_<HASH>` and the
-/// `wix-ir/` intermediate output directory) and combined with the
-/// implicit `\Temp\` gate from the surrounding non-temp branch
-/// they cannot be confused with an attacker drop.
-///
-/// See `FALSEPOSITIVES.md` (FP-WIN-13).
-fn default_managed_temp_staging_patterns() -> ManagedTempStagingPatternsJSON {
-    ManagedTempStagingPatternsJSON {
-        suppress_path_patterns: platform_string_lists(
-            // macos
-            &["/prost-build"],
-            // linux
-            &["/prost-build"],
-            // windows
-            &[
-                "\\prost-build",
-                "\\wixtoolset.bootstrapperapplications.wixext_",
-                "\\wix-ir\\",
-                "-populate-prefix\\tmp\\",
-                "\\nugetscratch",
-                "\\chocolatey\\chocolateyscratch",
-                "\\system-commandline-sentinel-files",
-                "\\remoteipmoproxy_configdefender_",
-            ],
-        ),
-        // Weaker path-only evidence: keep as LOW audit evidence instead of
-        // suppressing it completely.
-        demote_path_patterns: platform_string_lists(
-            // macos
-            &[],
-            // linux
-            &[],
-            // windows -- WiX Bootstrapper Application runtime extraction tree
-            // Chocolatey installer cache, and Chromium extension install/unpack staging.
-            &[
-                "\\.ba",
-                "\\appdata\\local\\temp\\chocolatey",
-                "\\chromecrx_",
-            ],
-        ),
-    }
-}
-
-/// Build and signing tools that legitimately materialize installer
-/// artifacts under OS temp directories while also talking to package or
-/// signing services. The detector demotes these to LOW only when BOTH the
-/// writer path and artifact path match, so a spoofed `light.exe` in temp does
-/// not inherit trust.
-fn default_trusted_build_temp_staging() -> TrustedBuildTempStagingJSON {
-    TrustedBuildTempStagingJSON {
-        writer_path_patterns: platform_string_lists(
-            // macos
-            &[],
-            // linux
-            &[],
-            // windows
-            &[
-                "\\program files (x86)\\wix toolset",
-                "\\program files\\wix toolset",
-                "\\.dotnet\\tools\\azuresigntool.exe",
-            ],
-        ),
-        artifact_path_patterns: platform_string_lists(
-            // macos
-            &[],
-            // linux
-            &[],
-            // windows
-            &[
-                "\\appdata\\local\\temp\\",
-                "\\temp\\axs.",
-                "\\temp\\00000001.",
-                "\\temp\\npmiemut\\",
-                "\\temp\\#media",
-            ],
-        ),
-    }
-}
-
-/// FP-WIN-7c -- trusted-app self-temp-staging pair-wise allowlist.
-///
-/// Documents legitimate self-update / self-extract flows that look
-/// like file-system tampering to the FIM-backed detector. Each entry
-/// pairs a writer process binary with the temp directory it writes
-/// into; both must match for the deterministic suppression hook to
-/// fire. See `FALSEPOSITIVES.md` (FP-WIN-7c) for the dogfood evidence
-/// these entries cover.
-fn default_app_self_temp_staging() -> AppSelfTempStagingJSON {
-    AppSelfTempStagingJSON {
-        macos: Vec::new(),
-        linux: Vec::new(),
-        windows: vec![
-            AppSelfTempStagingEntryJSON {
-                name: "chrome_self_update".to_string(),
-                writer_path_patterns: vec![
-                    "\\program files\\google\\chrome\\application\\chrome.exe".to_string(),
-                    "\\program files (x86)\\google\\chrome\\application\\chrome.exe".to_string(),
-                ],
-                target_path_patterns: vec![
-                    "\\appdata\\local\\temp\\chrome_chrome_bits_".to_string(),
-                    "\\appdata\\local\\temp\\chrome_chrome_unpacker_".to_string(),
-                ],
-            },
-            AppSelfTempStagingEntryJSON {
-                name: "edge_self_update".to_string(),
-                writer_path_patterns: vec![
-                    "\\program files\\microsoft\\edge\\application\\msedge.exe".to_string(),
-                    "\\program files (x86)\\microsoft\\edge\\application\\msedge.exe".to_string(),
-                ],
-                target_path_patterns: vec![
-                    "\\appdata\\local\\temp\\msedgeedge_bits_".to_string(),
-                    "\\appdata\\local\\temp\\msedge_chrome_unpacker_".to_string(),
-                    "\\appdata\\local\\temp\\msedge_chrome_bits_".to_string(),
-                ],
-            },
-            AppSelfTempStagingEntryJSON {
-                name: "brave_self_update".to_string(),
-                writer_path_patterns: vec![
-                    "\\program files\\bravesoftware\\brave-browser\\application\\brave.exe"
-                        .to_string(),
-                ],
-                target_path_patterns: vec![
-                    "\\appdata\\local\\temp\\brave_chrome_bits_".to_string(),
-                    "\\appdata\\local\\temp\\brave_chrome_unpacker_".to_string(),
-                ],
-            },
-            AppSelfTempStagingEntryJSON {
-                name: "windows_winget_svchost".to_string(),
-                writer_path_patterns: vec![
-                    "\\windows\\system32\\svchost.exe".to_string(),
-                    "\\windows\\syswow64\\svchost.exe".to_string(),
-                ],
-                target_path_patterns: vec![
-                    "\\appdata\\local\\temp\\winget\\".to_string(),
-                ],
-            },
-            AppSelfTempStagingEntryJSON {
-                name: "vs_installer_background_download_self_extracted".to_string(),
-                writer_path_patterns: vec![
-                    "\\resources\\app\\servicehub\\services\\microsoft.visualstudio.setup.service\\backgrounddownload.exe"
-                        .to_string(),
-                ],
-                target_path_patterns: vec![
-                    "\\appdata\\local\\temp\\dd_backgrounddownload_".to_string(),
-                    "\\appdata\\local\\temp\\".to_string(),
-                ],
-            },
-        ],
-    }
-}
-
-/// See `FALSEPOSITIVES.md` (FP-WIN-11).
-fn default_package_manager_temp_path_patterns() -> PlatformStringLists {
-    platform_string_lists(
-        // macos
-        &[
-            "/private/var/folders/",
-            "/library/caches/pub/",
-            "/.pub-cache/",
-            "/.npm/_cacache/",
-            "/.yarn/cache/",
-            "/.cargo/registry/cache/",
-        ],
-        // linux
-        &[
-            "/tmp/pub_",
-            "/tmp/pub-cache-",
-            "/tmp/npm-",
-            "/tmp/yarn-",
-            "/tmp/pip-",
-            "/tmp/cargo-install",
-            "/.cache/pub/",
-            "/.npm/_cacache/",
-            "/.yarn/cache/",
-            "/.cargo/registry/cache/",
-        ],
-        // windows
-        &[
-            "\\temp\\pub_",
-            "\\temp\\npm-",
-            "\\temp\\yarn-",
-            "\\temp\\.yarn-cache\\",
-            "\\temp\\pip-",
-            "\\appdata\\local\\pub-cache\\",
-            "\\appdata\\local\\npm-cache\\",
-            "\\appdata\\roaming\\npm-cache\\",
-            "\\appdata\\local\\yarn\\cache\\",
-            "\\.cargo\\registry\\cache\\",
-        ],
-    )
-}
-
-/// Process basenames recognized as legitimate package-manager
-/// toolchains that download dependency archives into their own
-/// temp/cache directories. Companion to
-/// `package_manager_temp_path_patterns`: a `file_system_tampering`
-/// finding is only suppressed when BOTH the writer basename matches
-/// here AND the artifact path matches the temp pattern list.
-///
-/// Match is case-insensitive exact-match against `process_name`.
-/// Windows entries include the `.exe`/`.cmd` suffix that FIM events
-/// carry; non-Windows variants omit the suffix.
-fn default_package_manager_temp_writers() -> PlatformStringLists {
-    platform_string_lists(
-        // macos
-        &[
-            "dart",
-            "node",
-            "npm",
-            "yarn",
-            "pnpm",
-            "pip",
-            "pip3",
-            "cargo",
-            "rustup-init",
-        ],
-        // linux
-        &[
-            "dart",
-            "node",
-            "npm",
-            "yarn",
-            "pnpm",
-            "pip",
-            "pip3",
-            "cargo",
-            "rustup-init",
-        ],
-        // windows
-        &[
-            "dart.exe",
-            "node.exe",
-            "npm.cmd",
-            "npm.exe",
-            "yarn.cmd",
-            "yarn.js",
-            "pnpm.cmd",
-            "pnpm.exe",
-            "pip.exe",
-            "pip3.exe",
-            "cargo.exe",
-            "rustup-init.exe",
-        ],
-    )
-}
-
-/// Per-OS process basenames that identify the EDAMAME daemon family
-/// (the GUI app, the posture CLI, the privileged helper). Used to
-/// recognize legitimate self-access during the daemon's own threat
-/// checks and self-telemetry uploads.
-///
-/// The deterministic `file_system_tampering` severity grading uses
-/// this list to extend the FP-WIN-4 LOW-demote carve-out
-/// (`operator_scratch_script_shape`) to also fire when
-/// `has_external_process` is true, AS LONG AS the writer is an
-/// EDAMAME daemon binary AND the script content has no
-/// network-command tokens. This handles the canonical FP-WIN-15
-/// shape: `edamame_posture.exe` writes a `.tmp*.ps1` threat-check
-/// stub into `%TEMP%` while concurrently uploading telemetry to
-/// `hub.edamame.tech`. The egress is real but it is the daemon's
-/// own self-telemetry, not malicious payload exfil. Without this
-/// allowance the FP-WIN-4 demote misses the EDAMAME case and the
-/// daemon flags itself HIGH on every CI / dogfood run.
-///
-/// The carve-out is conjunctive (writer name AND no network-command
-/// content AND not in `/tmp/`): an attacker who happens to drop a
-/// `.tmp*.ps1` containing `curl evil.example.com` into `%TEMP%`
-/// would still trip HIGH because `network_command_like` flips the
-/// gate off, regardless of process attribution.
-///
-/// See `FALSEPOSITIVES.md` (FP-WIN-15) and
-/// `FALSEPOSITIVESFIX.md` (FP-WIN-15) for the full case study.
-fn default_edamame_daemon_self_telemetry_writers() -> PlatformStringLists {
-    platform_string_lists(
-        // macos
-        &[
-            "edamame",
-            "edamame_posture",
-            "edamame_helper",
-            "edamame_security",
-        ],
-        // linux
-        &[
-            "edamame",
-            "edamame_posture",
-            "edamame_helper",
-            "edamame_security",
-        ],
-        // windows
-        &[
-            "edamame.exe",
-            "edamame_posture.exe",
-            "edamame_helper.exe",
-            "edamame_security.exe",
-        ],
-    )
-}
-
-fn default_edamame_daemon_self_telemetry_install_prefixes() -> PlatformStringLists {
-    platform_string_lists(
-        // macos
-        &[
-            "/applications/edamame security.app/contents/macos/",
-            "/usr/local/bin/",
-            "/opt/homebrew/bin/",
-        ],
-        // linux
-        &[
-            "/usr/lib/edamame-security/",
-            "/opt/edamame/",
-            "/usr/local/bin/",
-        ],
-        // windows
-        &[
-            "c:/program files/windowsapps/edamametechnologies.edamamesecurity_",
-            "c:/program files/edamame/",
-        ],
-    )
-}
-
-/// Filename leaf-prefixes that identify well-known platform-runtime
-/// probe scripts. The canonical case is Windows PowerShell, which
-/// drops a tiny one-line probe `__PSScriptPolicyTest_<random>.<random>.ps1`
-/// into `%TEMP%` every time any process spawns `powershell.exe` to
-/// verify the current execution policy. The probe is recognized,
-/// well-documented Microsoft behaviour, NOT user activity.
-///
-/// Matched as a case-insensitive prefix against the lowercased
-/// filename leaf (path basename). Storing the prefix is sufficient
-/// because the random suffix portion has no security relevance.
-///
-/// See `FALSEPOSITIVES.md` (FP-WIN-12).
-fn default_platform_runtime_probe_filename_patterns() -> PlatformStringLists {
-    platform_string_lists(
-        // macos
-        &[],
-        // linux
-        &[],
-        // windows
-        &["__psscriptpolicytest_"],
-    )
-}
-
-fn default_fim_hash_size_threshold() -> u64 {
-    10_485_760
 }
 
 #[derive(Clone)]
@@ -2634,6 +753,13 @@ pub struct CveDetectionParams {
     pub known_system_daemon_credential_maintenance_hints: PlatformStringLists,
     pub trusted_self_extracting_installers: PlatformStringLists,
     pub os_content_indexer_processes: PlatformStringLists,
+    pub credential_class_path_patterns: Vec<String>,
+    pub system_binary_path_roots: Vec<String>,
+    pub system_binary_path_excludes: Vec<String>,
+    pub public_diagnostic_destination_tokens: Vec<String>,
+    pub random_temp_scratch_path_prefixes: Vec<String>,
+    pub temp_installer_shell_names: Vec<String>,
+    pub packaged_developer_tool_identity_tokens: Vec<String>,
     pub fim_hash_size_threshold: u64,
     pub fim_temp_executable_patterns: Vec<String>,
     pub evidence_weights: EvidenceWeightsJSON,
@@ -3250,6 +1376,41 @@ impl CveDetectionParams {
                     .map(|name| name.to_ascii_lowercase())
                     .collect(),
             },
+            credential_class_path_patterns: json
+                .credential_class_path_patterns
+                .iter()
+                .map(|p| p.to_ascii_lowercase().replace('\\', "/"))
+                .collect(),
+            system_binary_path_roots: json
+                .system_binary_path_roots
+                .iter()
+                .map(|p| p.to_ascii_lowercase().replace('\\', "/"))
+                .collect(),
+            system_binary_path_excludes: json
+                .system_binary_path_excludes
+                .iter()
+                .map(|p| p.to_ascii_lowercase().replace('\\', "/"))
+                .collect(),
+            public_diagnostic_destination_tokens: json
+                .public_diagnostic_destination_tokens
+                .iter()
+                .map(|t| t.to_ascii_lowercase())
+                .collect(),
+            random_temp_scratch_path_prefixes: json
+                .random_temp_scratch_path_prefixes
+                .iter()
+                .map(|p| p.to_ascii_lowercase().replace('\\', "/"))
+                .collect(),
+            temp_installer_shell_names: json
+                .temp_installer_shell_names
+                .iter()
+                .map(|n| n.to_ascii_lowercase())
+                .collect(),
+            packaged_developer_tool_identity_tokens: json
+                .packaged_developer_tool_identity_tokens
+                .iter()
+                .map(|t| t.to_ascii_lowercase())
+                .collect(),
             fim_hash_size_threshold: json.fim_hash_size_threshold,
             fim_temp_executable_patterns: json.fim_temp_executable_patterns.clone(),
             evidence_weights: json.evidence_weights.clone(),
@@ -4596,6 +2757,49 @@ pub fn suspicious_parent_path_patterns() -> Vec<String> {
         .clone()
 }
 
+pub fn credential_class_path_patterns() -> Vec<String> {
+    PARAMS_SNAPSHOT
+        .load()
+        .credential_class_path_patterns
+        .clone()
+}
+
+pub fn system_binary_path_roots() -> Vec<String> {
+    PARAMS_SNAPSHOT.load().system_binary_path_roots.clone()
+}
+
+pub fn system_binary_path_excludes() -> Vec<String> {
+    PARAMS_SNAPSHOT
+        .load()
+        .system_binary_path_excludes
+        .clone()
+}
+
+pub fn public_diagnostic_destination_tokens() -> Vec<String> {
+    PARAMS_SNAPSHOT
+        .load()
+        .public_diagnostic_destination_tokens
+        .clone()
+}
+
+pub fn random_temp_scratch_path_prefixes() -> Vec<String> {
+    PARAMS_SNAPSHOT
+        .load()
+        .random_temp_scratch_path_prefixes
+        .clone()
+}
+
+pub fn temp_installer_shell_names() -> Vec<String> {
+    PARAMS_SNAPSHOT.load().temp_installer_shell_names.clone()
+}
+
+pub fn packaged_developer_tool_identity_tokens() -> Vec<String> {
+    PARAMS_SNAPSHOT
+        .load()
+        .packaged_developer_tool_identity_tokens
+        .clone()
+}
+
 pub fn fim_hash_size_threshold() -> u64 {
     PARAMS_SNAPSHOT.load().fim_hash_size_threshold
 }
@@ -4698,9 +2902,10 @@ pub fn secret_content_signatures() -> Vec<SecretContentSignatureJSON> {
 }
 
 /// Lowercased, slash-normalized path substrings that mark a path as
-/// "transient build-artifact, do not content-scan". See
-/// [`default_secret_content_scan_excluded_path_patterns`] for the
-/// rationale and Win32 race details.
+/// "transient build-artifact, do not content-scan". Patterns live in
+/// the CloudModel JSON / embedded snapshot (Win32 build-artifact
+/// races, cargo/target trees, etc.); this accessor returns the
+/// active snapshot slice.
 pub fn secret_content_scan_excluded_path_patterns() -> Vec<String> {
     PARAMS_SNAPSHOT
         .load()
@@ -4725,11 +2930,11 @@ pub fn is_secret_content_scan_excluded_path(path: &str) -> bool {
         .any(|pattern| normalized.contains(pattern.as_str()))
 }
 
-/// Lowercased, dot-prefixed file extensions whose content is never worth
-/// secret-scanning (binary / media). See
-/// [`default_secret_content_scan_skip_extensions`] for the rationale
-/// (TCC re-prompts on `~/Music` / `~/Pictures` / `~/Movies` media assets
-/// opened by media/browser processes and enumerated via
+/// Lowercased, dot-prefixed file extensions whose content is never
+/// worth secret-scanning (binary / media). Values live in the
+/// CloudModel JSON / embedded snapshot (avoids TCC re-prompts on
+/// `~/Music` / `~/Pictures` / `~/Movies` media assets opened by
+/// media/browser processes and enumerated via
 /// `flodbadd::open_files`).
 pub fn secret_content_scan_skip_extensions() -> Vec<String> {
     PARAMS_SNAPSHOT
@@ -4775,6 +2980,29 @@ mod tests {
     fn test_embedded_cve_params_snapshot_parses() {
         serde_json::from_str::<CveDetectionParamsJSON>(&CVE_DETECTION_PARAMS_DB)
             .expect("embedded CVE detection params snapshot must parse as CveDetectionParamsJSON");
+    }
+
+    /// ARCH-1 / Inc 2: missing required CloudModel fields must fail parse
+    /// (no silent serde defaults). A published JSON that drops a field
+    /// falls back to the embedded snapshot rather than zeros.
+    #[test]
+    fn test_cve_params_missing_required_field_fails_parse() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&CVE_DETECTION_PARAMS_DB).expect("embedded snapshot is valid JSON");
+        let obj = value
+            .as_object_mut()
+            .expect("embedded snapshot root is an object");
+        assert!(
+            obj.remove("evidence_weights").is_some(),
+            "embedded snapshot must include evidence_weights so the removal is meaningful"
+        );
+        let err = serde_json::from_value::<CveDetectionParamsJSON>(value)
+            .expect_err("missing evidence_weights must fail deserialize");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("evidence_weights") || msg.contains("missing field"),
+            "error should name the missing field, got: {msg}"
+        );
     }
 
     #[tokio::test]

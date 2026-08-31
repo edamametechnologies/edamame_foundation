@@ -22,6 +22,9 @@ fim = [ "flodbadd/fim" ]
 # this for the privileged helper or standalone posture CLI (it disables process
 # lineage enumeration). See flodbadd's `appstore` feature for details.
 appstore = [ "flodbadd/appstore" ]
+# Opt-in undeadlock hold-time / contention instrumentation in release builds.
+# Forwarded from edamame_core's `lock-diagnostics`. Never in `default`.
+lock-diagnostics = [ "undeadlock/diagnostics", "flodbadd/lock-diagnostics" ]
 
 [lib]
 # Dynamic lib version is not used on apple platforms as it's painful, but we must use it on Windows, Linux and Android

@@ -1199,7 +1199,7 @@ dependencies = [
 [[package]]
 name = "flodbadd"
 version = "1.8.3"
-source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#b3fea2a95eefdc181ba15e4c093c6f259f1ace2e"
+source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#b84c97a17294e4c8dbe74bb21d1a4b550d5c1d35"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -4418,7 +4418,7 @@ checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 [[package]]
 name = "undeadlock"
 version = "1.2.0"
-source = "git+https://github.com/edamametechnologies/undeadlock?branch=main#f15e686c8d1f95cc1f40e4215146623c9a6da5ac"
+source = "git+https://github.com/edamametechnologies/undeadlock?branch=main#22ed69039b43433b38e4baab7285ac16b5eca0ec"
 dependencies = [
  "dashmap",
  "tokio",

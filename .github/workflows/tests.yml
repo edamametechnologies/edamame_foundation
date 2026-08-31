@@ -21,17 +21,11 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+# CI-3 / SG-002: envcrypt compile secrets are step-scoped onto the "Run tests"
+# steps (the only steps that compile). EDAMAME_SERVER was consumed nowhere and
+# is dropped.
 env:
   CARGO_TERM_COLOR: always
-  EDAMAME_TARGET: ${{ secrets.EDAMAME_TARGET }}
-  EDAMAME_SERVER: ${{ secrets.EDAMAME_SERVER }}
-  EDAMAME_SERVER_PEM: ${{ secrets.EDAMAME_SERVER_PEM }}
-  EDAMAME_SERVER_KEY: ${{ secrets.EDAMAME_SERVER_KEY }}
-  EDAMAME_CA_PEM: ${{ secrets.EDAMAME_CA_PEM }}
-  EDAMAME_CLIENT_PEM: ${{ secrets.EDAMAME_CLIENT_PEM }}
-  EDAMAME_CLIENT_KEY: ${{ secrets.EDAMAME_CLIENT_KEY }}
-  EDAMAME_CLIENT_CA_PEM: ${{ secrets.EDAMAME_CLIENT_CA_PEM }}
-  LAMBDA_SIGNATURE: ${{ secrets.LAMBDA_SIGNATURE }}
   # Debug mode
   EDAMAME_LOG_LEVEL: debug
 
@@ -343,6 +337,16 @@ jobs:
       - name: Run tests
         id: tests
         shell: bash
+        env:
+          # CI-3 / SG-002: envcrypt compile inputs, scoped to the compile step.
+          EDAMAME_TARGET: ${{ secrets.EDAMAME_TARGET }}
+          EDAMAME_SERVER_PEM: ${{ secrets.EDAMAME_SERVER_PEM }}
+          EDAMAME_SERVER_KEY: ${{ secrets.EDAMAME_SERVER_KEY }}
+          EDAMAME_CA_PEM: ${{ secrets.EDAMAME_CA_PEM }}
+          EDAMAME_CLIENT_PEM: ${{ secrets.EDAMAME_CLIENT_PEM }}
+          EDAMAME_CLIENT_KEY: ${{ secrets.EDAMAME_CLIENT_KEY }}
+          EDAMAME_CLIENT_CA_PEM: ${{ secrets.EDAMAME_CLIENT_CA_PEM }}
+          LAMBDA_SIGNATURE: ${{ secrets.LAMBDA_SIGNATURE }}
         run: |
           cargo test --features packetcapture -- --nocapture
         continue-on-error: true
@@ -703,6 +707,16 @@ jobs:
       - name: Run tests
         id: tests
         shell: bash
+        env:
+          # CI-3 / SG-002: envcrypt compile inputs, scoped to the compile step.
+          EDAMAME_TARGET: ${{ secrets.EDAMAME_TARGET }}
+          EDAMAME_SERVER_PEM: ${{ secrets.EDAMAME_SERVER_PEM }}
+          EDAMAME_SERVER_KEY: ${{ secrets.EDAMAME_SERVER_KEY }}
+          EDAMAME_CA_PEM: ${{ secrets.EDAMAME_CA_PEM }}
+          EDAMAME_CLIENT_PEM: ${{ secrets.EDAMAME_CLIENT_PEM }}
+          EDAMAME_CLIENT_KEY: ${{ secrets.EDAMAME_CLIENT_KEY }}
+          EDAMAME_CLIENT_CA_PEM: ${{ secrets.EDAMAME_CLIENT_CA_PEM }}
+          LAMBDA_SIGNATURE: ${{ secrets.LAMBDA_SIGNATURE }}
         run: |
           # Ensure cargo is in path
           export PATH="$HOME/.cargo/bin:$PATH"
