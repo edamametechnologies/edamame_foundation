@@ -643,6 +643,38 @@ fn relative_token_looks_like_path(token: &str) -> bool {
 
 /// Best-effort `host:port` extraction from an absolute http(s) URL. Avoids
 /// pulling in the `url` crate for this single use case.
+/// A host extracted from transcript text is only a declarable egress endpoint
+/// when it is syntactically a hostname, an IPv4 literal, or a bracketed IPv6
+/// literal. Transcripts routinely quote UNEXPANDED template fragments --
+/// workflow YAML like `https://${{ secrets.TOKEN }}@github.com/...` or shell
+/// text like `https://edamamedev:${DEV_GITHUB_TOKEN}@github.com/` -- and the
+/// URL regex stops at whitespace, leaving authorities such as `${{` or
+/// `edamamedev:${{`. Declaring those as expected egress (`${{:443`) is noise
+/// in the provenance rail and in the divergence model. Reject anything with
+/// characters that cannot appear in a host.
+fn is_plausible_host(host: &str) -> bool {
+    if host.is_empty() || host.len() > 253 {
+        return false;
+    }
+    // Bracketed IPv6 literal.
+    if let Some(inner) = host.strip_prefix('[') {
+        return match inner.strip_suffix(']') {
+            Some(v6) => !v6.is_empty() && v6.chars().all(|c| c.is_ascii_hexdigit() || c == ':'),
+            None => false,
+        };
+    }
+    // Hostname / IPv4: alphanumeric labels with '-' and '_' joined by '.',
+    // no empty labels, no leading/trailing '-'.
+    host.split('.').all(|label| {
+        !label.is_empty()
+            && !label.starts_with('-')
+            && !label.ends_with('-')
+            && label
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    })
+}
+
 fn parse_host_port(url: &str) -> Option<(String, String)> {
     let (scheme, rest) = if let Some(rest) = url.strip_prefix("https://") {
         ("https", rest)
@@ -661,9 +693,15 @@ fn parse_host_port(url: &str) -> Option<(String, String)> {
     // Strip userinfo if present.
     let host_port = authority.rsplit_once('@').map_or(authority, |(_, hp)| hp);
     if let Some((host, port)) = host_port.rsplit_once(':') {
-        if !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) {
+        if !port.is_empty()
+            && port.chars().all(|c| c.is_ascii_digit())
+            && is_plausible_host(host)
+        {
             return Some((host.to_string(), port.to_string()));
         }
+    }
+    if !is_plausible_host(host_port) {
+        return None;
     }
     let default_port = if scheme == "http" { "80" } else { "443" };
     Some((host_port.to_string(), default_port.to_string()))
@@ -3323,5 +3361,51 @@ mod economics_tests {
         assert!(econ.prompt_injection_labels.is_empty());
         assert_eq!(econ.prompt_injection_hits, 0);
         assert!(econ.prompt_injection_markers.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod host_plausibility_tests {
+    use super::*;
+
+    #[test]
+    fn template_fragments_are_not_egress_hosts() {
+        // Workflow YAML quoted in a transcript: URL regex stops at the space
+        // inside `${{ secrets.TOKEN }}`, leaving `${{` as the authority.
+        let text = r#"
+            git clone https://${{ secrets.DEV_GITHUB_TOKEN }}@github.com/org/repo /tmp/wiki
+            curl https://edamamedev:${{ secrets.TOKEN }}@github.com/api
+            git config url."https://edamamedev:${DEV_GITHUB_TOKEN}@github.com/".insteadOf
+            plain https://api.github.com/repos and https://example.com:8443/x
+        "#;
+        let traffic = extract_traffic(text, &[], &[]);
+        assert!(
+            traffic.iter().any(|h| h == "api.github.com:443"),
+            "real host must survive: {traffic:?}"
+        );
+        assert!(
+            traffic.iter().any(|h| h == "example.com:8443"),
+            "explicit port must survive: {traffic:?}"
+        );
+        assert!(
+            !traffic.iter().any(|h| h.contains('$')
+                || h.contains('{')
+                || h.contains('}')),
+            "template fragments must not become egress declarations: {traffic:?}"
+        );
+    }
+
+    #[test]
+    fn host_plausibility_shapes() {
+        assert!(is_plausible_host("github.com"));
+        assert!(is_plausible_host("localhost"));
+        assert!(is_plausible_host("192.168.1.1"));
+        assert!(is_plausible_host("[::1]"));
+        assert!(is_plausible_host("some_host.internal"));
+        assert!(!is_plausible_host("${{"));
+        assert!(!is_plausible_host("edamamedev:${{"));
+        assert!(!is_plausible_host(""));
+        assert!(!is_plausible_host("-bad.example"));
+        assert!(!is_plausible_host("a..b"));
     }
 }
