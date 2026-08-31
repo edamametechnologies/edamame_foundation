@@ -157,6 +157,14 @@ const AGENT_IDENTITY_NEEDLES: &[(&str, &str)] = &[
     ("claude_desktop", "claude_desktop"),
     ("claude desktop", "claude_desktop"),
     ("claude.app", "claude_desktop"),
+    // Claude Code's VSIX/extension id is `anthropic.claude-code` (Cursor and
+    // VSCode install it under `.cursor/extensions/anthropic.claude-code-<ver>`
+    // and run the bundled `claude` binary from there), so the specific
+    // extension-id needle MUST precede the generic `anthropic.claude` desktop
+    // marker or every Claude Code plugin subprocess is misattributed to
+    // Claude Desktop (observed on kralizec, 2026-08-31: `gh` calls from a
+    // Claude Code session hosted in Cursor tagged `claude_desktop`).
+    ("anthropic.claude-code", "claude_code"),
     ("anthropic.claude", "claude_desktop"),
     // Claude Code (CLI).
     ("claude-code", "claude_code"),
@@ -822,6 +830,20 @@ mod tests {
         );
         assert_eq!(
             agent_type_for_identity("/applications/claude.app/contents/macos/claude"),
+            Some("claude_desktop")
+        );
+        // Claude Code hosted as the Cursor/VSCode extension: the extension id
+        // contains `anthropic.claude` but MUST attribute to claude_code, not
+        // claude_desktop (regression: gh calls from a plugin-hosted session).
+        assert_eq!(
+            agent_type_for_identity(
+                "/opt/homebrew/bin/gh zsh /bin/zsh /users/me/.cursor/extensions/anthropic.claude-code-2.1.251-darwin-arm64/resources/native-binary/claude"
+            ),
+            Some("claude_code")
+        );
+        // A genuine Claude Desktop marker still lands on claude_desktop.
+        assert_eq!(
+            agent_type_for_identity("/library/application support/com.anthropic.claude/vm/agent"),
             Some("claude_desktop")
         );
         assert_eq!(
