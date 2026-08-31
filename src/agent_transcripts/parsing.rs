@@ -693,10 +693,7 @@ fn parse_host_port(url: &str) -> Option<(String, String)> {
     // Strip userinfo if present.
     let host_port = authority.rsplit_once('@').map_or(authority, |(_, hp)| hp);
     if let Some((host, port)) = host_port.rsplit_once(':') {
-        if !port.is_empty()
-            && port.chars().all(|c| c.is_ascii_digit())
-            && is_plausible_host(host)
-        {
+        if !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) && is_plausible_host(host) {
             return Some((host.to_string(), port.to_string()));
         }
     }
@@ -3388,9 +3385,9 @@ mod host_plausibility_tests {
             "explicit port must survive: {traffic:?}"
         );
         assert!(
-            !traffic.iter().any(|h| h.contains('$')
-                || h.contains('{')
-                || h.contains('}')),
+            !traffic
+                .iter()
+                .any(|h| h.contains('$') || h.contains('{') || h.contains('}')),
             "template fragments must not become egress declarations: {traffic:?}"
         );
     }
