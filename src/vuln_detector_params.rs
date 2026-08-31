@@ -2769,10 +2769,7 @@ pub fn system_binary_path_roots() -> Vec<String> {
 }
 
 pub fn system_binary_path_excludes() -> Vec<String> {
-    PARAMS_SNAPSHOT
-        .load()
-        .system_binary_path_excludes
-        .clone()
+    PARAMS_SNAPSHOT.load().system_binary_path_excludes.clone()
 }
 
 pub fn public_diagnostic_destination_tokens() -> Vec<String> {
@@ -2987,8 +2984,8 @@ mod tests {
     /// falls back to the embedded snapshot rather than zeros.
     #[test]
     fn test_cve_params_missing_required_field_fails_parse() {
-        let mut value: serde_json::Value =
-            serde_json::from_str(&CVE_DETECTION_PARAMS_DB).expect("embedded snapshot is valid JSON");
+        let mut value: serde_json::Value = serde_json::from_str(&CVE_DETECTION_PARAMS_DB)
+            .expect("embedded snapshot is valid JSON");
         let obj = value
             .as_object_mut()
             .expect("embedded snapshot root is an object");
