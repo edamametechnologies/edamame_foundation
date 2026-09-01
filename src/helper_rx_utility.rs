@@ -449,47 +449,6 @@ pub async fn utility_get_sessions(incremental: bool) -> Result<String> {
     any(target_os = "macos", target_os = "linux", target_os = "windows"),
     feature = "packetcapture"
 ))]
-pub async fn utility_get_current_sessions(incremental: bool) -> Result<String> {
-    let start = Instant::now();
-    info!(
-        "Starting get_current_sessions (incremental: {})",
-        incremental
-    );
-    let active_sessions = CAPTURE.read().await.get_current_sessions(incremental).await;
-    let fetch_elapsed_ms = start.elapsed().as_millis();
-    // Use bincode for efficient binary serialization
-    let bincode_sessions =
-        match bincode::serde::encode_to_vec(&active_sessions, bincode::config::standard()) {
-            Ok(bytes) => bytes,
-            Err(e) => {
-                error!("Error serializing current sessions to bincode: {}", e);
-                return order_error(
-                    &format!("error serializing current sessions to bincode: {}", e),
-                    false,
-                );
-            }
-        };
-    let bincode_len = bincode_sessions.len();
-    let bincode_elapsed_ms = start.elapsed().as_millis();
-    let encoded = general_purpose::STANDARD.encode(&bincode_sessions);
-    let base64_elapsed_ms = start.elapsed().as_millis();
-    info!(
-        "Returning {} current sessions, incremental: {}, size: {} bytes (bincode: {} bytes, fetch: {}ms, bincode: {}ms, base64: {}ms)",
-        active_sessions.len(),
-        incremental,
-        encoded.len(),
-        bincode_len,
-        fetch_elapsed_ms,
-        bincode_elapsed_ms,
-        base64_elapsed_ms
-    );
-    Ok(encoded)
-}
-
-#[cfg(all(
-    any(target_os = "macos", target_os = "linux", target_os = "windows"),
-    feature = "packetcapture"
-))]
 pub async fn utility_get_packet_stats() -> Result<String> {
     let stats = CAPTURE.read().await.get_packet_stats().await;
     let json_stats = match serde_json::to_string(&stats) {
@@ -547,53 +506,6 @@ pub async fn utility_get_whitelist_exceptions(incremental: bool) -> Result<Strin
     info!(
         "Returning {} whitelist exceptions, incremental: {}, size: {} bytes (bincode+base64)",
         exceptions.len(),
-        incremental,
-        encoded.len()
-    );
-    Ok(encoded)
-}
-
-#[cfg(all(
-    any(target_os = "macos", target_os = "linux", target_os = "windows"),
-    feature = "packetcapture"
-))]
-pub async fn utility_get_blacklisted_status() -> Result<String> {
-    let status = CAPTURE
-        .read()
-        .await
-        .get_blacklisted_status()
-        .await
-        .to_string();
-    info!("Returning blacklisted status: {}", status);
-    Ok(status)
-}
-
-#[cfg(all(
-    any(target_os = "macos", target_os = "linux", target_os = "windows"),
-    feature = "packetcapture"
-))]
-pub async fn utility_get_blacklisted_sessions(incremental: bool) -> Result<String> {
-    let sessions = CAPTURE
-        .read()
-        .await
-        .get_blacklisted_sessions(incremental)
-        .await;
-    // Use bincode for efficient binary serialization
-    let bincode_sessions =
-        match bincode::serde::encode_to_vec(&sessions, bincode::config::standard()) {
-            Ok(bytes) => bytes,
-            Err(e) => {
-                error!("Error serializing blacklisted sessions to bincode: {}", e);
-                return order_error(
-                    &format!("error serializing blacklisted sessions to bincode: {}", e),
-                    false,
-                );
-            }
-        };
-    let encoded = general_purpose::STANDARD.encode(&bincode_sessions);
-    info!(
-        "Returning {} blacklisted sessions, incremental: {}, size: {} bytes (bincode+base64)",
-        sessions.len(),
         incremental,
         encoded.len()
     );
@@ -1247,6 +1159,77 @@ mod tests {
     use macaddr::MacAddr6;
     use serde_json;
     use std::net::{IpAddr, Ipv4Addr};
+
+    #[test]
+    fn test_require_caller_home_rejects_empty() {
+        let err = require_caller_home("", "collect_agent_transcripts").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("collect_agent_transcripts"),
+            "error must name the order: {}",
+            msg
+        );
+        assert!(
+            msg.contains("no home directory"),
+            "error must say why: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_require_caller_home_rejects_whitespace_only() {
+        for home in [" ", "\t", "\n", "  \t \n "] {
+            let err = require_caller_home(home, "detect_agent_clis")
+                .expect_err("whitespace-only home must be rejected");
+            assert!(
+                err.to_string().contains("detect_agent_clis"),
+                "error must name the order for {:?}: {}",
+                home,
+                err
+            );
+        }
+    }
+
+    #[test]
+    fn test_require_caller_home_error_mentions_each_order() {
+        // Every agent-surface order threads its own name through so a rejected
+        // call is attributable in the helper log.
+        for order in [
+            "collect_agent_transcripts",
+            "detect_agent_clis",
+            "run_agent_cli_insight",
+            "run_agent_cli_fix_interactive",
+        ] {
+            let err = require_caller_home("", order).unwrap_err().to_string();
+            assert!(
+                err.starts_with(order),
+                "{:?} should start with {:?}",
+                err,
+                order
+            );
+        }
+    }
+
+    #[test]
+    fn test_require_caller_home_accepts_absolute_path() {
+        let tmp = std::env::temp_dir();
+        let home = tmp.to_string_lossy().to_string();
+        let got = require_caller_home(&home, "collect_agent_transcripts")
+            .expect("absolute temp dir must be accepted");
+        assert_eq!(got, std::path::PathBuf::from(&home));
+        assert!(got.is_absolute());
+    }
+
+    #[test]
+    fn test_require_caller_home_does_not_touch_filesystem() {
+        // The helper only validates presence -- the core side already resolved
+        // the real home. A non-existent absolute path is passed through as-is
+        // (and fails later, attributably, when the surface tries to read it).
+        let bogus = std::env::temp_dir().join("edamame-require-caller-home-does-not-exist");
+        assert!(!bogus.exists());
+        let got = require_caller_home(&bogus.to_string_lossy(), "detect_agent_clis").unwrap();
+        assert_eq!(got, bogus);
+    }
 
     #[test]
     fn test_arp_resolve_serialization_format() {

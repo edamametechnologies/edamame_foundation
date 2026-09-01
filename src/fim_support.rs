@@ -55,3 +55,165 @@ fn default_watch_paths_for_home(home: &Path) -> Vec<PathBuf> {
 
     paths
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_home(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "edamame-fim-support-{}-{}",
+            tag,
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn assert_well_formed(paths: &[PathBuf], home: &Path) {
+        for p in paths {
+            assert!(
+                !p.as_os_str().is_empty(),
+                "watch path list must not contain empty entries: {:?}",
+                paths
+            );
+            assert!(p.is_absolute(), "watch path must be absolute: {:?}", p);
+            assert!(
+                p.starts_with(home) || fim::default_temp_watch_paths().contains(p),
+                "watch path {:?} is neither under home {:?} nor a temp root",
+                p,
+                home
+            );
+        }
+        let mut dedup = paths.to_vec();
+        dedup.sort();
+        dedup.dedup();
+        assert_eq!(
+            dedup.len(),
+            paths.len(),
+            "duplicate watch paths: {:?}",
+            paths
+        );
+    }
+
+    #[test]
+    fn test_default_watch_paths_for_home_includes_existing_sensitive_dirs() {
+        let home = temp_home("sensitive");
+        // `.ssh` is in `watch_roots.common_home_relative` on every platform;
+        // only directories that exist under the home are watched.
+        std::fs::create_dir_all(home.join(".ssh")).unwrap();
+
+        let paths = default_watch_paths_for_home(&home);
+        assert!(!paths.is_empty());
+        assert!(
+            paths.contains(&home.join(".ssh")),
+            "existing ~/.ssh must be watched: {:?}",
+            paths
+        );
+        assert_well_formed(&paths, &home);
+
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn test_default_watch_paths_for_home_skips_missing_dirs() {
+        let home = temp_home("empty");
+        let paths = default_watch_paths_for_home(&home);
+        // Nothing under the home exists, so only the (existing) temp roots
+        // can be returned -- never a path under home that does not exist.
+        assert!(
+            paths.iter().all(|p| !p.starts_with(&home)),
+            "no non-existent home-relative path may be watched: {:?}",
+            paths
+        );
+        for p in &paths {
+            assert!(p.exists(), "returned watch path must exist: {:?}", p);
+        }
+        assert_well_formed(&paths, &home);
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn test_default_watch_paths_for_home_appends_temp_roots_once() {
+        let home = temp_home("temp");
+        let paths = default_watch_paths_for_home(&home);
+        for t in fim::default_temp_watch_paths() {
+            assert_eq!(
+                paths.iter().filter(|p| **p == t).count(),
+                1,
+                "temp root {:?} must appear exactly once in {:?}",
+                t,
+                paths
+            );
+        }
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn test_resolve_fim_watch_paths_explicit_paths_win() {
+        let home = temp_home("explicit");
+        std::fs::create_dir_all(home.join(".ssh")).unwrap();
+        let explicit = vec!["/nonexistent/a".to_string(), "/nonexistent/b".to_string()];
+
+        for mode in [FimMode::CI, FimMode::Desktop] {
+            for user_home in [Some(home.as_path()), None] {
+                let got = resolve_fim_watch_paths(&explicit, user_home, mode);
+                assert_eq!(
+                    got,
+                    vec![
+                        PathBuf::from("/nonexistent/a"),
+                        PathBuf::from("/nonexistent/b")
+                    ],
+                    "explicit paths must be returned verbatim (mode {:?}, home {:?})",
+                    mode,
+                    user_home
+                );
+            }
+        }
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn test_resolve_fim_watch_paths_with_home_uses_home_defaults() {
+        let home = temp_home("home");
+        std::fs::create_dir_all(home.join(".ssh")).unwrap();
+
+        for mode in [FimMode::CI, FimMode::Desktop] {
+            let got = resolve_fim_watch_paths(&[], Some(&home), mode);
+            assert_eq!(
+                got,
+                default_watch_paths_for_home(&home),
+                "an explicit home must delegate to default_watch_paths_for_home regardless of mode"
+            );
+            assert!(got.contains(&home.join(".ssh")));
+        }
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn test_resolve_fim_watch_paths_without_home_uses_mode_defaults() {
+        for mode in [FimMode::CI, FimMode::Desktop] {
+            let got = resolve_fim_watch_paths(&[], None, mode);
+            assert_eq!(
+                got,
+                fim::default_watch_paths(mode),
+                "no home must delegate to flodbadd's per-mode defaults"
+            );
+            for p in &got {
+                assert!(!p.as_os_str().is_empty());
+                assert!(p.is_absolute(), "{:?}", p);
+            }
+        }
+    }
+
+    #[test]
+    fn test_current_fim_config_uses_params_threshold() {
+        let cfg = current_fim_config();
+        assert_eq!(
+            cfg.hash_size_threshold,
+            crate::vuln_detector_params::fim_hash_size_threshold()
+        );
+        assert!(cfg.recursive, "default FIM config is recursive");
+    }
+}

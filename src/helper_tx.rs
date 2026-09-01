@@ -46,8 +46,8 @@ pub const UTILITY_ORDER_NAMES: &[&str] = &[
     "mdns_resolve",
     "merge_custom_whitelists",
     "read_instruction_content",
-    "reveal_path_in_file_manager",
     "restart_capture",
+    "reveal_path_in_file_manager",
     "run_agent_cli_fix_interactive",
     "run_agent_cli_insight",
     "scan_secret_content",
@@ -330,6 +330,124 @@ async fn helper_run_with_channel(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Names of every utility order that `helper_rx.rs` knows how to dispatch.
+    ///
+    /// Two shapes are extracted:
+    /// - `"order_name" => ...` arms inside the `"utilityorder" => match
+    ///   subordertype { ... }` block of `handle_order` (the production
+    ///   dispatcher);
+    /// - `("utilityorder", "order_name") => ...` tuple arms anywhere in the
+    ///   file (the in-file mock helper server used by the transport tests).
+    ///
+    /// Other `match` blocks in the file (metric orders, `"cli"` /
+    /// `"internal"` implementation kinds, ...) are deliberately NOT
+    /// scanned: the string-arm extraction is scoped to the utility-order
+    /// dispatch block only.
+    fn dispatched_utility_order_names() -> std::collections::BTreeSet<String> {
+        const RX: &str = include_str!("helper_rx.rs");
+        let mut names = std::collections::BTreeSet::new();
+
+        let lines: Vec<&str> = RX.lines().collect();
+        let start = lines
+            .iter()
+            .position(|l| l.trim() == r#""utilityorder" => match subordertype {"#)
+            .expect("helper_rx.rs must contain the utility-order dispatch block");
+        let block_indent = lines[start].len() - lines[start].trim_start().len();
+
+        for line in &lines[start + 1..] {
+            let indent = line.len() - line.trim_start().len();
+            // The block closes at the first line back at the block's own
+            // indentation (`},`).
+            if !line.trim().is_empty() && indent <= block_indent {
+                break;
+            }
+            let t = line.trim_start();
+            if let Some(rest) = t.strip_prefix('"') {
+                if let Some(end) = rest.find('"') {
+                    let name = &rest[..end];
+                    if rest[end + 1..].trim_start().starts_with("=>")
+                        && name
+                            .chars()
+                            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+                    {
+                        names.insert(name.to_string());
+                    }
+                }
+            }
+        }
+
+        // Tuple-pattern arms: ("utilityorder", "name") =>
+        for line in &lines {
+            let t = line.trim_start();
+            if let Some(rest) = t.strip_prefix(r#"("utilityorder", ""#) {
+                if let Some(end) = rest.find('"') {
+                    if rest[end + 1..].trim_start().starts_with(") =>") {
+                        names.insert(rest[..end].to_string());
+                    }
+                }
+            }
+        }
+
+        names
+    }
+
+    /// `UTILITY_ORDER_NAMES` is the security boundary that core's
+    /// `helper_utility_order` enforces before dispatch; `helper_rx.rs` is the
+    /// set of orders the helper actually implements. The two MUST be the same
+    /// set: an arm without an allowlist entry is dead code nobody can reach,
+    /// and an allowlist entry without an arm is a runtime "unknown or
+    /// unimplemented utilityorder" error that only shows up in the field.
+    #[test]
+    fn test_utility_order_allowlist_matches_dispatch() {
+        let dispatched = dispatched_utility_order_names();
+        let allowed: std::collections::BTreeSet<String> =
+            UTILITY_ORDER_NAMES.iter().map(|s| s.to_string()).collect();
+
+        assert!(
+            !dispatched.is_empty(),
+            "extraction found no dispatch arms -- the parser is broken"
+        );
+
+        let not_allowed: Vec<&String> = dispatched.difference(&allowed).collect();
+        let not_dispatched: Vec<&String> = allowed.difference(&dispatched).collect();
+
+        assert!(
+            not_allowed.is_empty() && not_dispatched.is_empty(),
+            "UTILITY_ORDER_NAMES (helper_tx.rs) and the utility-order dispatch (helper_rx.rs) disagree.\n\
+             dispatched in helper_rx.rs but missing from UTILITY_ORDER_NAMES: {:?}\n\
+             in UTILITY_ORDER_NAMES but no dispatch arm in helper_rx.rs: {:?}",
+            not_allowed,
+            not_dispatched
+        );
+    }
+
+    #[test]
+    fn test_utility_order_allowlist_sorted_and_unique() {
+        let mut sorted = UTILITY_ORDER_NAMES.to_vec();
+        sorted.sort_unstable();
+        assert_eq!(
+            UTILITY_ORDER_NAMES,
+            sorted.as_slice(),
+            "UTILITY_ORDER_NAMES must be kept sorted"
+        );
+        sorted.dedup();
+        assert_eq!(
+            UTILITY_ORDER_NAMES.len(),
+            sorted.len(),
+            "UTILITY_ORDER_NAMES contains duplicates"
+        );
+        for name in UTILITY_ORDER_NAMES {
+            assert!(
+                !name.is_empty()
+                    && name
+                        .chars()
+                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
+                "order name {:?} is not snake_case",
+                name
+            );
+        }
+    }
 
     #[test]
     fn test_certificate_decoding_and_creation() {

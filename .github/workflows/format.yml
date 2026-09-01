@@ -31,6 +31,16 @@ jobs:
         run: |
           cargo fmt --all -- --check
 
+      # Catches `#[cfg(...)]` arms that substitute a bare true/false for a
+      # security-relevant binding -- a fail-open that produces no compile error
+      # and no runtime log on builds where the cfg is off. See the script header
+      # for the flodbadd/whitelists.rs case this was written for. The script is
+      # kept identical to edamame_core/tools/cfg_fallback_check.py; this copy
+      # scans only this repo.
+      - name: Check cfg security fallbacks
+        run: |
+          python3 tools/cfg_fallback_check.py
+
       - name: Install cargo-hack
         run: |
           cargo install -f cargo-hack

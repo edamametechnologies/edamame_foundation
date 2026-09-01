@@ -348,7 +348,7 @@ jobs:
           EDAMAME_CLIENT_CA_PEM: ${{ secrets.EDAMAME_CLIENT_CA_PEM }}
           LAMBDA_SIGNATURE: ${{ secrets.LAMBDA_SIGNATURE }}
         run: |
-          cargo test --features packetcapture -- --nocapture
+          cargo test --features packetcapture,fim -- --nocapture
         continue-on-error: true
 
       - name: Dump logs
@@ -720,7 +720,7 @@ jobs:
         run: |
           # Ensure cargo is in path
           export PATH="$HOME/.cargo/bin:$PATH"
-          cargo test --features packetcapture -- --nocapture
+          cargo test --features packetcapture,fim -- --nocapture
         continue-on-error: true
 
       - name: Dump logs

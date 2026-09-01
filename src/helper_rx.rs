@@ -666,14 +666,6 @@ pub async fn rpc_run(
                 any(target_os = "macos", target_os = "linux", target_os = "windows"),
                 feature = "packetcapture"
             ))]
-            "get_current_sessions" => {
-                let incremental: bool = serde_json::from_str(arg1).unwrap_or(false);
-                utility_get_current_sessions(incremental).await
-            }
-            #[cfg(all(
-                any(target_os = "macos", target_os = "linux", target_os = "windows"),
-                feature = "packetcapture"
-            ))]
             "get_packet_stats" => utility_get_packet_stats().await,
             #[cfg(all(
                 any(target_os = "macos", target_os = "linux", target_os = "windows"),
@@ -698,19 +690,6 @@ pub async fn rpc_run(
                 feature = "packetcapture"
             ))]
             "get_blacklists" => utility_get_blacklists().await,
-            #[cfg(all(
-                any(target_os = "macos", target_os = "linux", target_os = "windows"),
-                feature = "packetcapture"
-            ))]
-            "get_blacklisted_status" => utility_get_blacklisted_status().await,
-            #[cfg(all(
-                any(target_os = "macos", target_os = "linux", target_os = "windows"),
-                feature = "packetcapture"
-            ))]
-            "get_blacklisted_sessions" => {
-                let incremental: bool = serde_json::from_str(arg1).unwrap_or(false);
-                utility_get_blacklisted_sessions(incremental).await
-            }
             #[cfg(all(
                 any(target_os = "macos", target_os = "linux", target_os = "windows"),
                 feature = "packetcapture"
@@ -1190,19 +1169,9 @@ mod tests {
                     let payload = generate_bincode_session_payload(self.session_count);
                     Ok(Response::new(HelperResponse { output: payload }))
                 }
-                ("utilityorder", "get_current_sessions") => {
-                    // Return a smaller subset for current sessions
-                    let payload = generate_bincode_session_payload(self.session_count / 10);
-                    Ok(Response::new(HelperResponse { output: payload }))
-                }
                 ("utilityorder", "get_whitelist_exceptions") => {
                     // Generate whitelist exceptions (similar structure to sessions)
                     let payload = generate_bincode_session_payload(self.session_count / 5);
-                    Ok(Response::new(HelperResponse { output: payload }))
-                }
-                ("utilityorder", "get_blacklisted_sessions") => {
-                    // Generate blacklisted sessions
-                    let payload = generate_bincode_session_payload(self.session_count / 20);
                     Ok(Response::new(HelperResponse { output: payload }))
                 }
                 ("utilityorder", "get_packet_stats") => Ok(Response::new(HelperResponse {
