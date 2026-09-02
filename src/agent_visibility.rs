@@ -650,6 +650,318 @@ fn rule_counts_summary(permissions: &serde_json::Value) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join(" "))
 }
 
+/// Enforcement-side control configuration an agent declares for itself.
+///
+/// [`DeclaredConfinement`] answers "what will this agent ASK about"; this
+/// answers "what will it CONFINE". The two planes are independent: Claude Code
+/// can carry `permissions.defaultMode: "default"` (prompts for everything)
+/// while `sandbox.enabled` is false (confines nothing), and it is the second
+/// knob that actually bounds a compromised agent. Reading only the approval
+/// plane is why flipping `sandbox.enabled` moved no recorded field.
+///
+/// Every value is `Option`-shaped so "the agent declares nothing" stays
+/// distinguishable from "the agent declares a permissive value". That
+/// distinction is load-bearing for [`control_config_weakenings`], which must
+/// never read an unreadable config as "enforcement was turned off".
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+// Persisted on disk inside `AgenticPersistedConfig::agent_control_baselines`,
+// so a field added in a later version must not make an existing
+// `agentic_config.json` unloadable -- the app-upgrade exception in
+// `invariants.mdc`. Container-level rather than per-field because every field
+// added here is by construction a new knob that older baselines cannot carry.
+#[serde(default)]
+pub struct AgentControlConfig {
+    pub agent_type: String,
+    /// `sandbox.enabled` -- whether spawned commands are confined at all.
+    pub sandbox_enabled: Option<bool>,
+    /// `sandbox.autoAllowBashIfSandboxed` -- sandboxed commands skip the
+    /// approval prompt. Upstream default is true.
+    pub auto_allow_bash_if_sandboxed: Option<bool>,
+    /// `sandbox.allowUnsandboxedCommands` -- the agent may opt an individual
+    /// tool call out of the sandbox. Upstream default is true, which is why an
+    /// absent value is left `None` rather than assumed restrictive.
+    pub allow_unsandboxed_commands: Option<bool>,
+    /// `sandbox.enableWeakerNetworkIsolation`.
+    pub weaker_network_isolation: Option<bool>,
+    /// `sandbox.enableWeakerNestedSandbox`.
+    pub weaker_nested_sandbox: Option<bool>,
+    /// `sandbox.excludedCommands` length -- commands exempted from confinement.
+    pub excluded_command_count: Option<usize>,
+    /// `sandbox.network.allowedDomains` length -- egress allowlist width.
+    pub network_allowed_domain_count: Option<usize>,
+    pub deny_rule_count: Option<usize>,
+    pub ask_rule_count: Option<usize>,
+    pub allow_rule_count: Option<usize>,
+    /// `permissions.defaultMode`.
+    pub default_mode: Option<String>,
+    /// Config files that contributed, in the order they were applied.
+    pub sources: Vec<String>,
+    /// `false` when no config could be read at all -- the snapshot is then not
+    /// a claim, and is never diffed.
+    pub assessed: bool,
+}
+
+impl AgentControlConfig {
+    /// One-line operator summary of the enforcement plane, or `None` when the
+    /// agent declares nothing. Kept next to the reader so the rendering and
+    /// the field vocabulary cannot drift apart.
+    pub fn summary(&self) -> Option<String> {
+        if !self.assessed {
+            return None;
+        }
+        let mut parts: Vec<String> = Vec::new();
+        if let Some(enabled) = self.sandbox_enabled {
+            parts.push(format!("sandbox:{}", if enabled { "on" } else { "off" }));
+        }
+        if let Some(allowed) = self.allow_unsandboxed_commands {
+            if allowed {
+                parts.push("unsandboxed-opt-out:allowed".to_string());
+            }
+        }
+        if let Some(auto) = self.auto_allow_bash_if_sandboxed {
+            if auto {
+                parts.push("sandboxed-cmds:auto-allowed".to_string());
+            }
+        }
+        if self.weaker_network_isolation == Some(true) {
+            parts.push("weak-net-isolation".to_string());
+        }
+        if self.weaker_nested_sandbox == Some(true) {
+            parts.push("weak-nested-sandbox".to_string());
+        }
+        if let Some(count) = self.excluded_command_count.filter(|c| *c > 0) {
+            parts.push(format!("sandbox-excluded:{count}"));
+        }
+        if let Some(count) = self.network_allowed_domain_count {
+            parts.push(format!("egress-allowlist:{count}"));
+        }
+        (!parts.is_empty()).then(|| parts.join(" "))
+    }
+}
+
+/// One enforcement knob that moved in the permissive direction.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControlWeakening {
+    pub agent_type: String,
+    /// Dotted knob name as it appears in the agent's own config
+    /// (`sandbox.enabled`, `permissions.deny`, ...).
+    pub knob: String,
+    pub previous: String,
+    pub current: String,
+    /// Operator-facing sentence describing what protection was lost.
+    pub detail: String,
+}
+
+/// Rank a Claude Code `permissions.defaultMode` by how much it asks the
+/// operator. Higher is stricter. Unknown modes rank with `default` so an
+/// upstream addition never registers as a weakening on its own.
+fn permission_mode_strictness(mode: &str) -> u8 {
+    match mode.trim() {
+        "bypassPermissions" => 0,
+        "dontAsk" | "auto" => 1,
+        "acceptEdits" => 2,
+        "plan" => 4,
+        _ => 3,
+    }
+}
+
+/// Transitions from `previous` to `current` that WEAKEN enforcement.
+///
+/// Strengthening is deliberately silent: this is a monotonicity comparison in
+/// one direction, not a config-change audit. Both snapshots must be
+/// `assessed` -- a config that became unreadable produces no findings, because
+/// "unmeasured" and "turned off" must not collapse into the same signal.
+pub fn control_config_weakenings(
+    previous: &AgentControlConfig,
+    current: &AgentControlConfig,
+) -> Vec<ControlWeakening> {
+    let mut out = Vec::new();
+    if !previous.assessed || !current.assessed {
+        return out;
+    }
+
+    let agent_type = current.agent_type.clone();
+    let mut flag = |knob: &str, was: Option<bool>, now: Option<bool>, permissive: bool, detail: &str| {
+        if was == Some(!permissive) && now == Some(permissive) {
+            out.push(ControlWeakening {
+                agent_type: agent_type.clone(),
+                knob: knob.to_string(),
+                previous: (!permissive).to_string(),
+                current: permissive.to_string(),
+                detail: detail.to_string(),
+            });
+        }
+    };
+    flag(
+        "sandbox.enabled",
+        previous.sandbox_enabled,
+        current.sandbox_enabled,
+        false,
+        "Command confinement was turned off",
+    );
+    flag(
+        "sandbox.allowUnsandboxedCommands",
+        previous.allow_unsandboxed_commands,
+        current.allow_unsandboxed_commands,
+        true,
+        "Individual tool calls may now opt out of the sandbox",
+    );
+    flag(
+        "sandbox.autoAllowBashIfSandboxed",
+        previous.auto_allow_bash_if_sandboxed,
+        current.auto_allow_bash_if_sandboxed,
+        true,
+        "Sandboxed commands no longer prompt for approval",
+    );
+    flag(
+        "sandbox.enableWeakerNetworkIsolation",
+        previous.weaker_network_isolation,
+        current.weaker_network_isolation,
+        true,
+        "Network isolation inside the sandbox was weakened",
+    );
+    flag(
+        "sandbox.enableWeakerNestedSandbox",
+        previous.weaker_nested_sandbox,
+        current.weaker_nested_sandbox,
+        true,
+        "Nested-sandbox confinement was weakened",
+    );
+
+    let mut count_move = |knob: &str, was: Option<usize>, now: Option<usize>, grew_is_weaker: bool, detail: &str| {
+        let (Some(was), Some(now)) = (was, now) else {
+            return;
+        };
+        let weaker = if grew_is_weaker { now > was } else { now < was };
+        if weaker {
+            out.push(ControlWeakening {
+                agent_type: agent_type.clone(),
+                knob: knob.to_string(),
+                previous: was.to_string(),
+                current: now.to_string(),
+                detail: detail.to_string(),
+            });
+        }
+    };
+    count_move(
+        "permissions.deny",
+        previous.deny_rule_count,
+        current.deny_rule_count,
+        false,
+        "Deny rules were removed",
+    );
+    count_move(
+        "permissions.ask",
+        previous.ask_rule_count,
+        current.ask_rule_count,
+        false,
+        "Ask rules were removed",
+    );
+    count_move(
+        "sandbox.excludedCommands",
+        previous.excluded_command_count,
+        current.excluded_command_count,
+        true,
+        "More commands were exempted from the sandbox",
+    );
+    count_move(
+        "sandbox.network.allowedDomains",
+        previous.network_allowed_domain_count,
+        current.network_allowed_domain_count,
+        true,
+        "The sandbox egress allowlist was widened",
+    );
+
+    if let (Some(was), Some(now)) = (
+        previous.default_mode.as_deref(),
+        current.default_mode.as_deref(),
+    ) {
+        if permission_mode_strictness(now) < permission_mode_strictness(was) {
+            out.push(ControlWeakening {
+                agent_type: agent_type.clone(),
+                knob: "permissions.defaultMode".to_string(),
+                previous: was.to_string(),
+                current: now.to_string(),
+                detail: "The approval mode was relaxed".to_string(),
+            });
+        }
+    }
+
+    out
+}
+
+/// Read an agent's enforcement-side control configuration.
+///
+/// Scope: the per-user config only. Claude Code also merges project
+/// (`.claude/settings.json`), local (`.claude/settings.local.json`) and
+/// managed settings, and honours a runtime `/sandbox` toggle; none of those
+/// are visible from a home directory alone, so a host that pins enforcement
+/// through managed settings reads here as declaring nothing rather than as
+/// declaring something permissive. That is the conservative direction: an
+/// unread layer leaves `assessed` semantics intact and produces no weakening
+/// finding of its own.
+pub fn agent_control_config(agent_type: &str, home: &Path) -> AgentControlConfig {
+    let mut config = AgentControlConfig {
+        agent_type: agent_type.to_string(),
+        ..Default::default()
+    };
+    // Only Claude Code publishes a distinct enforcement plane today. Cursor and
+    // Codex express confinement through the single `sandbox.mode` /
+    // `sandbox_mode` value already captured by `declared_confinement_for_agent`.
+    if agent_type != "claude_code" {
+        return config;
+    }
+    let path = home.join(".claude").join("settings.json");
+    let Some(json) = read_json_config(&path) else {
+        return config;
+    };
+    config.assessed = true;
+    config.sources.push(path.to_string_lossy().to_string());
+    apply_claude_code_control_layer(&mut config, &json);
+    config
+}
+
+/// Overlay one settings layer onto `config`. A later layer wins per key; keys
+/// it does not mention keep the earlier layer's value, which is the precedence
+/// Claude Code itself applies when merging settings files.
+fn apply_claude_code_control_layer(config: &mut AgentControlConfig, json: &serde_json::Value) {
+    let array_len = |value: Option<&serde_json::Value>| -> Option<usize> {
+        value.and_then(|v| v.as_array()).map(|a| a.len())
+    };
+
+    if let Some(sandbox) = json.get("sandbox") {
+        let flag = |key: &str| sandbox.get(key).and_then(|v| v.as_bool());
+        config.sandbox_enabled = flag("enabled").or(config.sandbox_enabled);
+        config.auto_allow_bash_if_sandboxed =
+            flag("autoAllowBashIfSandboxed").or(config.auto_allow_bash_if_sandboxed);
+        config.allow_unsandboxed_commands =
+            flag("allowUnsandboxedCommands").or(config.allow_unsandboxed_commands);
+        config.weaker_network_isolation =
+            flag("enableWeakerNetworkIsolation").or(config.weaker_network_isolation);
+        config.weaker_nested_sandbox =
+            flag("enableWeakerNestedSandbox").or(config.weaker_nested_sandbox);
+        config.excluded_command_count =
+            array_len(sandbox.get("excludedCommands")).or(config.excluded_command_count);
+        config.network_allowed_domain_count = array_len(
+            sandbox
+                .get("network")
+                .and_then(|network| network.get("allowedDomains")),
+        )
+        .or(config.network_allowed_domain_count);
+    }
+
+    if let Some(permissions) = json.get("permissions") {
+        config.allow_rule_count = array_len(permissions.get("allow")).or(config.allow_rule_count);
+        config.deny_rule_count = array_len(permissions.get("deny")).or(config.deny_rule_count);
+        config.ask_rule_count = array_len(permissions.get("ask")).or(config.ask_rule_count);
+        config.default_mode = permissions
+            .get("defaultMode")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .or_else(|| config.default_mode.take());
+    }
+}
+
 fn declared_or_default(
     confinement: Option<String>,
     approval: Option<String>,
@@ -752,6 +1064,17 @@ pub struct AgentSandbox {
     /// Config file the declared values were read from. `None` when nothing was
     /// declared.
     pub declared_source: Option<String>,
+    /// The agent's declared ENFORCEMENT configuration -- the knobs that decide
+    /// whether a command is confined, as opposed to whether it is approved.
+    /// See [`AgentControlConfig`]; `assessed == false` when the agent declares
+    /// no enforcement plane or its config could not be read.
+    /// `#[serde(default)]` for the same rolling helper/core compatibility
+    /// reason as `agent_transcripts::CollectedRawSession::economics_raw_text`:
+    /// this bundle arrives from the helper as JSON, and during an upgrade
+    /// window a core newer than the helper would otherwise fail to
+    /// deserialize the ENTIRE visibility bundle over one missing field.
+    #[serde(default)]
+    pub control: AgentControlConfig,
 }
 
 /// An agent's self-declared confinement + approval policy, read from its own
@@ -769,6 +1092,7 @@ fn build_agent_sandbox_with_declared(
     mechanism: &str,
     detail: String,
     declared: DeclaredConfinement,
+    control: AgentControlConfig,
 ) -> AgentSandbox {
     let (
         file_access_scope,
@@ -807,6 +1131,7 @@ fn build_agent_sandbox_with_declared(
         declared_confinement: declared.confinement,
         declared_approval: declared.approval,
         declared_source: declared.source,
+        control,
     }
 }
 
@@ -1513,6 +1838,7 @@ fn assess_one_agent_sandbox(
     home: &Path,
 ) -> AgentSandbox {
     let declared = declared_confinement_for_agent(&def.agent_type, home);
+    let control = agent_control_config(&def.agent_type, home);
     let needles = sandbox_container_needles(&def.agent_type);
     if !needles.is_empty() {
         let containers = home.join("Library/Containers");
@@ -1527,6 +1853,7 @@ fn assess_one_agent_sandbox(
                         "app-sandbox",
                         format!("App-sandbox container present ({})", raw.to_string_lossy()),
                         declared,
+                        control,
                     );
                 }
             }
@@ -1542,6 +1869,7 @@ fn assess_one_agent_sandbox(
             "vm",
             format!("Local-agent VM bundle present ({})", bundle),
             declared,
+            control,
         );
     }
     build_agent_sandbox_with_declared(
@@ -1550,6 +1878,7 @@ fn assess_one_agent_sandbox(
         "none",
         "Unsandboxed - full access to your user files".to_string(),
         declared,
+        control,
     )
 }
 
@@ -1579,6 +1908,7 @@ fn assess_one_agent_sandbox(
     home: &Path,
 ) -> AgentSandbox {
     let declared = declared_confinement_for_agent(&def.agent_type, home);
+    let control = agent_control_config(&def.agent_type, home);
     let needles = sandbox_container_needles(&def.agent_type);
     if !needles.is_empty() {
         for (subdir, mechanism) in [(".var/app", "flatpak"), ("snap", "snap")] {
@@ -1593,6 +1923,7 @@ fn assess_one_agent_sandbox(
                             mechanism,
                             format!("{}-confined ({})", mechanism, raw.to_string_lossy()),
                             declared,
+                            control,
                         );
                     }
                 }
@@ -1605,6 +1936,7 @@ fn assess_one_agent_sandbox(
         "none",
         "Unsandboxed - full access to your user files".to_string(),
         declared,
+        control,
     )
 }
 
@@ -1624,6 +1956,7 @@ fn assess_one_agent_sandbox(
             "none",
             "Win32 desktop app - not UWP/AppContainer-sandboxed".to_string(),
             declared_confinement_for_agent(&def.agent_type, _home),
+            agent_control_config(&def.agent_type, _home),
         )
     }
     #[cfg(not(target_os = "windows"))]
@@ -1634,6 +1967,7 @@ fn assess_one_agent_sandbox(
             "unknown",
             "Sandbox status not assessed on this platform".to_string(),
             DeclaredConfinement::default(),
+            AgentControlConfig::default(),
         )
     }
 }
@@ -6386,6 +6720,7 @@ bob ALL=(ALL) NOPASSWD: ALL
             declared_confinement: None,
             declared_approval: None,
             declared_source: None,
+            control: AgentControlConfig::default(),
         }
     }
 
@@ -9992,6 +10327,96 @@ skills/gtm-report and @rules/invariants.mdc.
             .iter()
             .any(|n| *n == "claude"));
         assert_eq!(sandbox_container_needles("cursor"), &["cursor"]);
+    }
+
+    #[test]
+    fn agent_control_config_reads_claude_code_enforcement_plane() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let home = tmp.path();
+        std::fs::create_dir_all(home.join(".claude")).expect("mkdir");
+        std::fs::write(
+            home.join(".claude").join("settings.json"),
+            r#"{"permissions":{"defaultMode":"acceptEdits","allow":["Bash(ls)"],"deny":["Bash(curl:*)","Bash(wget:*)"]},
+                "sandbox":{"enabled":true,"allowUnsandboxedCommands":false,
+                           "excludedCommands":["git"],
+                           "network":{"allowedDomains":["api.anthropic.com","github.com"]}}}"#,
+        )
+        .expect("write");
+
+        let control = agent_control_config("claude_code", home);
+        assert!(control.assessed);
+        assert_eq!(control.sandbox_enabled, Some(true));
+        assert_eq!(control.allow_unsandboxed_commands, Some(false));
+        assert_eq!(control.excluded_command_count, Some(1));
+        assert_eq!(control.network_allowed_domain_count, Some(2));
+        assert_eq!(control.deny_rule_count, Some(2));
+        assert_eq!(control.default_mode.as_deref(), Some("acceptEdits"));
+        assert!(control.summary().is_some_and(|s| s.contains("sandbox:on")));
+
+        // An agent with no enforcement plane of its own is not a claim.
+        let cursor = agent_control_config("cursor", home);
+        assert!(!cursor.assessed && cursor.sandbox_enabled.is_none());
+    }
+
+    #[test]
+    fn control_config_weakenings_flag_only_permissive_moves() {
+        let before = AgentControlConfig {
+            agent_type: "claude_code".to_string(),
+            sandbox_enabled: Some(true),
+            allow_unsandboxed_commands: Some(false),
+            excluded_command_count: Some(1),
+            deny_rule_count: Some(3),
+            default_mode: Some("acceptEdits".to_string()),
+            assessed: true,
+            ..Default::default()
+        };
+        let after = AgentControlConfig {
+            sandbox_enabled: Some(false),
+            allow_unsandboxed_commands: Some(true),
+            excluded_command_count: Some(4),
+            deny_rule_count: Some(0),
+            default_mode: Some("bypassPermissions".to_string()),
+            ..before.clone()
+        };
+
+        let knobs: Vec<String> = control_config_weakenings(&before, &after)
+            .into_iter()
+            .map(|w| w.knob)
+            .collect();
+        for expected in [
+            "sandbox.enabled",
+            "sandbox.allowUnsandboxedCommands",
+            "sandbox.excludedCommands",
+            "permissions.deny",
+            "permissions.defaultMode",
+        ] {
+            assert!(knobs.iter().any(|k| k == expected), "missing {expected}");
+        }
+
+        // Strengthening is silent -- this is a one-directional monotonicity
+        // comparison, not a config-change audit.
+        assert!(control_config_weakenings(&after, &before).is_empty());
+        // Identity is silent.
+        assert!(control_config_weakenings(&before, &before).is_empty());
+    }
+
+    #[test]
+    fn control_config_weakenings_ignore_unassessed_snapshots() {
+        // "The config became unreadable" must never render as "enforcement was
+        // turned off": an unmeasured snapshot is not evidence.
+        let strong = AgentControlConfig {
+            agent_type: "claude_code".to_string(),
+            sandbox_enabled: Some(true),
+            assessed: true,
+            ..Default::default()
+        };
+        let unmeasured = AgentControlConfig {
+            agent_type: "claude_code".to_string(),
+            assessed: false,
+            ..Default::default()
+        };
+        assert!(control_config_weakenings(&strong, &unmeasured).is_empty());
+        assert!(control_config_weakenings(&unmeasured, &strong).is_empty());
     }
 
     #[test]

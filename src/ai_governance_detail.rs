@@ -1526,6 +1526,7 @@ mod tests {
             declared_confinement: None,
             declared_approval: None,
             declared_source: None,
+            control: crate::agent_visibility::AgentControlConfig::default(),
         }
     }
 
