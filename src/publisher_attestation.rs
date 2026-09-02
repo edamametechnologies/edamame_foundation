@@ -214,7 +214,10 @@ fn verify_platform_signature(path: &str) -> (Option<bool>, Option<String>) {
 
     let mut dpkg_present = false;
     for candidate in &candidates {
-        match Command::new("dpkg").args(["-S", candidate.as_str()]).output() {
+        match Command::new("dpkg")
+            .args(["-S", candidate.as_str()])
+            .output()
+        {
             Ok(output) => {
                 dpkg_present = true;
                 if output.status.success() {
@@ -237,7 +240,10 @@ fn verify_platform_signature(path: &str) -> (Option<bool>, Option<String>) {
 
     let mut rpm_present = false;
     for candidate in &candidates {
-        match Command::new("rpm").args(["-qf", candidate.as_str()]).output() {
+        match Command::new("rpm")
+            .args(["-qf", candidate.as_str()])
+            .output()
+        {
             Ok(output) => {
                 rpm_present = true;
                 if output.status.success() {
