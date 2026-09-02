@@ -34,11 +34,14 @@ use edamame_backend::detail_backend::{
     AiHostInventoryBackend, AiInventoryBackend, AiMcpServerInventoryBackend,
     AiSandboxInventoryBackend, CheckContextBackend, CheckContextKindBackend, CheckDetailBackend,
     CoverageKindBackend, CoverageRowBackend, FailureCauseBackend, FailureSelectorBackend,
-    FailureSelectorKindBackend, MAX_FAILURE_CAUSES, MAX_INVENTORY_AGENTS,
+    ContextDetailBackend, ContextFactBackend, FailureSelectorKindBackend,
+    MAX_CHECK_CONTEXT_ROWS, MAX_FAILURE_CAUSES, MAX_INVENTORY_AGENTS,
     MAX_INVENTORY_CRITICAL_PROCESSES_PER_AGENT, MAX_INVENTORY_HARNESSES,
     MAX_INVENTORY_MCP_SERVERS_PER_AGENT, MAX_INVENTORY_RULE_IDS_PER_SERVER,
     MAX_INVENTORY_SECRET_LABELS_PER_AGENT,
 };
+#[cfg(test)]
+use edamame_backend::detail_backend::MAX_CONTEXT_TEXT_LEN;
 use std::collections::{BTreeMap, BTreeSet};
 
 use FailureSelectorKindBackend as Kind;
@@ -108,6 +111,24 @@ impl EvidenceBuilder {
         self.context.push(row);
     }
 
+    /// Record a context row carrying the full on-device card (level 3).
+    fn context_rich(
+        &mut self,
+        kind: CheckContextKindBackend,
+        key: &str,
+        scope: &str,
+        detail: ContextDetailBackend,
+    ) {
+        if key.is_empty() {
+            return;
+        }
+        let mut row = CheckContextBackend::new(kind, key);
+        if !scope.is_empty() {
+            row = row.with_scope(scope);
+        }
+        self.context.push(row.with_detail(detail));
+    }
+
     fn finish(self) -> CheckEvidence {
         finalize(self.causes, self.context)
     }
@@ -168,7 +189,9 @@ fn finalize(
 
     context.sort();
     context.dedup();
-    context.truncate(MAX_FAILURE_CAUSES);
+    // Context has its own cap: it is display-only, so unlike the cause cap this
+    // one is cosmetic and never feeds `truncated`.
+    context.truncate(MAX_CHECK_CONTEXT_ROWS);
 
     CheckEvidence {
         truncated: total > kept.len(),
@@ -367,6 +390,309 @@ pub fn detail_for_unsecured_agent(agent_type: &str) -> CheckEvidence {
     }
     let mut builder = EvidenceBuilder::default();
     builder.cause(&scope, vec![(Kind::Observer, "paused".into())]);
+    builder.finish()
+}
+
+// ---------------------------------------------------------------------------
+// Runtime-plane checks: attack detection, divergence, escalated actions
+//
+// These three were originally outside the AI governance class -- they shipped
+// as bare booleans with no causes, which meant an administrator could neither
+// review nor accept them, and could not tell "the engine found something" from
+// "the engine is switched off". They now emit causes like every other AI check,
+// plus the level-3 context that carries the card the device user already sees.
+//
+// Selector-kind boundary (mirrors the MCP rule in AIGOVERNANCE.md §7): the
+// `attack_*`, `divergence_*` and `escalated_*` kinds are emitted ONLY by their
+// own check. Accepting `attack_process:ssh` must never clear a blast-radius
+// cause naming the same binary through `critical_process:ssh`, because the two
+// say different things -- one accepts a spawn, the other accepts an attack.
+// ---------------------------------------------------------------------------
+
+/// One attack finding, flattened to metadata the governance surface may carry.
+///
+/// Deliberately NOT the detector's `VulnerabilityFinding`: foundation cannot
+/// depend on core, and the narrower shape is also the privacy boundary. Full
+/// file paths, open-file lists and LLM rationales are excluded by construction
+/// rather than by remembering to strip them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AttackFindingSlice {
+    /// Detector family (`credential_harvest`, `token_exfiltration`, ...).
+    pub check_family: String,
+    pub finding_key: String,
+    pub severity: String,
+    /// Deterministic description. Never an LLM rationale.
+    pub description: String,
+    pub process_name: String,
+    pub parent_process_name: String,
+    pub destination_domain: String,
+    pub destination_ip: String,
+    pub destination_port: Option<u16>,
+    pub detection_basis: Vec<String>,
+    pub reference: String,
+    pub dismissed: bool,
+    /// Agent slug when the finding is attributable to one; empty otherwise.
+    pub agent_type: String,
+}
+
+/// One divergence evidence row, flattened the same way.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DivergenceEvidenceSlice {
+    pub category: String,
+    pub finding_key: String,
+    pub severity: String,
+    pub description: String,
+    pub process_name: String,
+    pub agent_type: String,
+    pub trigger_reason: String,
+    /// Count only. The paths themselves are sensitive by definition.
+    pub unexpected_sensitive_count: usize,
+    pub dismissed: bool,
+}
+
+/// One escalated advisor action awaiting operator review.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EscalatedActionSlice {
+    pub action_id: String,
+    pub action_class: String,
+    pub advice_type: String,
+    pub title: String,
+    pub severity: String,
+}
+
+/// `credential_harvest` -> `Credential harvest`.
+fn humanize(raw: &str) -> String {
+    let cleaned = raw.trim().replace(['_', '-'], " ");
+    let mut chars = cleaned.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
+fn destination_of(domain: &str, ip: &str) -> String {
+    let domain = norm(domain);
+    if !domain.is_empty() {
+        return domain;
+    }
+    norm(ip)
+}
+
+/// The engine behind a runtime check is stopped.
+///
+/// Emitted as its own cause so a stopped engine is never a cause-less Active
+/// check -- which the Hub would be free to derive `Passed` for, exactly the
+/// vacuous-pass bug `amplifier:unsandboxed` exists to prevent on blast radius.
+fn push_engine_stopped(builder: &mut EvidenceBuilder) {
+    builder.cause("", vec![(Kind::EngineState, "stopped".into())]);
+}
+
+/// Evidence for an Active `vulnerabilities` (attack detection) check.
+///
+/// One cause per non-dismissed finding, named four ways so an administrator
+/// picks their own blast radius: the whole detector family, one exact finding,
+/// the process, or the destination. Dismissed findings ship as context only --
+/// they are not why the check is failing, but the Hub should be able to see
+/// that a condition was reviewed on the device rather than never observed.
+pub fn detail_for_attack_findings(
+    findings: &[AttackFindingSlice],
+    engine_running: bool,
+) -> CheckEvidence {
+    let mut builder = EvidenceBuilder::default();
+
+    if !engine_running {
+        push_engine_stopped(&mut builder);
+    }
+
+    for finding in findings {
+        let scope = norm(&finding.agent_type);
+        let family = norm(&finding.check_family);
+        let process = normalize_process_basename(&finding.process_name);
+        let destination = destination_of(&finding.destination_domain, &finding.destination_ip);
+        let key = finding.finding_key.trim().to_string();
+
+        if !finding.dismissed {
+            builder.cause(
+                &scope,
+                vec![
+                    (Kind::AttackFamily, family.clone()),
+                    (Kind::AttackFinding, key.clone()),
+                    (Kind::AttackProcess, process.clone()),
+                    (Kind::AttackDestination, destination.clone()),
+                ],
+            );
+        }
+
+        let mut facts = vec![ContextFactBackend::new("Detector", humanize(&family))];
+        if !process.is_empty() {
+            facts.push(ContextFactBackend::new("Process", process.clone()));
+        }
+        let parent = normalize_process_basename(&finding.parent_process_name);
+        if !parent.is_empty() {
+            facts.push(ContextFactBackend::new("Parent", parent));
+        }
+        if !destination.is_empty() {
+            let shown = match finding.destination_port {
+                Some(port) => format!("{destination}:{port}"),
+                None => destination.clone(),
+            };
+            facts.push(ContextFactBackend::new("Destination", shown));
+        }
+        let basis = normalized_set(finding.detection_basis.iter(), false);
+        if !basis.is_empty() {
+            facts.push(ContextFactBackend::new("Detection basis", basis.join(", ")));
+        }
+        if !scope.is_empty() {
+            facts.push(ContextFactBackend::new("Agent", scope.clone()));
+        }
+
+        let detail = ContextDetailBackend::new(
+            format!("Attack pattern: {}", humanize(&family)),
+            &finding.severity,
+            &finding.description,
+        )
+        .with_subject(if process.is_empty() {
+            scope.clone()
+        } else {
+            process
+        })
+        .with_facts(facts)
+        .with_references(if finding.reference.trim().is_empty() {
+            Vec::new()
+        } else {
+            vec![finding.reference.clone()]
+        })
+        .with_dismissed(finding.dismissed);
+
+        builder.context_rich(CheckContextKindBackend::AttackFinding, &key, &scope, detail);
+    }
+
+    builder.finish()
+}
+
+/// Evidence for an Active `divergence` check.
+///
+/// Scoped to the agent whose declared intent the behaviour diverged from, which
+/// is what makes a per-agent acceptance meaningful: "this agent is expected to
+/// reach there" is a statement about that agent, not about the category.
+pub fn detail_for_divergence(
+    evidence: &[DivergenceEvidenceSlice],
+    engine_running: bool,
+) -> CheckEvidence {
+    let mut builder = EvidenceBuilder::default();
+
+    if !engine_running {
+        push_engine_stopped(&mut builder);
+    }
+
+    for row in evidence {
+        let scope = norm(&row.agent_type);
+        let category = norm(&row.category);
+        let process = normalize_process_basename(&row.process_name);
+        let key = row.finding_key.trim().to_string();
+
+        if !row.dismissed {
+            builder.cause(
+                &scope,
+                vec![
+                    (Kind::DivergenceCategory, category.clone()),
+                    (Kind::DivergenceFinding, key.clone()),
+                    (Kind::DivergenceProcess, process.clone()),
+                ],
+            );
+        }
+
+        let mut facts = vec![ContextFactBackend::new("Category", humanize(&category))];
+        if !process.is_empty() {
+            facts.push(ContextFactBackend::new("Process", process.clone()));
+        }
+        if !scope.is_empty() {
+            facts.push(ContextFactBackend::new("Agent", scope.clone()));
+        }
+        let trigger = row.trigger_reason.trim();
+        if !trigger.is_empty() {
+            facts.push(ContextFactBackend::new("Trigger", trigger));
+        }
+        if row.unexpected_sensitive_count > 0 {
+            facts.push(ContextFactBackend::new(
+                "Unexpected sensitive files",
+                row.unexpected_sensitive_count.to_string(),
+            ));
+        }
+
+        let detail = ContextDetailBackend::new(
+            format!("Divergence: {}", humanize(&category)),
+            &row.severity,
+            &row.description,
+        )
+        .with_subject(if scope.is_empty() {
+            process
+        } else {
+            scope.clone()
+        })
+        .with_facts(facts)
+        .with_dismissed(row.dismissed);
+
+        builder.context_rich(
+            CheckContextKindBackend::DivergenceFinding,
+            &key,
+            &scope,
+            detail,
+        );
+    }
+
+    builder.finish()
+}
+
+/// Evidence for an Active `escalated` check.
+///
+/// The unit of acceptance is the action class, not the individual action: an
+/// administrator decides "this agent may escalate port closures for review",
+/// and each new action of that class is then expected rather than a new
+/// exception to approve.
+pub fn detail_for_escalated(
+    actions: &[EscalatedActionSlice],
+    loop_running: bool,
+) -> CheckEvidence {
+    let mut builder = EvidenceBuilder::default();
+
+    if !loop_running {
+        push_engine_stopped(&mut builder);
+    }
+
+    for action in actions {
+        let class = norm(&action.action_class);
+        builder.cause("", vec![(Kind::EscalatedAction, class.clone())]);
+
+        let mut facts = vec![ContextFactBackend::new("Action class", humanize(&class))];
+        let advice = norm(&action.advice_type);
+        if !advice.is_empty() {
+            facts.push(ContextFactBackend::new("Advice", humanize(&advice)));
+        }
+
+        let detail = ContextDetailBackend::new(
+            if action.title.trim().is_empty() {
+                format!("Escalated action: {}", humanize(&class))
+            } else {
+                action.title.clone()
+            },
+            &action.severity,
+            format!(
+                "An agentic action of class \"{}\" was escalated for operator review instead of being applied automatically.",
+                humanize(&class)
+            ),
+        )
+        .with_subject(class)
+        .with_facts(facts);
+
+        builder.context_rich(
+            CheckContextKindBackend::EscalatedAction,
+            action.action_id.trim(),
+            "",
+            detail,
+        );
+    }
+
     builder.finish()
 }
 
@@ -949,6 +1275,176 @@ mod tests {
             tokens(cause_for(&evidence, "codex", "harness_state:diverging").unwrap()).len(),
             1
         );
+    }
+
+    fn attack_slice() -> AttackFindingSlice {
+        AttackFindingSlice {
+            check_family: "credential_harvest".into(),
+            finding_key: "fk-1".into(),
+            severity: "HIGH".into(),
+            description: "Process read AWS credentials and opened a socket".into(),
+            process_name: "/usr/bin/Curl.exe".into(),
+            parent_process_name: "bash".into(),
+            destination_domain: "Evil.example.com".into(),
+            destination_ip: "203.0.113.9".into(),
+            destination_port: Some(443),
+            detection_basis: vec!["temp_origin".into(), "sensitive_read".into()],
+            reference: "OWASP-LLM06".into(),
+            dismissed: false,
+            agent_type: "Cursor".into(),
+        }
+    }
+
+    #[test]
+    fn attack_finding_emits_four_selector_granularities() {
+        let ev = detail_for_attack_findings(&[attack_slice()], true);
+        assert_eq!(ev.causes.len(), 1);
+        let cause = &ev.causes[0];
+        assert_eq!(cause.scope, "cursor");
+        let tokens: Vec<String> = cause.selectors.iter().map(|s| s.token()).collect();
+        assert!(tokens.contains(&"attack_family:credential_harvest".to_string()));
+        assert!(tokens.contains(&"attack_finding:fk-1".to_string()));
+        assert!(tokens.contains(&"attack_process:curl".to_string()));
+        assert!(tokens.contains(&"attack_destination:evil.example.com".to_string()));
+    }
+
+    #[test]
+    fn attack_context_carries_the_card_without_leaking_content() {
+        let ev = detail_for_attack_findings(&[attack_slice()], true);
+        let row = ev.context.iter().find(|c| c.key == "fk-1").expect("row");
+        let detail = row.detail.as_ref().expect("level-3 detail");
+        assert_eq!(detail.title, "Attack pattern: Credential harvest");
+        assert_eq!(detail.severity, "high");
+        assert_eq!(detail.subject, "curl");
+        assert!(!detail.dismissed);
+        assert_eq!(detail.references, vec!["OWASP-LLM06".to_string()]);
+        let facts: Vec<(String, String)> = detail
+            .facts
+            .iter()
+            .map(|f| (f.label.clone(), f.value.clone()))
+            .collect();
+        assert!(facts.contains(&("Destination".into(), "evil.example.com:443".into())));
+        assert!(facts.contains(&("Parent".into(), "bash".into())));
+        assert!(facts
+            .iter()
+            .any(|(l, v)| l == "Detection basis" && v.contains("temp_origin")));
+    }
+
+    #[test]
+    fn dismissed_attack_finding_ships_as_context_but_never_as_a_cause() {
+        let mut slice = attack_slice();
+        slice.dismissed = true;
+        let ev = detail_for_attack_findings(&[slice], true);
+        assert!(ev.causes.is_empty(), "a dismissed finding is not why the check fails");
+        let row = ev.context.iter().find(|c| c.key == "fk-1").expect("row");
+        assert!(row.detail.as_ref().expect("detail").dismissed);
+    }
+
+    #[test]
+    fn stopped_engine_emits_its_own_cause_so_it_can_never_pass_vacuously() {
+        for ev in [
+            detail_for_attack_findings(&[], false),
+            detail_for_divergence(&[], false),
+            detail_for_escalated(&[], false),
+        ] {
+            let tokens: Vec<String> = ev
+                .causes
+                .iter()
+                .flat_map(|c| c.selectors.iter().map(|s| s.token()))
+                .collect();
+            assert_eq!(tokens, vec!["engine_state:stopped".to_string()]);
+        }
+    }
+
+    #[test]
+    fn running_engine_with_no_findings_emits_nothing() {
+        assert!(detail_for_attack_findings(&[], true).is_empty());
+        assert!(detail_for_divergence(&[], true).is_empty());
+        assert!(detail_for_escalated(&[], true).is_empty());
+    }
+
+    #[test]
+    fn divergence_scopes_to_the_agent_and_counts_sensitive_paths() {
+        let ev = detail_for_divergence(
+            &[DivergenceEvidenceSlice {
+                category: "correlation:unexplained".into(),
+                finding_key: "dk-1".into(),
+                severity: "MEDIUM".into(),
+                description: "Egress not explained by declared intent".into(),
+                process_name: "node".into(),
+                agent_type: "Claude_Code".into(),
+                trigger_reason: "unexplained_destination".into(),
+                unexpected_sensitive_count: 3,
+                dismissed: false,
+            }],
+            true,
+        );
+        assert_eq!(ev.causes[0].scope, "claude_code");
+        let tokens: Vec<String> = ev.causes[0].selectors.iter().map(|s| s.token()).collect();
+        assert!(tokens.contains(&"divergence_category:correlation:unexplained".to_string()));
+        assert!(tokens.contains(&"divergence_process:node".to_string()));
+        let detail = ev.context[0].detail.as_ref().expect("detail");
+        assert_eq!(detail.subject, "claude_code");
+        // The paths themselves must never ship -- only how many there were.
+        assert!(detail
+            .facts
+            .iter()
+            .any(|f| f.label == "Unexpected sensitive files" && f.value == "3"));
+    }
+
+    #[test]
+    fn escalated_accepts_the_class_not_the_individual_action() {
+        let ev = detail_for_escalated(
+            &[
+                EscalatedActionSlice {
+                    action_id: "a1".into(),
+                    action_class: "network_port".into(),
+                    advice_type: "NetworkPort".into(),
+                    title: String::new(),
+                    severity: "high".into(),
+                },
+                EscalatedActionSlice {
+                    action_id: "a2".into(),
+                    action_class: "network_port".into(),
+                    advice_type: "NetworkPort".into(),
+                    title: String::new(),
+                    severity: "high".into(),
+                },
+            ],
+            true,
+        );
+        // Two actions of one class collapse to one reviewable cause...
+        assert_eq!(ev.causes.len(), 1);
+        assert_eq!(ev.causes[0].selectors[0].token(), "escalated_action:network_port");
+        // ...but both remain individually visible as context.
+        assert_eq!(ev.context.len(), 2);
+    }
+
+    #[test]
+    fn context_text_is_clamped_on_a_char_boundary() {
+        let mut slice = attack_slice();
+        slice.description = "é".repeat(MAX_CONTEXT_TEXT_LEN);
+        let ev = detail_for_attack_findings(&[slice], true);
+        let summary = &ev.context[0].detail.as_ref().expect("detail").summary;
+        assert!(summary.len() <= MAX_CONTEXT_TEXT_LEN + 4);
+        assert!(summary.ends_with('…'));
+    }
+
+    #[test]
+    fn runtime_context_is_capped_without_flagging_truncated() {
+        // Context is display-only, so its cap must never make a check
+        // unprovable the way a dropped cause does.
+        let findings: Vec<AttackFindingSlice> = (0..MAX_CHECK_CONTEXT_ROWS + 10)
+            .map(|i| {
+                let mut f = attack_slice();
+                f.finding_key = format!("fk-{i}");
+                f.dismissed = true;
+                f
+            })
+            .collect();
+        let ev = detail_for_attack_findings(&findings, true);
+        assert_eq!(ev.context.len(), MAX_CHECK_CONTEXT_ROWS);
+        assert!(!ev.truncated);
     }
 
     #[test]

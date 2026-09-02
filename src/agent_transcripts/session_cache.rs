@@ -280,6 +280,7 @@ mod tests {
             context_token_limit: None,
             context_usage_percent: None,
             workspace_hint: String::new(),
+            tool_events: Vec::new(),
         }
     }
 

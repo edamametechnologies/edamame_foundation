@@ -169,6 +169,15 @@ pub struct CollectedRawSession {
     /// as [`economics_raw_text`] (an older helper omits this field entirely).
     #[serde(default)]
     pub workspace_hint: String,
+    /// Typed tool-call events (name, target, in-transcript
+    /// timestamp) decoded from structured transcript blocks. Populated
+    /// centrally by `collect_agent_transcripts` from `raw_text` (adapters
+    /// leave it empty), so every agent whose transcript carries typed
+    /// blocks gets ground-truth events without per-adapter work.
+    /// `#[serde(default)]` for the same rolling helper/core compatibility
+    /// reason as [`economics_raw_text`].
+    #[serde(default)]
+    pub tool_events: Vec<parsing::ToolCallEvent>,
 }
 
 /// Derive `derived_scope_any_lineage_paths` for an agent from its
@@ -338,7 +347,7 @@ pub struct SessionEconomics {
     /// distinct from `tool_errors` (which are local tool failures).
     pub inferred_provider_errors: u64,
 
-    // ---- Per-MCP-server tool-call attribution (Workstream C Phase 2) --------
+    // ---- Per-MCP-server tool-call attribution ------------------------------
     //
     // Counts of tool invocations attributed to each MCP server, derived purely
     // from the tool name's `mcp__<server>__<tool>` convention (the standard MCP
@@ -605,6 +614,11 @@ pub fn collect(
         let resolved = economics_override_text(&session.source_path);
         session.economics_raw_text = resolved.text;
         session.economics_truncated = resolved.truncated;
+        // Decode typed tool-call events centrally so every agent whose
+        // transcript carries structured blocks gets ground-truth
+        // (name, target, timestamp) events without per-adapter work.
+        // Cursor `.txt` exports carry no typed blocks and yield none.
+        session.tool_events = parsing::extract_tool_call_events(&session.raw_text, 64);
     }
 
     // Having ingested a session is itself proof the store is present, so an

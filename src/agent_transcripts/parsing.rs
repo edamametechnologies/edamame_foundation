@@ -114,6 +114,13 @@ pub struct ParsedTranscript {
     pub user_text: String,
     pub assistant_text: String,
     pub raw_text: String,
+    /// Concatenated `tool_use` INPUT arguments (WebFetch url, WebSearch query,
+    /// Bash command, ...) -- NOT tool RESULTS. Traffic derivation reads this
+    /// plus `user_text`/`assistant_text` so an egress the agent actually
+    /// requested is declared, while a hostname that merely appeared inside a
+    /// tool result body (e.g. every URL in a WebSearch result page) is not.
+    /// See `extract_traffic` callers.
+    pub tool_input_text: String,
 }
 
 /// Parse a `.txt` Cursor-style transcript with `user:` / `assistant:` markers.
@@ -174,6 +181,10 @@ pub fn parse_txt_transcript(raw_text: &str) -> ParsedTranscript {
         user_text: user_sections.join("\n\n").trim().to_string(),
         assistant_text: assistant_sections.join("\n\n").trim().to_string(),
         raw_text: raw_text.to_string(),
+        // `.txt` transcripts carry no structured tool_use blocks; the
+        // user/assistant marker sections already exclude tool result bodies,
+        // so traffic derives from those alone.
+        tool_input_text: String::new(),
     }
 }
 
@@ -183,6 +194,7 @@ pub fn parse_txt_transcript(raw_text: &str) -> ParsedTranscript {
 pub fn parse_jsonl_transcript(raw_text: &str) -> ParsedTranscript {
     let mut user_sections = Vec::new();
     let mut assistant_sections = Vec::new();
+    let mut tool_input_sections = Vec::new();
 
     for line in raw_text.split('\n') {
         let line = line.trim();
@@ -198,6 +210,19 @@ pub fn parse_jsonl_transcript(raw_text: &str) -> ParsedTranscript {
             .get("message")
             .and_then(|m| m.get("content"))
             .and_then(|c| c.as_array());
+        if let Some(items) = content {
+            // Collect `tool_use` INPUT arguments (the url/query/command the
+            // agent chose) but never `tool_result` bodies -- the latter carry
+            // arbitrary fetched/searched content whose every domain-shaped
+            // string would otherwise be swept into declared egress.
+            for item in items {
+                if item.get("type").and_then(|v| v.as_str()) == Some("tool_use") {
+                    if let Some(input) = item.get("input") {
+                        collect_tool_input_strings(input, &mut tool_input_sections);
+                    }
+                }
+            }
+        }
         let text = content
             .map(|items| {
                 items
@@ -229,6 +254,33 @@ pub fn parse_jsonl_transcript(raw_text: &str) -> ParsedTranscript {
         user_text: user_sections.join("\n\n").trim().to_string(),
         assistant_text: assistant_sections.join("\n\n").trim().to_string(),
         raw_text: raw_text.to_string(),
+        tool_input_text: tool_input_sections.join("\n").trim().to_string(),
+    }
+}
+
+/// Flatten a `tool_use` input value into plain strings for traffic/host
+/// derivation. Recurses objects/arrays and keeps only string leaves (a
+/// WebFetch `url`, a WebSearch `query`, a Bash `command`); numbers/bools carry
+/// no host.
+fn collect_tool_input_strings(value: &serde_json::Value, out: &mut Vec<String>) {
+    match value {
+        serde_json::Value::String(s) => {
+            let t = s.trim();
+            if !t.is_empty() {
+                out.push(t.to_string());
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                collect_tool_input_strings(item, out);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for item in map.values() {
+                collect_tool_input_strings(item, out);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -348,7 +400,7 @@ fn looks_like_plausible_path_token(token: &str, allow_backslash: bool) -> bool {
 /// a file name: long, and made only of base64 alphabet characters with mixed
 /// case AND digits and no `.`/`-`/`_` separator.
 ///
-/// Real names that long carry a separator (`FALSEPOSITIVESFIX.md`,
+/// Real names that long carry a separator (`ARCHITECTUREOVERVIEW.md`,
 /// `var-folders-7t-sg03pq8s3cs`), and git object names are single-case hex, so
 /// both are left alone by the mixed-case requirement.
 fn looks_like_blob_segment(seg: &str) -> bool {
@@ -489,7 +541,7 @@ src/api/api_agentic.rs and
     fn blob_and_file_name_shape_helpers() {
         assert!(looks_like_blob_segment("CAIS2gQKpgEIERgCKkDLy0TyooRz"));
         // Separator-bearing names and single-case hex are not blobs.
-        assert!(!looks_like_blob_segment("FALSEPOSITIVESFIX.md"));
+        assert!(!looks_like_blob_segment("ARCHITECTUREOVERVIEW.md"));
         assert!(!looks_like_blob_segment("var-folders-7t-sg03pq8s3cs-cdqz"));
         assert!(!looks_like_blob_segment(
             "e83c5163316f89bfbde7d9ab23ca2e25604af290"
@@ -605,8 +657,8 @@ fn decode_file_path_token(token: &str, workspace_root: &str) -> Option<String> {
         //
         // A relative reference does not identify an absolute path, and rooting
         // it at the workspace invented one: on a live host
-        // `edamame_core/FALSEPOSITIVES.md` became
-        // `/Users/me/edamame_core/FALSEPOSITIVES.md` (the file is under
+        // `edamame_core/ARCHITECTURE.md` became
+        // `/Users/me/edamame_core/ARCHITECTURE.md` (the file is under
         // `Programming/`), and `references/palette.md` -- a path relative to a
         // skill directory -- became `/Users/me/references/palette.md`. Those
         // entries can never match the real file, so the access they were meant
@@ -762,7 +814,25 @@ pub fn extract_hostnames(text: &str) -> Vec<String> {
         //     `settings.local.json` (the `.json` suffix filter never sees the
         //     truncated match).
         let mut after = text[g.end()..].chars();
-        if after.next() == Some('.') && after.next().is_some_and(|c| c.is_ascii_alphanumeric()) {
+        let next_after = after.next();
+        if next_after == Some('.') && after.next().is_some_and(|c| c.is_ascii_alphanumeric()) {
+            continue;
+        }
+        // (e) Prefix of a hyphenated identifier: `com.apple.security.app`
+        //     truncated from the entitlement string
+        //     `com.apple.security.app-sandbox` (the `.app` gTLD is lowercase,
+        //     so filters (a)-(d) let it through). A real host is never
+        //     immediately followed by `-<word>`.
+        if next_after == Some('-') {
+            continue;
+        }
+        // (f) Per-edge-IP CDN reverse-DNS names such as
+        //     `cdn-185-199-110-133.github.com`: an unmatchable host shape (the
+        //     next CDN answer comes from a different edge IP), the exact
+        //     garbage the whitelists reverse-DNS skip exists for. Reuse the
+        //     always-compiled flodbadd helper rather than reimplementing the
+        //     shape here (No Permissive `#[cfg]` Fallbacks).
+        if flodbadd::dns_patterns::is_reverse_dns_pattern(&domain) {
             continue;
         }
         out.insert(domain);
@@ -3461,6 +3531,71 @@ mod host_plausibility_tests {
     }
 
     #[test]
+    fn hostname_extraction_skips_entitlement_and_reverse_dns_shapes() {
+        let text = r#"
+            entitlement key com.apple.security.app-sandbox is set
+            CDN edge cdn-185-199-110-133.github.com answered the request
+            reversed 51.241.186.35.bc.googleusercontent.com
+            real hosts: api.github.com www.edamame.tech
+        "#;
+        let hosts = extract_hostnames(text);
+        for bad in [
+            // `com.apple.security.app` truncated from the `-sandbox` entitlement
+            "com.apple.security.app",
+            // per-edge-IP CDN reverse-DNS name (unmatchable next answer)
+            "cdn-185-199-110-133.github.com",
+            "51.241.186.35.bc.googleusercontent.com",
+        ] {
+            assert!(
+                !hosts.iter().any(|h| h == bad),
+                "{bad} must not be extracted as a host: {hosts:?}"
+            );
+        }
+        for good in ["api.github.com", "www.edamame.tech"] {
+            assert!(
+                hosts.iter().any(|h| h == good),
+                "{good} must survive extraction: {hosts:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn jsonl_traffic_derives_from_tool_input_not_tool_result() {
+        // A WebFetch tool_use INPUT carries the url the agent requested; the
+        // matching tool_result body carries arbitrary fetched content whose
+        // domains must NOT become declared egress.
+        let raw = concat!(
+            r#"{"role":"assistant","message":{"content":[{"type":"tool_use","name":"WebFetch","input":{"url":"https://api.anthropic.com/v1/models"}}]}}"#,
+            "\n",
+            r#"{"role":"user","message":{"content":[{"type":"tool_result","content":[{"type":"text","text":"see also https://www.prnewswire.com and https://ir.crowdstrike.com"}]}]}}"#,
+            "\n",
+            r#"{"role":"assistant","message":{"content":[{"type":"text","text":"done"}]}}"#,
+        );
+        let parsed = parse_jsonl_transcript(raw);
+        assert!(
+            parsed.tool_input_text.contains("api.anthropic.com"),
+            "tool_input_text must carry the WebFetch url: {:?}",
+            parsed.tool_input_text
+        );
+        // Traffic text = user + assistant + tool_input (never raw_text).
+        let traffic_text = format!(
+            "{}\n\n{}\n\n{}",
+            parsed.user_text, parsed.assistant_text, parsed.tool_input_text
+        );
+        let traffic = extract_traffic(&traffic_text, &[], &[]);
+        assert!(
+            traffic.iter().any(|h| h == "api.anthropic.com:443"),
+            "the requested WebFetch host must be declared: {traffic:?}"
+        );
+        for garbage in ["www.prnewswire.com:443", "ir.crowdstrike.com:443"] {
+            assert!(
+                !traffic.iter().any(|h| h == garbage),
+                "{garbage} came from a tool RESULT body and must not be egress: {traffic:?}"
+            );
+        }
+    }
+
+    #[test]
     fn host_plausibility_shapes() {
         assert!(is_plausible_host("github.com"));
         assert!(is_plausible_host("localhost"));
@@ -3472,5 +3607,134 @@ mod host_plausibility_tests {
         assert!(!is_plausible_host(""));
         assert!(!is_plausible_host("-bad.example"));
         assert!(!is_plausible_host("a..b"));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Typed tool-call events. The economics walk above already decodes structured
+// `tool_use`/`function_call` blocks with per-line timestamps but keeps only
+// aggregate counters; this extractor preserves the per-call ground truth
+// (name, target, timestamp) for the divergence payload so the extrapolator
+// works from typed events instead of regex-scraped prose.
+// ---------------------------------------------------------------------------
+
+/// One typed tool-call event decoded from a structured transcript block
+/// (Anthropic `tool_use`, Codex `function_call`), with the enclosing
+/// line's in-transcript timestamp when the format carries one (Cursor
+/// `.txt` exports carry neither blocks nor timestamps and yield none).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ToolCallEvent {
+    pub name: String,
+    /// First recognized target argument (path / command / url), same
+    /// normalization as the friction signatures: slash-normalized and
+    /// length-capped.
+    pub target: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// Decode up to `cap` typed tool-call events from a transcript's raw
+/// text. Mirrors the block-candidate logic of the economics walk
+/// (Anthropic `message.content` arrays, Codex per-line `payload`
+/// blocks, top-level blocks) so it works across transcript shapes.
+pub fn extract_tool_call_events(raw_text: &str, cap: usize) -> Vec<ToolCallEvent> {
+    let mut events = Vec::new();
+    for line in raw_text.split('\n') {
+        if events.len() >= cap {
+            break;
+        }
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let value: serde_json::Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let mut line_ts: Option<chrono::DateTime<chrono::Utc>> = None;
+        for candidate in [
+            value.get("timestamp"),
+            value.get("payload").and_then(|p| p.get("timestamp")),
+            value.get("ts"),
+        ] {
+            if let Some(v) = candidate {
+                if let Some(dt) = parse_ts(v) {
+                    line_ts = Some(dt);
+                    break;
+                }
+            }
+        }
+        let content = value
+            .get("message")
+            .and_then(|m| m.get("content"))
+            .and_then(|c| c.as_array())
+            .or_else(|| value.get("content").and_then(|c| c.as_array()));
+        let mut candidates: Vec<&serde_json::Value> = Vec::new();
+        if let Some(items) = content {
+            candidates.extend(items.iter());
+        } else if let Some(payload) = value.get("payload") {
+            candidates.push(payload);
+        } else {
+            candidates.push(&value);
+        }
+        for item in candidates {
+            if events.len() >= cap {
+                break;
+            }
+            let kind = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            if !matches!(kind, "tool_use" | "function_call") {
+                continue;
+            }
+            let name = item
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if name.is_empty() {
+                continue;
+            }
+            let input = tool_call_input(item);
+            let signature = tool_target_signature(&name, input.as_ref());
+            let target = signature.split('\u{1}').nth(1).unwrap_or("").to_string();
+            events.push(ToolCallEvent {
+                name,
+                target,
+                at: line_ts,
+            });
+        }
+    }
+    events
+}
+
+#[cfg(test)]
+mod tool_call_event_tests {
+    use super::*;
+
+    #[test]
+    fn extracts_typed_tool_events_with_timestamps() {
+        let raw = r#"{"timestamp":"2026-09-02T10:00:00Z","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{"command":"cargo build --features swiftrs"}}]}}
+{"timestamp":"2026-09-02T10:00:05Z","message":{"role":"assistant","content":[{"type":"tool_use","name":"Read","input":{"file_path":"/tmp/x.rs"}}]}}
+not json
+{"payload":{"type":"function_call","name":"shell","arguments":"{\"command\":\"ls\"}"},"timestamp":"2026-09-02T10:00:09Z"}"#;
+        let events = extract_tool_call_events(raw, 32);
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0].name, "Bash");
+        assert!(events[0].target.contains("cargo build"));
+        assert!(events[0].at.is_some());
+        assert_eq!(events[1].name, "Read");
+        assert_eq!(events[1].target, "/tmp/x.rs");
+        assert_eq!(events[2].name, "shell");
+        assert!(events[2].at.is_some());
+    }
+
+    #[test]
+    fn respects_cap_and_skips_nameless_blocks() {
+        let line = r#"{"message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"x"}},{"type":"tool_use","input":{}}]}}"#;
+        let raw = [line; 100].join("\n");
+        let events = extract_tool_call_events(&raw, 8);
+        assert_eq!(events.len(), 8);
+        assert!(events.iter().all(|e| e.name == "Bash"));
+        assert!(events.iter().all(|e| e.at.is_none()));
     }
 }

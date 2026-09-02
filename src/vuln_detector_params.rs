@@ -53,8 +53,7 @@ pub struct PlatformHelperMatcherConfigs {
 /// for the recomputable browser-cache subtrees (`Code Cache`,
 /// `GPUCache`, `Service Worker`, etc.) and for the routine-rotation
 /// state files (`Local State`, `Preferences`) that browsers atomically
-/// rewrite many times an hour. See `FALSEPOSITIVES.md`
-/// FP-WIN-1 / FP-WIN-2 / FP-WIN-5.
+/// rewrite many times an hour.
 ///
 /// All patterns are case-insensitive substring matches against the
 /// FIM event path (after lowercasing). The detector requires BOTH
@@ -245,7 +244,7 @@ pub struct AppSelfTempStagingJSON {
     pub windows: Vec<AppSelfTempStagingEntryJSON>,
 }
 
-/// P1 symmetric-evidence weight table (`evidence_weights`).
+/// Symmetric-evidence weight table (`evidence_weights`).
 ///
 /// The CloudModel JSON shape mirrors `EvidenceWeights` in
 /// `edamame_core::agentic::vulnerability_score`. We deliberately keep
@@ -264,18 +263,41 @@ pub struct AppSelfTempStagingJSON {
 /// complete). Runtime `Default` for `EvidenceWeightsJSON` still
 /// uses the calibrated `default_ew_*` helpers below so unit tests
 /// and in-process construction get meaningful initial weights
-/// without silent serde zeros. See the ARCH-1 "born complete"
+/// without silent serde zeros, per the "born complete" CloudModel
 /// decision in the core/foundation invariants.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct EvidenceWeightsJSON {
     // ---- Attack signals ----
     pub session_is_anomalous: f32,
+    /// Graded-anomaly signal: ADDITIVE extra weight applied on
+    /// top of `session_is_anomalous` when the originating session's
+    /// iForest grade is `abnormal` (>= the p99.75 threshold) rather
+    /// than merely `suspicious` (>= p99.5). Lets calibration weight
+    /// strong outliers above the guaranteed ~0.5% base-rate band
+    /// without touching the boolean signal. Default 0.0 (inert) until
+    /// calibrated via CloudModel.
+    pub session_is_abnormal_extra: f32,
     pub session_is_blacklisted: f32,
+    /// Signal: the originating session's whitelist conformance
+    /// state is `NonConforming`. Deterministic corroboration computed
+    /// by the flodbadd whitelist engine that previously never reached
+    /// the detector (only the Conforming direction was ever debated,
+    /// and it is deliberately NOT a suppression signal). Default 0.0
+    /// (inert) until calibrated via CloudModel.
+    pub session_whitelist_nonconforming: f32,
     pub destination_is_public_diagnostic: f32,
     pub destination_is_blacklisted: f32,
     pub sensitive_material_evidence_present: f32,
     pub suspicious_lineage_present: f32,
     pub process_path_matches_suspicious_lineage: f32,
+    /// Signal: the session's GRANDPARENT process path or
+    /// grandparent script path matches a suspicious-lineage pattern.
+    /// The parent-level lineage signals stop one level up, so a
+    /// `/tmp/` grandparent currently evades the lineage corroboration
+    /// axis entirely (the data is on every session; divergence already
+    /// consumes it, the detector did not). Default 0.0 (inert) until
+    /// calibrated via CloudModel.
+    pub grandparent_matches_suspicious_lineage: f32,
     pub is_system_binary_target: f32,
     /// Structural attack signal: the finding's target path is in a
     /// sensitive class (ssh private key, AWS credentials, .env file,
@@ -295,6 +317,14 @@ pub struct EvidenceWeightsJSON {
 
     // ---- Benign signals ----
     pub destination_is_routine_vendor_backend: f32,
+    /// Destination<->publisher affinity: the destination's
+    /// organization (ASN owner or registrable-domain label) matches the
+    /// egressing binary's verified signing publisher ("this app is
+    /// talking to its own vendor"). Structural replacement for the
+    /// routine-destination vocabularies; token matching is deliberately
+    /// conservative and the weight stays 0.0 until calibrated via
+    /// CloudModel.
+    pub destination_org_matches_publisher: f32,
     pub process_in_trusted_credential_helper_list: f32,
     pub process_in_generic_git_credential_manager_list: f32,
     pub process_path_matches_packaged_application: f32,
@@ -342,17 +372,22 @@ impl Default for EvidenceWeightsJSON {
     fn default() -> Self {
         Self {
             session_is_anomalous: default_ew_session_is_anomalous(),
+            session_is_abnormal_extra: default_ew_session_is_abnormal_extra(),
             session_is_blacklisted: default_ew_session_is_blacklisted(),
+            session_whitelist_nonconforming: default_ew_session_whitelist_nonconforming(),
             destination_is_public_diagnostic: default_ew_destination_is_public_diagnostic(),
             destination_is_blacklisted: default_ew_destination_is_blacklisted(),
             sensitive_material_evidence_present: default_ew_sensitive_material_evidence_present(),
             suspicious_lineage_present: default_ew_suspicious_lineage_present(),
             process_path_matches_suspicious_lineage:
                 default_ew_process_path_matches_suspicious_lineage(),
+            grandparent_matches_suspicious_lineage:
+                default_ew_grandparent_matches_suspicious_lineage(),
             is_system_binary_target: default_ew_is_system_binary_target(),
             target_in_sensitive_path_class: default_ew_target_in_sensitive_path_class(),
             destination_is_routine_vendor_backend: default_ew_destination_is_routine_vendor_backend(
             ),
+            destination_org_matches_publisher: default_ew_destination_org_matches_publisher(),
             process_in_trusted_credential_helper_list:
                 default_ew_process_in_trusted_credential_helper_list(),
             process_in_generic_git_credential_manager_list:
@@ -379,17 +414,29 @@ impl Default for EvidenceWeightsJSON {
     }
 }
 
-// P1 initial weights -- mirror EvidenceWeights::default in
-// `edamame_core::agentic::vulnerability_score`. See
-// `FALSEPOSITIVESFIX.md` "Breakthrough: symmetric two-axis evidence"
-// for the calibration source. Do NOT tune these here outside the
-// fixture-driven P1 shadow window; the CloudModel publish is the
-// authoritative knob.
+// Initial weights -- mirror EvidenceWeights::default in
+// `edamame_core::agentic::vulnerability_score`. Do NOT tune these here
+// outside the fixture-driven shadow window; the CloudModel publish is
+// the authoritative knob.
 fn default_ew_session_is_anomalous() -> f32 {
     50.0
 }
 fn default_ew_session_is_blacklisted() -> f32 {
     50.0
+}
+// Inert-by-default signals: land at 0.0 and are calibrated via the
+// CloudModel publish, never here.
+fn default_ew_session_is_abnormal_extra() -> f32 {
+    0.0
+}
+fn default_ew_session_whitelist_nonconforming() -> f32 {
+    0.0
+}
+fn default_ew_grandparent_matches_suspicious_lineage() -> f32 {
+    0.0
+}
+fn default_ew_destination_org_matches_publisher() -> f32 {
+    0.0
 }
 fn default_ew_destination_is_public_diagnostic() -> f32 {
     30.0
@@ -642,7 +689,45 @@ pub struct CveDetectionParamsJSON {
     pub packaged_developer_tool_identity_tokens: Vec<String>,
     pub fim_hash_size_threshold: u64,
     pub fim_temp_executable_patterns: Vec<String>,
-    /// P1 symmetric-evidence shadow-scoring weight table. See
+    /// P3 publisher-attestation master switch. When `false` (the
+    /// shipped default) the enrichment pipeline never invokes the
+    /// platform signature check and the two publisher-attestation
+    /// evidence fields stay unpopulated (unmeasured). Flipped via
+    /// CloudModel once the predicate is calibrated against the FP
+    /// corpus. Born-complete on the wire: a published JSON
+    /// missing this key fails parse and falls back to the embedded
+    /// snapshot.
+    pub publisher_attestation_enabled: bool,
+    /// Gate: when true, high-volume udp/53 and udp/123
+    /// egress is treated as a non-routine destination (closes the
+    /// BS-5/BS-6 DNS/NTP tunnel blindness that the hard "routine
+    /// protocol" arm created). Default false = current behaviour;
+    /// flipped via CloudModel after corpus replay.
+    pub treat_high_volume_dns_ntp_as_non_routine: bool,
+    /// Outbound-byte floor for the DNS/NTP non-routine gate: udp/53 or
+    /// udp/123 sessions below this volume stay routine even when the
+    /// gate above is enabled.
+    pub dns_ntp_non_routine_min_outbound_bytes: u64,
+    /// Gate: when true, the anomaly arm of the
+    /// EvidenceFloor rule "anomalous AND credential-class files"
+    /// requires the graded `abnormal` band (p99.75) instead of any
+    /// anomaly (p99.5), so a guaranteed-base-rate suspicious grade
+    /// alone can no longer pin a finding beyond LLM/CRS authority.
+    /// The blacklist arm is unaffected. Default false = current
+    /// behaviour.
+    pub evidence_floor_requires_graded_anomaly: bool,
+    /// Ambient-baseline master switch: when true the
+    /// enrichment pipeline marks process identities that have recurred
+    /// benignly on THIS host, feeding the `ambient_baseline_credit`
+    /// evidence signal. Default false.
+    pub ambient_baseline_enabled: bool,
+    /// Distinct days a benign (non-corroborated, non-credential) shape
+    /// must recur before it earns the ambient-baseline credit.
+    pub ambient_baseline_min_recurrent_days: u64,
+    /// Days after which a baseline entry that stopped recurring is
+    /// pruned.
+    pub ambient_baseline_ttl_days: u64,
+    /// Symmetric-evidence shadow-scoring weight table. See
     /// `EvidenceWeightsJSON` for the per-field documentation. Required
     /// on the CloudModel wire: a publish that omits this field fails
     /// parse and falls back to the embedded snapshot (born complete).
@@ -762,6 +847,44 @@ pub struct CveDetectionParams {
     pub packaged_developer_tool_identity_tokens: Vec<String>,
     pub fim_hash_size_threshold: u64,
     pub fim_temp_executable_patterns: Vec<String>,
+    /// P3 publisher-attestation master switch. When `false` (the
+    /// shipped default) the enrichment pipeline never invokes the
+    /// platform signature check and the two publisher-attestation
+    /// evidence fields stay unpopulated (unmeasured). Flipped via
+    /// CloudModel once the predicate is calibrated against the FP
+    /// corpus. Born-complete on the wire: a published JSON
+    /// missing this key fails parse and falls back to the embedded
+    /// snapshot.
+    pub publisher_attestation_enabled: bool,
+    /// Gate: when true, high-volume udp/53 and udp/123
+    /// egress is treated as a non-routine destination (closes the
+    /// BS-5/BS-6 DNS/NTP tunnel blindness that the hard "routine
+    /// protocol" arm created). Default false = current behaviour;
+    /// flipped via CloudModel after corpus replay.
+    pub treat_high_volume_dns_ntp_as_non_routine: bool,
+    /// Outbound-byte floor for the DNS/NTP non-routine gate: udp/53 or
+    /// udp/123 sessions below this volume stay routine even when the
+    /// gate above is enabled.
+    pub dns_ntp_non_routine_min_outbound_bytes: u64,
+    /// Gate: when true, the anomaly arm of the
+    /// EvidenceFloor rule "anomalous AND credential-class files"
+    /// requires the graded `abnormal` band (p99.75) instead of any
+    /// anomaly (p99.5), so a guaranteed-base-rate suspicious grade
+    /// alone can no longer pin a finding beyond LLM/CRS authority.
+    /// The blacklist arm is unaffected. Default false = current
+    /// behaviour.
+    pub evidence_floor_requires_graded_anomaly: bool,
+    /// Ambient-baseline master switch: when true the
+    /// enrichment pipeline marks process identities that have recurred
+    /// benignly on THIS host, feeding the `ambient_baseline_credit`
+    /// evidence signal. Default false.
+    pub ambient_baseline_enabled: bool,
+    /// Distinct days a benign (non-corroborated, non-credential) shape
+    /// must recur before it earns the ambient-baseline credit.
+    pub ambient_baseline_min_recurrent_days: u64,
+    /// Days after which a baseline entry that stopped recurring is
+    /// pruned.
+    pub ambient_baseline_ttl_days: u64,
     pub evidence_weights: EvidenceWeightsJSON,
     pub secret_content_powershell_probe_read_verbs: Vec<String>,
     pub secret_content_powershell_dangerous_verbs: Vec<String>,
@@ -1412,6 +1535,13 @@ impl CveDetectionParams {
                 .map(|t| t.to_ascii_lowercase())
                 .collect(),
             fim_hash_size_threshold: json.fim_hash_size_threshold,
+            publisher_attestation_enabled: json.publisher_attestation_enabled,
+            treat_high_volume_dns_ntp_as_non_routine: json.treat_high_volume_dns_ntp_as_non_routine,
+            dns_ntp_non_routine_min_outbound_bytes: json.dns_ntp_non_routine_min_outbound_bytes,
+            evidence_floor_requires_graded_anomaly: json.evidence_floor_requires_graded_anomaly,
+            ambient_baseline_enabled: json.ambient_baseline_enabled,
+            ambient_baseline_min_recurrent_days: json.ambient_baseline_min_recurrent_days,
+            ambient_baseline_ttl_days: json.ambient_baseline_ttl_days,
             fim_temp_executable_patterns: json.fim_temp_executable_patterns.clone(),
             evidence_weights: json.evidence_weights.clone(),
             secret_content_powershell_probe_read_verbs: json
@@ -2130,8 +2260,7 @@ pub fn is_runtime_perfdata_self_write(
             // binary into `/usr/lib/jvm/evil` would otherwise be
             // suppressed). Combined with the artifact-path-substring
             // gate above, this is the path-shape + writer-identity
-            // attestation pair documented in `FALSEPOSITIVESFIX.md`
-            // (FP-CI-5).
+            // attestation pair.
             let basename_match = !proc_name_lower.is_empty()
                 && entry
                     .writer_basenames
@@ -2436,9 +2565,6 @@ pub fn is_package_manager_temp_writer(name: &str) -> bool {
 /// or `Invoke-WebRequest` would still fire HIGH because
 /// `network_command_like` flips the gate off, regardless of
 /// process attribution.
-///
-/// See `FALSEPOSITIVES.md` (FP-WIN-15) and
-/// `FALSEPOSITIVESFIX.md` (FP-WIN-15).
 pub fn is_edamame_daemon_self_telemetry_writer(name: &str) -> bool {
     if name.is_empty() {
         return false;
@@ -2805,10 +2931,44 @@ pub fn fim_temp_executable_patterns() -> Vec<String> {
     PARAMS_SNAPSHOT.load().fim_temp_executable_patterns.clone()
 }
 
-/// P1 symmetric-evidence weight table accessor.
+/// P3 publisher-attestation master switch (see the field doc on
+/// `CveDetectionParamsJSON::publisher_attestation_enabled`). Checked by
+/// the core enrichment pipeline before any signature verification runs.
+pub fn publisher_attestation_enabled() -> bool {
+    PARAMS_SNAPSHOT.load().publisher_attestation_enabled
+}
+
+/// DNS/NTP tunnel gate (see the field docs).
+pub fn treat_high_volume_dns_ntp_as_non_routine() -> bool {
+    PARAMS_SNAPSHOT.load().treat_high_volume_dns_ntp_as_non_routine
+}
+
+pub fn dns_ntp_non_routine_min_outbound_bytes() -> u64 {
+    PARAMS_SNAPSHOT.load().dns_ntp_non_routine_min_outbound_bytes
+}
+
+/// Graded EvidenceFloor gate (see the field docs).
+pub fn evidence_floor_requires_graded_anomaly() -> bool {
+    PARAMS_SNAPSHOT.load().evidence_floor_requires_graded_anomaly
+}
+
+/// Ambient-baseline switch and tunables (see field docs).
+pub fn ambient_baseline_enabled() -> bool {
+    PARAMS_SNAPSHOT.load().ambient_baseline_enabled
+}
+
+pub fn ambient_baseline_min_recurrent_days() -> u64 {
+    PARAMS_SNAPSHOT.load().ambient_baseline_min_recurrent_days
+}
+
+pub fn ambient_baseline_ttl_days() -> u64 {
+    PARAMS_SNAPSHOT.load().ambient_baseline_ttl_days
+}
+
+/// Symmetric-evidence weight table accessor.
 ///
 /// Returns a clone of the current `EvidenceWeightsJSON` snapshot from
-/// the CloudModel. Cheap: `EvidenceWeightsJSON` is 19 `f32` fields,
+/// the CloudModel. Cheap: `EvidenceWeightsJSON` is a flat set of `f32` fields,
 /// no heap allocation. Callers should clone-then-reuse for the
 /// duration of one detector tick rather than calling this per-finding,
 /// even though both shapes are cheap.
@@ -2979,7 +3139,7 @@ mod tests {
             .expect("embedded CVE detection params snapshot must parse as CveDetectionParamsJSON");
     }
 
-    /// ARCH-1 / Inc 2: missing required CloudModel fields must fail parse
+    /// Missing required CloudModel fields must fail parse
     /// (no silent serde defaults). A published JSON that drops a field
     /// falls back to the embedded snapshot rather than zeros.
     #[test]

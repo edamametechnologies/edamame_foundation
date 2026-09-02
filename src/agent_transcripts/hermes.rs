@@ -40,6 +40,7 @@ use super::{
 
 const HERMES_LLM_HOSTS: &[&str] = &[
     "api.anthropic.com:443",
+    "asn:ANTHROPIC",
     "api.openai.com:443",
     "openrouter.ai:443",
     "api.nousresearch.com:443",
@@ -295,7 +296,10 @@ fn build_session(
     let extracted_paths = extract_paths(&combined, workspace_root);
     let tool_names = extract_tool_names(&inputs.raw_text, &inputs.assistant_text);
     let commands = extract_commands(&inputs.raw_text, &inputs.assistant_text);
-    let traffic = extract_traffic(&combined, &commands, HERMES_LLM_HOSTS);
+    // Tool-result bodies (in raw_text) are excluded from traffic derivation;
+    // only what the agent said contributes host declarations here.
+    let traffic_text = format!("{}\n\n{}", inputs.user_text, inputs.assistant_text);
+    let traffic = extract_traffic(&traffic_text, &commands, HERMES_LLM_HOSTS);
     let ports = extract_ports(&combined, &commands);
     let inferred = infer_process_paths(&commands, workspace_root);
     let expected_open = classify_open_files_excluding_sensitive(&extracted_paths, home_str);
@@ -341,6 +345,7 @@ fn build_session(
         context_usage_percent: None,
         // Hermes manifests do not expose a per-session working directory yet.
         workspace_hint: String::new(),
+        tool_events: Vec::new(),
     }
 }
 

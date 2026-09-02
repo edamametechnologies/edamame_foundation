@@ -17,6 +17,7 @@ use super::{
 
 const CLAUDE_DESKTOP_LLM_HOSTS: &[&str] = &[
     "api.anthropic.com:443",
+    "asn:ANTHROPIC",
     "api.openai.com:443",
     "amazonaws.com:443",
     "asn:CLOUDFLARENET",
@@ -118,7 +119,15 @@ pub fn collect(home: &Path, options: &CollectOptions) -> anyhow::Result<CollectR
                 let extracted_paths = extract_paths(&combined, &workspace_root);
                 let tool_names = extract_tool_names(&parsed.raw_text, &parsed.assistant_text);
                 let commands = extract_commands(&parsed.raw_text, &parsed.assistant_text);
-                let traffic = extract_traffic(&combined, &commands, CLAUDE_DESKTOP_LLM_HOSTS);
+                // Traffic derives from what the agent SAID and the tool-call
+                // arguments it issued -- never from tool RESULT bodies (in
+                // `raw_text`), whose every domain-shaped string would inflate
+                // the egress allowlist (e.g. URLs inside WebSearch results).
+                let traffic_text = format!(
+                    "{}\n\n{}\n\n{}",
+                    parsed.user_text, parsed.assistant_text, parsed.tool_input_text
+                );
+                let traffic = extract_traffic(&traffic_text, &commands, CLAUDE_DESKTOP_LLM_HOSTS);
                 let ports = extract_ports(&combined, &commands);
                 let inferred = super::parsing::infer_process_paths(&commands, &workspace_root);
                 let expected_open =
@@ -164,6 +173,7 @@ pub fn collect(home: &Path, options: &CollectOptions) -> anyhow::Result<CollectR
                     context_token_limit: None,
                     context_usage_percent: None,
                     workspace_hint: workspace_hint.clone(),
+                    tool_events: Vec::new(),
                 }
             },
         ) {
