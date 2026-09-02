@@ -781,17 +781,18 @@ pub fn control_config_weakenings(
     }
 
     let agent_type = current.agent_type.clone();
-    let mut flag = |knob: &str, was: Option<bool>, now: Option<bool>, permissive: bool, detail: &str| {
-        if was == Some(!permissive) && now == Some(permissive) {
-            out.push(ControlWeakening {
-                agent_type: agent_type.clone(),
-                knob: knob.to_string(),
-                previous: (!permissive).to_string(),
-                current: permissive.to_string(),
-                detail: detail.to_string(),
-            });
-        }
-    };
+    let mut flag =
+        |knob: &str, was: Option<bool>, now: Option<bool>, permissive: bool, detail: &str| {
+            if was == Some(!permissive) && now == Some(permissive) {
+                out.push(ControlWeakening {
+                    agent_type: agent_type.clone(),
+                    knob: knob.to_string(),
+                    previous: (!permissive).to_string(),
+                    current: permissive.to_string(),
+                    detail: detail.to_string(),
+                });
+            }
+        };
     flag(
         "sandbox.enabled",
         previous.sandbox_enabled,
@@ -828,21 +829,22 @@ pub fn control_config_weakenings(
         "Nested-sandbox confinement was weakened",
     );
 
-    let mut count_move = |knob: &str, was: Option<usize>, now: Option<usize>, grew_is_weaker: bool, detail: &str| {
-        let (Some(was), Some(now)) = (was, now) else {
-            return;
+    let mut count_move =
+        |knob: &str, was: Option<usize>, now: Option<usize>, grew_is_weaker: bool, detail: &str| {
+            let (Some(was), Some(now)) = (was, now) else {
+                return;
+            };
+            let weaker = if grew_is_weaker { now > was } else { now < was };
+            if weaker {
+                out.push(ControlWeakening {
+                    agent_type: agent_type.clone(),
+                    knob: knob.to_string(),
+                    previous: was.to_string(),
+                    current: now.to_string(),
+                    detail: detail.to_string(),
+                });
+            }
         };
-        let weaker = if grew_is_weaker { now > was } else { now < was };
-        if weaker {
-            out.push(ControlWeakening {
-                agent_type: agent_type.clone(),
-                knob: knob.to_string(),
-                previous: was.to_string(),
-                current: now.to_string(),
-                detail: detail.to_string(),
-            });
-        }
-    };
     count_move(
         "permissions.deny",
         previous.deny_rule_count,
