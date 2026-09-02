@@ -180,6 +180,27 @@ fn verify_platform_signature(path: &str) -> (Option<bool>, Option<String>) {
     (signed, publisher)
 }
 
+/// Paths to ask the package manager about, in query order.
+///
+/// usrmerge: on Debian 12 / Ubuntu 21.04+ (and Fedora long before that)
+/// `/bin`, `/sbin` and `/lib` are symlinks into `/usr`, and the package
+/// database records ONLY the `/usr` form. `dpkg -S /bin/ls` therefore answers
+/// "not owned" for a coreutils binary, which graded every binary reached
+/// through a merged prefix as the relocated-impostor class -- a measured
+/// negative on exactly the paths most likely to be legitimate. Resolve the
+/// link and query both forms.
+#[cfg(target_os = "linux")]
+fn package_query_paths(path: &str) -> Vec<String> {
+    let mut paths = vec![path.to_string()];
+    if let Ok(resolved) = std::fs::canonicalize(path) {
+        let resolved = resolved.to_string_lossy().to_string();
+        if resolved != path {
+            paths.push(resolved);
+        }
+    }
+    paths
+}
+
 #[cfg(target_os = "linux")]
 fn verify_platform_signature(path: &str) -> (Option<bool>, Option<String>) {
     use std::process::Command;
@@ -189,39 +210,51 @@ fn verify_platform_signature(path: &str) -> (Option<bool>, Option<String>) {
     // /usr/local, which is deliberately non-canonical, so `make
     // install` artifacts never reach this check). dpkg first, rpm as
     // the fallback; a host with neither manager is unmeasured (`None`).
-    match Command::new("dpkg").args(["-S", path]).output() {
-        Ok(output) => {
-            if output.status.success() {
-                let text = String::from_utf8_lossy(&output.stdout);
-                let package = text
-                    .split(':')
-                    .next()
-                    .map(|name| name.trim().to_string())
-                    .filter(|name| !name.is_empty());
-                return (Some(true), package);
-            }
-            // dpkg exists and says "not owned": measured negative on
-            // dpkg systems -- unless rpm below claims it.
-        }
-        Err(_) => {
-            // No dpkg: fall through to rpm; if that is missing too,
-            // the verdict is unmeasured.
-            return match Command::new("rpm").args(["-qf", path]).output() {
-                Ok(output) if output.status.success() => {
-                    let package = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                    (Some(true), (!package.is_empty()).then_some(package))
+    let candidates = package_query_paths(path);
+
+    let mut dpkg_present = false;
+    for candidate in &candidates {
+        match Command::new("dpkg").args(["-S", candidate.as_str()]).output() {
+            Ok(output) => {
+                dpkg_present = true;
+                if output.status.success() {
+                    let text = String::from_utf8_lossy(&output.stdout);
+                    let package = text
+                        .split(':')
+                        .next()
+                        .map(|name| name.trim().to_string())
+                        .filter(|name| !name.is_empty());
+                    return (Some(true), package);
                 }
-                Ok(_) => (Some(false), None),
-                Err(_) => (None, None),
-            };
+                // dpkg exists and says "not owned" for this spelling of the
+                // path: try the next candidate, then rpm below.
+            }
+            // No dpkg on this host: the remaining candidates would fail the
+            // same way, so stop asking it.
+            Err(_) => break,
         }
     }
-    match Command::new("rpm").args(["-qf", path]).output() {
-        Ok(output) if output.status.success() => {
-            let package = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            (Some(true), (!package.is_empty()).then_some(package))
+
+    let mut rpm_present = false;
+    for candidate in &candidates {
+        match Command::new("rpm").args(["-qf", candidate.as_str()]).output() {
+            Ok(output) => {
+                rpm_present = true;
+                if output.status.success() {
+                    let package = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    return (Some(true), (!package.is_empty()).then_some(package));
+                }
+            }
+            Err(_) => break,
         }
-        _ => (Some(false), None),
+    }
+
+    // A managed host that disclaims ownership is a measured negative; a host
+    // with neither package manager asserts nothing.
+    if dpkg_present || rpm_present {
+        (Some(false), None)
+    } else {
+        (None, None)
     }
 }
 
@@ -287,6 +320,25 @@ mod tests {
         let attestation = attest_binary(copy.to_str().unwrap());
         assert!(!attestation.canonical_path);
         let _ = std::fs::remove_file(&copy);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn package_query_paths_include_the_usrmerge_resolution() {
+        // `/bin/ls` is the canonical usrmerge case: the package database
+        // records `/usr/bin/ls`, so querying only the literal path reports a
+        // coreutils binary as unowned.
+        let paths = package_query_paths("/bin/ls");
+        assert_eq!(paths.first().map(String::as_str), Some("/bin/ls"));
+        if std::path::Path::new("/bin").is_symlink() {
+            assert!(
+                paths.iter().any(|p| p == "/usr/bin/ls"),
+                "usrmerge host must also be queried as /usr/bin/ls: {paths:?}"
+            );
+        }
+        // A path that is already canonical yields exactly one candidate.
+        let single = package_query_paths("/usr/bin/ls");
+        assert_eq!(single.len(), 1);
     }
 
     #[cfg(target_os = "linux")]
