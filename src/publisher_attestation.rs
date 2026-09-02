@@ -114,10 +114,7 @@ pub fn attest_binary(path: &str) -> BinaryAttestation {
         if cache.len() >= CACHE_MAX_ENTRIES {
             cache.clear();
         }
-        cache.insert(
-            path.to_string(),
-            (mtime_secs, size, attestation.clone()),
-        );
+        cache.insert(path.to_string(), (mtime_secs, size, attestation.clone()));
     }
     attestation
 }
@@ -242,10 +239,14 @@ mod tests {
     #[test]
     fn canonical_path_rejects_writable_prefixes() {
         assert!(is_canonical_os_path("/usr/bin/security"));
-        assert!(is_canonical_os_path("/System/Library/CoreServices/sharingd"));
+        assert!(is_canonical_os_path(
+            "/System/Library/CoreServices/sharingd"
+        ));
         assert!(is_canonical_os_path("C:\\Windows\\System32\\svchost.exe"));
         assert!(!is_canonical_os_path("/usr/local/bin/anything"));
-        assert!(!is_canonical_os_path("/Applications/Foo.app/Contents/MacOS/foo"));
+        assert!(!is_canonical_os_path(
+            "/Applications/Foo.app/Contents/MacOS/foo"
+        ));
         assert!(!is_canonical_os_path("/opt/homebrew/bin/bash"));
         assert!(!is_canonical_os_path("/tmp/usr/bin/ls"));
     }

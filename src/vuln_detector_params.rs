@@ -2940,16 +2940,22 @@ pub fn publisher_attestation_enabled() -> bool {
 
 /// DNS/NTP tunnel gate (see the field docs).
 pub fn treat_high_volume_dns_ntp_as_non_routine() -> bool {
-    PARAMS_SNAPSHOT.load().treat_high_volume_dns_ntp_as_non_routine
+    PARAMS_SNAPSHOT
+        .load()
+        .treat_high_volume_dns_ntp_as_non_routine
 }
 
 pub fn dns_ntp_non_routine_min_outbound_bytes() -> u64 {
-    PARAMS_SNAPSHOT.load().dns_ntp_non_routine_min_outbound_bytes
+    PARAMS_SNAPSHOT
+        .load()
+        .dns_ntp_non_routine_min_outbound_bytes
 }
 
 /// Graded EvidenceFloor gate (see the field docs).
 pub fn evidence_floor_requires_graded_anomaly() -> bool {
-    PARAMS_SNAPSHOT.load().evidence_floor_requires_graded_anomaly
+    PARAMS_SNAPSHOT
+        .load()
+        .evidence_floor_requires_graded_anomaly
 }
 
 /// Ambient-baseline switch and tunables (see field docs).

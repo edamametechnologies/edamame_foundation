@@ -98,9 +98,9 @@ dependencies = [
 
 [[package]]
 name = "async-compression"
-version = "0.4.43"
+version = "0.4.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3976abdc8fe7d1133d43d304afd42abdf5bc3e1319d263d223bde07b5efc4be8"
+checksum = "515a1f282e33d55983c499d7e9e87082e81cbc32974825bf9032f928392d5844"
 dependencies = [
  "compression-codecs",
  "compression-core",
@@ -545,9 +545,9 @@ dependencies = [
 
 [[package]]
 name = "compression-codecs"
-version = "0.4.38"
+version = "0.4.39"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce2548391e9c1929c21bf6aa2680af86fe4c1b33e6cea9ac1cfeec0bd11218cf"
+checksum = "2fe67f2944eef52fc7b106b8c9450d243a88701a0c065f7f57235e76abaed7df"
 dependencies = [
  "compression-core",
  "flate2",
@@ -556,9 +556,9 @@ dependencies = [
 
 [[package]]
 name = "compression-core"
-version = "0.4.32"
+version = "0.4.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cc14f565cf027a105f7a44ccf9e5b424348421a1d8952a8fc9d499d313107789"
+checksum = "6e8ccc4ea9f6acc32d102c0f6d471d11d913ad15f20c04de743374861fa1d414"
 
 [[package]]
 name = "concurrent-queue"
@@ -926,7 +926,7 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 [[package]]
 name = "edamame_backend"
 version = "0.3.5"
-source = "git+https://github.com/edamametechnologies/edamame_backend?branch=main#cc810964d57a974fcfdf60089ec0e41476b88b68"
+source = "git+https://github.com/edamametechnologies/edamame_backend?branch=main#2c193fc26522209c3fc33bb25b8223bca1f5f16e"
 dependencies = [
  "anyhow",
  "blake3",
@@ -1199,7 +1199,7 @@ dependencies = [
 [[package]]
 name = "flodbadd"
 version = "1.8.4"
-source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#25e1a5e308f4f05105e909c4bcadffc5415e457a"
+source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#5f1531ba5d1c5f3f56c0ff99b869af2354092018"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -2149,9 +2149,9 @@ checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 
 [[package]]
 name = "libredox"
-version = "0.1.21"
+version = "0.1.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d7955dfc218a8afb29dfeffd540e3a6e96baeb94fe7138228dd7cc6937fbbf96"
+checksum = "8d8f1ea3f21fd3405dcaf6c9b5c1630af9afc422d9073ea39c5f6d6c772e08ed"
 dependencies = [
  "libc",
 ]
@@ -2280,9 +2280,9 @@ dependencies = [
 
 [[package]]
 name = "mio"
-version = "1.2.2"
+version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "30d65c71f1ce40ab09135ce117d742b9f8a19ff91a41a8b57ed50bc2de59c427"
+checksum = "4b18443e9c262bfe8fa82f51666e2642c53393f7e5c27b3e1aeab922cff5b9d8"
 dependencies = [
  "libc",
  "log",
@@ -3806,9 +3806,9 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "smallvec"
-version = "1.15.2"
+version = "1.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
+checksum = "b9be42f50aa861c555654aa3a37f52f4b1074bacf4e48fe0ef7fa584e80f1f0f"
 
 [[package]]
 name = "smol"
@@ -4057,7 +4057,7 @@ dependencies = [
 [[package]]
 name = "threatmodels_rs"
 version = "0.1.1"
-source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#b3919a6ee1d0b22eb1cf3d23f09afabc5f05b558"
+source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#7231916018b852b6b52b030a1331648364490109"
 dependencies = [
  "anyhow",
  "chrono",

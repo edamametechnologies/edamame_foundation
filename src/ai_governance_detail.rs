@@ -29,19 +29,19 @@ use crate::agent_visibility::{
     AgentHarness, AgentSandbox, AuthStrength, BlastRadiusAgent, ExposureScope, HostPrivilege,
     McpEndpoint, McpRiskEndpoint, VisibilityFinding, VisibilitySeverity,
 };
+#[cfg(test)]
+use edamame_backend::detail_backend::MAX_CONTEXT_TEXT_LEN;
 use edamame_backend::detail_backend::{
     AiAgentInventoryBackend, AiAmplifiersInventoryBackend, AiHarnessInventoryBackend,
     AiHostInventoryBackend, AiInventoryBackend, AiMcpServerInventoryBackend,
     AiSandboxInventoryBackend, CheckContextBackend, CheckContextKindBackend, CheckDetailBackend,
-    CoverageKindBackend, CoverageRowBackend, FailureCauseBackend, FailureSelectorBackend,
-    ContextDetailBackend, ContextFactBackend, FailureSelectorKindBackend,
+    ContextDetailBackend, ContextFactBackend, CoverageKindBackend, CoverageRowBackend,
+    FailureCauseBackend, FailureSelectorBackend, FailureSelectorKindBackend,
     MAX_CHECK_CONTEXT_ROWS, MAX_FAILURE_CAUSES, MAX_INVENTORY_AGENTS,
     MAX_INVENTORY_CRITICAL_PROCESSES_PER_AGENT, MAX_INVENTORY_HARNESSES,
     MAX_INVENTORY_MCP_SERVERS_PER_AGENT, MAX_INVENTORY_RULE_IDS_PER_SERVER,
     MAX_INVENTORY_SECRET_LABELS_PER_AGENT,
 };
-#[cfg(test)]
-use edamame_backend::detail_backend::MAX_CONTEXT_TEXT_LEN;
 use std::collections::{BTreeMap, BTreeSet};
 
 use FailureSelectorKindBackend as Kind;
@@ -650,10 +650,7 @@ pub fn detail_for_divergence(
 /// administrator decides "this agent may escalate port closures for review",
 /// and each new action of that class is then expected rather than a new
 /// exception to approve.
-pub fn detail_for_escalated(
-    actions: &[EscalatedActionSlice],
-    loop_running: bool,
-) -> CheckEvidence {
+pub fn detail_for_escalated(actions: &[EscalatedActionSlice], loop_running: bool) -> CheckEvidence {
     let mut builder = EvidenceBuilder::default();
 
     if !loop_running {
@@ -1335,7 +1332,10 @@ mod tests {
         let mut slice = attack_slice();
         slice.dismissed = true;
         let ev = detail_for_attack_findings(&[slice], true);
-        assert!(ev.causes.is_empty(), "a dismissed finding is not why the check fails");
+        assert!(
+            ev.causes.is_empty(),
+            "a dismissed finding is not why the check fails"
+        );
         let row = ev.context.iter().find(|c| c.key == "fk-1").expect("row");
         assert!(row.detail.as_ref().expect("detail").dismissed);
     }
@@ -1415,7 +1415,10 @@ mod tests {
         );
         // Two actions of one class collapse to one reviewable cause...
         assert_eq!(ev.causes.len(), 1);
-        assert_eq!(ev.causes[0].selectors[0].token(), "escalated_action:network_port");
+        assert_eq!(
+            ev.causes[0].selectors[0].token(),
+            "escalated_action:network_port"
+        );
         // ...but both remain individually visible as context.
         assert_eq!(ev.context.len(), 2);
     }
