@@ -169,6 +169,7 @@ pub fn collect(home: &Path, options: &CollectOptions) -> anyhow::Result<CollectR
                     economics_raw_text: String::new(),
                     economics_truncated: false,
                     economics: None,
+                    tool_error_details: Vec::new(),
                     // Populated below by attach_cursor_context_usage() on desktop.
                     context_tokens_used: None,
                     context_token_limit: None,

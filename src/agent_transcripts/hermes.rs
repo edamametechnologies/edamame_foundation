@@ -341,6 +341,7 @@ fn build_session(
         economics_raw_text: String::new(),
         economics_truncated: false,
         economics: None,
+        tool_error_details: Vec::new(),
         context_tokens_used: None,
         context_token_limit: None,
         context_usage_percent: None,

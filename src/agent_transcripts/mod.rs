@@ -212,6 +212,14 @@ pub struct CollectedRawSession {
     /// `economics_raw_text`.
     #[serde(default)]
     pub economics: Option<SessionEconomics>,
+    /// Tool-error details (bounded: 50 entries, 200-char messages) parsed
+    /// at collection time from the same usage-bearing text as `economics`,
+    /// so the failure-cluster rollups need no text either. Empty from a
+    /// helper older than the field (`economics` is `None` then, which is
+    /// the signal to parse the shipped texts instead). `#[serde(default)]`
+    /// for the same rolling helper/core compatibility reason.
+    #[serde(default)]
+    pub tool_error_details: Vec<ToolErrorDetail>,
 }
 
 /// Derive `derived_scope_any_lineage_paths` for an agent from its
@@ -699,6 +707,7 @@ pub(crate) fn finish_session(session: &mut CollectedRawSession) {
         &session.source_path,
         economics_text,
     ));
+    session.tool_error_details = parsing::parse_tool_error_details(economics_text);
 }
 
 /// Drop the transcript texts from a payload for a caller that asked for

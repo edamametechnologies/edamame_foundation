@@ -119,6 +119,10 @@ fn collect_to_json_ships_derived_data_without_the_texts_on_request() {
         session["economics"].is_object(),
         "economics must be precomputed on the collection side: {session}"
     );
+    assert!(
+        session["tool_error_details"].is_array(),
+        "tool error details must be precomputed on the collection side: {session}"
+    );
     assert!(session["derived_expected_traffic"]
         .as_array()
         .expect("traffic array")
