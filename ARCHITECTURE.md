@@ -60,7 +60,17 @@ src/
 │   │                              # install on desktop.
 │   ├── mod.rs                     # CollectOptions / CollectResult types,
 │   │                              # `collect`, `collect_to_json` dispatcher,
+│   │                              # `finish_session` (once-per-file post-pass:
+│   │                              # economics override text, tool / denylist
+│   │                              # events, parsed economics, tool errors)
 │   │                              # and shared filesystem helpers.
+│   │                              # `CollectOptions::include_raw_text = false`
+│   │                              # ships derived data only (economics /
+│   │                              # augmentation callers), keeping ~100 MB of
+│   │                              # transcript text off the helper boundary.
+│   ├── session_cache.rs           # Process-wide per-file session cache keyed
+│   │                              # by (path, mtime, len); holds the finished
+│   │                              # session, evicts oldest transcript first.
 │   ├── parsing.rs                 # Path / URL / port / tool / command
 │   │                              # extractors mirroring the Node-side
 │   │                              # session_prediction_adapter.mjs.
@@ -68,6 +78,7 @@ src/
 │   ├── claude_code.rs             # ~/.claude/projects walker.
 │   ├── claude_desktop.rs          # ~/.claude/projects + Cowork sessions root.
 │   ├── codex.rs                   # ~/.codex/sessions rollout JSONL walker.
+│   ├── hermes.rs                  # Hermes session walker.
 │   └── openclaw.rs                # Best-effort host-resident OpenClaw probe.
 ├── peer_ids.rs                    # Peer identity management
 │
