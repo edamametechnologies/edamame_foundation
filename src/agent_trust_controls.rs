@@ -1070,6 +1070,31 @@ pub struct TrustControlsScorecard {
 /// Live attribution: each control unions the inputs of the OWASP ids it
 /// references, deduping contributing findings by finding key so a finding
 /// tagged with two of a control's refs counts once for that control.
+/// One published control as `agent_framework_tags` needs it: id, title, the
+/// publisher's ISO framework + clause, and the OWASP GenAI ids whose findings
+/// evidence it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TrustControlCrosswalkRow {
+    pub id: &'static str,
+    pub title: &'static str,
+    pub framework: &'static str,
+    pub framework_mapping: &'static str,
+    pub owasp_refs: &'static [&'static str],
+}
+
+/// Every catalog row, in published order.
+pub(crate) fn trust_controls_catalog_rows() -> impl Iterator<Item = TrustControlCrosswalkRow> {
+    TRUST_CONTROLS_CATALOG
+        .iter()
+        .map(|entry| TrustControlCrosswalkRow {
+            id: entry.id,
+            title: entry.title,
+            framework: entry.framework,
+            framework_mapping: entry.framework_mapping,
+            owasp_refs: entry.owasp_refs,
+        })
+}
+
 pub fn build_trust_controls_scorecard(
     inputs: &HashMap<String, OwaspRowInput>,
     llm_available: bool,

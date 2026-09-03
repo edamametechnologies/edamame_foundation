@@ -72,6 +72,13 @@ const ATLAS_LLM_DEPENDENT_IDS: &[&str] = &[
 ];
 
 /// True when the technique's evidence path depends on the divergence engine.
+/// `(technique id, canonical name)` for every runtime-observable catalog row.
+/// Read by `agent_framework_tags`; techniques outside this scoped catalog get
+/// no tag, matching the scorecard's roll-up to catalog rows.
+pub(crate) fn atlas_catalog_rows() -> impl Iterator<Item = (&'static str, &'static str)> {
+    ATLAS_CATALOG.iter().map(|entry| (entry.id, entry.name))
+}
+
 pub fn is_llm_dependent(id: &str) -> bool {
     ATLAS_LLM_DEPENDENT_IDS.contains(&id)
 }

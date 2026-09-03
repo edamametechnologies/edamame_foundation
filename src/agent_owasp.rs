@@ -364,6 +364,16 @@ const OWASP_LLM_DEPENDENT_IDS: &[&str] = &["ASI01", "ASI10", "LLM01"];
 /// True when category `id`'s live assessment depends on the behavioral-divergence
 /// engine (and therefore on a configured LLM provider). See
 /// [`OWASP_LLM_DEPENDENT_IDS`].
+/// `(id, framework, title)` for every catalog row. Read by
+/// `agent_framework_tags` so threat-model tags and detail-bundle references
+/// carry the same titles this scorecard renders.
+pub(crate) fn owasp_catalog_rows(
+) -> impl Iterator<Item = (&'static str, OwaspFramework, &'static str)> {
+    OWASP_CATALOG
+        .iter()
+        .map(|(id, framework, title, _, _, _, _)| (*id, *framework, *title))
+}
+
 pub fn is_llm_dependent(id: &str) -> bool {
     OWASP_LLM_DEPENDENT_IDS.contains(&id)
 }

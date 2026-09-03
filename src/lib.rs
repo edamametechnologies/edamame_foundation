@@ -8,6 +8,7 @@ pub mod agent_atlas;
 pub mod agent_cli_insight;
 pub mod agent_dataflow;
 pub mod agent_drift;
+pub mod agent_framework_tags;
 pub mod agent_history;
 pub mod agent_memory;
 pub mod agent_owasp;

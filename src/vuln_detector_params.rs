@@ -2998,6 +2998,19 @@ pub fn check_description(check_name: &str, fallback: &str) -> String {
         .unwrap_or_else(|| fallback.to_string())
 }
 
+/// Every attack-pattern check's `reference` string from the params snapshot
+/// (`checks.<name>.reference`), in check-name order. Read by
+/// `agent_framework_tags` to crosswalk the umbrella `vulnerabilities` check.
+pub fn all_check_references() -> Vec<String> {
+    let snapshot = PARAMS_SNAPSHOT.load();
+    let mut names: Vec<&String> = snapshot.checks.keys().collect();
+    names.sort();
+    names
+        .into_iter()
+        .filter_map(|name| snapshot.checks.get(name).map(|m| m.reference.clone()))
+        .collect()
+}
+
 pub fn check_reference(check_name: &str, fallback: &str) -> String {
     PARAMS_SNAPSHOT
         .load()

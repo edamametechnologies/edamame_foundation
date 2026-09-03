@@ -64,9 +64,16 @@ impl CheckEvidence {
         self.causes.is_empty() && self.context.is_empty()
     }
 
-    /// Key this evidence by the failing check's metric name.
+    /// Key this evidence by the failing check's metric name, and stamp the
+    /// check-level framework references (OWASP GenAI / MITRE ATLAS / Agentic
+    /// Trust Controls / ISO tokens) derived from the same crosswalk the threat
+    /// model tags come from. Metadata only -- see `agent_framework_tags`.
     pub fn into_detail(self, check: impl Into<String>) -> CheckDetailBackend {
+        let check: String = check.into();
+        let references =
+            crate::agent_framework_tags::framework_reference_tokens_for_ai_check(&check);
         CheckDetailBackend::new(check, self.causes, self.context, self.truncated)
+            .with_references(references)
     }
 }
 
