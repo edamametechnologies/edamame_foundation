@@ -18,7 +18,7 @@ use std::time::{Duration, SystemTime};
 
 use serial_test::serial;
 
-use super::{collect, CollectOptions};
+use super::{collect, collect_to_json, CollectOptions};
 
 fn write(path: &Path, contents: &str) {
     if let Some(parent) = path.parent() {
@@ -50,6 +50,7 @@ fn options() -> CollectOptions {
         limit: 4,
         active_window_minutes: 60,
         project_hints: Vec::new(),
+        include_raw_text: true,
     }
 }
 
@@ -81,6 +82,58 @@ fn cursor_collects_txt_and_jsonl() {
         .derived_expected_traffic
         .iter()
         .any(|h| h == "crates.io:443"));
+}
+
+#[test]
+fn collect_to_json_ships_derived_data_without_the_texts_on_request() {
+    // The helper boundary carries only what the caller asked for: with
+    // `include_raw_text: false` the four transcript texts are empty in the
+    // JSON, while every derived field -- economics, expected traffic --
+    // is still there. With the default the texts ride along as before.
+    let temp = tempfile::tempdir().expect("tempdir");
+    let home = temp.path();
+    write(
+        &home.join(".cursor/projects/some-project/agent-transcripts/session-a.txt"),
+        "user:\nplease run cargo build\n\nassistant:\nRunning `cargo build` now.\n",
+    );
+    let derived_only = CollectOptions {
+        include_raw_text: false,
+        ..options()
+    };
+    let json = collect_to_json("cursor", home, &derived_only).expect("collect_to_json");
+    let value: serde_json::Value = serde_json::from_str(&json).expect("valid json");
+    let session = &value["payload"]["sessions"][0];
+    for field in [
+        "raw_text",
+        "user_text",
+        "assistant_text",
+        "economics_raw_text",
+    ] {
+        assert_eq!(
+            session[field].as_str(),
+            Some(""),
+            "{field} must be stripped when include_raw_text is false"
+        );
+    }
+    assert!(
+        session["economics"].is_object(),
+        "economics must be precomputed on the collection side: {session}"
+    );
+    assert!(session["derived_expected_traffic"]
+        .as_array()
+        .expect("traffic array")
+        .iter()
+        .any(|h| h == "crates.io:443"));
+    // Round-trips into the typed struct a core consumer deserializes.
+    let typed: super::CollectResult = serde_json::from_str(&json).expect("typed round-trip");
+    assert!(typed.payload.sessions[0].economics.is_some());
+
+    let json = collect_to_json("cursor", home, &options()).expect("collect_to_json");
+    let value: serde_json::Value = serde_json::from_str(&json).expect("valid json");
+    assert!(value["payload"]["sessions"][0]["user_text"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("cargo build"));
 }
 
 #[test]
@@ -130,6 +183,7 @@ fn active_window_excludes_stale_sessions_across_agents() {
         limit: 10,
         active_window_minutes: 1,
         project_hints: Vec::new(),
+        include_raw_text: true,
     };
 
     for agent in &["cursor", "claude_code", "openclaw"] {
@@ -1053,6 +1107,7 @@ fn live_probe_reports_session_counts_per_installed_agent() {
         limit: 10,
         active_window_minutes: window_mins,
         project_hints: Vec::new(),
+        include_raw_text: true,
     };
 
     println!(

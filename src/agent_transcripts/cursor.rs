@@ -168,6 +168,7 @@ pub fn collect(home: &Path, options: &CollectOptions) -> anyhow::Result<CollectR
                     modified_at,
                     economics_raw_text: String::new(),
                     economics_truncated: false,
+                    economics: None,
                     // Populated below by attach_cursor_context_usage() on desktop.
                     context_tokens_used: None,
                     context_token_limit: None,

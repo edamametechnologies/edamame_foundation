@@ -63,6 +63,23 @@ pub struct CollectOptions {
     /// or project the operator cares about. Empty means "no filter".
     #[serde(default)]
     pub project_hints: Vec<String>,
+    /// Ship the transcript texts (`raw_text`, `user_text`, `assistant_text`,
+    /// `economics_raw_text`) in the result. Callers that only need the derived
+    /// data -- economics, skill usage, tool / denylist events -- set this to
+    /// `false`: those texts are ~3x the transcript size per session and were
+    /// the bulk of the JSON crossing the helper boundary on every report call
+    /// (a 14-day window is ~100 MB of text for a busy operator). Every
+    /// derived field is computed at collection time, so nothing downstream of
+    /// a `false` caller ever needs the text. `#[serde(default)]` for the
+    /// rolling helper/core compatibility reason as the other fields: a newer
+    /// core talking to an older helper simply gets the texts it did not ask
+    /// for.
+    #[serde(default = "default_include_raw_text")]
+    pub include_raw_text: bool,
+}
+
+fn default_include_raw_text() -> bool {
+    true
 }
 
 fn default_limit() -> usize {
@@ -83,6 +100,7 @@ impl Default for CollectOptions {
             limit: default_limit(),
             active_window_minutes: default_active_window_minutes(),
             project_hints: Vec::new(),
+            include_raw_text: default_include_raw_text(),
         }
     }
 }
@@ -185,6 +203,15 @@ pub struct CollectedRawSession {
     /// helper/core compatibility reason as [`economics_raw_text`].
     #[serde(default)]
     pub denylist_bypass_events: Vec<parsing::DenylistBypassEvent>,
+    /// Session economics (tokens, cost, turns, tool calls) parsed at
+    /// collection time from the usage-bearing text, so a consumer can read
+    /// them without the text itself (see `CollectOptions::include_raw_text`).
+    /// `None` only from a helper older than the field; consumers then fall
+    /// back to parsing `economics_raw_text` / `raw_text`. `#[serde(default)]`
+    /// for the same rolling helper/core compatibility reason as
+    /// `economics_raw_text`.
+    #[serde(default)]
+    pub economics: Option<SessionEconomics>,
 }
 
 /// Derive `derived_scope_any_lineage_paths` for an agent from its
@@ -612,25 +639,17 @@ pub fn collect(
         },
     };
 
-    // Populate the economics override (usage-bearing text the divergence
-    // `raw_text` cannot carry) once, centrally, for every adapter. Runs on the
-    // collection side where transcript files are reachable; the result (text +
-    // truncation flag) rides to core in `CollectedRawSession::economics_raw_text`
-    // / `economics_truncated`.
+    // The per-session post-pass (economics override text, tool-call and
+    // denylist-bypass events, parsed economics) runs inside
+    // `session_cache::get_or_build_session` -> `finish_session`, so it is
+    // computed once per unchanged transcript file instead of on every call.
+    // Sessions an adapter builds outside the cache are finished here so the
+    // invariant "a collected session is fully derived" holds regardless of
+    // path.
     for session in &mut result.payload.sessions {
-        let resolved = economics_override_text(&session.source_path);
-        session.economics_raw_text = resolved.text;
-        session.economics_truncated = resolved.truncated;
-        // Decode typed tool-call events centrally so every agent whose
-        // transcript carries structured blocks gets ground-truth
-        // (name, target, timestamp) events without per-adapter work.
-        // Cursor `.txt` exports carry no typed blocks and yield none.
-        session.tool_events = parsing::extract_tool_call_events(&session.raw_text, 64);
-        // Decode denylist-bypass events centrally too: a permission-denied
-        // command re-spelled to get around the rule is ground truth in the
-        // transcript, so every agent gets it without per-adapter work.
-        session.denylist_bypass_events =
-            parsing::extract_denylist_bypass_events(&session.raw_text, 32);
+        if session.economics.is_none() {
+            finish_session(session);
+        }
     }
 
     // Having ingested a session is itself proof the store is present, so an
@@ -649,13 +668,60 @@ pub fn collect(
     Ok(result)
 }
 
+/// Derive everything a consumer may need from one freshly built session:
+/// the usage-bearing economics override text (a `.jsonl` sibling of a `.txt`
+/// export, or a head+tail read past the cap) with its truncation flag, typed
+/// tool-call events, denylist-bypass events, and the parsed session
+/// economics. Runs on the collection side where the transcript files are
+/// reachable, once per unchanged file (called from the session cache on a
+/// miss), so no per-call work depends on the window width.
+pub(crate) fn finish_session(session: &mut CollectedRawSession) {
+    let resolved = economics_override_text(&session.source_path);
+    session.economics_raw_text = resolved.text;
+    session.economics_truncated = resolved.truncated;
+    // Decode typed tool-call events centrally so every agent whose transcript
+    // carries structured blocks gets ground-truth (name, target, timestamp)
+    // events without per-adapter work. Cursor `.txt` exports yield none.
+    session.tool_events = parsing::extract_tool_call_events(&session.raw_text, 64);
+    // Decode denylist-bypass events centrally too: a permission-denied
+    // command re-spelled to get around the rule is ground truth in the
+    // transcript, so every agent gets it without per-adapter work.
+    session.denylist_bypass_events = parsing::extract_denylist_bypass_events(&session.raw_text, 32);
+    // Same text preference the economics build used to apply per call: the
+    // usage-bearing override when present, else raw_text.
+    let economics_text = if session.economics_raw_text.is_empty() {
+        session.raw_text.as_str()
+    } else {
+        session.economics_raw_text.as_str()
+    };
+    session.economics = Some(parsing::parse_session_economics(
+        &session.session_key,
+        &session.source_path,
+        economics_text,
+    ));
+}
+
+/// Drop the transcript texts from a payload for a caller that asked for
+/// derived data only (`CollectOptions::include_raw_text == false`).
+pub(crate) fn strip_raw_text(payload: &mut CollectedPayload) {
+    for session in &mut payload.sessions {
+        session.raw_text.clear();
+        session.user_text.clear();
+        session.assistant_text.clear();
+        session.economics_raw_text.clear();
+    }
+}
+
 /// JSON convenience wrapper used by the helper utility order.
 pub fn collect_to_json(
     agent_type: &str,
     home: &Path,
     options: &CollectOptions,
 ) -> anyhow::Result<String> {
-    let result = collect(agent_type, home, options)?;
+    let mut result = collect(agent_type, home, options)?;
+    if !options.include_raw_text {
+        strip_raw_text(&mut result.payload);
+    }
     serde_json::to_string(&result).map_err(|e| anyhow::anyhow!(e))
 }
 
