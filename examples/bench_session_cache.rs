@@ -35,6 +35,7 @@ fn main() {
         limit,
         active_window_minutes: window,
         project_hints: Vec::new(),
+        include_raw_text: true,
     };
 
     let cap = std::env::var("EDAMAME_TRANSCRIPT_SESSION_CACHE_BYTES")
