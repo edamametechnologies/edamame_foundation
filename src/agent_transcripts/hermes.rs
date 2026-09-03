@@ -346,6 +346,7 @@ fn build_session(
         // Hermes manifests do not expose a per-session working directory yet.
         workspace_hint: String::new(),
         tool_events: Vec::new(),
+        denylist_bypass_events: Vec::new(),
     }
 }
 

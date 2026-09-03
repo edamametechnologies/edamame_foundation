@@ -198,6 +198,7 @@ pub(crate) fn build_payload(
                     // so source_path already yields the workspace slug.
                     workspace_hint: String::new(),
                     tool_events: Vec::new(),
+                    denylist_bypass_events: Vec::new(),
                 }
             },
         ) {

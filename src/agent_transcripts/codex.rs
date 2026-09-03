@@ -316,6 +316,7 @@ pub(crate) fn build_payload(
                     // threads recover a real cwd in thread_row_to_session).
                     workspace_hint: codex_workspace_hint(None, &resolve_codex_home(home), home),
                     tool_events: Vec::new(),
+                    denylist_bypass_events: Vec::new(),
                 }
             },
         ) {
@@ -840,6 +841,7 @@ fn thread_row_to_session(
         // node for both Codex.app and the CLI store.
         workspace_hint: codex_workspace_hint(cwd.as_deref(), codex_home, Path::new(workspace_root)),
         tool_events: Vec::new(),
+        denylist_bypass_events: Vec::new(),
     })
 }
 

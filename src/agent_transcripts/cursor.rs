@@ -176,6 +176,7 @@ pub fn collect(home: &Path, options: &CollectOptions) -> anyhow::Result<CollectR
                     // slug derivation needs no separate cwd hint.
                     workspace_hint: String::new(),
                     tool_events: Vec::new(),
+                    denylist_bypass_events: Vec::new(),
                 }
             },
         ) {

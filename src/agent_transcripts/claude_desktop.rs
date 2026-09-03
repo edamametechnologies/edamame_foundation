@@ -174,6 +174,7 @@ pub fn collect(home: &Path, options: &CollectOptions) -> anyhow::Result<CollectR
                     context_usage_percent: None,
                     workspace_hint: workspace_hint.clone(),
                     tool_events: Vec::new(),
+                    denylist_bypass_events: Vec::new(),
                 }
             },
         ) {

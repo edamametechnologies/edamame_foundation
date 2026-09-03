@@ -281,6 +281,7 @@ mod tests {
             context_usage_percent: None,
             workspace_hint: String::new(),
             tool_events: Vec::new(),
+            denylist_bypass_events: Vec::new(),
         }
     }
 

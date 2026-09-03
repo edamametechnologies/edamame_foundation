@@ -178,6 +178,13 @@ pub struct CollectedRawSession {
     /// reason as [`economics_raw_text`].
     #[serde(default)]
     pub tool_events: Vec<parsing::ToolCallEvent>,
+    /// Denylist-bypass events: a permission-denied command that a later,
+    /// differently-spelled command bypassed (the Ona evasion class). Populated
+    /// centrally by `collect_agent_transcripts` from `raw_text` (adapters leave
+    /// it empty), same as [`tool_events`]. `#[serde(default)]` for the rolling
+    /// helper/core compatibility reason as [`economics_raw_text`].
+    #[serde(default)]
+    pub denylist_bypass_events: Vec<parsing::DenylistBypassEvent>,
 }
 
 /// Derive `derived_scope_any_lineage_paths` for an agent from its
@@ -619,6 +626,11 @@ pub fn collect(
         // (name, target, timestamp) events without per-adapter work.
         // Cursor `.txt` exports carry no typed blocks and yield none.
         session.tool_events = parsing::extract_tool_call_events(&session.raw_text, 64);
+        // Decode denylist-bypass events centrally too: a permission-denied
+        // command re-spelled to get around the rule is ground truth in the
+        // transcript, so every agent gets it without per-adapter work.
+        session.denylist_bypass_events =
+            parsing::extract_denylist_bypass_events(&session.raw_text, 32);
     }
 
     // Having ingested a session is itself proof the store is present, so an
