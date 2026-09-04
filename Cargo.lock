@@ -939,7 +939,7 @@ dependencies = [
 
 [[package]]
 name = "edamame_foundation"
-version = "1.8.4"
+version = "1.8.5"
 dependencies = [
  "anyhow",
  "arc-swap",
