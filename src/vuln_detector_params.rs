@@ -727,6 +727,14 @@ pub struct CveDetectionParamsJSON {
     /// Days after which a baseline entry that stopped recurring is
     /// pruned.
     pub ambient_baseline_ttl_days: u64,
+    /// R4 (A4): when true, the CRS band is authoritative for non-floor
+    /// findings -- the monotonic-down clamp and the legacy-LOW keep are
+    /// bypassed (EvidenceFloor findings keep legacy severity either
+    /// way, and the ARIS>=50 CRITICAL floor still applies). Flip via
+    /// CloudModel only after a clean shadow-disagreement observation
+    /// window (`crs_shadow_disagreements_total` flat across the fleet).
+    /// Default false.
+    pub crs_authoritative_enabled: bool,
     /// Symmetric-evidence shadow-scoring weight table. See
     /// `EvidenceWeightsJSON` for the per-field documentation. Required
     /// on the CloudModel wire: a publish that omits this field fails
@@ -885,6 +893,14 @@ pub struct CveDetectionParams {
     /// Days after which a baseline entry that stopped recurring is
     /// pruned.
     pub ambient_baseline_ttl_days: u64,
+    /// R4 (A4): when true, the CRS band is authoritative for non-floor
+    /// findings -- the monotonic-down clamp and the legacy-LOW keep are
+    /// bypassed (EvidenceFloor findings keep legacy severity either
+    /// way, and the ARIS>=50 CRITICAL floor still applies). Flip via
+    /// CloudModel only after a clean shadow-disagreement observation
+    /// window (`crs_shadow_disagreements_total` flat across the fleet).
+    /// Default false.
+    pub crs_authoritative_enabled: bool,
     pub evidence_weights: EvidenceWeightsJSON,
     pub secret_content_powershell_probe_read_verbs: Vec<String>,
     pub secret_content_powershell_dangerous_verbs: Vec<String>,
@@ -1542,6 +1558,7 @@ impl CveDetectionParams {
             ambient_baseline_enabled: json.ambient_baseline_enabled,
             ambient_baseline_min_recurrent_days: json.ambient_baseline_min_recurrent_days,
             ambient_baseline_ttl_days: json.ambient_baseline_ttl_days,
+            crs_authoritative_enabled: json.crs_authoritative_enabled,
             fim_temp_executable_patterns: json.fim_temp_executable_patterns.clone(),
             evidence_weights: json.evidence_weights.clone(),
             secret_content_powershell_probe_read_verbs: json
@@ -2969,6 +2986,11 @@ pub fn ambient_baseline_min_recurrent_days() -> u64 {
 
 pub fn ambient_baseline_ttl_days() -> u64 {
     PARAMS_SNAPSHOT.load().ambient_baseline_ttl_days
+}
+
+/// R4 (A4) clamp-flip switch (see the field docs).
+pub fn crs_authoritative_enabled() -> bool {
+    PARAMS_SNAPSHOT.load().crs_authoritative_enabled
 }
 
 /// Symmetric-evidence weight table accessor.
