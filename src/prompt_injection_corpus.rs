@@ -22,7 +22,11 @@
 //! (no paraphrase, encoding, or non-English sample is caught -- the literal
 //! catalog is exactly as evadable as COMPETITION.md G3 says), `must_not_fire`
 //! 10/10 silent, `should_not_fire` 3/5 silent (two user-directed sentences
-//! that reuse a marker phrase about an *instructions file* still fire). A semantic detector is "better" only
+//! that reuse a marker phrase about an *instructions file* still fire).
+//! The same day, obfuscation folding in `secret_content_scan` (zero-width
+//! strip, in-word leetspeak, printable base64 decode) lifted `should_fire`
+//! to 3/16 with the strict tiers and the false-positive count unchanged;
+//! the remaining misses are genuine paraphrases and non-English bait. A semantic detector is "better" only
 //! if it raises `should_fire` coverage without raising the
 //! `should_not_fire` false-positive count -- prompt text is high-volume and a
 //! naive matcher is a false-positive generator. `evaluate` is pure so a
@@ -214,7 +218,7 @@ pub fn evaluate_literal_scanner(files: &[CorpusFile]) -> CorpusReport {
 
 /// Coverage the literal scanner recorded on the `should_fire` tier when the
 /// corpus landed. A change that lowers it fails `corpus_should_fire_floor`.
-pub const SHOULD_FIRE_COVERAGE_FLOOR_PERCENT: u32 = 0;
+pub const SHOULD_FIRE_COVERAGE_FLOOR_PERCENT: u32 = 18;
 
 /// False positives the literal scanner recorded on the `should_not_fire`
 /// tier when the corpus landed. A change that raises it fails
