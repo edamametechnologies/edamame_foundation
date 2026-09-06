@@ -107,7 +107,11 @@ pub fn action_class_for_check(check: &str) -> Option<HarnessActionClass> {
     match check {
         "credential_harvest" => Some(CredentialAccess),
         "token_exfiltration" | "sensitive_material_egress" => Some(NetworkEgress),
-        "sandbox_exploitation" | "agent_denylist_bypass" => Some(ShellExec),
+        // An install-time lifecycle script is a tool execution the harness
+        // let through.
+        "sandbox_exploitation" | "agent_denylist_bypass" | "package_install_lifecycle" => {
+            Some(ShellExec)
+        }
         // Agent config / system binary writes and dropped skills are writes
         // outside the workspace an OS sandbox or action policy would bound.
         "file_system_tampering" | "agent_control_tampering" | "skill_supply_chain" => {
@@ -313,6 +317,7 @@ mod tests {
             "file_system_tampering",
             "agent_control_tampering",
             "skill_supply_chain",
+            "package_install_lifecycle",
         ] {
             assert!(action_class_for_check(check).is_some(), "{check} unmapped");
         }
