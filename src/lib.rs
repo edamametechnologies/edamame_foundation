@@ -46,6 +46,8 @@ pub mod helper_tx;
 pub mod history;
 pub mod llm_client;
 pub mod logger;
+/// INC-18: MCP tool-definition integrity (tool poisoning / rug-pull detection).
+pub mod mcp_tool_integrity;
 pub mod order;
 pub mod order_type;
 pub mod peer_ids;

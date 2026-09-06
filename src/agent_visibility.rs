@@ -209,6 +209,11 @@ pub(crate) const EMITTED_VISIBILITY_RULE_IDS: &[&str] = &[
     "mcp_remote_saas_endpoint",
     "mcp_lan_privileged_no_auth",
     "mcp_unclassified_transport",
+    // INC-18 content integrity (`mcp_tool_integrity`): tool poisoning /
+    // line jumping, and definition rug pulls. `mcp_` prefix so the OWASP /
+    // ATLAS mappings below cover them.
+    "mcp_tool_description_instructions",
+    "mcp_tool_definition_changed",
     "recursion_same_purpose_loop",
     "recursion_excessive_depth",
     "recursion_excessive_fanout",
@@ -2038,6 +2043,11 @@ pub struct VisibilityBundle {
     /// on the bundle because the sandboxed app cannot read `~/.claude` itself --
     /// this rides the one helper round-trip the bundle already pays for.
     pub host_installed_agents: Vec<String>,
+    /// INC-18: tool definitions the agents keep on disk, hashed per server
+    /// (`mcp_tool_integrity::collect_mcp_tool_digests`). The persisted
+    /// approval baseline and the rug-pull / poisoning findings derived from
+    /// these live in `edamame_core` (`CoreManager::refresh_structural_visibility`).
+    pub mcp_tool_digests: Vec<crate::mcp_tool_integrity::McpToolDigest>,
 }
 
 /// Build the full structural visibility bundle for a host in a single
@@ -2045,6 +2055,7 @@ pub struct VisibilityBundle {
 /// and the helper path (`utility_collect_agent_visibility`).
 pub fn build_visibility_bundle(home: &Path) -> VisibilityBundle {
     let now = chrono::Utc::now();
+    let mcp_tool_digests = crate::mcp_tool_integrity::collect_mcp_tool_digests(home);
     let endpoints = discover_mcp_endpoints(home);
     let findings = assess_mcp_risk(&endpoints);
     let component_inventories =
@@ -2072,6 +2083,7 @@ pub fn build_visibility_bundle(home: &Path) -> VisibilityBundle {
         agent_sandboxes,
         harnesses,
         host_installed_agents,
+        mcp_tool_digests,
     }
 }
 
