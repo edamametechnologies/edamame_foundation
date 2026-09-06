@@ -52,6 +52,7 @@ pub mod mcp_tool_integrity;
 pub mod order;
 pub mod order_type;
 pub mod peer_ids;
+pub mod prompt_injection_corpus;
 pub mod publisher_attestation;
 pub mod pwned;
 pub mod runner_cli;
