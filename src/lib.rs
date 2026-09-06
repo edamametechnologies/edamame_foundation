@@ -33,6 +33,8 @@ pub mod file_reveal;
     feature = "fim"
 ))]
 pub mod fim_support;
+/// INC-18: MCP tool-definition integrity (tool poisoning / rug-pull detection).
+pub mod harness_efficacy;
 pub mod health;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub mod helper_proto;
@@ -46,7 +48,6 @@ pub mod helper_tx;
 pub mod history;
 pub mod llm_client;
 pub mod logger;
-/// INC-18: MCP tool-definition integrity (tool poisoning / rug-pull detection).
 pub mod mcp_tool_integrity;
 pub mod order;
 pub mod order_type;
