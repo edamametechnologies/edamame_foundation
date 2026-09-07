@@ -117,6 +117,9 @@ pub fn action_class_for_check(check: &str) -> Option<HarnessActionClass> {
         "file_system_tampering" | "agent_control_tampering" | "skill_supply_chain" => {
             Some(FilesystemWrite)
         }
+        // Reading another process's memory / task port is the OS-confinement
+        // boundary an OS sandbox is meant to hold.
+        "process_memory_scrape" => Some(PrivilegeEscalation),
         _ => None,
     }
 }
@@ -318,6 +321,7 @@ mod tests {
             "agent_control_tampering",
             "skill_supply_chain",
             "package_install_lifecycle",
+            "process_memory_scrape",
         ] {
             assert!(action_class_for_check(check).is_some(), "{check} unmapped");
         }
