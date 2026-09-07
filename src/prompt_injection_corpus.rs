@@ -26,7 +26,10 @@
 //! The same day, obfuscation folding in `secret_content_scan` (zero-width
 //! strip, in-word leetspeak, printable base64 decode) lifted `should_fire`
 //! to 3/16 with the strict tiers and the false-positive count unchanged;
-//! the remaining misses are genuine paraphrases and non-English bait. A semantic detector is "better" only
+//! the remaining misses were genuine paraphrases and non-English bait. With
+//! the French / Spanish / German / Portuguese markers added to the catalog
+//! (threatmodels #590, same day) the tier reads 9/20 (45 %): every
+//! non-English sample now hits and the misses left are true paraphrases. A semantic detector is "better" only
 //! if it raises `should_fire` coverage without raising the
 //! `should_not_fire` false-positive count -- prompt text is high-volume and a
 //! naive matcher is a false-positive generator. `evaluate` is pure so a
@@ -218,7 +221,7 @@ pub fn evaluate_literal_scanner(files: &[CorpusFile]) -> CorpusReport {
 
 /// Coverage the literal scanner recorded on the `should_fire` tier when the
 /// corpus landed. A change that lowers it fails `corpus_should_fire_floor`.
-pub const SHOULD_FIRE_COVERAGE_FLOOR_PERCENT: u32 = 18;
+pub const SHOULD_FIRE_COVERAGE_FLOOR_PERCENT: u32 = 45;
 
 /// False positives the literal scanner recorded on the `should_not_fire`
 /// tier when the corpus landed. A change that raises it fails
