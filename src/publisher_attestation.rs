@@ -69,6 +69,11 @@ pub fn is_canonical_os_path(path: &str) -> bool {
         || normalized.starts_with("/sbin/")
         || normalized.starts_with("/library/apple/")
         || normalized.starts_with("c:/windows/")
+        // Defender's engine lives outside %SystemRoot% but is OS-shipped and
+        // opens every process with PROCESS_VM_READ; it must count as a
+        // canonical OS path for the BS-9 platform-requester rule.
+        || normalized.starts_with("c:/program files/windows defender/")
+        || normalized.starts_with("c:/programdata/microsoft/windows defender/")
 }
 
 /// Verify the code-signing provenance of `path`, with caching.
@@ -408,5 +413,24 @@ mod tests {
             "an unsigned file must be a measured negative, not unmeasured"
         );
         let _ = std::fs::remove_file(&junk);
+    }
+}
+
+#[cfg(test)]
+mod canonical_path_tests {
+    use super::is_canonical_os_path;
+
+    #[test]
+    fn defender_roots_are_canonical() {
+        assert!(is_canonical_os_path(r"C:\Windows\System32\csrss.exe"));
+        assert!(is_canonical_os_path(
+            r"C:\ProgramData\Microsoft\Windows Defender\Platform\4.18\MsMpEng.exe"
+        ));
+        assert!(is_canonical_os_path(
+            r"C:\Program Files\Windows Defender\MsMpEng.exe"
+        ));
+        assert!(!is_canonical_os_path(
+            r"C:\Users\me\AppData\Local\Temp\stealer.exe"
+        ));
     }
 }
