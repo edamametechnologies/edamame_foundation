@@ -43,6 +43,7 @@ pub const UTILITY_ORDER_NAMES: &[&str] = &[
     "helper_check",
     "helper_flags",
     "is_capturing",
+    "kill_process",
     "mdns_resolve",
     "merge_custom_whitelists",
     "read_instruction_content",

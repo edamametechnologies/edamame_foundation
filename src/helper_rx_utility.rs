@@ -801,6 +801,24 @@ pub async fn utility_read_instruction_content(tier: &str, args_json: &str) -> Re
 /// openable from the sandboxed app. `arg1` is the path (absolute or
 /// dash-encoded workspace slug); `arg2` is the target user home (may be
 /// empty -- helper then uses `real_home_dir()`).
+/// Operator hard kill (L2 thin delegate). `arg1` is `{"pid": u32,
+/// "expected_path": String}`; the verdict is
+/// `process_control::KillProcessOutcome` as JSON. No caller home is needed:
+/// the target is identified by pid + image path, and the guards
+/// (protected images, identity check) live in the shared primitive.
+pub async fn utility_kill_process(arg1: &str) -> Result<String> {
+    #[derive(serde::Deserialize)]
+    struct Args {
+        pid: u32,
+        expected_path: String,
+    }
+    let args: Args = serde_json::from_str(arg1)
+        .map_err(|e| anyhow::anyhow!("kill_process: invalid arguments: {}", e))?;
+    let outcome = crate::process_control::kill_process(args.pid, &args.expected_path);
+    serde_json::to_string(&outcome)
+        .map_err(|e| anyhow::anyhow!("Failed to serialize kill_process outcome: {}", e))
+}
+
 pub async fn utility_reveal_path_in_file_manager(path: &str, user_home: &str) -> Result<String> {
     if path.trim().is_empty() {
         return Err(anyhow::anyhow!("reveal_path_in_file_manager: empty path"));
