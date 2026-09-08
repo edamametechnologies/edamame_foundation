@@ -52,7 +52,10 @@ pub mod mcp_tool_integrity;
 pub mod order;
 pub mod order_type;
 pub mod peer_ids;
-pub mod prompt_injection_corpus;
+/// Test-only regression corpus for the literal prompt-injection scanner
+/// (INC-20's semantic detector is parked, 2026-09-08).
+#[cfg(test)]
+mod prompt_injection_corpus;
 pub mod publisher_attestation;
 pub mod pwned;
 pub mod runner_cli;

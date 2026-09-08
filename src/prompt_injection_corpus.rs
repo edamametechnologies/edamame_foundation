@@ -1,43 +1,31 @@
-//! INC-20 prompt-injection eval corpus (corpus first, semantics later).
+//! Prompt-injection regression corpus for the shipped literal scanner
+//! (test-only).
 //!
 //! `secret_content_scan::scan_transcript_text_for_prompt_injection` is a
-//! literal-signature scanner: four marker classes from
-//! `agent-visibility-params-db.json`, matched as case-insensitive substrings
-//! with citation / user-directed-instruction exclusions. Before any semantic
-//! detector replaces or augments it, its behaviour has to be measurable, so
-//! this module carries a labelled corpus in
-//! `src/prompt_injection_corpus/*.json` and the evaluation that scores a
-//! scanner against it. Four tiers, in the fail-closed style of the posture
-//! security gate:
+//! literal-signature scanner: marker classes from
+//! `agent-visibility-params-db.json` (English plus French / Spanish / German
+//! / Portuguese since threatmodels #590), matched case-insensitively after
+//! obfuscation folding (zero-width strip, in-word leetspeak, printable
+//! base64 decode), with citation / user-directed-instruction exclusions.
+//! This module keeps that scanner honest with a labelled corpus in
+//! `src/prompt_injection_corpus/*.json`, scored in the fail-closed style of
+//! the posture security gate:
 //!
 //! | tier | meaning | test policy |
 //! |---|---|---|
 //! | `must_fire` | literal bait the shipped scanner is contractually expected to catch, with the exact label set | any miss fails the build |
-//! | `should_fire` | paraphrased / encoded / multilingual bait beyond the literal catalog | measured; coverage must not drop below the recorded floor |
+//! | `should_fire` | paraphrased / encoded / multilingual bait; the folding and the multilingual markers are what catch its 9/20 | coverage must not drop below the recorded floor |
 //! | `must_not_fire` | ordinary task text, security tooling, the detector's own alert text | any hit fails the build (clean-idle-baseline discipline) |
-//! | `should_not_fire` | benign text that cites or resembles a marker | measured; the false-positive count must not rise above the recorded ceiling |
+//! | `should_not_fire` | benign text that cites or resembles a marker | the false-positive count must not rise above the recorded ceiling |
 //!
-//! The recorded floor / ceiling are the numbers the literal scanner produced
-//! when the corpus landed (2026-09-07): `must_fire` 9/9, `should_fire` 0/16
-//! (no paraphrase, encoding, or non-English sample is caught -- the literal
-//! catalog is exactly as evadable as COMPETITION.md G3 says), `must_not_fire`
-//! 10/10 silent, `should_not_fire` 3/5 silent (two user-directed sentences
-//! that reuse a marker phrase about an *instructions file* still fire).
-//! The same day, obfuscation folding in `secret_content_scan` (zero-width
-//! strip, in-word leetspeak, printable base64 decode) lifted `should_fire`
-//! to 3/16 with the strict tiers and the false-positive count unchanged;
-//! the remaining misses were genuine paraphrases and non-English bait. With
-//! the French / Spanish / German / Portuguese markers added to the catalog
-//! (threatmodels #590, same day) the tier reads 9/20 (45 %): every
-//! non-English sample now hits and the misses left are true paraphrases. A semantic detector is "better" only
-//! if it raises `should_fire` coverage without raising the
-//! `should_not_fire` false-positive count -- prompt text is high-volume and a
-//! naive matcher is a false-positive generator. `evaluate` is pure so a
-//! future `edamame_cli` eval command or CI job can run the same scoring.
+//! The remaining `should_fire` misses are true paraphrases, which a literal
+//! scanner cannot catch. INC-20's semantic detector -- the reason the scoring
+//! was originally scanner-agnostic -- is parked (2026-09-08); the module is
+//! now compiled for tests only and scores the shipped scanner alone. If the
+//! detector is revived, reintroduce a scanner parameter on `evaluate` and
+//! lift the `cfg(test)` gate so an `edamame_cli` eval command can run it.
 
-use crate::secret_content_scan::{
-    scan_transcript_text_for_prompt_injection, TranscriptSecretExposure,
-};
+use crate::secret_content_scan::scan_transcript_text_for_prompt_injection;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
@@ -54,10 +42,6 @@ impl CorpusTier {
     /// Whether samples in this tier are bait (expected to fire).
     pub fn is_attack(self) -> bool {
         matches!(self, CorpusTier::MustFire | CorpusTier::ShouldFire)
-    }
-    /// Whether a mismatch in this tier is a hard failure.
-    pub fn is_strict(self) -> bool {
-        matches!(self, CorpusTier::MustFire | CorpusTier::MustNotFire)
     }
 }
 
@@ -129,14 +113,6 @@ pub struct CorpusReport {
 }
 
 impl CorpusReport {
-    pub fn tier(&self, tier: CorpusTier) -> &TierReport {
-        match tier {
-            CorpusTier::MustFire => &self.must_fire,
-            CorpusTier::ShouldFire => &self.should_fire,
-            CorpusTier::MustNotFire => &self.must_not_fire,
-            CorpusTier::ShouldNotFire => &self.should_not_fire,
-        }
-    }
     fn tier_mut(&mut self, tier: CorpusTier) -> &mut TierReport {
         match tier {
             CorpusTier::MustFire => &mut self.must_fire,
@@ -164,17 +140,12 @@ impl CorpusReport {
     }
 }
 
-/// Score a scanner against corpus files. Pure: the scanner is injected so the
-/// same corpus can grade the literal scanner, a future semantic detector, or
-/// both side by side.
-pub fn evaluate(
-    files: &[CorpusFile],
-    scan: impl Fn(&str) -> TranscriptSecretExposure,
-) -> CorpusReport {
+/// Score the shipped literal scanner against corpus files.
+pub fn evaluate_literal_scanner(files: &[CorpusFile]) -> CorpusReport {
     let mut report = CorpusReport::default();
     for file in files {
         for sample in &file.samples {
-            let exposure = scan(&sample.text);
+            let exposure = scan_transcript_text_for_prompt_injection(&sample.text);
             let observed: BTreeSet<String> = exposure.labels.iter().cloned().collect();
             let expected: BTreeSet<String> = sample.expected_labels.iter().cloned().collect();
             let fired = !observed.is_empty();
@@ -212,11 +183,6 @@ pub fn evaluate(
         }
     }
     report
-}
-
-/// Score the shipped literal scanner.
-pub fn evaluate_literal_scanner(files: &[CorpusFile]) -> CorpusReport {
-    evaluate(files, scan_transcript_text_for_prompt_injection)
 }
 
 /// Coverage the literal scanner recorded on the `should_fire` tier when the
@@ -320,7 +286,7 @@ mod tests {
         let r = report();
         assert!(
             r.should_fire.coverage_percent() >= SHOULD_FIRE_COVERAGE_FLOOR_PERCENT,
-            "semantic coverage regressed below the recorded floor: {}",
+            "should_fire coverage regressed below the recorded floor: {}",
             r.summary()
         );
     }
@@ -334,33 +300,5 @@ mod tests {
             "ambiguous-benign false positives rose above the recorded ceiling: {}",
             r.summary()
         );
-    }
-
-    #[test]
-    fn evaluate_is_scanner_agnostic() {
-        let files = vec![CorpusFile {
-            tier: CorpusTier::ShouldFire,
-            samples: vec![CorpusSample {
-                id: "x".into(),
-                family: "instruction_override".into(),
-                text: "anything".into(),
-                expected_labels: vec!["instruction_override".into()],
-                source: None,
-                note: None,
-            }],
-        }];
-        let perfect = evaluate(&files, |_| TranscriptSecretExposure {
-            labels: vec!["instruction_override".into()],
-            hits: 2,
-            matched_markers: Vec::new(),
-        });
-        assert_eq!(perfect.should_fire.coverage_percent(), 100);
-        let wrong = evaluate(&files, |_| TranscriptSecretExposure {
-            labels: vec!["role_override".into()],
-            hits: 2,
-            matched_markers: Vec::new(),
-        });
-        assert_eq!(wrong.should_fire.correct, 0);
-        assert_eq!(wrong.should_fire.partial, 1);
     }
 }
