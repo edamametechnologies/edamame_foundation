@@ -155,34 +155,266 @@ fn verify_platform_signature(path: &str) -> (Option<bool>, Option<String>) {
 
 #[cfg(target_os = "windows")]
 fn verify_platform_signature(path: &str) -> (Option<bool>, Option<String>) {
-    use std::process::Command;
-    // Authenticode via PowerShell. `-LiteralPath` avoids wildcard
-    // expansion; the single-quoted path escapes embedded quotes by
-    // doubling (PowerShell rules). Output is `<Status>|<SignerSubject>`
-    // on one line. A failed spawn (PowerShell unavailable/blocked) is
-    // unmeasured (`None`); a signature whose Status is anything but
-    // `Valid` is a MEASURED negative.
-    let escaped = path.replace('\'', "''");
-    let script = format!(
-        "$s = Get-AuthenticodeSignature -LiteralPath '{escaped}'; \
-         Write-Output (\"{{0}}|{{1}}\" -f $s.Status, $s.SignerCertificate.Subject)"
-    );
-    let output = Command::new("powershell.exe")
-        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
-        .output();
-    let output = match output {
-        Ok(output) if output.status.success() => output,
-        _ => return (None, None),
+    windows_trust::verify(path)
+}
+
+/// In-process Authenticode + catalog verification through `WinVerifyTrust`
+/// (FLODBADD2 §1b.5). Replaces the PowerShell `Get-AuthenticodeSignature`
+/// spawn, which was slow (a process per binary), blockable (AMSI / execution
+/// policy), and blind to catalog-signed OS binaries -- `notepad.exe` and
+/// most of `System32` carry no embedded signature and reported `NotSigned`.
+///
+/// Verdict shape: `Some(true)` when the file's embedded signature or the
+/// catalog that lists its hash verifies; `Some(false)` when verification
+/// ran and failed or the file is in no catalog (a measured negative);
+/// `None` only when the API could not run at all.
+#[cfg(target_os = "windows")]
+mod windows_trust {
+    use std::ffi::c_void;
+    use windows::core::{GUID, PCWSTR};
+    use windows::Win32::Foundation::{
+        CloseHandle, GENERIC_READ, HANDLE, HWND, TRUST_E_NOSIGNATURE,
     };
-    let text = String::from_utf8_lossy(&output.stdout);
-    let line = text.trim();
-    let (status, subject) = line.split_once('|').unwrap_or((line, ""));
-    let signed = Some(status.trim().eq_ignore_ascii_case("Valid"));
-    let publisher = subject
-        .split(',')
-        .find_map(|part| part.trim().strip_prefix("CN=").map(str::to_string))
-        .filter(|cn| !cn.is_empty());
-    (signed, publisher)
+    use windows::Win32::Security::Cryptography::Catalog::{
+        CryptCATAdminAcquireContext2, CryptCATAdminEnumCatalogFromHash,
+        CryptCATAdminReleaseCatalogContext, CryptCATAdminReleaseContext,
+        CryptCATCatalogInfoFromContext, CATALOG_INFO,
+    };
+    use windows::Win32::Security::Cryptography::{
+        CertGetNameStringW, BCRYPT_SHA256_ALGORITHM, CERT_NAME_SIMPLE_DISPLAY_TYPE,
+    };
+    use windows::Win32::Security::WinTrust::{
+        WTHelperGetProvSignerFromChain, WTHelperProvDataFromStateData, WinVerifyTrust,
+        DRIVER_ACTION_VERIFY, WINTRUST_ACTION_GENERIC_VERIFY_V2, WINTRUST_CATALOG_INFO,
+        WINTRUST_DATA, WINTRUST_DATA_0, WINTRUST_FILE_INFO, WTD_CACHE_ONLY_URL_RETRIEVAL,
+        WTD_CHOICE_CATALOG, WTD_CHOICE_FILE, WTD_REVOKE_NONE, WTD_STATEACTION_CLOSE,
+        WTD_STATEACTION_VERIFY, WTD_UI_NONE,
+    };
+    use windows::Win32::Storage::FileSystem::{
+        CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, OPEN_EXISTING,
+    };
+
+    // Not projected by the `windows` crate, and absent from the MSVC
+    // `wintrust.lib` import library: the SHA-2 aware hash for catalog lookup
+    // (the plain variant is SHA-1 and misses every modern catalog). Bound
+    // the way the crate binds everything else -- straight to the DLL, under
+    // the name wintrust.dll actually exports (`CalcHash`, not the
+    // `CalculateHash` the header documents).
+    #[allow(non_snake_case)]
+    unsafe fn CryptCATAdminCalculateHashFromFileHandle2(
+        hcatadmin: isize,
+        hfile: HANDLE,
+        pcbhash: *mut u32,
+        pbhash: *mut u8,
+        dwflags: u32,
+    ) -> i32 {
+        windows::core::link!("wintrust.dll" "system" fn CryptCATAdminCalcHashFromFileHandle2(hcatadmin: isize, hfile: HANDLE, pcbhash: *mut u32, pbhash: *mut u8, dwflags: u32) -> i32);
+        CryptCATAdminCalcHashFromFileHandle2(hcatadmin, hfile, pcbhash, pbhash, dwflags)
+    }
+
+    fn wide(text: &str) -> Vec<u16> {
+        text.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    /// Outcome of one `WinVerifyTrust` call.
+    enum Verdict {
+        Valid(Option<String>),
+        NoSignature,
+        Invalid,
+    }
+
+    /// Run the verify action, pull the signer's simple display name from
+    /// the provider state, and close the state handle.
+    unsafe fn run_wvt(data: &mut WINTRUST_DATA) -> Verdict {
+        let mut action = WINTRUST_ACTION_GENERIC_VERIFY_V2;
+        data.dwStateAction = WTD_STATEACTION_VERIFY;
+        let status = WinVerifyTrust(
+            HWND::default(),
+            &mut action as *mut GUID,
+            data as *mut WINTRUST_DATA as *mut c_void,
+        );
+        let verdict = if status == 0 {
+            Verdict::Valid(signer_name(data.hWVTStateData))
+        } else if status == TRUST_E_NOSIGNATURE.0 {
+            Verdict::NoSignature
+        } else {
+            Verdict::Invalid
+        };
+        data.dwStateAction = WTD_STATEACTION_CLOSE;
+        let _ = WinVerifyTrust(
+            HWND::default(),
+            &mut action as *mut GUID,
+            data as *mut WINTRUST_DATA as *mut c_void,
+        );
+        verdict
+    }
+
+    unsafe fn signer_name(state: HANDLE) -> Option<String> {
+        let prov = WTHelperProvDataFromStateData(state);
+        if prov.is_null() {
+            return None;
+        }
+        let signer = WTHelperGetProvSignerFromChain(prov, 0, false, 0);
+        if signer.is_null() || (*signer).csCertChain == 0 || (*signer).pasCertChain.is_null() {
+            return None;
+        }
+        let cert = (*(*signer).pasCertChain).pCert;
+        if cert.is_null() {
+            return None;
+        }
+        let mut buf = vec![0u16; 256];
+        let len = CertGetNameStringW(cert, CERT_NAME_SIMPLE_DISPLAY_TYPE, 0, None, Some(&mut buf));
+        if len <= 1 {
+            return None;
+        }
+        Some(String::from_utf16_lossy(&buf[..(len as usize - 1)]))
+    }
+
+    fn base_data() -> WINTRUST_DATA {
+        let mut data = WINTRUST_DATA::default();
+        data.cbStruct = std::mem::size_of::<WINTRUST_DATA>() as u32;
+        data.dwUIChoice = WTD_UI_NONE;
+        data.fdwRevocationChecks = WTD_REVOKE_NONE;
+        data.dwProvFlags = WTD_CACHE_ONLY_URL_RETRIEVAL;
+        data
+    }
+
+    /// Embedded Authenticode signature.
+    unsafe fn verify_embedded(path_w: &[u16]) -> Verdict {
+        let mut file = WINTRUST_FILE_INFO::default();
+        file.cbStruct = std::mem::size_of::<WINTRUST_FILE_INFO>() as u32;
+        file.pcwszFilePath = PCWSTR(path_w.as_ptr());
+        let mut data = base_data();
+        data.dwUnionChoice = WTD_CHOICE_FILE;
+        data.Anonymous = WINTRUST_DATA_0 {
+            pFile: &mut file as *mut WINTRUST_FILE_INFO,
+        };
+        run_wvt(&mut data)
+    }
+
+    /// Catalog membership: hash the file, find a catalog listing that hash,
+    /// verify the catalog with the file as the member. `None` = the file
+    /// is in no catalog (or the catalog subsystem could not be used).
+    unsafe fn verify_catalog(path_w: &[u16]) -> Option<Verdict> {
+        let handle = CreateFileW(
+            PCWSTR(path_w.as_ptr()),
+            GENERIC_READ.0,
+            FILE_SHARE_READ,
+            None,
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,
+            None,
+        )
+        .ok()?;
+        let result = verify_catalog_with_handle(path_w, handle);
+        let _ = CloseHandle(handle);
+        result
+    }
+
+    unsafe fn verify_catalog_with_handle(path_w: &[u16], handle: HANDLE) -> Option<Verdict> {
+        let mut admin: isize = 0;
+        CryptCATAdminAcquireContext2(
+            &mut admin,
+            Some(&DRIVER_ACTION_VERIFY),
+            BCRYPT_SHA256_ALGORITHM,
+            None,
+            None,
+        )
+        .ok()?;
+        let result = (|| {
+            let mut len: u32 = 0;
+            // First call sizes the buffer.
+            let _ = CryptCATAdminCalculateHashFromFileHandle2(
+                admin,
+                handle,
+                &mut len,
+                std::ptr::null_mut(),
+                0,
+            );
+            if len == 0 || len > 128 {
+                return None;
+            }
+            let mut hash = vec![0u8; len as usize];
+            if CryptCATAdminCalculateHashFromFileHandle2(
+                admin,
+                handle,
+                &mut len,
+                hash.as_mut_ptr(),
+                0,
+            ) == 0
+            {
+                return None;
+            }
+            hash.truncate(len as usize);
+            let cat = CryptCATAdminEnumCatalogFromHash(admin, &hash, None, None);
+            if cat == 0 {
+                return Some(Verdict::NoSignature);
+            }
+            let mut info = CATALOG_INFO::default();
+            info.cbStruct = std::mem::size_of::<CATALOG_INFO>() as u32;
+            let verdict = if CryptCATCatalogInfoFromContext(cat, &mut info, 0).is_ok() {
+                let tag: String = hash.iter().map(|b| format!("{b:02X}")).collect();
+                let tag_w = wide(&tag);
+                let mut catalog = WINTRUST_CATALOG_INFO::default();
+                catalog.cbStruct = std::mem::size_of::<WINTRUST_CATALOG_INFO>() as u32;
+                catalog.pcwszCatalogFilePath = PCWSTR(info.wszCatalogFile.as_ptr());
+                catalog.pcwszMemberTag = PCWSTR(tag_w.as_ptr());
+                catalog.pcwszMemberFilePath = PCWSTR(path_w.as_ptr());
+                catalog.hMemberFile = handle;
+                catalog.pbCalculatedFileHash = hash.as_mut_ptr();
+                catalog.cbCalculatedFileHash = hash.len() as u32;
+                catalog.hCatAdmin = admin;
+                let mut data = base_data();
+                data.dwUnionChoice = WTD_CHOICE_CATALOG;
+                data.Anonymous = WINTRUST_DATA_0 {
+                    pCatalog: &mut catalog as *mut WINTRUST_CATALOG_INFO,
+                };
+                run_wvt(&mut data)
+            } else {
+                Verdict::Invalid
+            };
+            let _ = CryptCATAdminReleaseCatalogContext(admin, cat, 0);
+            Some(verdict)
+        })();
+        let _ = CryptCATAdminReleaseContext(admin, 0);
+        result
+    }
+
+    /// The platform publisher, mirroring macOS's `-R=anchor apple`: a valid
+    /// signature by anyone else is a measured `false` with the signer as
+    /// publisher (what `attest_binary` reports for a Developer ID binary).
+    fn is_platform_signer(signer: &str) -> bool {
+        signer.trim().starts_with("Microsoft ")
+    }
+
+    fn verdict_to_result(verdict: Verdict) -> (Option<bool>, Option<String>) {
+        match verdict {
+            Verdict::Valid(signer) => {
+                let platform = signer.as_deref().is_some_and(is_platform_signer);
+                (Some(platform), signer)
+            }
+            Verdict::Invalid | Verdict::NoSignature => (Some(false), None),
+        }
+    }
+
+    pub fn verify(path: &str) -> (Option<bool>, Option<String>) {
+        if path.trim().is_empty() {
+            return (None, None);
+        }
+        let path_w = wide(path);
+        // SAFETY: every pointer handed to the Win32 calls outlives the call
+        // (stack locals and `path_w`), state handles are closed by `run_wvt`,
+        // and the catalog / file handles are released on every path.
+        unsafe {
+            match verify_embedded(&path_w) {
+                Verdict::NoSignature => match verify_catalog(&path_w) {
+                    Some(verdict) => verdict_to_result(verdict),
+                    None => (None, None),
+                },
+                verdict => verdict_to_result(verdict),
+            }
+        }
+    }
 }
 
 /// Paths to ask the package manager about, in query order.
@@ -385,10 +617,28 @@ mod tests {
     fn windows_platform_binary_attests_signed_and_canonical() {
         let attestation = attest_binary("C:\\Windows\\System32\\notepad.exe");
         assert!(attestation.canonical_path, "notepad must be canonical");
-        // Catalog-signed OS files can report NotSigned via Authenticode
-        // alone on some builds; assert only that the check is MEASURED
-        // and that an unsigned scratch file is a measured negative.
-        assert!(attestation.platform_signed.is_some(), "must be measured");
+        // notepad carries no embedded signature: this is the catalog path,
+        // which the PowerShell Get-AuthenticodeSignature spawn reported as
+        // NotSigned. In-process WinVerifyTrust resolves the catalog.
+        assert_eq!(
+            attestation.platform_signed,
+            Some(true),
+            "catalog-signed OS binary must verify: {:?}",
+            attestation
+        );
+        assert!(
+            attestation
+                .publisher
+                .as_deref()
+                .is_some_and(|p| p.contains("Microsoft")),
+            "signer must be Microsoft: {:?}",
+            attestation.publisher
+        );
+        // An embedded Authenticode signature (kernel32 is catalog-signed too;
+        // PowerShell's own host binary carries an embedded one).
+        let embedded =
+            attest_binary("C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe");
+        assert_eq!(embedded.platform_signed, Some(true), "{:?}", embedded);
         let dir = std::env::temp_dir().join("edamame_pubattest_test");
         let _ = std::fs::create_dir_all(&dir);
         let junk = dir.join("junk_binary.ps1");
