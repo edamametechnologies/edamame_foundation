@@ -77,9 +77,8 @@ pub struct SecretContentFileMatch {
 
 /// See `SecretContentFileMatch::unicode_smuggling`.
 pub fn contains_unicode_smuggling(text: &str) -> bool {
-    text.chars().any(|c| {
-        matches!(c, '\u{E0000}'..='\u{E007F}') || matches!(c, '\u{202A}'..='\u{202E}')
-    })
+    text.chars()
+        .any(|c| matches!(c, '\u{E0000}'..='\u{E007F}') || matches!(c, '\u{202A}'..='\u{202E}'))
 }
 
 fn looks_like_edamame_powershell_probe_stub(basename: &str, normalized: &str) -> bool {
