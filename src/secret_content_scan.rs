@@ -64,6 +64,22 @@ pub struct SecretContentFileMatch {
     // predate EDAMAME generated PowerShell stub attestation.
     #[serde(default)]
     pub edamame_powershell_probe_stub: bool,
+    /// Unicode smuggling (TrapDoor, May 2026; AIDR T0002 sub-case): the
+    /// text carries Tag Block characters (U+E0000..U+E007F, "ASCII
+    /// smuggling") or explicit bidi overrides (U+202A..U+202E) -- invisible
+    /// to a human reader, fully readable by the model. Zero-width joiners
+    /// and bidi isolates are deliberately NOT counted (legitimate in
+    /// Thai / Lao / Khmer, emoji sequences and mixed-direction text).
+    /// Same backward-compatibility default as the field above.
+    #[serde(default)]
+    pub unicode_smuggling: bool,
+}
+
+/// See `SecretContentFileMatch::unicode_smuggling`.
+pub fn contains_unicode_smuggling(text: &str) -> bool {
+    text.chars().any(|c| {
+        matches!(c, '\u{E0000}'..='\u{E007F}') || matches!(c, '\u{202A}'..='\u{202E}')
+    })
 }
 
 fn looks_like_edamame_powershell_probe_stub(basename: &str, normalized: &str) -> bool {
@@ -188,6 +204,7 @@ pub fn inspect_secret_like_file(path: &str) -> Option<SecretContentFileMatch> {
         .any(|needle| normalized.contains(needle.as_str()));
     let edamame_powershell_probe_stub =
         looks_like_edamame_powershell_probe_stub(&basename, &normalized);
+    let unicode_smuggling = contains_unicode_smuggling(&normalized);
 
     Some(SecretContentFileMatch {
         path: path.to_string(),
@@ -196,6 +213,7 @@ pub fn inspect_secret_like_file(path: &str) -> Option<SecretContentFileMatch> {
         script_like,
         network_command_like,
         edamame_powershell_probe_stub,
+        unicode_smuggling,
     })
 }
 

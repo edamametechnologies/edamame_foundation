@@ -171,11 +171,6 @@
         "bundle_icon_relpath": "assets/plugin_openclaw.png"
       },
       "mcp": null,
-      "e2e": {
-        "repo_env_var": "OPENCLAW_REPO",
-        "intent_script": "tests/e2e_inject_intent.sh",
-        "intent_timeout_seconds": 600
-      },
       "registry_icon_relpath": "openclaw/icon.svg"
     }
   ]

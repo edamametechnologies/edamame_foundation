@@ -822,11 +822,9 @@ fn builtin_supported_agents() -> LoadedSupportedAgents {
                     bundle_icon_relpath: Some("assets/plugin_openclaw.png".to_string()),
                 },
                 mcp: None,
-                e2e: Some(AgentE2eConfig {
-                    repo_env_var: Some("OPENCLAW_REPO".to_string()),
-                    intent_script: Some("tests/e2e_inject_intent.sh".to_string()),
-                    intent_timeout_seconds: Some(600),
-                }),
+                // No intent-injection E2E: the OpenClaw plugin pushes no behavioral
+                // model (host-side transcript observer only).
+                e2e: None,
                 registry_icon_relpath: Some("openclaw/icon.svg".to_string()),
             },
         ],

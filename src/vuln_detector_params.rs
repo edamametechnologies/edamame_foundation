@@ -298,6 +298,27 @@ pub struct EvidenceWeightsJSON {
     /// consumes it, the detector did not). Default 0.0 (inert) until
     /// calibrated via CloudModel.
     pub grandparent_matches_suspicious_lineage: f32,
+    /// INC-19: own image or ANY kernel ancestor matches the
+    /// suspicious-lineage patterns (the polled lineage stops at the
+    /// grandparent). Default 0.0 (inert, shadow tag only) until the
+    /// `kernel_lineage_flip_enabled` switch and a calibrated weight land
+    /// together via CloudModel.
+    pub kernel_lineage_suspicious: f32,
+    // ---- B4 cross-engine bus signals (attack axis; 0.0 until calibrated) ----
+    /// The session's agent has a live Divergence verdict this tick.
+    pub divergence_verdict_active: f32,
+    /// A `correlation:not_expected` (explicit prohibition violated) row of
+    /// the live verdict names this session.
+    pub divergence_prohibition_on_session: f32,
+    /// The agent's transcripts carry a prompt-injection marker hit.
+    pub transcript_prompt_injection_hit: f32,
+    /// The agent's transcripts carry a secret-exposure hit.
+    pub transcript_secret_exposure_hit: f32,
+    /// The session's destination is a risk-flagged MCP endpoint.
+    pub mcp_endpoint_risk: f32,
+    /// A declared confinement (prohibited path / binary) was crossed by this
+    /// session's agent in the live verdict.
+    pub declared_confinement_mismatch: f32,
     pub is_system_binary_target: f32,
     /// Structural attack signal: the finding's target path is in a
     /// sensitive class (ssh private key, AWS credentials, .env file,
@@ -383,6 +404,13 @@ impl Default for EvidenceWeightsJSON {
                 default_ew_process_path_matches_suspicious_lineage(),
             grandparent_matches_suspicious_lineage:
                 default_ew_grandparent_matches_suspicious_lineage(),
+            kernel_lineage_suspicious: default_ew_kernel_lineage_suspicious(),
+            divergence_verdict_active: 0.0,
+            divergence_prohibition_on_session: 0.0,
+            transcript_prompt_injection_hit: 0.0,
+            transcript_secret_exposure_hit: 0.0,
+            mcp_endpoint_risk: 0.0,
+            declared_confinement_mismatch: 0.0,
             is_system_binary_target: default_ew_is_system_binary_target(),
             target_in_sensitive_path_class: default_ew_target_in_sensitive_path_class(),
             destination_is_routine_vendor_backend: default_ew_destination_is_routine_vendor_backend(
@@ -433,6 +461,9 @@ fn default_ew_session_whitelist_nonconforming() -> f32 {
     0.0
 }
 fn default_ew_grandparent_matches_suspicious_lineage() -> f32 {
+    0.0
+}
+fn default_ew_kernel_lineage_suspicious() -> f32 {
     0.0
 }
 fn default_ew_destination_org_matches_publisher() -> f32 {
@@ -689,6 +720,11 @@ pub struct CveDetectionParamsJSON {
     pub packaged_developer_tool_identity_tokens: Vec<String>,
     pub fim_hash_size_threshold: u64,
     pub fim_temp_executable_patterns: Vec<String>,
+    /// Basenames (lowercase, `.exe` stripped by the consumer) of processes
+    /// whose memory holds credentials or tokens (CI runner workers, key
+    /// agents, password managers, browsers, cloud CLIs). Consumed by
+    /// `process_memory_scrape`. Born complete on the wire.
+    pub process_memory_scrape_sensitive_target_basenames: Vec<String>,
     /// P3 publisher-attestation master switch. When `false` (the
     /// shipped default) the enrichment pipeline never invokes the
     /// platform signature check and the two publisher-attestation
@@ -735,6 +771,31 @@ pub struct CveDetectionParamsJSON {
     /// window (`crs_shadow_disagreements_total` flat across the fleet).
     /// Default false.
     pub crs_authoritative_enabled: bool,
+    /// INC-19 kernel-lineage flip: when true, `kernel_lineage_suspicious`
+    /// (own image or ANY kernel ancestor matches the suspicious-lineage
+    /// patterns) feeds `suspicious_lineage_present` -- and with it the
+    /// EvidenceFloor tier for `file_system_tampering` /
+    /// `sandbox_exploitation` -- instead of only stamping the
+    /// `kernel_lineage_shadow:suspicious` basis tag. Flip via CloudModel
+    /// after a flat `kernel_lineage_shadow_total` window on the fleet and a
+    /// green 4-platform gate. Default false.
+    pub kernel_lineage_flip_enabled: bool,
+    /// Deterministic divergence floor (DETECTIONGAPSPLAN-2026-09 Inc 5):
+    /// when true, an agent-attributed session with untrusted lineage
+    /// (`spawned_from_tmp` or kernel `lineage_suspicious`) that is
+    /// corroborated by undeclared external egress or sensitive-material
+    /// access emits `correlation:untrusted_lineage_floor` (HIGH) even when
+    /// the declared plan never mentioned the lineage dimension, and the
+    /// prediction-independent half of the correlation keeps running on
+    /// Stale / NoModel ticks. Shadow-tagged while false. Default false.
+    pub divergence_lineage_floor_enabled: bool,
+    /// B4 cross-engine evidence bus, injection direction: when true, active
+    /// attack-pattern findings on agent-bound sessions are injected into the
+    /// same tick's divergence correlation as `vulnerability:<check>`
+    /// evidence (non-clearable) and a session carrying both signals is
+    /// escalated to CRITICAL. The detector-side bus fields are populated
+    /// regardless (their weights are what gate their effect). Default false.
+    pub cross_engine_bus_enabled: bool,
     /// Symmetric-evidence shadow-scoring weight table. See
     /// `EvidenceWeightsJSON` for the per-field documentation. Required
     /// on the CloudModel wire: a publish that omits this field fails
@@ -855,6 +916,11 @@ pub struct CveDetectionParams {
     pub packaged_developer_tool_identity_tokens: Vec<String>,
     pub fim_hash_size_threshold: u64,
     pub fim_temp_executable_patterns: Vec<String>,
+    /// Basenames (lowercase, `.exe` stripped by the consumer) of processes
+    /// whose memory holds credentials or tokens (CI runner workers, key
+    /// agents, password managers, browsers, cloud CLIs). Consumed by
+    /// `process_memory_scrape`. Born complete on the wire.
+    pub process_memory_scrape_sensitive_target_basenames: Vec<String>,
     /// P3 publisher-attestation master switch. When `false` (the
     /// shipped default) the enrichment pipeline never invokes the
     /// platform signature check and the two publisher-attestation
@@ -901,6 +967,9 @@ pub struct CveDetectionParams {
     /// window (`crs_shadow_disagreements_total` flat across the fleet).
     /// Default false.
     pub crs_authoritative_enabled: bool,
+    pub kernel_lineage_flip_enabled: bool,
+    pub divergence_lineage_floor_enabled: bool,
+    pub cross_engine_bus_enabled: bool,
     pub evidence_weights: EvidenceWeightsJSON,
     pub secret_content_powershell_probe_read_verbs: Vec<String>,
     pub secret_content_powershell_dangerous_verbs: Vec<String>,
@@ -1559,6 +1628,15 @@ impl CveDetectionParams {
             ambient_baseline_min_recurrent_days: json.ambient_baseline_min_recurrent_days,
             ambient_baseline_ttl_days: json.ambient_baseline_ttl_days,
             crs_authoritative_enabled: json.crs_authoritative_enabled,
+            kernel_lineage_flip_enabled: json.kernel_lineage_flip_enabled,
+            divergence_lineage_floor_enabled: json.divergence_lineage_floor_enabled,
+            cross_engine_bus_enabled: json.cross_engine_bus_enabled,
+            process_memory_scrape_sensitive_target_basenames: json
+                .process_memory_scrape_sensitive_target_basenames
+                .iter()
+                .map(|b| b.trim().to_ascii_lowercase())
+                .filter(|b| !b.is_empty())
+                .collect(),
             fim_temp_executable_patterns: json.fim_temp_executable_patterns.clone(),
             evidence_weights: json.evidence_weights.clone(),
             secret_content_powershell_probe_read_verbs: json
@@ -2991,6 +3069,29 @@ pub fn ambient_baseline_ttl_days() -> u64 {
 /// R4 (A4) clamp-flip switch (see the field docs).
 pub fn crs_authoritative_enabled() -> bool {
     PARAMS_SNAPSHOT.load().crs_authoritative_enabled
+}
+
+/// INC-19 kernel-lineage flip switch (see the field docs).
+pub fn kernel_lineage_flip_enabled() -> bool {
+    PARAMS_SNAPSHOT.load().kernel_lineage_flip_enabled
+}
+
+/// Deterministic divergence lineage floor switch (see the field docs).
+pub fn divergence_lineage_floor_enabled() -> bool {
+    PARAMS_SNAPSHOT.load().divergence_lineage_floor_enabled
+}
+
+/// B4 cross-engine bus injection switch (see the field docs).
+pub fn cross_engine_bus_enabled() -> bool {
+    PARAMS_SNAPSHOT.load().cross_engine_bus_enabled
+}
+
+/// `process_memory_scrape` credential-holder basenames (lowercase).
+pub fn process_memory_scrape_sensitive_target_basenames() -> Vec<String> {
+    PARAMS_SNAPSHOT
+        .load()
+        .process_memory_scrape_sensitive_target_basenames
+        .clone()
 }
 
 /// Symmetric-evidence weight table accessor.
