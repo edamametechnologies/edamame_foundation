@@ -1861,13 +1861,12 @@ pub fn is_ci_runner_internal_process(name: &str) -> bool {
         .ci_runner_process_name_prefixes
         .iter()
         .any(|prefix| {
-            // Lower-case BOTH sides. The name was folded above but the prefix
-            // was compared verbatim, so a capitalised entry in the published
-            // list could never match: `Runner.Worker` and `Runner.Listener`
-            // have been inert since they were added, and only their
-            // lower-case twins in the same list kept the predicate working.
-            // A future capitalised entry would have failed silently.
-            !prefix.is_empty() && lower.starts_with(&prefix.to_ascii_lowercase())
+            // Only the name is folded: the prefixes are already lowercased by
+            // `CveDetectionParams::new_from_json`, so a capitalised entry in
+            // the published list (`Runner.Worker`, `Runner.Listener`) reaches
+            // here as its lower-case form. Same convention as the other
+            // params-backed lookups; the test below pins the invariant.
+            !prefix.is_empty() && lower.starts_with(prefix.as_str())
         })
 }
 
@@ -3728,20 +3727,20 @@ mod tests {
         assert!(is_ci_runner_internal_process("Runner.Listener"));
         assert!(is_ci_runner_internal_process("Runner.Listener.exe"));
         assert!(is_ci_runner_internal_process("Runner.Listener.exe9999"));
-        // Both sides are case-folded, so a capitalised entry in the published
-        // list matches as well as a lower-case one. Before 2026-09-11 only the
-        // name was folded, which made the list's `Runner.Worker` and
-        // `Runner.Listener` entries permanently inert -- the assertions above
-        // passed solely on their lower-case twins, and a future capitalised
-        // entry would have failed silently.
+        // The capitalised assertions above hold because the constructor folds
+        // the list, not because the predicate folds each prefix. Pin that:
+        // `new_from_json` is the only producer of `CveDetectionParams`, and if
+        // a refactor ever stops lowercasing there, every capitalised entry
+        // would go inert with no other signal. Data-independent -- it holds
+        // for any published list, however it is spelled.
         assert!(
-            crate::vuln_detector_params::PARAMS_SNAPSHOT
+            PARAMS_SNAPSHOT
                 .load()
                 .ci_runner_process_name_prefixes
                 .iter()
-                .any(|p| p.chars().any(|c| c.is_ascii_uppercase())),
-            "this regression guard is only meaningful while the published list \
-             still carries a capitalised prefix"
+                .all(|p| p.chars().all(|c| !c.is_ascii_uppercase())),
+            "CveDetectionParams::new_from_json must lowercase \
+             ci_runner_process_name_prefixes; the prefix comparison relies on it"
         );
         // Empty and unrelated names must not be matched.
         assert!(!is_ci_runner_internal_process(""));
