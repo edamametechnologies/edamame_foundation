@@ -1860,7 +1860,15 @@ pub fn is_ci_runner_internal_process(name: &str) -> bool {
         .load()
         .ci_runner_process_name_prefixes
         .iter()
-        .any(|prefix| !prefix.is_empty() && lower.starts_with(prefix))
+        .any(|prefix| {
+            // Lower-case BOTH sides. The name was folded above but the prefix
+            // was compared verbatim, so a capitalised entry in the published
+            // list could never match: `Runner.Worker` and `Runner.Listener`
+            // have been inert since they were added, and only their
+            // lower-case twins in the same list kept the predicate working.
+            // A future capitalised entry would have failed silently.
+            !prefix.is_empty() && lower.starts_with(&prefix.to_ascii_lowercase())
+        })
 }
 
 /// Returns true if `path` lies inside a directory owned by the GitHub
@@ -3720,6 +3728,21 @@ mod tests {
         assert!(is_ci_runner_internal_process("Runner.Listener"));
         assert!(is_ci_runner_internal_process("Runner.Listener.exe"));
         assert!(is_ci_runner_internal_process("Runner.Listener.exe9999"));
+        // Both sides are case-folded, so a capitalised entry in the published
+        // list matches as well as a lower-case one. Before 2026-09-11 only the
+        // name was folded, which made the list's `Runner.Worker` and
+        // `Runner.Listener` entries permanently inert -- the assertions above
+        // passed solely on their lower-case twins, and a future capitalised
+        // entry would have failed silently.
+        assert!(
+            crate::vuln_detector_params::PARAMS_SNAPSHOT
+                .load()
+                .ci_runner_process_name_prefixes
+                .iter()
+                .any(|p| p.chars().any(|c| c.is_ascii_uppercase())),
+            "this regression guard is only meaningful while the published list \
+             still carries a capitalised prefix"
+        );
         // Empty and unrelated names must not be matched.
         assert!(!is_ci_runner_internal_process(""));
         assert!(!is_ci_runner_internal_process("python3"));
