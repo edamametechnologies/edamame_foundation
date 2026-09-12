@@ -31,7 +31,7 @@ pub fn resolve_fim_watch_paths(
     }
 }
 
-fn default_watch_paths_for_home(home: &Path) -> Vec<PathBuf> {
+pub fn default_watch_paths_for_home(home: &Path) -> Vec<PathBuf> {
     // Delegate to the shared flodbadd helper so the helper path (called here
     // with an explicit home) and the standalone path (which calls
     // `fim::default_watch_paths(Desktop)`) converge on the same default set.

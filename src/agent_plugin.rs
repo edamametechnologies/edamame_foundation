@@ -82,10 +82,27 @@ pub fn real_home_dir() -> Option<PathBuf> {
             Some(path)
         }
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    {
+        // A root daemon started by systemd before anyone logged in has
+        // HOME=/root, so every home-relative surface -- FIM watch roots, the
+        // agent surface, the secret-content scan -- silently targets root's
+        // empty home. Prefer the console user's home when we are root and
+        // there is exactly one; otherwise this is unchanged. See
+        // `console_user` for the rule and why session type is not consulted.
+        crate::console_user::console_user_home().or_else(dirs::home_dir)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         dirs::home_dir()
     }
+}
+
+/// The home of the process's own account, with no console-user redirection.
+/// A root daemon that adopts the console user's home for its watch roots
+/// still wants root's own `~/.ssh` under watch; this is how it names it.
+pub fn process_home_dir() -> Option<PathBuf> {
+    dirs::home_dir()
 }
 
 /// Return the real (unsandboxed) Application Support directory on macOS,

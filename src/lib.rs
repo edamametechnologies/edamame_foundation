@@ -26,6 +26,7 @@ pub mod backend;
 pub mod cloud_model_fallback;
 pub mod consent_documents;
 pub mod consent_documents_db;
+pub mod console_user;
 pub mod cve_detection_params_db;
 pub mod file_reveal;
 #[cfg(all(

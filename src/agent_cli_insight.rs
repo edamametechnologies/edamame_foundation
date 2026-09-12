@@ -588,41 +588,9 @@ fn detect_user_display() -> Option<String> {
             return Some(d);
         }
     }
-    let list = std::process::Command::new("loginctl")
-        .args(["list-sessions", "--no-legend"])
-        .output()
-        .ok()?;
-    let text = String::from_utf8_lossy(&list.stdout);
-    for line in text.lines() {
-        let Some(sid) = line.split_whitespace().next() else {
-            continue;
-        };
-        let Ok(show) = std::process::Command::new("loginctl")
-            .args(["show-session", sid, "-p", "Display", "-p", "Active"])
-            .output()
-        else {
-            continue;
-        };
-        let s = String::from_utf8_lossy(&show.stdout);
-        let mut display = None;
-        let mut active = false;
-        for l in s.lines() {
-            if let Some(v) = l.strip_prefix("Display=") {
-                if !v.is_empty() {
-                    display = Some(v.to_string());
-                }
-            }
-            if l.trim() == "Active=yes" {
-                active = true;
-            }
-        }
-        if active {
-            if let Some(d) = display {
-                return Some(d);
-            }
-        }
-    }
-    None
+    // One logind walk, shared with `console_user::console_user_home` so the
+    // two "who is on this desktop" questions cannot drift apart.
+    crate::console_user::pick_console_display(&crate::console_user::enumerate_sessions())
 }
 
 /// Resolve the account name that owns `home` (the target of `sudo -u`).
