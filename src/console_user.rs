@@ -17,6 +17,15 @@
 //! it is needed. The fixture in the tests below is that host's real
 //! `loginctl` output, not an invented one.
 //!
+//! An explicit non-root `$HOME` wins before any of this runs: `sudo -E`, an
+//! operator exporting `HOME` on purpose, or a test harness planting a
+//! temporary home have all said where home is, and second-guessing them
+//! through `SUDO_USER` or logind sent the Linux transcript-observer tests to
+//! the runner's real home instead of the planted one (`edamame_core`
+//! tests.yml, red from 34696139049 to 34752753183). A root process whose
+//! `$HOME` is unset, empty or root's own home is the systemd case this module
+//! exists for.
+//!
 //! Fails closed. Not root, no logind, no active non-root user, or more than
 //! one distinct active user all yield `None`, and callers keep today's
 //! behaviour. Cached for 30 s behind an `ArcSwap` because
@@ -109,6 +118,19 @@ pub fn pick_console_display(sessions: &[LogindSession]) -> Option<String> {
         .map(|s| s.display.clone())
 }
 
+/// `true` when the process was handed a home of its own: `$HOME` set, non-empty
+/// and not root's home. The resolver then stays out of the way and
+/// `dirs::home_dir()` follows `$HOME` as it always did.
+pub fn explicit_home_wins(home_env: Option<&str>, root_home: &std::path::Path) -> bool {
+    match home_env.map(str::trim) {
+        None | Some("") => false,
+        Some(home) => {
+            let home = std::path::Path::new(home);
+            home != std::path::Path::new("/root") && home != root_home
+        }
+    }
+}
+
 #[cfg(target_os = "linux")]
 pub fn enumerate_sessions() -> Vec<LogindSession> {
     let Ok(list) = std::process::Command::new("loginctl")
@@ -170,6 +192,14 @@ mod resolve {
         // Only a privileged process has the problem this solves. A daemon
         // running as the user already has the right `$HOME`.
         if unsafe { libc::getuid() } != 0 {
+            return None;
+        }
+        // A home the process was explicitly given is the answer; see the
+        // module docs for why SUDO_USER and logind must not override it.
+        let root_home = users::get_user_by_uid(0)
+            .map(|u| u.home_dir().to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("/root"));
+        if explicit_home_wins(std::env::var("HOME").ok().as_deref(), &root_home) {
             return None;
         }
         // Interactive `sudo edamame_posture ...`: the invoking user is known
@@ -305,6 +335,33 @@ mod tests {
             sess("3", "bob", true, "user", ""),
         ];
         assert_eq!(pick_console_user(&sessions).as_deref(), Some("bob"));
+    }
+
+    /// The CI shape that stayed red for a day: `sudo -E cargo test` keeps the
+    /// runner's `$HOME`, the observer tests plant a temporary one on top, and
+    /// the resolver must follow it instead of SUDO_USER's passwd entry.
+    #[test]
+    fn explicit_non_root_home_wins_over_sudo_user_and_logind() {
+        let root = std::path::Path::new("/root");
+        assert!(explicit_home_wins(Some("/tmp/planted-home"), root));
+        assert!(explicit_home_wins(Some("/home/runner"), root));
+        assert!(
+            explicit_home_wins(Some("  /home/runner  "), root),
+            "whitespace is trimmed"
+        );
+    }
+
+    /// The systemd case the module exists for: HOME unset, empty or root's own.
+    #[test]
+    fn root_or_absent_home_does_not_block_resolution() {
+        let root = std::path::Path::new("/root");
+        assert!(!explicit_home_wins(None, root));
+        assert!(!explicit_home_wins(Some(""), root));
+        assert!(!explicit_home_wins(Some("/root"), root));
+        assert!(
+            !explicit_home_wins(Some("/var/root"), std::path::Path::new("/var/root")),
+            "a non-standard root home from passwd counts as root's home"
+        );
     }
 
     #[test]
