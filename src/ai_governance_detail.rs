@@ -440,6 +440,10 @@ pub struct AttackFindingSlice {
     pub dismissed: bool,
     /// Agent slug when the finding is attributable to one; empty otherwise.
     pub agent_type: String,
+    /// Report-level adjudication provenance, lowercased (`llm_confirmed`,
+    /// `history_reused`, `deterministic_only`, `llm_unavailable`); empty when
+    /// the report carried none. Every finding of a report shares it.
+    pub decision_source: String,
 }
 
 /// One divergence evidence row, flattened the same way.
@@ -455,6 +459,10 @@ pub struct DivergenceEvidenceSlice {
     /// Count only. The paths themselves are sensitive by definition.
     pub unexpected_sensitive_count: usize,
     pub dismissed: bool,
+    /// Verdict-level adjudication provenance, lowercased (`llm_confirmed`,
+    /// `history_reused`, `deterministic_only`, `llm_unavailable`); empty when
+    /// the verdict carried none.
+    pub decision_source: String,
 }
 
 /// One escalated advisor action awaiting operator review.
@@ -468,6 +476,31 @@ pub struct EscalatedActionSlice {
 }
 
 /// `credential_harvest` -> `Credential harvest`.
+/// `llm_confirmed` -> `LLM confirmed`; the token vocabulary is the detector's
+/// `VulnerabilityDecisionSource` / `DivergenceDecisionSource`, lowercased.
+fn humanize_adjudication(token: &str) -> String {
+    match token.trim().to_ascii_lowercase().as_str() {
+        "llm_confirmed" => "LLM confirmed".to_string(),
+        "history_reused" => "LLM verdict reused".to_string(),
+        "deterministic_only" => "Deterministic only".to_string(),
+        "llm_unavailable" => "LLM unavailable".to_string(),
+        other => humanize(other),
+    }
+}
+
+/// The adjudication row of a level-3 card, when the report carried provenance.
+/// A reviewer reads it before the summary: a model looked at the evidence, a
+/// recent verdict was reused, or the deterministic layer published alone.
+fn push_adjudication_fact(facts: &mut Vec<ContextFactBackend>, decision_source: &str) {
+    let token = decision_source.trim();
+    if !token.is_empty() {
+        facts.push(ContextFactBackend::new(
+            "Adjudication",
+            humanize_adjudication(token),
+        ));
+    }
+}
+
 fn humanize(raw: &str) -> String {
     let cleaned = raw.trim().replace(['_', '-'], " ");
     let mut chars = cleaned.chars();
@@ -552,6 +585,7 @@ pub fn detail_for_attack_findings(
         if !scope.is_empty() {
             facts.push(ContextFactBackend::new("Agent", scope.clone()));
         }
+        push_adjudication_fact(&mut facts, &finding.decision_source);
 
         let detail = ContextDetailBackend::new(
             format!("Attack pattern: {}", humanize(&family)),
@@ -569,7 +603,8 @@ pub fn detail_for_attack_findings(
         } else {
             vec![finding.reference.clone()]
         })
-        .with_dismissed(finding.dismissed);
+        .with_dismissed(finding.dismissed)
+        .with_adjudication(&finding.decision_source);
 
         builder.context_rich(CheckContextKindBackend::AttackFinding, &key, &scope, detail);
     }
@@ -626,6 +661,7 @@ pub fn detail_for_divergence(
                 row.unexpected_sensitive_count.to_string(),
             ));
         }
+        push_adjudication_fact(&mut facts, &row.decision_source);
 
         let detail = ContextDetailBackend::new(
             format!("Divergence: {}", humanize(&category)),
@@ -638,7 +674,8 @@ pub fn detail_for_divergence(
             scope.clone()
         })
         .with_facts(facts)
-        .with_dismissed(row.dismissed);
+        .with_dismissed(row.dismissed)
+        .with_adjudication(&row.decision_source);
 
         builder.context_rich(
             CheckContextKindBackend::DivergenceFinding,
@@ -1296,6 +1333,7 @@ mod tests {
             reference: "OWASP-LLM06".into(),
             dismissed: false,
             agent_type: "Cursor".into(),
+            decision_source: "llm_confirmed".into(),
         }
     }
 
@@ -1332,6 +1370,18 @@ mod tests {
         assert!(facts
             .iter()
             .any(|(l, v)| l == "Detection basis" && v.contains("temp_origin")));
+        assert!(facts.contains(&("Adjudication".into(), "LLM confirmed".into())));
+        assert_eq!(detail.adjudication, "llm_confirmed");
+    }
+
+    #[test]
+    fn attack_card_without_provenance_has_no_adjudication_row() {
+        let mut slice = attack_slice();
+        slice.decision_source.clear();
+        let ev = detail_for_attack_findings(&[slice], true);
+        let detail = ev.context[0].detail.as_ref().expect("detail");
+        assert!(detail.adjudication.is_empty());
+        assert!(detail.facts.iter().all(|f| f.label != "Adjudication"));
     }
 
     #[test]
@@ -1383,6 +1433,7 @@ mod tests {
                 trigger_reason: "unexplained_destination".into(),
                 unexpected_sensitive_count: 3,
                 dismissed: false,
+                decision_source: "deterministic_only".into(),
             }],
             true,
         );
@@ -1397,6 +1448,11 @@ mod tests {
             .facts
             .iter()
             .any(|f| f.label == "Unexpected sensitive files" && f.value == "3"));
+        assert_eq!(detail.adjudication, "deterministic_only");
+        assert!(detail
+            .facts
+            .iter()
+            .any(|f| f.label == "Adjudication" && f.value == "Deterministic only"));
     }
 
     #[test]
