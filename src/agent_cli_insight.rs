@@ -304,7 +304,7 @@ fn root_target_ids(home: Option<&Path>) -> Option<(u32, u32)> {
 /// Account name for `USER` / `LOGNAME` when dropping to the home owner.
 #[cfg(unix)]
 fn user_name_for_uid(uid: u32) -> Option<String> {
-    users::get_user_by_uid(uid).map(|u| u.name().to_string_lossy().to_string())
+    uzers::get_user_by_uid(uid).map(|u| u.name().to_string_lossy().to_string())
 }
 
 /// Format a failed insight CLI exit so operators see useful diagnostics.
@@ -598,7 +598,7 @@ fn detect_user_display() -> Option<String> {
 fn user_name_from_home(home: &Path) -> Option<String> {
     use std::os::unix::fs::MetadataExt;
     let uid = std::fs::metadata(home).ok()?.uid();
-    users::get_user_by_uid(uid).map(|u| u.name().to_string_lossy().to_string())
+    uzers::get_user_by_uid(uid).map(|u| u.name().to_string_lossy().to_string())
 }
 
 #[cfg(target_os = "windows")]

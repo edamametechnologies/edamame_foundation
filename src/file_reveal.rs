@@ -242,7 +242,7 @@ fn root_target_uid(home: Option<&Path>) -> Option<u32> {
 fn user_name_from_home(home: &Path) -> Option<String> {
     use std::os::unix::fs::MetadataExt;
     let uid = std::fs::metadata(home).ok()?.uid();
-    users::get_user_by_uid(uid).map(|u| u.name().to_string_lossy().to_string())
+    uzers::get_user_by_uid(uid).map(|u| u.name().to_string_lossy().to_string())
 }
 
 #[cfg(test)]

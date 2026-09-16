@@ -176,7 +176,7 @@ mod resolve {
     // `User::home_dir` is a trait method, not inherent. This module only
     // compiles on Linux, so the macOS cross-target sweep cannot see a missing
     // import here; the Lima VM check is what caught it.
-    use users::os::unix::UserExt;
+    use uzers::os::unix::UserExt;
 
     const CACHE_TTL: Duration = Duration::from_secs(30);
 
@@ -185,7 +185,7 @@ mod resolve {
     }
 
     fn home_of(name: &str) -> Option<PathBuf> {
-        users::get_user_by_name(name).map(|u| u.home_dir().to_path_buf())
+        uzers::get_user_by_name(name).map(|u| u.home_dir().to_path_buf())
     }
 
     fn resolve_uncached() -> Option<PathBuf> {
@@ -196,7 +196,7 @@ mod resolve {
         }
         // A home the process was explicitly given is the answer; see the
         // module docs for why SUDO_USER and logind must not override it.
-        let root_home = users::get_user_by_uid(0)
+        let root_home = uzers::get_user_by_uid(0)
             .map(|u| u.home_dir().to_path_buf())
             .unwrap_or_else(|| PathBuf::from("/root"));
         if explicit_home_wins(std::env::var("HOME").ok().as_deref(), &root_home) {
