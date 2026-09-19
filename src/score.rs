@@ -11,6 +11,10 @@ use threatmodels_rs::*;
 use tracing::{trace, warn};
 
 // Score
+/// The tag every AI Agent Posture threat carries (`agent_framework_tags`
+/// keeps it out of the framework crosswalk). Drives the `Score::ai` overlay.
+pub const AI_POSTURE_TAG: &str = "AI Agent Posture";
+
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Score {
@@ -19,6 +23,13 @@ pub struct Score {
     pub system_services: i32,
     pub applications: i32,
     pub credentials: i32,
+    /// AI security axis (2.0.0): the share of `AI Agent Posture`-tagged
+    /// threats that are inactive. An overlay over the five scored dimensions
+    /// -- those threats keep their `dimension` and count once in `overall`
+    /// -- because retagging them would make every released client, which
+    /// refreshes the threat model live, skip them as an unknown dimension.
+    /// `-1` when the model carries no such threat.
+    pub ai: i32,
     pub overall: i32,
     pub stars: f64,
     #[serde_as(as = "Vec<(_, _)>")]
@@ -38,6 +49,7 @@ impl Score {
             system_services: 0,
             applications: 0,
             credentials: 0,
+            ai: -1,
             overall: 0,
             stars: 0.0,
             compliance: HashMap::new(),
@@ -61,9 +73,18 @@ impl Score {
         dim.insert("system integrity", (0, 0));
         dim.insert("credentials", (0, 0));
         dim.insert("applications", (0, 0));
+        // The AI axis is an overlay keyed on the posture tag, not a dimension
+        // of the overall score (see `Score::ai`).
+        let (mut ai_current, mut ai_max) = (0, 0);
 
         // Compute score
         for m in &self.metrics.metrics {
+            if m.metric.tags.iter().any(|tag| tag == AI_POSTURE_TAG) {
+                ai_max += m.metric.severity;
+                if matches!(m.status, ThreatStatus::Inactive) {
+                    ai_current += m.metric.severity;
+                }
+            }
             trace!(
                 "Computing score for metric: {:?} - dimension {:?} - status {:?}",
                 m.metric.name,
@@ -148,6 +169,14 @@ impl Score {
             // Tell the UX to ignore this dimension
             trace!("Applications dimension is ignored");
             self.applications = -1;
+        }
+
+        if ai_max > 0 {
+            self.ai = 100 * ai_current / ai_max;
+        } else {
+            // Tell the UX to ignore this axis
+            trace!("AI axis is ignored");
+            self.ai = -1;
         }
 
         if overall_max > 0 {
@@ -363,6 +392,47 @@ mod tests {
         assert_eq!(score.applications, -1);
         assert_eq!(score.overall, 0);
         assert_eq!(score.stars, 0.0);
+    }
+
+    #[tokio::test]
+    async fn test_ai_axis_overlays_posture_tagged_threats_without_touching_overall() {
+        let mut score = Score::new();
+        let mut metrics = ThreatMetrics::new();
+
+        // An AI posture threat keeps its scored dimension (applications) and
+        // counts once in `overall`; the AI axis reads it a second time.
+        let mut agent = ThreatMetric::new();
+        agent.metric.dimension = "applications".to_string();
+        agent.metric.severity = 4;
+        agent.metric.tags = vec![AI_POSTURE_TAG.to_string()];
+        agent.status = ThreatStatus::Active;
+        metrics.metrics.push(agent);
+
+        let mut ordinary = ThreatMetric::new();
+        ordinary.metric.dimension = "applications".to_string();
+        ordinary.metric.severity = 4;
+        ordinary.metric.tags = vec!["CIS Benchmark Level 1,Something".to_string()];
+        ordinary.status = ThreatStatus::Inactive;
+        metrics.metrics.push(ordinary);
+
+        score.metrics = metrics;
+        score.compute_score().await;
+
+        assert_eq!(score.applications, 50, "both threats score applications");
+        assert_eq!(score.overall, 50, "the AI threat counts once");
+        assert_eq!(score.ai, 0, "the AI axis sees only the posture-tagged threat");
+
+        // No posture-tagged threat at all: the axis is hidden, not zero.
+        let mut score = Score::new();
+        let mut metrics = ThreatMetrics::new();
+        let mut only_ordinary = ThreatMetric::new();
+        only_ordinary.metric.dimension = "network".to_string();
+        only_ordinary.metric.severity = 1;
+        only_ordinary.status = ThreatStatus::Inactive;
+        metrics.metrics.push(only_ordinary);
+        score.metrics = metrics;
+        score.compute_score().await;
+        assert_eq!(score.ai, -1);
     }
 
     #[tokio::test]
