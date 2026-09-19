@@ -420,7 +420,10 @@ mod tests {
 
         assert_eq!(score.applications, 50, "both threats score applications");
         assert_eq!(score.overall, 50, "the AI threat counts once");
-        assert_eq!(score.ai, 0, "the AI axis sees only the posture-tagged threat");
+        assert_eq!(
+            score.ai, 0,
+            "the AI axis sees only the posture-tagged threat"
+        );
 
         // No posture-tagged threat at all: the axis is hidden, not zero.
         let mut score = Score::new();
