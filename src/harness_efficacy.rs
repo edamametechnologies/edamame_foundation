@@ -292,6 +292,7 @@ mod tests {
             slug: slug.to_string(),
             display_name: slug.to_uppercase(),
             detected,
+            homepage: String::new(),
             evidence: if detected {
                 vec![format!("~/.{slug}")]
             } else {

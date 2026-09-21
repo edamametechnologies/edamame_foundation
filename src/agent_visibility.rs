@@ -1265,6 +1265,9 @@ pub struct AgentHarness {
     pub display_name: String,
     /// Whether the product's footprint was found on this host for this user.
     pub detected: bool,
+    /// The product's public homepage, so the UI can send an operator who has
+    /// no harness to the place where one is installed from.
+    pub homepage: String,
     /// The on-disk markers / binaries that matched (display paths / names),
     /// for the UI and threat evidence. Empty when `detected` is false.
     pub evidence: Vec<String>,
@@ -1280,7 +1283,7 @@ pub struct AgentHarness {
 }
 
 /// Known agent harnesses with a detectable, cross-platform per-user footprint.
-/// Each row is `(slug, display_name, extra_markers, binaries)`:
+/// Each row is `(slug, display_name, homepage, extra_markers, binaries)`:
 /// - `slug` also drives the standard per-user config locations checked
 ///   automatically: `~/.{slug}`, `~/.config/{slug}`, (macOS)
 ///   `~/Library/Application Support/{slug}`, and (Windows)
@@ -1294,25 +1297,49 @@ pub struct AgentHarness {
 /// row. Cloud-only control planes with no local footprint (a pure SaaS
 /// dashboard) are intentionally out of scope: there is nothing on the host to
 /// detect, so claiming detection would be dishonest.
-const KNOWN_AGENT_HARNESSES: &[(&str, &str, &[&str], &[&str])] = &[
+const KNOWN_AGENT_HARNESSES: &[(&str, &str, &str, &[&str], &[&str])] = &[
     // AgentField (agentfield.ai): open-source agent control plane / harness.
     // The `af` CLI scaffolds projects; `app.harness(...)` dispatches governed
     // multi-turn coding tasks to Claude Code / Codex / Gemini CLI / OpenCode
     // with budgets, turn caps, tool allow-lists, W3C-DID identity, and audit
     // trails.
-    ("agentfield", "AgentField", &[".af"], &["agentfield", "af"]),
+    (
+        "agentfield",
+        "AgentField",
+        "https://agentfield.ai",
+        &[".af"],
+        &["agentfield", "af"],
+    ),
     // Rippletide (rippletide.com): decision-runtime / policy-enforcement layer
     // that validates every proposed agent action against business rules before
     // it executes (local SDK + CLI footprint).
-    ("rippletide", "Rippletide", &[], &["rippletide"]),
+    (
+        "rippletide",
+        "Rippletide",
+        "https://rippletide.com",
+        &[],
+        &["rippletide"],
+    ),
     // nono (Apache-2.0): least-privilege OS sandbox for coding agents and
     // delegated tools. Preferred local prevention layer after the EDAMAME
     // tool-call firewall was retired in 1.7.0.
-    ("nono", "nono", &[".nono"], &["nono"]),
+    (
+        "nono",
+        "nono",
+        "https://github.com/always-further/nono",
+        &[".nono"],
+        &["nono"],
+    ),
     // Anthropic Sandbox Runtime (srt, Apache-2.0): OS-level filesystem and
     // network restrictions (sandbox-exec / Bubblewrap / Windows primitives).
     // Beta research preview; detected via the `srt` CLI when installed.
-    ("srt", "Anthropic Sandbox Runtime", &[".srt"], &["srt"]),
+    (
+        "srt",
+        "Anthropic Sandbox Runtime",
+        "https://github.com/anthropic-experimental/sandbox-runtime",
+        &[".srt"],
+        &["srt"],
+    ),
 ];
 
 /// Stable slugs for every known harness row (detected or not). Used by AI
@@ -1503,7 +1530,7 @@ pub fn detect_agent_harnesses(home: &Path) -> Vec<AgentHarness> {
 fn detect_agent_harnesses_with(home: &Path, path_dirs: &[PathBuf]) -> Vec<AgentHarness> {
     let mut out: Vec<AgentHarness> = KNOWN_AGENT_HARNESSES
         .iter()
-        .map(|(slug, display, extra, binaries)| {
+        .map(|(slug, display, homepage, extra, binaries)| {
             let mut evidence: Vec<String> = Vec::new();
 
             // Standard per-user config locations for this slug.
@@ -1550,6 +1577,7 @@ fn detect_agent_harnesses_with(home: &Path, path_dirs: &[PathBuf]) -> Vec<AgentH
                 slug: (*slug).to_string(),
                 display_name: (*display).to_string(),
                 detected: !evidence.is_empty(),
+                homepage: (*homepage).to_string(),
                 evidence,
                 identity,
             }
@@ -6876,6 +6904,7 @@ bob ALL=(ALL) NOPASSWD: ALL
             slug: slug.to_string(),
             display_name: slug.to_string(),
             detected,
+            homepage: format!("https://{slug}.example"),
             evidence: if detected {
                 vec![format!("~/.config/{slug}")]
             } else {

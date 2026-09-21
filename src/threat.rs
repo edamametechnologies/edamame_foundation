@@ -174,6 +174,10 @@ pub enum ThreatUnknownReason {
     ElevationUnavailable,
     /// The cloud threat model asks for a check this binary does not implement.
     CheckUnsupported,
+    /// The check exists but is not configured on this host (an operator-supplied
+    /// input such as `EDAMAME_BUSINESS_RULES_CMD` is absent), so it has no
+    /// result. Not a failure of the device and not an active threat.
+    NotConfigured,
     /// Anything else -- the case that still deserves a Sentry error.
     Other,
 }
