@@ -1365,6 +1365,12 @@ const HARNESS_HOME_BIN_DIRS: &[&str] = &[
     ".npm-global/bin",
     ".bun/bin",
     ".deno/bin",
+    // Node version managers and package managers whose global installs land
+    // under $HOME (nvm is scanned separately: its bin dir is per version).
+    ".volta/bin",
+    ".yarn/bin",
+    "Library/pnpm",
+    ".local/share/pnpm",
     // Windows-native per-user bin locations: npm's global prefix is
     // %APPDATA%\npm (the shims sit directly there, no `bin` subdir); winget /
     // Store execution aliases live under %LOCALAPPDATA%\Microsoft\WindowsApps.
@@ -1389,6 +1395,53 @@ fn harness_path_dirs() -> Vec<PathBuf> {
         .unwrap_or_default()
 }
 
+/// System-wide package-manager bin directories, searched regardless of the
+/// process `$PATH`. The helper runs as root/SYSTEM with a minimal PATH (launchd
+/// gives `/usr/bin:/bin:/usr/sbin:/sbin`), so a harness CLI installed the
+/// usual way on a developer machine was invisible to it: `npm install -g`
+/// with Homebrew's node, or `brew install`, puts the binary in
+/// `/opt/homebrew/bin` (Apple Silicon) or `/usr/local/bin` (Intel), outside
+/// both `$HOME` and that PATH (2026-09-22: Rippletide installed through npm
+/// on a Mac read as "no harness").
+///
+/// Platform matrix: macOS adds Homebrew's two prefixes; Linux adds
+/// `/usr/local/bin` (npm/pip global default prefix), Linuxbrew and snap;
+/// Windows adds nothing, because npm's global shims live in `%APPDATA%\npm`
+/// (already a home bin dir) and machine-wide installers put their own
+/// directory on the machine PATH that SYSTEM inherits.
+fn harness_system_bin_dirs() -> Vec<PathBuf> {
+    let dirs: &[&str] = if cfg!(target_os = "macos") {
+        &["/opt/homebrew/bin", "/usr/local/bin"]
+    } else if cfg!(target_os = "linux") {
+        &[
+            "/usr/local/bin",
+            "/home/linuxbrew/.linuxbrew/bin",
+            "/snap/bin",
+        ]
+    } else {
+        &[]
+    };
+    dirs.iter().map(PathBuf::from).collect()
+}
+
+/// nvm keeps one `bin` directory per installed Node version
+/// (`~/.nvm/versions/node/<v>/bin`), which is where `npm install -g` puts CLIs
+/// for nvm users. Every installed version is searched, newest name first.
+fn harness_nvm_bin_dirs(home: &Path) -> Vec<PathBuf> {
+    let root = home.join(".nvm").join("versions").join("node");
+    let Ok(entries) = std::fs::read_dir(&root) else {
+        return Vec::new();
+    };
+    let mut dirs: Vec<PathBuf> = entries
+        .filter_map(|e| e.ok())
+        .map(|e| e.path().join("bin"))
+        .filter(|p| p.is_dir())
+        .collect();
+    dirs.sort();
+    dirs.reverse();
+    dirs
+}
+
 /// Candidate executable file names for `bin` on this OS (Windows adds the common
 /// executable extensions).
 fn harness_binary_names(bin: &str) -> Vec<String> {
@@ -1408,8 +1461,11 @@ fn harness_binary_names(bin: &str) -> Vec<String> {
 /// Returns a display string for the first match (for evidence).
 fn find_harness_binary(home: &Path, path_dirs: &[PathBuf], bin: &str) -> Option<String> {
     let names = harness_binary_names(bin);
-    for rel in HARNESS_HOME_BIN_DIRS {
-        let dir = home.join(rel);
+    let home_dirs = HARNESS_HOME_BIN_DIRS
+        .iter()
+        .map(|rel| home.join(rel))
+        .chain(harness_nvm_bin_dirs(home));
+    for dir in home_dirs {
         for name in &names {
             let candidate = dir.join(name);
             if candidate.is_file() {
@@ -1417,10 +1473,13 @@ fn find_harness_binary(home: &Path, path_dirs: &[PathBuf], bin: &str) -> Option<
             }
         }
     }
+    // PATH and the system package-manager dirs: the evidence names the file
+    // found (rendered `~/...` when under $HOME), so an operator can see where.
     for dir in path_dirs {
         for name in &names {
-            if dir.join(name).is_file() {
-                return Some(format!("{bin} (on PATH)"));
+            let candidate = dir.join(name);
+            if candidate.is_file() {
+                return Some(harness_display_path(home, &candidate));
             }
         }
     }
@@ -1522,11 +1581,18 @@ fn is_plausible_identity(s: &str) -> bool {
 /// target user's home so a root-side scan still resolves the user's footprint).
 /// Returns one entry per known harness (detected or not), sorted by slug.
 pub fn detect_agent_harnesses(home: &Path) -> Vec<AgentHarness> {
-    detect_agent_harnesses_with(home, &harness_path_dirs())
+    let mut dirs = harness_path_dirs();
+    for dir in harness_system_bin_dirs() {
+        if !dirs.contains(&dir) {
+            dirs.push(dir);
+        }
+    }
+    detect_agent_harnesses_with(home, &dirs)
 }
 
-/// `detect_agent_harnesses` with an explicit `$PATH` directory list so unit
-/// tests are deterministic regardless of the host's real `$PATH`.
+/// `detect_agent_harnesses` with an explicit directory list (`$PATH` plus the
+/// system package-manager dirs in production) so unit tests are deterministic
+/// regardless of the host's real `$PATH` and installs.
 fn detect_agent_harnesses_with(home: &Path, path_dirs: &[PathBuf]) -> Vec<AgentHarness> {
     let mut out: Vec<AgentHarness> = KNOWN_AGENT_HARNESSES
         .iter()
@@ -6995,7 +7061,76 @@ bob ALL=(ALL) NOPASSWD: ALL
         let harnesses = detect_agent_harnesses_with(tmp.path(), &[path_dir]);
         let af = harnesses.iter().find(|h| h.slug == "agentfield").unwrap();
         assert!(af.detected);
-        assert!(af.evidence.iter().any(|e| e.contains("on PATH")));
+        // The evidence names the file found, rendered relative to $HOME.
+        assert!(
+            af.evidence
+                .iter()
+                .any(|e| e.contains("opt-bin") && e.contains("agentfield")),
+            "evidence should name the binary's location: {:?}",
+            af.evidence
+        );
+    }
+
+    #[test]
+    fn detect_agent_harnesses_finds_a_system_prefix_binary_outside_home() {
+        // The helper-as-root case: a CLI in a package-manager prefix such as
+        // /opt/homebrew/bin, outside $HOME and outside the daemon's minimal
+        // PATH. Production passes those prefixes in the directory list.
+        let home = tempfile::TempDir::new().unwrap();
+        let prefix = tempfile::TempDir::new().unwrap();
+        let bin_name = if cfg!(target_os = "windows") {
+            "rippletide.exe"
+        } else {
+            "rippletide"
+        };
+        std::fs::write(prefix.path().join(bin_name), b"#!/bin/sh\n").unwrap();
+        let harnesses = detect_agent_harnesses_with(home.path(), &[prefix.path().to_path_buf()]);
+        let rt = harnesses.iter().find(|h| h.slug == "rippletide").unwrap();
+        assert!(
+            rt.detected,
+            "rippletide in a system prefix should be detected"
+        );
+        assert!(
+            rt.evidence.iter().any(|e| e.contains("rippletide")),
+            "{:?}",
+            rt.evidence
+        );
+    }
+
+    #[test]
+    fn detect_agent_harnesses_finds_an_nvm_global_install() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let bin_dir = tmp
+            .path()
+            .join(".nvm")
+            .join("versions")
+            .join("node")
+            .join("v22.11.0")
+            .join("bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        let bin_name = if cfg!(target_os = "windows") {
+            "rippletide.exe"
+        } else {
+            "rippletide"
+        };
+        std::fs::write(bin_dir.join(bin_name), b"#!/bin/sh\n").unwrap();
+        let harnesses = detect_agent_harnesses_with(tmp.path(), &[]);
+        let rt = harnesses.iter().find(|h| h.slug == "rippletide").unwrap();
+        assert!(rt.detected, "an nvm global install should be detected");
+        assert!(rt.evidence.iter().any(|e| e.starts_with("~/.nvm/")));
+    }
+
+    #[test]
+    fn harness_system_bin_dirs_cover_the_platform_package_managers() {
+        let dirs = harness_system_bin_dirs();
+        if cfg!(target_os = "macos") {
+            assert!(dirs.contains(&PathBuf::from("/opt/homebrew/bin")));
+            assert!(dirs.contains(&PathBuf::from("/usr/local/bin")));
+        } else if cfg!(target_os = "linux") {
+            assert!(dirs.contains(&PathBuf::from("/usr/local/bin")));
+        } else {
+            assert!(dirs.is_empty());
+        }
     }
 
     #[test]
