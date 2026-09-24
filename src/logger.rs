@@ -94,7 +94,9 @@ lazy_static! {
     // over the input instead of iterating and recompiling per-keyword.
     static ref SANITIZE_REGEX: Regex = {
         // Keep this list in sync with the one used in `handle_log`.
-        let keywords = [
+        // Exact keys: masked only as whole words (`finding_key`, `session_id`
+        // and the like stay readable for debugging).
+        let exact_keywords = [
             "id",
             "uuid",
             "pin",
@@ -104,16 +106,26 @@ lazy_static! {
             "Device ID",
             "device_id",
             "code",
+            "authorization",
+            "bearer",
         ];
-        // Join the escaped keywords with `|` to build the alternation part of the regex.
-        let joined = keywords
+        // Secret names that also count with a prefix: `api_key`,
+        // `edamame_api_key`, `mcp_psk`, `oauth_refresh_token`, `bot_token`,
+        // `client_secret`, `edamame_pin`, ...
+        let secret_suffixes = [
+            "api_?key", "psk", "secret", "token", "credential", "credentials",
+            "password", "passwd", "pin", "private_key",
+        ];
+        let exact = exact_keywords
             .iter()
             .map(|k| regex::escape(k))
             .collect::<Vec<_>>()
             .join("|");
+        let suffixes = secret_suffixes.join("|");
+        // Keys and values may be JSON-escaped (`\"pin\":\"123456\"`) when a
+        // JSON string is logged through Debug.
         let pattern = format!(
-            r#"(?P<key>"?(?:\b(?:{})\b)"?\s*[:=]?\s*)("(?P<val1>[^"]+)"|(?P<val2>\b[^\s",}}]+))"#,
-            joined
+            r#"(?P<key>\\?"?\b(?:(?:[A-Za-z0-9]+_)*(?:{suffixes})|{exact})\b\\?"?\s*[:=]?\s*)(\\?"(?P<val1>[^"\\]+)\\?"|(?P<val2>\b[^\s",}}\\]+))"#
         );
         Regex::new(&pattern).expect("Failed to compile sanitization regex")
     };
@@ -271,9 +283,18 @@ fn sanitize_keywords(input: &str, _keywords: &[&str]) -> String {
             let val1 = caps.name("val1").map_or("", |m| m.as_str());
             let val2 = caps.name("val2").map_or("", |m| m.as_str());
             let val = if !val1.is_empty() { val1 } else { val2 };
-            let quotes = if !val1.is_empty() { "\"" } else { "" };
+            // Keep the value's own quoting (plain or JSON-escaped).
+            let whole = caps.get(0).map_or("", |m| m.as_str());
+            let value_part = &whole[key.len()..];
+            let (open, close) = if val1.is_empty() {
+                ("", "")
+            } else if value_part.starts_with("\\\"") {
+                ("\\\"", "\\\"")
+            } else {
+                ("\"", "\"")
+            };
 
-            format!("{}{}{}{}", key, quotes, "*".repeat(val.len()), quotes)
+            format!("{}{}{}{}", key, open, "*".repeat(val.len()), close)
         })
         .to_string()
 }
@@ -1044,6 +1065,34 @@ mod tests {
         let test_log = r#"{"id": "12345", "password": "secret"}"#;
         let sanitized_log = sanitize_keywords(test_log, &["id", "password"]);
         assert_eq!(sanitized_log, r#"{"id": "*****", "password": "******"}"#);
+    }
+
+    #[test]
+    fn test_sanitize_keywords_masks_compound_secret_names() {
+        let log = r#"{"edamame_api_key": "edm_abc123", "mcp_psk": "0123456789abcdef", "oauth_refresh_token": "rt-xyz", "client_secret": "s3"}"#;
+        let sanitized = sanitize_keywords(log, &[]);
+        for secret in ["edm_abc123", "0123456789abcdef", "rt-xyz", "\"s3\""] {
+            assert!(!sanitized.contains(secret), "{secret} leaked: {sanitized}");
+        }
+        assert!(
+            sanitized.contains(r#""edamame_api_key": "**********""#),
+            "{sanitized}"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_keywords_masks_json_escaped_values() {
+        let log = r#"args: ["{\"pin\":\"123456\",\"api_key\":\"edm_secret\"}"]"#;
+        let sanitized = sanitize_keywords(log, &[]);
+        assert!(!sanitized.contains("123456"), "{sanitized}");
+        assert!(!sanitized.contains("edm_secret"), "{sanitized}");
+        assert!(sanitized.contains(r#"\"pin\":\"******\""#), "{sanitized}");
+    }
+
+    #[test]
+    fn test_sanitize_keywords_keeps_debugging_keys_and_counts() {
+        let log = r#"{"finding_key": "vuln:abc", "session_id": "s-1", "input_tokens": 1200} LLM decision: allow (tokens: 1200/80)"#;
+        assert_eq!(sanitize_keywords(log, &[]), log);
     }
 
     #[test]
