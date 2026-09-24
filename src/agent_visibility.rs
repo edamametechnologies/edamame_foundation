@@ -4196,6 +4196,12 @@ fn token_looks_secret(tok: &str) -> bool {
     has_digit && has_alpha && all_token
 }
 
+/// A token that starts like a filesystem path (`/`, `~/`, `./`, `../`). Base64
+/// secrets can contain `/` too, but they do not start with one of these.
+fn token_looks_like_path(tok: &str) -> bool {
+    tok.starts_with('/') || tok.starts_with("~/") || tok.starts_with("./") || tok.starts_with("../")
+}
+
 /// Mask secret-like spans in `line`. Returns the (possibly rewritten) line and
 /// whether anything was masked.
 fn redact_secret_line(line: &str) -> (String, bool) {
@@ -4220,7 +4226,22 @@ fn redact_secret_line(line: &str) -> (String, bool) {
     let mut cur = String::new();
     let flush = |cur: &mut String, out: &mut String, masked: &mut bool| {
         if !cur.is_empty() {
-            if token_looks_secret(cur) {
+            if token_looks_like_path(cur) {
+                // A path is judged segment by segment: a long absolute path
+                // with a digit anywhere is not a secret, a secret-looking
+                // segment inside it still is.
+                for (index, segment) in cur.split('/').enumerate() {
+                    if index > 0 {
+                        out.push('/');
+                    }
+                    if token_looks_secret(segment) {
+                        out.push_str("REDACTED");
+                        *masked = true;
+                    } else {
+                        out.push_str(segment);
+                    }
+                }
+            } else if token_looks_secret(cur) {
                 out.push_str("REDACTED");
                 *masked = true;
             } else {
@@ -4243,7 +4264,11 @@ fn redact_secret_line(line: &str) -> (String, bool) {
 
 /// Apply line-level secret redaction to `text`. Returns the redacted text and
 /// the number of lines that had a value masked.
-fn redact_secret_like_text(text: &str) -> (String, usize) {
+///
+/// The `redacted_excerpt`-tier masker for every transcript- or file-derived
+/// excerpt: instruction bodies here, and in core the recorder titles,
+/// commands and tool-error text served over RPC and MCP.
+pub fn redact_secret_like_text(text: &str) -> (String, usize) {
     let mut redacted_lines = 0usize;
     let mut out = String::with_capacity(text.len());
     for segment in text.split_inclusive('\n') {
@@ -9454,6 +9479,26 @@ skills/gtm-report and @rules/invariants.mdc.
         assert!(res.content.is_empty(), "body leaked at metadata-only tier");
         assert!(res.size_bytes > 0);
         assert!(!res.redacted);
+    }
+
+    #[test]
+    fn secret_masker_judges_paths_segment_by_segment() {
+        // A long absolute path with digits is not a high-entropy token.
+        let path = "/Users/dev/Programming/edamame_core/src/api/api_v2_types.rs";
+        let (out, n) = redact_secret_like_text(&format!("cat {path}"));
+        assert_eq!(n, 0, "{out}");
+        assert_eq!(out, format!("cat {path}"));
+
+        // A secret segment inside a path is still masked, the rest kept.
+        let (out, n) =
+            redact_secret_like_text("/tmp/ghp_abcdefghij0123456789abcdefghij0123/config");
+        assert_eq!(n, 1);
+        assert_eq!(out, "/tmp/REDACTED/config");
+
+        // A base64 secret containing '/' is judged whole.
+        let (out, n) = redact_secret_like_text("key wJalrXUtnFEMI/K7MDENG/bPxRfiCY3XAMPLEKEY");
+        assert_eq!(n, 1, "{out}");
+        assert!(!out.contains("K7MDENG"), "{out}");
     }
 
     #[test]
