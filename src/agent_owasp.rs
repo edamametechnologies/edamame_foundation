@@ -26,7 +26,7 @@
 //! - Pure: no I/O, no clock except `generated_at` via `chrono::Utc::now()`.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 // ---------------------------------------------------------------------------
 // Taxonomy enums
@@ -548,7 +548,12 @@ pub fn build_owasp_scorecard(
 ) -> OwaspScorecard {
     let mut agentic_rows: Vec<OwaspRow> = Vec::new();
     let mut llm_rows: Vec<OwaspRow> = Vec::new();
-    let mut total_alertable = 0u32;
+    // A finding that evidences several rows counts once, as on the Trust
+    // Controls scorecard: summing per row showed one finding as 2 here and 3
+    // there. Rows whose alertable count carries no keyed finding still add
+    // their count.
+    let mut alertable_keys: BTreeSet<String> = BTreeSet::new();
+    let mut unkeyed_alertable = 0u32;
     let mut categories_with_findings = 0u32;
     let mut hard_fail = false;
 
@@ -574,7 +579,15 @@ pub fn build_owasp_scorecard(
         if has_live {
             categories_with_findings += 1;
         }
-        total_alertable += alertable;
+        let mut keyed = 0u32;
+        for f in findings.iter().filter(|f| f.alertable) {
+            let key = f.finding_key.trim();
+            if !key.is_empty() {
+                keyed += 1;
+                alertable_keys.insert(key.to_string());
+            }
+        }
+        unkeyed_alertable += alertable.saturating_sub(keyed);
         if findings
             .iter()
             .any(|f| f.alertable && f.severity.trim().eq_ignore_ascii_case("CRITICAL"))
@@ -603,6 +616,7 @@ pub fn build_owasp_scorecard(
         }
     }
 
+    let total_alertable = alertable_keys.len() as u32 + unkeyed_alertable;
     let headline_status = if hard_fail {
         "critical"
     } else if total_alertable > 0 {
@@ -718,6 +732,29 @@ mod tests {
         // Headline is clean with no live findings.
         assert_eq!(sc.headline_status, "clean");
         assert!(!sc.hard_fail);
+    }
+
+    #[test]
+    fn a_finding_on_two_rows_counts_once() {
+        let finding = OwaspContributingFinding {
+            finding_key: "credential_harvest:k".to_string(),
+            title: "Credential harvest".to_string(),
+            severity: "HIGH".to_string(),
+            domain: "attack_pattern".to_string(),
+            alertable: true,
+        };
+        let row = OwaspRowInput {
+            total_findings: 1,
+            alertable_findings: 1,
+            worst_severity: "HIGH".to_string(),
+            contributing_findings: vec![finding],
+        };
+        let mut inputs: HashMap<String, OwaspRowInput> = HashMap::new();
+        inputs.insert("LLM02".to_string(), row.clone());
+        inputs.insert("ASI03".to_string(), row);
+        let sc = build_owasp_scorecard(&inputs, true);
+        assert_eq!(sc.total_alertable, 1);
+        assert_eq!(sc.categories_with_findings, 2);
     }
 
     #[test]

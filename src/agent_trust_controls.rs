@@ -909,7 +909,7 @@ const TRUST_CONTROLS_CATALOG: &[TrustControlCatalogEntry] = &[
         framework: "ISO 27001:2022",
         framework_mapping: "A.5.24 Information security incident management planning and preparation",
         grade: Indirect,
-        coverage_rationale: "The IR process is organizational, but EDAMAME supplies its agent-specific inputs: tamper-evident receipts for evidence preservation and the reversible response catalog for containment steps.",
+        coverage_rationale: "The IR process is organizational, but EDAMAME supplies its agent-specific inputs: tamper-evident receipts for evidence preservation, and operator-side containment (stopping an offending process from its divergence evidence).",
         enforcement: NotApplicable,
         enforcement_note: "The IR procedure is the organization's; EDAMAME supplies evidence and partial containment primitives to it.",
         owasp_refs: &["ASI10"],

@@ -40,7 +40,7 @@
 
 use crate::agent_owasp::{OwaspContributingFinding, OwaspCoverageGrade, OwaspRowInput};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 /// Published ATLAS matrix, linked from the scorecard header.
 pub const ATLAS_MATRIX_URL: &str = "https://atlas.mitre.org/matrices/ATLAS";
@@ -758,7 +758,12 @@ pub fn build_atlas_scorecard(
     llm_available: bool,
 ) -> AtlasScorecard {
     let mut groups: Vec<AtlasTacticGroup> = Vec::new();
-    let mut total_alertable = 0u32;
+    // A finding that evidences several rows counts once, as on the Trust
+    // Controls scorecard: summing per row showed one finding as 2 here and 3
+    // there. Rows whose alertable count carries no keyed finding still add
+    // their count.
+    let mut alertable_keys: BTreeSet<String> = BTreeSet::new();
+    let mut unkeyed_alertable = 0u32;
     let mut techniques_with_findings = 0u32;
     let mut hard_fail = false;
     let mut strong_count = 0u32;
@@ -786,7 +791,15 @@ pub fn build_atlas_scorecard(
         if has_live {
             techniques_with_findings += 1;
         }
-        total_alertable += alertable;
+        let mut keyed = 0u32;
+        for f in findings.iter().filter(|f| f.alertable) {
+            let key = f.finding_key.trim();
+            if !key.is_empty() {
+                keyed += 1;
+                alertable_keys.insert(key.to_string());
+            }
+        }
+        unkeyed_alertable += alertable.saturating_sub(keyed);
         if findings
             .iter()
             .any(|f| f.alertable && f.severity.trim().eq_ignore_ascii_case("CRITICAL"))
@@ -832,6 +845,7 @@ pub fn build_atlas_scorecard(
         }
     }
 
+    let total_alertable = alertable_keys.len() as u32 + unkeyed_alertable;
     let headline_status = if hard_fail {
         "critical"
     } else if total_alertable > 0 {
