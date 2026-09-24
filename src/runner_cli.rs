@@ -692,24 +692,43 @@ fn build_default_windows_context(user_segment: &str) -> WindowsUserContext {
     }
 }
 
+/// Account names the helper resolves a home for: what useradd, dscl and
+/// directory services (`user@domain`) produce. Anything else -- shell
+/// metacharacters, spaces, `/` -- is refused before a shell sees it: the
+/// helper runs as root and the name comes from the caller.
+pub(crate) fn is_valid_unix_username(username: &str) -> bool {
+    let mut chars = username.chars();
+    match chars.next() {
+        Some(first) if first.is_ascii_alphanumeric() || first == '_' => {}
+        _ => return false,
+    }
+    username.len() <= 128
+        && chars.all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | '@'))
+}
+
 async fn resolve_home_unix(username: &str) -> Result<String> {
+    if !is_valid_unix_username(username) {
+        return Err(anyhow!(
+            "Refusing to resolve a home directory for an invalid account name"
+        ));
+    }
     // Look up the user via NSS (getpwnam_r), which respects nsswitch.conf so LDAP/SSSD
     // entries on Linux are resolved correctly. Falls back to dscl on macOS systems where
     // the binary is the canonical source of truth and finally to a default location if
-    // the user is genuinely missing from the database.
-    let cmd = format!(
-        concat!(
-            "HOME=$(getent passwd {} 2>/dev/null | cut -d: -f6) || ",
-            "HOME=$(dscl . -read /Users/{} NFSHomeDirectory 2>/dev/null | awk '{{print $2}}') || ",
-            "{{ [ \"$(uname)\" = \"Darwin\" ] && HOME=\"/Users/{}\" || HOME=\"/home/{}\"; }}; ",
-            "echo $HOME"
-        ),
-        username, username, username, username
+    // the user is genuinely missing from the database. The name reaches the script as
+    // $1, never spliced into its text.
+    const SCRIPT: &str = concat!(
+        "HOME=$(getent passwd \"$1\" 2>/dev/null | cut -d: -f6) || ",
+        "HOME=$(dscl . -read \"/Users/$1\" NFSHomeDirectory 2>/dev/null | awk '{print $2}') || ",
+        "{ [ \"$(uname)\" = \"Darwin\" ] && HOME=\"/Users/$1\" || HOME=\"/home/$1\"; }; ",
+        "echo \"$HOME\""
     );
 
     let output = Command::new("/bin/bash")
         .arg("-c")
-        .arg(&cmd)
+        .arg(SCRIPT)
+        .arg("resolve_home")
+        .arg(username)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -739,6 +758,54 @@ async fn resolve_home_unix(username: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unix_usernames_from_useradd_dscl_and_directories_are_valid() {
+        for name in [
+            "alice",
+            "john.doe",
+            "_svc",
+            "runner-1",
+            "user@corp.example",
+            "a",
+        ] {
+            assert!(is_valid_unix_username(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn unix_usernames_carrying_shell_syntax_are_refused() {
+        for name in [
+            "",
+            "x; touch /tmp/pwned #",
+            "$(id)",
+            "`id`",
+            "a b",
+            "../root",
+            "-rf",
+            "alice\nid",
+            "name|cat",
+        ] {
+            assert!(!is_valid_unix_username(name), "{name:?}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn resolve_home_unix_refuses_an_injected_name_without_running_it() {
+        let marker = std::env::temp_dir().join("edamame_resolve_home_injection_marker");
+        let _ = std::fs::remove_file(&marker);
+        let injected = format!("x; touch {} #", marker.display());
+        assert!(resolve_home_unix(&injected).await.is_err());
+        assert!(!marker.exists(), "the injected command must never run");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn resolve_home_unix_falls_back_for_an_unknown_account() {
+        let home = resolve_home_unix("edamame_no_such_user_zz").await.unwrap();
+        assert!(home.ends_with("/edamame_no_such_user_zz"), "{home}");
+    }
     use serial_test::serial;
 
     /// Defensive parser for the powershell `GetConsoleWindow().ToInt64()`
