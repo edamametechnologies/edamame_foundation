@@ -731,6 +731,16 @@ pub fn collect_to_json(
     if !options.include_raw_text {
         strip_raw_text(&mut result.payload);
     }
+    // Core reads `economics_raw_text` only when `economics` is missing (an
+    // older helper). Once the economics are parsed here, the text -- a
+    // head+tail copy of up to 16 MiB for a transcript over the read cap, on
+    // top of `raw_text` -- only fattens every response the helper serializes
+    // and the app parses.
+    for session in &mut result.payload.sessions {
+        if session.economics.is_some() {
+            session.economics_raw_text.clear();
+        }
+    }
     serde_json::to_string(&result).map_err(|e| anyhow::anyhow!(e))
 }
 

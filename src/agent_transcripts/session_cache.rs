@@ -50,7 +50,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::sync::Arc;
-use std::time::UNIX_EPOCH;
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
@@ -87,7 +87,26 @@ struct Entry {
     /// Eviction position: `(file mtime, insertion tick)`. The tick only breaks
     /// ties between files sharing an mtime.
     order_key: (u128, u64),
+    /// When the session was built: an oversized transcript's entry is served
+    /// only while it is younger than [`OVERSIZED_REBUILD_INTERVAL`].
+    built_at: Instant,
 }
+
+/// How long the session of a transcript larger than the head-only read cap
+/// ([`super::MAX_TRANSCRIPT_BYTES`]) is served from the cache while the file
+/// keeps growing.
+///
+/// Such a file is the operator's current very long session (a Claude Code
+/// transcript of 57 MB on the development Mac, 2026-09-24). Every append
+/// changes its size and mtime, so the `(mtime, size)` key missed on every
+/// 60 s observer tick and the helper re-read, re-parsed and re-extracted the
+/// same 16 MiB head -- about 2 s of CPU per tick in a release build, several
+/// cores for 10-15 s in the helper on the development Mac -- and handed core a
+/// session whose only change was `modified_at`, which then re-hashed and
+/// re-ingested it. The head never changes while the file grows at its end, so
+/// the rebuilds bought nothing but the tail-derived economics and
+/// `modified_at`; those now refresh at this interval instead.
+const OVERSIZED_REBUILD_INTERVAL: Duration = Duration::from_secs(600);
 
 struct LruCache {
     map: HashMap<String, Entry>,
@@ -117,8 +136,19 @@ impl LruCache {
 
     /// Return the cached session (as a cheap `Arc` clone). Access does not
     /// change eviction order: the file's age does, see the module docs.
+    #[cfg(test)]
     fn get(&self, key: &str) -> Option<Arc<CollectedRawSession>> {
-        self.map.get(key).map(|entry| entry.session.clone())
+        self.get_fresh(key, None)
+    }
+
+    /// [`Self::get`], treating an entry built longer than `max_age` ago as
+    /// absent.
+    fn get_fresh(&self, key: &str, max_age: Option<Duration>) -> Option<Arc<CollectedRawSession>> {
+        let entry = self.map.get(key)?;
+        if max_age.is_some_and(|max_age| entry.built_at.elapsed() >= max_age) {
+            return None;
+        }
+        Some(entry.session.clone())
     }
 
     fn insert(
@@ -146,6 +176,7 @@ impl LruCache {
                 session,
                 bytes,
                 order_key,
+                built_at: Instant::now(),
             },
         );
         while self.total_bytes > self.capacity_bytes {
@@ -186,6 +217,17 @@ fn cache_key(path: &Path, mtime_nanos: u128, len: u64, is_jsonl: bool) -> String
     )
 }
 
+/// The key of a transcript over the head-only read cap: the path alone, since
+/// what the build reads (the head) does not change while the file grows.
+fn oversized_cache_key(path: &Path, is_jsonl: bool) -> String {
+    format!(
+        "{}\u{1f}oversized\u{1f}{}\u{1f}{}",
+        path.to_string_lossy(),
+        is_jsonl as u8,
+        SESSION_CACHE_SCHEMA
+    )
+}
+
 fn estimate_bytes(session: &CollectedRawSession) -> usize {
     session
         .user_text
@@ -198,7 +240,8 @@ fn estimate_bytes(session: &CollectedRawSession) -> usize {
 
 /// Build the [`CollectedRawSession`] for a transcript file, served from the
 /// per-file cache when the file's `(mtime, size)` are unchanged since the last
-/// build.
+/// build -- or, for a file larger than the head-only read cap, when the last
+/// build is younger than [`OVERSIZED_REBUILD_INTERVAL`].
 ///
 /// `build` receives the freshly [`ParsedTranscript`] and returns the fully
 /// extracted/derived session. It runs ONLY on a cache miss; on a hit the stored
@@ -226,14 +269,26 @@ where
             .duration_since(UNIX_EPOCH)
             .ok()?
             .as_nanos();
-        Some((cache_key(path, mtime_nanos, len, is_jsonl), mtime_nanos))
+        if len > super::MAX_TRANSCRIPT_BYTES {
+            return Some((
+                oversized_cache_key(path, is_jsonl),
+                Some(OVERSIZED_REBUILD_INTERVAL),
+                mtime_nanos,
+            ));
+        }
+        Some((
+            cache_key(path, mtime_nanos, len, is_jsonl),
+            None,
+            mtime_nanos,
+        ))
     });
-    let key = keyed.as_ref().map(|(key, _)| key.clone());
-    let mtime_nanos = keyed.as_ref().map(|(_, m)| *m).unwrap_or(0);
+    let key = keyed.as_ref().map(|(key, _, _)| key.clone());
+    let max_age = keyed.as_ref().and_then(|(_, max_age, _)| *max_age);
+    let mtime_nanos = keyed.as_ref().map(|(_, _, m)| *m).unwrap_or(0);
 
     if let Some(key) = key.as_ref() {
         // Take the Arc under the lock, then copy the payload after releasing it.
-        let hit = CACHE.lock().get(key);
+        let hit = CACHE.lock().get_fresh(key, max_age);
         if let Some(arc) = hit {
             return Some((*arc).clone());
         }
@@ -383,6 +438,70 @@ mod tests {
         let b = get_or_build_session(&path, false, |parsed| session_with_user(&parsed.user_text))
             .unwrap();
         assert_eq!(b.user_text, "twotwo");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A transcript over the head-only read cap that keeps growing (the
+    /// operator's current long session) is served from the cache until the
+    /// rebuild interval has passed: the head the build reads is unchanged.
+    #[test]
+    fn a_growing_transcript_over_the_read_cap_is_rebuilt_only_after_the_interval() {
+        use std::io::Write;
+        let dir = std::env::temp_dir().join(format!(
+            "edamame_session_cache_oversized_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("long.txt");
+        {
+            let mut f = std::fs::File::create(&path).unwrap();
+            f.write_all(b"user:\nhead\n").unwrap();
+            let filler = format!("{}\n", "x".repeat(1023));
+            let lines = (super::super::MAX_TRANSCRIPT_BYTES as usize / filler.len()) + 16;
+            for _ in 0..lines {
+                f.write_all(filler.as_bytes()).unwrap();
+            }
+        }
+        let first = get_or_build_session(&path, false, |parsed| {
+            session_with_user(&format!("built:{}", parsed.user_text.len()))
+        })
+        .unwrap();
+
+        // The session keeps growing: size and mtime change, the head does not.
+        {
+            let mut f = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&path)
+                .unwrap();
+            f.write_all(b"user:\nlater turn\n").unwrap();
+        }
+        let second = get_or_build_session(&path, false, |_| {
+            panic!("a growing transcript over the read cap must be served from the cache")
+        })
+        .unwrap();
+        assert_eq!(first.user_text, second.user_text);
+
+        // Past the interval it is rebuilt (the tail-derived economics and
+        // `modified_at` refresh then).
+        {
+            let key = oversized_cache_key(&path, false);
+            let mut cache = CACHE.lock();
+            let entry = cache
+                .map
+                .get_mut(&key)
+                .expect("the oversized session is cached");
+            entry.built_at = Instant::now()
+                .checked_sub(OVERSIZED_REBUILD_INTERVAL)
+                .expect("the clock is past the interval");
+        }
+        let mut rebuilt = false;
+        get_or_build_session(&path, false, |parsed| {
+            rebuilt = true;
+            session_with_user(&parsed.user_text)
+        })
+        .unwrap();
+        assert!(rebuilt, "an entry older than the interval must be rebuilt");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
