@@ -7117,7 +7117,13 @@ bob ALL=(ALL) NOPASSWD: ALL
         let harnesses = detect_agent_harnesses_with(tmp.path(), &[]);
         let rt = harnesses.iter().find(|h| h.slug == "rippletide").unwrap();
         assert!(rt.detected, "an nvm global install should be detected");
-        assert!(rt.evidence.iter().any(|e| e.starts_with("~/.nvm/")));
+        // Home-relative evidence keeps the platform separator after `~/`
+        // (`~/.nvm\versions\...` on Windows).
+        assert!(
+            rt.evidence.iter().any(|e| e.starts_with("~/.nvm")),
+            "{:?}",
+            rt.evidence
+        );
     }
 
     #[test]
