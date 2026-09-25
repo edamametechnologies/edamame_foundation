@@ -624,9 +624,8 @@ pub fn declared_confinement_for_agent(agent_type: &str, home: &Path) -> Declared
         }
         // `~/.codex/config.toml`: top-level `sandbox_mode` / `approval_policy`.
         "codex" => {
-            let path = std::env::var("CODEX_HOME")
-                .map(PathBuf::from)
-                .unwrap_or_else(|_| home.join(".codex"))
+            let path = crate::supported_agents::agent_home_env("CODEX_HOME")
+                .unwrap_or_else(|| home.join(".codex"))
                 .join("config.toml");
             let Ok(text) = std::fs::read_to_string(&path) else {
                 return DeclaredConfinement::default();

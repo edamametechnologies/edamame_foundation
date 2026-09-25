@@ -85,6 +85,17 @@ struct CachedRegistry {
 
 static REGISTRY_CACHE: Lazy<Mutex<Option<CachedRegistry>>> = Lazy::new(|| Mutex::new(None));
 
+/// An agent home override (`CODEX_HOME`, `HERMES_HOME`), or `None` when it
+/// is unset, empty or blank: `CODEX_HOME=""` must fall back to `~/.codex`,
+/// not resolve to an empty root that covers every path (the divergence
+/// policy exempts an agent's own instruction root).
+pub(crate) fn agent_home_env(name: &str) -> Option<PathBuf> {
+    std::env::var(name)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(PathBuf::from)
+}
+
 impl SupportedAgentDefinition {
     pub fn install_script_relpath(&self) -> Option<&str> {
         #[cfg(target_os = "windows")]
@@ -156,16 +167,8 @@ impl SupportedAgentDefinition {
         match self.agent_type.as_str() {
             "cursor" => Some(home.join(".cursor")),
             "claude_code" => Some(home.join(".claude")),
-            "codex" => Some(
-                std::env::var("CODEX_HOME")
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|_| home.join(".codex")),
-            ),
-            "hermes" => Some(
-                std::env::var("HERMES_HOME")
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|_| home.join(".hermes")),
-            ),
+            "codex" => Some(agent_home_env("CODEX_HOME").unwrap_or_else(|| home.join(".codex"))),
+            "hermes" => Some(agent_home_env("HERMES_HOME").unwrap_or_else(|| home.join(".hermes"))),
             "openclaw" => Some(home.join(".openclaw")),
             // Claude Desktop is a GUI app whose instruction surface (when
             // present) lives under its platform app-support dir, not a dot-dir
@@ -252,9 +255,8 @@ impl SupportedAgentDefinition {
                 "cursor_user_mcp" => paths.push(home.join(".cursor/mcp.json")),
                 "claude_cli_config" => paths.push(home.join(".claude.json")),
                 "codex_cli_config" => {
-                    let codex_home = std::env::var("CODEX_HOME")
-                        .map(PathBuf::from)
-                        .unwrap_or_else(|_| home.join(".codex"));
+                    let codex_home =
+                        agent_home_env("CODEX_HOME").unwrap_or_else(|| home.join(".codex"));
                     paths.push(codex_home.join("config.toml"));
                 }
                 "claude_desktop_app_config" => {
@@ -290,9 +292,8 @@ impl SupportedAgentDefinition {
                 "hermes_config_yaml" => {
                     // Hermes declares MCP servers under `mcp_servers:` in config.yaml.
                     // HERMES_HOME overrides the default ~/.hermes location.
-                    let hermes_home = std::env::var("HERMES_HOME")
-                        .map(PathBuf::from)
-                        .unwrap_or_else(|_| home.join(".hermes"));
+                    let hermes_home =
+                        agent_home_env("HERMES_HOME").unwrap_or_else(|| home.join(".hermes"));
                     paths.push(hermes_home.join("config.yaml"));
 
                     // Windows installs may instead live under %LOCALAPPDATA%\hermes.
@@ -881,6 +882,32 @@ fn platform_state_dir_for_slug(home: &Path, slug: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `CODEX_HOME=""` (or blank) is unset: the root falls back to
+    /// `~/.codex` instead of an empty root that covers every path.
+    #[test]
+    #[serial_test::serial]
+    fn an_empty_agent_home_variable_is_unset() {
+        let saved = std::env::var("CODEX_HOME").ok();
+        let home = Path::new("/home/me");
+        let codex = find_supported_agent("codex").expect("codex is a supported agent");
+        for blank in ["", "   "] {
+            std::env::set_var("CODEX_HOME", blank);
+            assert_eq!(
+                codex.resolve_instruction_root_with_home(home),
+                Some(home.join(".codex"))
+            );
+        }
+        std::env::set_var("CODEX_HOME", "/opt/codex");
+        assert_eq!(
+            codex.resolve_instruction_root_with_home(home),
+            Some(PathBuf::from("/opt/codex"))
+        );
+        match saved {
+            Some(value) => std::env::set_var("CODEX_HOME", value),
+            None => std::env::remove_var("CODEX_HOME"),
+        }
+    }
 
     #[test]
     fn fleet_workspace_seed_roots_covers_single_workspace_agents_only() {
