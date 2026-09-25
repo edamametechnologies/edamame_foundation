@@ -123,9 +123,18 @@ lazy_static! {
             .join("|");
         let suffixes = secret_suffixes.join("|");
         // Keys and values may be JSON-escaped (`\"pin\":\"123456\"`) when a
-        // JSON string is logged through Debug.
+        // JSON string is logged through Debug. A quoted value steps over its
+        // escape pairs, so a PEM body (`\n`) or a password holding `\\` or
+        // `\"` is masked whole instead of up to its first backslash; the
+        // JSON-escaped form sees those as `\\n`, `\\\\` and `\\\"`, and ends
+        // at the first `\"` that does not close one of them. `"[^"]+"` stays
+        // as the fallback for a quoted value ending in a lone backslash. A
+        // bare value may hold a backslash but not start with one, so the
+        // backslash of an escaped key is never masked in place of a value.
+        let quoted = r#"(?:[^"\\]|\\.)+"#;
+        let escaped = r#"(?:[^"\\]|\\[^"\\]|\\\\(?:\\.|[^"\\]))+"#;
         let pattern = format!(
-            r#"(?P<key>\\?"?\b(?:(?:[A-Za-z0-9]+_)*(?:{suffixes})|{exact})\b\\?"?\s*[:=]?\s*)(\\?"(?P<val1>[^"\\]+)\\?"|(?P<val2>\b[^\s",}}\\]+))"#
+            r#"(?P<key>\\?"?\b(?:(?:[A-Za-z0-9]+_)*(?:{suffixes})|{exact})\b\\?"?\s*[:=]?\s*)(?:\\"(?P<escaped>{escaped})\\"|"(?P<quoted>{quoted})"|"(?P<raw>[^"]+)"|(?P<bare>\b[^\s",}}\\][^\s",}}]*))"#
         );
         Regex::new(&pattern).expect("Failed to compile sanitization regex")
     };
@@ -280,21 +289,16 @@ fn sanitize_keywords(input: &str, _keywords: &[&str]) -> String {
     SANITIZE_REGEX
         .replace_all(input, |caps: &regex::Captures| {
             let key = &caps["key"];
-            let val1 = caps.name("val1").map_or("", |m| m.as_str());
-            let val2 = caps.name("val2").map_or("", |m| m.as_str());
-            let val = if !val1.is_empty() { val1 } else { val2 };
-            // Keep the value's own quoting (plain or JSON-escaped).
-            let whole = caps.get(0).map_or("", |m| m.as_str());
-            let value_part = &whole[key.len()..];
-            let (open, close) = if val1.is_empty() {
-                ("", "")
-            } else if value_part.starts_with("\\\"") {
-                ("\\\"", "\\\"")
+            // Keep the value's own quoting (JSON-escaped, plain or none).
+            let (quote, value) = if let Some(m) = caps.name("escaped") {
+                ("\\\"", m.as_str())
+            } else if let Some(m) = caps.name("quoted").or_else(|| caps.name("raw")) {
+                ("\"", m.as_str())
             } else {
-                ("\"", "\"")
+                ("", caps.name("bare").map_or("", |m| m.as_str()))
             };
 
-            format!("{}{}{}{}", key, open, "*".repeat(val.len()), close)
+            format!("{}{}{}{}", key, quote, "*".repeat(value.len()), quote)
         })
         .to_string()
 }
@@ -1087,6 +1091,63 @@ mod tests {
         assert!(!sanitized.contains("123456"), "{sanitized}");
         assert!(!sanitized.contains("edm_secret"), "{sanitized}");
         assert!(sanitized.contains(r#"\"pin\":\"******\""#), "{sanitized}");
+    }
+
+    #[test]
+    fn test_sanitize_keywords_masks_plain_values() {
+        let log = r#"{"password": "hunter2", "client_secret": "p\"w", "user": "bob"}"#;
+        assert_eq!(
+            sanitize_keywords(log, &[]),
+            r#"{"password": "*******", "client_secret": "****", "user": "bob"}"#
+        );
+    }
+
+    #[test]
+    fn test_sanitize_keywords_masks_values_holding_a_backslash() {
+        // A JSON-escaped backslash, then a lone one.
+        let log = r#"{"password": "a\\b", "user": "bob"} password: "c\d""#;
+        assert_eq!(
+            sanitize_keywords(log, &[]),
+            r#"{"password": "****", "user": "bob"} password: "***""#
+        );
+        // A bare value keeps everything after its backslash masked too.
+        assert_eq!(
+            sanitize_keywords(r#"login password=abc\def user=bob"#, &[]),
+            r#"login password=******* user=bob"#
+        );
+    }
+
+    #[test]
+    fn test_sanitize_keywords_masks_a_pem_value_whole() {
+        let pem =
+            r#"-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0B\n-----END PRIVATE KEY-----\n"#;
+        let log = format!(r#"{{"private_key": "{pem}", "kid": "k1"}}"#);
+        assert_eq!(
+            sanitize_keywords(&log, &[]),
+            format!(
+                r#"{{"private_key": "{}", "kid": "k1"}}"#,
+                "*".repeat(pem.len())
+            )
+        );
+    }
+
+    #[test]
+    fn test_sanitize_keywords_masks_json_escaped_values_holding_escapes() {
+        // `{"pin":..,"private_key":"<PEM>","password":"a\\b\"c"}` logged
+        // through Debug: every escape inside a value arrives doubled.
+        let pem = r#"-----BEGIN KEY-----\\nMIIEsecret\\n-----END KEY-----\\n"#;
+        let password = r#"a\\\\b\\\"c"#;
+        let log = format!(
+            r#"args: ["{{\"pin\":\"123456\",\"private_key\":\"{pem}\",\"password\":\"{password}\"}}"]"#
+        );
+        assert_eq!(
+            sanitize_keywords(&log, &[]),
+            format!(
+                r#"args: ["{{\"pin\":\"******\",\"private_key\":\"{}\",\"password\":\"{}\"}}"]"#,
+                "*".repeat(pem.len()),
+                "*".repeat(password.len())
+            )
+        );
     }
 
     #[test]
