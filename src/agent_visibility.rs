@@ -1267,6 +1267,12 @@ pub struct AgentHarness {
     pub detected: bool,
     /// The product's public homepage, so the UI can send an operator who has
     /// no harness to the place where one is installed from.
+    /// `#[serde(default)]`: core persists the bundle as its
+    /// `visibility_snapshot`, and a 1.9 snapshot has no homepage -- without
+    /// the default, the first 2.0 start fails to load the whole snapshot (the
+    /// app-upgrade exception in `invariants.mdc`). Empty until the next
+    /// structural refresh; the UI shows no link for an empty homepage.
+    #[serde(default)]
     pub homepage: String,
     /// The on-disk markers / binaries that matched (display paths / names),
     /// for the UI and threat evidence. Empty when `detected` is false.
@@ -7025,6 +7031,37 @@ bob ALL=(ALL) NOPASSWD: ALL
         ];
         // A single detected harness clears the gap even with agents present.
         assert!(!agents_without_harness(3, &harnesses));
+    }
+
+    /// Core persists the structural bundle as its `visibility_snapshot`. A
+    /// snapshot written by 1.9 has no harness `homepage`, and a deserialize
+    /// failure discards the whole snapshot on the first 2.0 start.
+    #[test]
+    fn agent_harness_written_by_1_9_still_deserializes() {
+        let json = r#"{"slug":"agentfield","display_name":"AgentField","detected":true,"evidence":["~/.af"],"identity":null}"#;
+        let harness: AgentHarness =
+            serde_json::from_str(json).expect("a 1.9 harness must still deserialize");
+        assert_eq!(harness.slug, "agentfield");
+        assert!(harness.detected);
+        assert_eq!(harness.evidence, vec!["~/.af".to_string()]);
+        assert!(harness.homepage.is_empty());
+
+        // The same through the whole bundle, the shape core reads back.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut bundle = serde_json::to_value(build_visibility_bundle(tmp.path())).unwrap();
+        let harnesses = bundle["harnesses"]
+            .as_array_mut()
+            .expect("bundle serializes its harnesses");
+        assert!(!harnesses.is_empty());
+        for harness in harnesses {
+            harness
+                .as_object_mut()
+                .and_then(|object| object.remove("homepage"))
+                .expect("homepage is serialized, so this test still covers it");
+        }
+        let restored: VisibilityBundle =
+            serde_json::from_value(bundle).expect("a 1.9 bundle must still deserialize");
+        assert!(restored.harnesses.iter().all(|h| h.homepage.is_empty()));
     }
 
     #[test]
