@@ -4,6 +4,8 @@
 /// Embedded consent markdown snapshot used when the remote fetch fails.
 pub fn embedded_consent(filename: &str) -> Option<&'static str> {
     match filename {
+        "ai-failure-export-EN.md" => Some(include_str!("../consent/ai-failure-export-EN.md")),
+        "ai-failure-export-FR.md" => Some(include_str!("../consent/ai-failure-export-FR.md")),
         "compliance-scanner-EN.md" => Some(include_str!("../consent/compliance-scanner-EN.md")),
         "compliance-scanner-FR.md" => Some(include_str!("../consent/compliance-scanner-FR.md")),
         "privacy-LLM-EN.md" => Some(include_str!("../consent/privacy-LLM-EN.md")),
@@ -71,6 +73,8 @@ pub fn embedded_consent(filename: &str) -> Option<&'static str> {
 /// Filenames present in the embedded snapshot.
 pub fn embedded_consent_filenames() -> &'static [&'static str] {
     &[
+        "ai-failure-export-EN.md",
+        "ai-failure-export-FR.md",
         "compliance-scanner-EN.md",
         "compliance-scanner-FR.md",
         "privacy-LLM-EN.md",

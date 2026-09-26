@@ -14,6 +14,7 @@ const FETCH_TIMEOUT: Duration = Duration::from_secs(3);
 const USER_AGENT: &str = "EDAMAME-Security (consent-documents)";
 
 const STATIC_DOCUMENTS: &[&str] = &[
+    "ai-failure-export",
     "compliance-scanner",
     "user-feedback",
     "profiling-feedback",
@@ -210,6 +211,16 @@ mod tests {
             remote_url("main", "compliance-scanner-EN.md"),
             "https://raw.githubusercontent.com/edamametechnologies/threatmodels/main/consent/compliance-scanner-EN.md"
         );
+    }
+
+    #[test]
+    fn every_static_document_ships_in_both_locales() {
+        for document in STATIC_DOCUMENTS {
+            for locale in ["EN", "FR"] {
+                let name = consent_filename(document, locale).expect("static document");
+                assert!(embedded_consent(&name).is_some(), "missing embed {name}");
+            }
+        }
     }
 
     #[test]
