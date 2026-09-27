@@ -24,24 +24,24 @@ Tant que vous êtes connecté, EDAMAME envoie des requêtes textuelles construit
   * Appareils de votre réseau local : nom d'hôte, type, fabricant, système d'exploitation, ports ouverts et bannières de service qu'ils renvoient. Lorsqu'un appareil n'a pas d'autre information d'identification, son adresse IP, son nom d'hôte ou son adresse MAC est envoyé à la place
   * Noms et descriptions des menaces et des politiques, et noms et descriptions des fuites de données. Dans certains cas, l'adresse email concernée par une fuite est incluse
   * Avec chaque analyse de tâche, un résumé de toutes vos tâches de sécurité en cours, qui peut reprendre les informations ci-dessus
+* Lorsque vous demandez un conseil du coach : des scores et des compteurs décrivant votre usage des agents de programmation IA, et les noms de leurs compétences, hooks et espaces de travail
 
 Les chemins de fichiers contiennent souvent le nom de votre compte utilisateur, par exemple `/Users/<nom>/...` ou `C:\Users\<nom>\...`. Ces valeurs sont envoyées telles qu'enregistrées, sans être raccourcies ni anonymisées.
 
 EDAMAME envoie aussi un enregistrement de notification à votre compte EDAMAME Portal lorsque la protection lève une alerte ou que l'Assistant agit. Cet enregistrement contient le nom d'hôte de cet ordinateur, ses adresses IP publiques, son modèle et la version de son système d'exploitation, les informations de constat listées ci-dessus (y compris le raisonnement du modèle) et les actions effectuées. Les constats de schémas d'attaque et de divergence sont aussi ajoutés à l'historique des constats de votre Portal.
 
-**Identifiants envoyés avec chaque requête**
-* L'identifiant d'appareil EDAMAME de cet appareil
-* Le jeton de connexion de votre compte EDAMAME. Vous vous connectez avec votre adresse email, et le jeton identifie votre compte
-* Le nom d'hôte de cet ordinateur, utilisé comme nom d'appareil dans votre compte Portal
+**Identifiants envoyés à EDAMAME**
+* Avec chaque requête : l'identifiant d'appareil EDAMAME de cet appareil, et le jeton de connexion de votre compte EDAMAME (vous vous connectez avec votre adresse email, et le jeton identifie votre compte)
+* Lorsque l'application vérifie votre offre Portal : le nom d'hôte de cet ordinateur, utilisé comme nom d'appareil dans votre compte Portal
 
 **Comment EDAMAME traite et conserve ces données**
 * Les requêtes sont analysées par Microsoft Azure OpenAI Service, pour le compte d'EDAMAME. Vos identifiants de compte et d'appareil ne lui sont pas transmis
-* EDAMAME conserve chaque requête et sa réponse jusqu'à 12 heures, afin qu'une requête répétée ne soit pas analysée deux fois
-* Les enregistrements de notification sont conservés 1 jour, et les entrées de l'historique des constats du Portal 90 jours après leur dernière observation
-* EDAMAME enregistre la consommation de jetons par compte et par appareil pour appliquer les limites de votre offre. Les journaux du service enregistrent les identifiants de compte et d'appareil et le nombre de jetons, pas le contenu des requêtes
+* EDAMAME stocke chaque requête et sa réponse, avec vos identifiants de compte et d'appareil, afin qu'une requête répétée ne soit pas analysée deux fois. Ces entrées sont programmées pour expirer 12 heures après leur écriture
+* Les enregistrements de notification sont programmés pour expirer 1 jour après leur envoi, et les entrées de l'historique des constats du Portal 90 jours après la dernière observation du constat
+* EDAMAME enregistre la consommation de jetons par compte et par appareil pour appliquer les limites de votre offre. Les journaux du service d'EDAMAME enregistrent les identifiants de compte et d'appareil et le nombre de jetons ; le service n'écrit pas le texte des requêtes dans ses journaux
 
 **Vos choix**
-* Désactivez la protection à tout moment avec le bouton de protection de l'écran Sécurité. L'Assistant, les détecteurs, la capture des sessions et la surveillance des fichiers s'arrêtent tous, et aucune nouvelle requête n'est envoyée
+* Désactivez la protection à tout moment avec le bouton de protection de l'écran Sécurité. L'Assistant, les détecteurs, la capture des sessions et la surveillance des fichiers s'arrêtent tous, et EDAMAME n'envoie plus de requêtes de lui-même. Tant que vous restez connecté, une requête est encore envoyée lorsqu'une analyse est demandée explicitement, depuis l'application ou par un agent IA via le serveur MCP d'EDAMAME
 * Déconnectez-vous d'EDAMAME Portal dans Config > IA pour cesser toute utilisation du service. Vos jetons de connexion sont stockés sur cet appareil et sont supprimés lors de la déconnexion
 * À la place d'EDAMAME Portal, vous pouvez utiliser votre propre fournisseur de modèle dans Config > IA. Les requêtes sont alors envoyées directement à ce fournisseur
 
