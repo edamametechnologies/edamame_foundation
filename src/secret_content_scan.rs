@@ -832,8 +832,19 @@ mod tests {
             .to_string()
     }
 
+    /// Writes a fixture the scan will read at once. On Windows the scan
+    /// leaves files written in the last `STAGING_QUIET_PERIOD` alone, so the
+    /// fixture is dated a minute back, like a file at rest.
     fn write_temp(path: &str, body: &str) {
         std::fs::write(path, body).expect("write tmp file");
+        #[cfg(target_os = "windows")]
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .and_then(|file| {
+                file.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(60))
+            })
+            .expect("backdate tmp file");
     }
 
     fn cleanup(path: &str) {
