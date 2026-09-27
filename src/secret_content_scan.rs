@@ -107,6 +107,31 @@ fn looks_like_edamame_powershell_probe_stub(basename: &str, normalized: &str) ->
         .any(|needle| normalized.contains(needle.as_str()))
 }
 
+/// How long after its last write a file is left alone on Windows.
+#[cfg(target_os = "windows")]
+const STAGING_QUIET_PERIOD: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Whether a file was written too recently to read on Windows. A producer
+/// often still owns it: uv writes a launcher and then patches its PE
+/// resources, an installer publishes a download by renaming it or its
+/// staging directory. A read handle, even one sharing delete, makes the
+/// producer's exclusive re-open or directory rename fail ("Access is
+/// denied", WinError 32): with EDAMAME protection on, Hermes' uv install
+/// failed that way on windows-latest (probe runs 36273248402, 36295564142).
+/// A secret another process reads lives in a file written long before, and a
+/// later tick reads a fresh file once it is still. The cost: a script written
+/// and deleted within the quiet period loses its content signal on Windows
+/// (its file event and process lineage remain). POSIX renames and unlinks
+/// ignore readers, so other platforms read at once.
+#[cfg(target_os = "windows")]
+fn still_being_staged(metadata: &fs::Metadata, now: std::time::SystemTime) -> bool {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|modified| now.duration_since(modified).ok())
+        .is_some_and(|age| age < STAGING_QUIET_PERIOD)
+}
+
 pub fn inspect_secret_like_file(path: &str) -> Option<SecretContentFileMatch> {
     // Extension gate FIRST, before any filesystem access. Binary/media files
     // (audio, images, video, archives, compiled artifacts, on-disk media
@@ -137,6 +162,10 @@ pub fn inspect_secret_like_file(path: &str) -> Option<SecretContentFileMatch> {
         return None;
     }
     if metadata.len() > vuln_detector_params::secret_content_scan_max_bytes() {
+        return None;
+    }
+    #[cfg(target_os = "windows")]
+    if still_being_staged(&metadata, std::time::SystemTime::now()) {
         return None;
     }
 
@@ -774,6 +803,21 @@ pub fn scan_secret_like_files(paths: &[String]) -> Vec<SecretContentFileMatch> {
 
 #[cfg(test)]
 mod tests {
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn a_file_written_moments_ago_is_left_to_its_producer() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("staged.txt");
+        std::fs::write(&path, b"AWS_SECRET_ACCESS_KEY=abc").expect("write");
+        let metadata = std::fs::metadata(&path).expect("metadata");
+        let now = std::time::SystemTime::now();
+        assert!(still_being_staged(&metadata, now));
+        assert!(!still_being_staged(
+            &metadata,
+            now + STAGING_QUIET_PERIOD + std::time::Duration::from_secs(1)
+        ));
+    }
     use super::*;
     use std::env;
     use std::sync::atomic::{AtomicUsize, Ordering};
