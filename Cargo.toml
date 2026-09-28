@@ -25,6 +25,12 @@ appstore = [ "flodbadd/appstore" ]
 # Opt-in undeadlock hold-time / contention instrumentation in release builds.
 # Forwarded from edamame_core's `lock-diagnostics`. Never in `default`.
 lock-diagnostics = [ "undeadlock/diagnostics", "flodbadd/lock-diagnostics" ]
+# Authenticate every downloaded model and consent page against the
+# Ed25519-signed manifests of the threatmodels repository (threatmodels_rs
+# `authenticity`). Covers flodbadd's CloudModels too (same crate). Off until
+# the production root keys are in threatmodels_rs; enabling it earlier fails
+# the build.
+model-signatures = [ "threatmodels_rs/model-signatures" ]
 
 [lib]
 # Dynamic lib version is not used on apple platforms as it's painful, but we must use it on Windows, Linux and Android

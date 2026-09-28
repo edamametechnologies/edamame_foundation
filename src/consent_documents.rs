@@ -4,7 +4,10 @@
 //! that tree into `consent/` and regenerates [`consent_documents_db`]. Runtime
 //! fetch uses the same `raw.githubusercontent.com/edamametechnologies/threatmodels`
 //! origin as CloudModel. A 429 / timeout / empty body is not a dialog failure:
-//! the embedded snapshot is returned instead.
+//! the embedded snapshot is returned instead. With the `model-signatures`
+//! feature, a fetched page must also match the signed data manifest
+//! (threatmodels_rs `authenticity`); one that does not is treated like a
+//! failed fetch.
 
 use crate::consent_documents_db::{embedded_consent, embedded_consent_filenames};
 use std::time::Duration;
@@ -141,6 +144,25 @@ async fn try_fetch_remote(filename: &str, branch: &str) -> Option<String> {
     match client.get(&url).send().await {
         Ok(response) if response.status().is_success() => match response.text().await {
             Ok(body) if !body.trim().is_empty() && !looks_like_github_block_page(&body) => {
+                if let Some(authenticator) = threatmodels_rs::ModelAuthenticator::production() {
+                    let path = format!("consent/{filename}");
+                    if let Err(error) = authenticator
+                        .verify_published_file(
+                            &client,
+                            THREATMODELS_RAW,
+                            branch,
+                            &path,
+                            body.as_bytes(),
+                        )
+                        .await
+                    {
+                        warn!(
+                            "Consent {} from {} failed authentication, using the embedded copy: {:#}",
+                            filename, url, error
+                        );
+                        return None;
+                    }
+                }
                 info!("Loaded consent {} from {}", filename, url);
                 Some(body)
             }
