@@ -49,6 +49,8 @@ pub mod helper_tx;
 pub mod history;
 pub mod llm_client;
 pub mod logger;
+/// Managed (MDM) configuration: policy readers and the secrets file (2.0.2).
+pub mod managed_config;
 pub mod mcp_tool_integrity;
 pub mod order;
 pub mod order_type;

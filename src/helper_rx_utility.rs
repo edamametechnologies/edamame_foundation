@@ -188,6 +188,16 @@ pub async fn utility_get_logs() -> Result<String> {
     Ok(logs)
 }
 
+/// The organization's managed secrets file (Hub PIN, LLM / Portal key). The
+/// helper runs as root / SYSTEM and the file is root-only; the sandboxed app
+/// cannot read it itself. Thin delegate to the shared reader, which a
+/// standalone core calls directly.
+pub async fn utility_get_managed_secrets() -> Result<String> {
+    let read = crate::managed_config::read_managed_secrets();
+    serde_json::to_string(&read)
+        .map_err(|e| anyhow::anyhow!("Failed to serialize managed secrets: {}", e))
+}
+
 #[cfg(all(
     any(target_os = "macos", target_os = "linux", target_os = "windows"),
     feature = "packetcapture"

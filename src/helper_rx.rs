@@ -567,6 +567,7 @@ pub async fn rpc_run(
             "helper_check" => utility_helper_check().await,
             "helper_flags" => utility_helper_flags().await,
             "get_logs" => utility_get_logs().await,
+            "get_managed_secrets" => utility_get_managed_secrets().await,
 
             #[cfg(all(
                 any(target_os = "macos", target_os = "linux", target_os = "windows"),
@@ -810,6 +811,31 @@ mod tests {
             .domain_name("localhost")
             .ca_certificate(ca_certificate)
             .identity(client_identity);
+    }
+
+    /// The managed-secrets order goes through the real dispatcher to the
+    /// shared reader and answers a `ManagedSecretsRead` document. No dev or CI
+    /// host has the root-only file, so it is absent (or unsupported on Linux).
+    #[tokio::test]
+    async fn test_get_managed_secrets_order_dispatches_to_shared_reader() -> Result<()> {
+        let output = rpc_run(
+            "utilityorder",
+            "get_managed_secrets",
+            "",
+            "",
+            "",
+            env!("CARGO_PKG_VERSION"),
+        )
+        .await?;
+        let read: crate::managed_config::ManagedSecretsRead = serde_json::from_str(&output)?;
+        assert_eq!(read, crate::managed_config::read_managed_secrets());
+        if cfg!(target_os = "linux") {
+            assert_eq!(
+                read.status,
+                crate::managed_config::ManagedSecretsStatus::Unsupported
+            );
+        }
+        Ok(())
     }
 
     #[tokio::test]

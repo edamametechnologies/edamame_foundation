@@ -31,6 +31,7 @@ pub const UTILITY_ORDER_NAMES: &[&str] = &[
     "get_file_monitor_status",
     "get_filter",
     "get_logs",
+    "get_managed_secrets",
     "get_neighbors",
     "get_packet_stats",
     "get_peer_ids",
@@ -61,6 +62,9 @@ pub const UTILITY_ORDER_NAMES: &[&str] = &[
     "stop_capture",
     "stop_file_monitor",
 ];
+
+/// Utility orders whose response carries secrets: never logged, even at trace.
+pub const SECRET_BEARING_UTILITY_ORDERS: &[&str] = &["get_managed_secrets"];
 
 // Version
 pub static CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -324,7 +328,11 @@ async fn helper_run_with_channel(
         }
     };
     let output = response.into_inner().output;
-    trace!("Helper response: {:?}", output);
+    if SECRET_BEARING_UTILITY_ORDERS.contains(&subordertype) {
+        trace!("Helper response: <{} bytes, redacted>", output.len());
+    } else {
+        trace!("Helper response: {:?}", output);
+    }
     Ok(output)
 }
 
