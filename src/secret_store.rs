@@ -15,6 +15,9 @@
 //! | Linux (posture as root, app as the user) | [`OwnerOnlyFileStore`] `0600` in a `0700` dir | The Secret Service needs a D-Bus user session: absent for a root daemon, a headless host or a CI runner |
 //! | Android | [`OwnerOnlyFileStore`] in the app's private files dir | Per-app UID sandbox; Keystore-backed encryption is not wired (no JNI path in the storage layer yet) |
 //!
+//! File-backed stores of a root process live in root's own home from the user
+//! database, never under an inherited `$HOME` ([`secrets_location`]).
+//!
 //! Names are storage keys (`[A-Za-z0-9._-]+`); values are UTF-8 strings (the
 //! caller serializes). Every store treats "no such item" as `Ok(None)` and
 //! reports every other failure as an error: a caller must be able to tell
@@ -378,6 +381,102 @@ impl SecretStore for KeychainStore {
 }
 
 // ---------------------------------------------------------------------------
+// Where a root process keeps its file-backed secrets
+// ---------------------------------------------------------------------------
+
+/// The process's effective uid (root is 0).
+#[cfg(unix)]
+pub fn effective_uid() -> u32 {
+    // SAFETY: geteuid has no preconditions and cannot fail.
+    unsafe { libc::geteuid() as u32 }
+}
+
+/// The home directory of account `uid` from the user database, never from
+/// `$HOME` (`getpwuid_r`). `None` when the account has no entry.
+#[cfg(unix)]
+pub fn account_home_dir(uid: u32) -> Option<PathBuf> {
+    use std::ffi::CStr;
+    let mut buf = vec![0u8; 4096];
+    loop {
+        // SAFETY: `pwd` and `buf` outlive the call; on success `result`
+        // points at `pwd`, whose strings point into `buf`.
+        let mut pwd: libc::passwd = unsafe { std::mem::zeroed() };
+        let mut result: *mut libc::passwd = std::ptr::null_mut();
+        let rc = unsafe {
+            libc::getpwuid_r(
+                uid as libc::uid_t,
+                &mut pwd,
+                buf.as_mut_ptr() as *mut libc::c_char,
+                buf.len(),
+                &mut result,
+            )
+        };
+        if rc == libc::ERANGE && buf.len() < 1 << 20 {
+            buf.resize(buf.len() * 2, 0);
+            continue;
+        }
+        if rc != 0 || result.is_null() || pwd.pw_dir.is_null() {
+            return None;
+        }
+        let dir = unsafe { CStr::from_ptr(pwd.pw_dir) }
+            .to_string_lossy()
+            .into_owned();
+        return (!dir.is_empty()).then(|| PathBuf::from(dir));
+    }
+}
+
+/// Where a process keeps its file-backed secrets (the `secrets` dir under
+/// `<home>/.edamame`) and the suffix its secret names carry.
+///
+/// - Not root (the user app, `edamame_cli` as the user): `$HOME`, unchanged.
+/// - Root (posture as a service, `sudo edamame_posture ...`): root's own home
+///   from the user database, whatever `$HOME` says. `sudo -E` (and macOS's
+///   default sudoers, which keeps `HOME`) hands root the calling user's home;
+///   root would then create its secrets dir inside a tree that user owns and
+///   can swap for a symlink, and `sudo` from two accounts would split one
+///   daemon's secrets in two.
+/// - `json_follows_home`: the persisted JSON config of this build lives under
+///   `$HOME` (Linux, macOS without `userdefaults`) instead of in the per-uid
+///   defaults domain. A root process started with another `$HOME` then pairs
+///   with another JSON config; its names take a suffix derived from that home
+///   so the two configs never share (and fight over) one secret.
+///
+/// `root_fallback` is used when the user database has no entry for root.
+pub fn secrets_location(
+    euid: u32,
+    env_home: Option<&str>,
+    root_home: Option<&Path>,
+    root_fallback: &Path,
+    json_follows_home: bool,
+) -> Result<(PathBuf, Option<String>)> {
+    let env_home = env_home.map(str::trim).filter(|home| !home.is_empty());
+    if euid != 0 {
+        let home = env_home.ok_or_else(|| anyhow!("HOME is not set"))?;
+        return Ok((PathBuf::from(home).join(".edamame").join("secrets"), None));
+    }
+    let own = root_home.unwrap_or(root_fallback);
+    let normalize = |p: &str| p.trim_end_matches('/').to_string();
+    let suffix = match env_home {
+        Some(home) if json_follows_home && normalize(home) != normalize(&own.to_string_lossy()) => {
+            Some(format!("h{:016x}", fnv1a64(normalize(home).as_bytes())))
+        }
+        _ => None,
+    };
+    Ok((own.join(".edamame").join("secrets"), suffix))
+}
+
+/// FNV-1a, 64 bit: stable across Rust releases (unlike `DefaultHasher`), so a
+/// name derived from it survives an upgrade.
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+// ---------------------------------------------------------------------------
 // Composition and test double
 // ---------------------------------------------------------------------------
 
@@ -561,6 +660,79 @@ mod tests {
         for bad in ["", "../x", "a/b", ".hidden", "a\\b", "a b"] {
             assert!(store.write(bad, "v").is_err(), "{bad:?} accepted");
         }
+    }
+
+    #[test]
+    fn a_user_process_keeps_its_secrets_under_home() {
+        let (dir, suffix) = secrets_location(
+            501,
+            Some("/Users/alice"),
+            Some(Path::new("/var/root")),
+            Path::new("/var/root"),
+            true,
+        )
+        .unwrap();
+        assert_eq!(dir, PathBuf::from("/Users/alice/.edamame/secrets"));
+        assert_eq!(suffix, None);
+        assert!(secrets_location(501, None, None, Path::new("/root"), true).is_err());
+    }
+
+    #[test]
+    fn root_keeps_its_secrets_in_its_own_home_whatever_home_says() {
+        for env_home in [Some("/Users/alice"), Some("/var/root"), Some(""), None] {
+            let (dir, _) = secrets_location(
+                0,
+                env_home,
+                Some(Path::new("/var/root")),
+                Path::new("/root"),
+                false,
+            )
+            .unwrap();
+            assert_eq!(
+                dir,
+                PathBuf::from("/var/root/.edamame/secrets"),
+                "{env_home:?}"
+            );
+        }
+        // No user-database entry: the platform fallback.
+        let (dir, _) =
+            secrets_location(0, Some("/home/bob"), None, Path::new("/root"), true).unwrap();
+        assert_eq!(dir, PathBuf::from("/root/.edamame/secrets"));
+    }
+
+    #[test]
+    fn root_names_follow_the_json_config_home() {
+        let root = Path::new("/root");
+        let name = |home: Option<&str>, follows: bool| {
+            secrets_location(0, home, Some(root), root, follows)
+                .unwrap()
+                .1
+        };
+        // The JSON config is per-uid (macOS defaults domain): one set of names.
+        assert_eq!(name(Some("/home/bob"), false), None);
+        // The JSON config follows HOME: root's own home keeps plain names...
+        assert_eq!(name(Some("/root"), true), None);
+        assert_eq!(name(Some("/root/"), true), None);
+        assert_eq!(name(None, true), None);
+        // ...another HOME gets its own, stable, per-home names.
+        let bob = name(Some("/home/bob"), true).unwrap();
+        assert_eq!(bob, name(Some("/home/bob/"), true).unwrap());
+        assert_ne!(bob, name(Some("/home/carol"), true).unwrap());
+        assert_eq!(bob, format!("h{:016x}", fnv1a64(b"/home/bob")));
+        assert!(bob
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn account_home_comes_from_the_user_database() {
+        let home = account_home_dir(0).expect("root has an entry");
+        #[cfg(target_os = "macos")]
+        assert_eq!(home, PathBuf::from("/var/root"));
+        #[cfg(target_os = "linux")]
+        assert_eq!(home, PathBuf::from("/root"));
+        let _ = home;
     }
 
     #[test]
