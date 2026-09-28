@@ -89,55 +89,6 @@ fn prune_stale_logs(log_dir: &Path, stem: &str, current_pid: u32) {
 
 lazy_static! {
     static ref LOGGER: Mutex<Option<Arc<Logger>>> = Mutex::new(None);
-    // Pre-compile the sanitization regex once so it can be reused for every log line.
-    // The pattern dynamically embeds all sensitive keywords and performs a single pass
-    // over the input instead of iterating and recompiling per-keyword.
-    static ref SANITIZE_REGEX: Regex = {
-        // Keep this list in sync with the one used in `handle_log`.
-        // Exact keys: masked only as whole words (`finding_key`, `session_id`
-        // and the like stay readable for debugging).
-        let exact_keywords = [
-            "id",
-            "uuid",
-            "pin",
-            "device",
-            "password",
-            "key",
-            "Device ID",
-            "device_id",
-            "code",
-            "authorization",
-            "bearer",
-        ];
-        // Secret names that also count with a prefix: `api_key`,
-        // `edamame_api_key`, `mcp_psk`, `oauth_refresh_token`, `bot_token`,
-        // `client_secret`, `edamame_pin`, ...
-        let secret_suffixes = [
-            "api_?key", "psk", "secret", "token", "credential", "credentials",
-            "password", "passwd", "pin", "private_key",
-        ];
-        let exact = exact_keywords
-            .iter()
-            .map(|k| regex::escape(k))
-            .collect::<Vec<_>>()
-            .join("|");
-        let suffixes = secret_suffixes.join("|");
-        // Keys and values may be JSON-escaped (`\"pin\":\"123456\"`) when a
-        // JSON string is logged through Debug. A quoted value steps over its
-        // escape pairs, so a PEM body (`\n`) or a password holding `\\` or
-        // `\"` is masked whole instead of up to its first backslash; the
-        // JSON-escaped form sees those as `\\n`, `\\\\` and `\\\"`, and ends
-        // at the first `\"` that does not close one of them. `"[^"]+"` stays
-        // as the fallback for a quoted value ending in a lone backslash. A
-        // bare value may hold a backslash but not start with one, so the
-        // backslash of an escaped key is never masked in place of a value.
-        let quoted = r#"(?:[^"\\]|\\.)+"#;
-        let escaped = r#"(?:[^"\\]|\\[^"\\]|\\\\(?:\\.|[^"\\]))+"#;
-        let pattern = format!(
-            r#"(?P<key>\\?"?\b(?:(?:[A-Za-z0-9]+_)*(?:{suffixes})|{exact})\b\\?"?\s*[:=]?\s*)(?:\\"(?P<escaped>{escaped})\\"|"(?P<quoted>{quoted})"|"(?P<raw>[^"]+)"|(?P<bare>\b[^\s",}}\\][^\s",}}]*))"#
-        );
-        Regex::new(&pattern).expect("Failed to compile sanitization regex")
-    };
     static ref ANSI_ESCAPE_REGEX: Regex =
         Regex::new(r"\x1b\[[0-9;]*m").expect("Failed to compile ANSI escape regex");
 }
@@ -174,9 +125,8 @@ impl MemoryWriter {
     }
 
     fn handle_log(&self, log_line: &str) -> io::Result<()> {
-        // Sanitize the log line (not in debug mode). All sensitive keywords are handled
-        // by the pre-compiled regex inside `sanitize_keywords`, so we don't need to allocate
-        // a keywords vector on every call.
+        // Sanitize the log line (not in debug mode) through the shared
+        // redaction module (secret shapes, secret-named fields, privacy keys).
         let log_line_sanitized = if cfg!(debug_assertions) {
             log_line.to_string()
         } else {
@@ -285,22 +235,10 @@ where
     }
 }
 
+/// Log-line scrubbing: secret shapes, secret-named fields and the privacy
+/// keys, all owned by the shared `redaction` module.
 fn sanitize_keywords(input: &str, _keywords: &[&str]) -> String {
-    SANITIZE_REGEX
-        .replace_all(input, |caps: &regex::Captures| {
-            let key = &caps["key"];
-            // Keep the value's own quoting (JSON-escaped, plain or none).
-            let (quote, value) = if let Some(m) = caps.name("escaped") {
-                ("\\\"", m.as_str())
-            } else if let Some(m) = caps.name("quoted").or_else(|| caps.name("raw")) {
-                ("\"", m.as_str())
-            } else {
-                ("", caps.name("bare").map_or("", |m| m.as_str()))
-            };
-
-            format!("{}{}{}{}", key, quote, "*".repeat(value.len()), quote)
-        })
-        .to_string()
+    crate::redaction::redact_log_line(input)
 }
 
 fn build_log_output(logs: &[String]) -> String {
@@ -496,6 +434,90 @@ fn sentry_event_fingerprint(event: &sentry::protocol::Event) -> u64 {
     hasher.finish()
 }
 
+fn scrub_sentry_value(value: &mut serde_json::Value) {
+    use crate::redaction::{is_secret_field_name, redact_log_line, REDACTED};
+    match value {
+        serde_json::Value::String(text) => {
+            let scrubbed = redact_log_line(text);
+            if scrubbed != *text {
+                *text = scrubbed;
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for (name, field) in map.iter_mut() {
+                if is_secret_field_name(name) && !field.is_null() {
+                    *field = serde_json::Value::String(REDACTED.to_string());
+                } else {
+                    scrub_sentry_value(field);
+                }
+            }
+        }
+        serde_json::Value::Array(items) => items.iter_mut().for_each(scrub_sentry_value),
+        _ => {}
+    }
+}
+
+fn scrub_sentry_map(map: &mut sentry::protocol::Map<String, serde_json::Value>) {
+    use crate::redaction::{is_secret_field_name, REDACTED};
+    for (name, field) in map.iter_mut() {
+        if is_secret_field_name(name) && !field.is_null() {
+            *field = serde_json::Value::String(REDACTED.to_string());
+        } else {
+            scrub_sentry_value(field);
+        }
+    }
+}
+
+/// Defence in depth for the Sentry path: every free-text and structured field
+/// of an event goes through the shared redaction module before it leaves the
+/// process. The log writers already scrub what they write, but the
+/// sentry_tracing layer builds its event from the raw tracing record.
+pub(crate) fn scrub_sentry_event(
+    mut event: sentry::protocol::Event<'static>,
+) -> sentry::protocol::Event<'static> {
+    use crate::redaction::redact_log_line;
+    let scrub = |text: &mut String| {
+        let scrubbed = redact_log_line(text);
+        if scrubbed != *text {
+            *text = scrubbed;
+        }
+    };
+    if let Some(message) = event.message.as_mut() {
+        scrub(message);
+    }
+    if let Some(logentry) = event.logentry.as_mut() {
+        scrub(&mut logentry.message);
+        logentry.params.iter_mut().for_each(scrub_sentry_value);
+    }
+    if let Some(culprit) = event.culprit.as_mut() {
+        scrub(culprit);
+    }
+    if let Some(transaction) = event.transaction.as_mut() {
+        scrub(transaction);
+    }
+    for exception in event.exception.values.iter_mut() {
+        if let Some(value) = exception.value.as_mut() {
+            scrub(value);
+        }
+    }
+    for breadcrumb in event.breadcrumbs.values.iter_mut() {
+        if let Some(message) = breadcrumb.message.as_mut() {
+            scrub(message);
+        }
+        scrub_sentry_map(&mut breadcrumb.data);
+    }
+    scrub_sentry_map(&mut event.extra);
+    for value in event.tags.values_mut() {
+        scrub(value);
+    }
+    for context in event.contexts.values_mut() {
+        if let sentry::protocol::Context::Other(map) = context {
+            scrub_sentry_map(map);
+        }
+    }
+    event
+}
+
 fn init_sentry(url: &str, release: &str) {
     let release = release.to_string();
     let sentry_guard = sentry::init((
@@ -508,6 +530,11 @@ fn init_sentry(url: &str, release: &str) {
             },
             traces_sample_rate: 0.2,
             before_send: Some(Arc::new(|event| {
+                // Scrub before anything else: an ERROR log can carry an LLM
+                // provider's error body or a credential-bearing argument, and
+                // the sentry_tracing layer sees the raw event, not the
+                // sanitized writer output. Always on, debug builds included.
+                let event = scrub_sentry_event(event);
                 let fp = sentry_event_fingerprint(&event);
                 let now = Instant::now();
                 let mut dedup = match SENTRY_DEDUP.lock() {
@@ -1122,12 +1149,19 @@ mod tests {
         let pem =
             r#"-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0B\n-----END PRIVATE KEY-----\n"#;
         let log = format!(r#"{{"private_key": "{pem}", "kid": "k1"}}"#);
-        assert_eq!(
-            sanitize_keywords(&log, &[]),
-            format!(
-                r#"{{"private_key": "{}", "kid": "k1"}}"#,
-                "*".repeat(pem.len())
-            )
+        let sanitized = sanitize_keywords(&log, &[]);
+        // The PEM shape goes first, then the named field masks what is left
+        // of the value: nothing of the key survives, the neighbour does.
+        assert!(!sanitized.contains("MIIE"), "{sanitized}");
+        assert!(!sanitized.contains("BEGIN"), "{sanitized}");
+        assert!(sanitized.ends_with(r#"", "kid": "k1"}"#), "{sanitized}");
+        let value = sanitized
+            .strip_prefix(r#"{"private_key": ""#)
+            .and_then(|rest| rest.split('"').next())
+            .unwrap();
+        assert!(
+            !value.is_empty() && value.chars().all(|c| c == '*'),
+            "{sanitized}"
         );
     }
 
@@ -1154,6 +1188,73 @@ mod tests {
     fn test_sanitize_keywords_keeps_debugging_keys_and_counts() {
         let log = r#"{"finding_key": "vuln:abc", "session_id": "s-1", "input_tokens": 1200} LLM decision: allow (tokens: 1200/80)"#;
         assert_eq!(sanitize_keywords(log, &[]), log);
+    }
+
+    #[test]
+    fn sentry_events_are_scrubbed_before_they_leave() {
+        use sentry::protocol::{Breadcrumb, Context, Event, Exception, LogEntry, Map};
+        let mut event = Event::default();
+        event.message = Some(
+            "LLM error: 401 {\"error\":\"invalid x-api-key sk-ant-api03-AAAAAAAAAAAAAAAAAAAA\"}"
+                .into(),
+        );
+        event.logentry = Some(LogEntry {
+            message: "Connected with pin: 123456".into(),
+            params: vec![serde_json::json!("Bearer abcdefghijklmnop")],
+        });
+        event.exception.values.push(Exception {
+            ty: "Error".into(),
+            value: Some("edamame_api_key=edm_live_0123456789abcdef".into()),
+            ..Default::default()
+        });
+        let mut data = Map::new();
+        data.insert("api_key".to_string(), serde_json::json!("plain-secret"));
+        event.breadcrumbs.values.push(Breadcrumb {
+            message: Some("token=ghp_0123456789abcdefghij0123".into()),
+            data,
+            ..Default::default()
+        });
+        event
+            .extra
+            .insert("oauth_refresh_token".into(), serde_json::json!("rt-secret"));
+        event.extra.insert(
+            "note".into(),
+            serde_json::json!("key xoxb-1234567890-abcdefghij"),
+        );
+        let mut other = Map::new();
+        other.insert("password".to_string(), serde_json::json!("hunter2"));
+        event
+            .contexts
+            .insert("fields".into(), Context::Other(other));
+
+        let scrubbed = scrub_sentry_event(event);
+        // The scrubbed surfaces only: event_id / timestamp are random digits.
+        let serialized = serde_json::to_string(&(
+            &scrubbed.message,
+            &scrubbed.logentry,
+            &scrubbed.exception,
+            &scrubbed.breadcrumbs,
+            &scrubbed.extra,
+            &scrubbed.contexts,
+        ))
+        .unwrap();
+        for secret in [
+            "sk-ant-api03",
+            "123456",
+            "abcdefghijklmnop",
+            "edm_live_0123",
+            "plain-secret",
+            "ghp_0123",
+            "rt-secret",
+            "xoxb-",
+            "hunter2",
+        ] {
+            assert!(
+                !serialized.contains(secret),
+                "{secret} leaked: {serialized}"
+            );
+        }
+        assert!(serialized.contains("LLM error: 401"), "{serialized}");
     }
 
     #[test]

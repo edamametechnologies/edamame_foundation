@@ -61,6 +61,7 @@ pub mod process_control;
 mod prompt_injection_corpus;
 pub mod publisher_attestation;
 pub mod pwned;
+pub mod redaction;
 pub mod runner_cli;
 pub mod runtime;
 pub mod score;

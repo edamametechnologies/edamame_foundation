@@ -19,6 +19,10 @@
 //! collectors simply find nothing on disk).
 
 use crate::agent_visibility_params;
+// The URL and excerpt maskers moved to the shared redaction module (2.0.2);
+// re-exported so `agent_visibility::redact_secret_like_text` keeps working.
+pub use crate::redaction::redact_secret_like_text;
+use crate::redaction::{is_secret_query_key, redact_url_credentials};
 use crate::supported_agents;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -3180,31 +3184,6 @@ fn auth_phrase(auth: AuthStrength) -> &'static str {
     }
 }
 
-/// Query-parameter keys that conventionally carry a credential. Matched
-/// case-insensitively. Only the *presence* of the key is ever used; the value
-/// is never read or stored (invariant I5).
-fn is_secret_query_key(key: &str) -> bool {
-    matches!(
-        key.trim().to_ascii_lowercase().as_str(),
-        "secret"
-            | "token"
-            | "access_token"
-            | "accesstoken"
-            | "refresh_token"
-            | "api_key"
-            | "apikey"
-            | "api-key"
-            | "key"
-            | "auth"
-            | "authorization"
-            | "password"
-            | "passwd"
-            | "pwd"
-            | "sig"
-            | "signature"
-    )
-}
-
 /// True when the URL carries an inline credential -- a `user:pass@` authority or
 /// a secret-bearing query parameter (`?secret=`, `?token=`, ...). Presence only;
 /// the value is never inspected or persisted (invariant I5).
@@ -3229,75 +3208,6 @@ fn url_carries_inline_credential(url: &str) -> bool {
         }
     }
     false
-}
-
-/// Redact inline credentials from a URL for storage / display / hashing: drop
-/// the password from a `user:pass@` authority and rewrite any secret-bearing
-/// query-parameter value to `REDACTED`. The raw secret is never stored
-/// (invariant I5); redacting before the id hash also keeps the endpoint id
-/// stable across secret rotation.
-fn redact_url_credentials(url: &str) -> String {
-    let (base, rest) = match url.split_once('?') {
-        Some((b, r)) => (b.to_string(), Some(r.to_string())),
-        None => (url.to_string(), None),
-    };
-    let mut out = redact_userinfo(&base);
-    if let Some(rest) = rest {
-        let (query, frag) = match rest.split_once('#') {
-            Some((q, f)) => (q.to_string(), Some(f.to_string())),
-            None => (rest, None),
-        };
-        let redacted_query = query
-            .split('&')
-            .map(|pair| match pair.split_once('=') {
-                Some((k, _)) if is_secret_query_key(k) => format!("{}=REDACTED", k),
-                _ => pair.to_string(),
-            })
-            .collect::<Vec<_>>()
-            .join("&");
-        out.push('?');
-        out.push_str(&redacted_query);
-        if let Some(frag) = frag {
-            out.push('#');
-            out.push_str(&frag);
-        }
-    }
-    out
-}
-
-/// Strip the password from a `scheme://user:pass@host/...` authority, keeping
-/// only `scheme://user@host/...`. Authority-free inputs pass through unchanged.
-fn redact_userinfo(base: &str) -> String {
-    let (scheme, rest) = match base.split_once("://") {
-        Some((s, r)) => (Some(s), r),
-        None => (None, base),
-    };
-    let (authority, path) = match rest.split_once('/') {
-        Some((a, p)) => (a.to_string(), Some(p.to_string())),
-        None => (rest.to_string(), None),
-    };
-    let authority = match authority.split_once('@') {
-        Some((userinfo, host)) => {
-            let user = userinfo.split(':').next().unwrap_or("");
-            if user.is_empty() {
-                host.to_string()
-            } else {
-                format!("{}@{}", user, host)
-            }
-        }
-        None => authority,
-    };
-    let mut out = String::new();
-    if let Some(s) = scheme {
-        out.push_str(s);
-        out.push_str("://");
-    }
-    out.push_str(&authority);
-    if let Some(p) = path {
-        out.push('/');
-        out.push_str(&p);
-    }
-    out
 }
 
 fn classify_exposure(transport: &str, host: Option<&str>) -> ExposureScope {
@@ -4138,157 +4048,6 @@ fn path_is_instruction_artifact(path: &Path) -> bool {
             .iter()
             .any(|(dir, _)| *dir == seg.as_str())
     })
-}
-
-/// Key-name hints that mark a `key = value` / `key: value` line as carrying a
-/// secret value to mask at the `redacted_excerpt` tier.
-const SECRET_KEY_HINTS: &[&str] = &[
-    "secret",
-    "token",
-    "password",
-    "passwd",
-    "pwd",
-    "api_key",
-    "apikey",
-    "api-key",
-    "access_key",
-    "private_key",
-    "client_secret",
-    "auth",
-    "bearer",
-    "credential",
-    "session_key",
-];
-
-/// Standalone token prefixes that are masked wherever they appear, regardless
-/// of the surrounding line shape.
-const SECRET_TOKEN_PREFIXES: &[&str] = &[
-    "sk-",
-    "ghp_",
-    "gho_",
-    "ghs_",
-    "github_pat_",
-    "xox",
-    "akia",
-    "asia",
-    "aiza",
-    "ya29.",
-    "eyj",
-];
-
-fn char_is_token(c: char) -> bool {
-    c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '_' | '-' | '=' | '.')
-}
-
-/// True when `tok` looks like a high-entropy secret: a known secret prefix, or a
-/// long mixed alphanumeric run (>= 28 chars with at least one digit and one
-/// letter). Conservative on purpose -- this is defense in depth behind the tier
-/// gate, not the primary control.
-fn token_looks_secret(tok: &str) -> bool {
-    let lower = tok.to_ascii_lowercase();
-    if SECRET_TOKEN_PREFIXES
-        .iter()
-        .any(|p| lower.starts_with(p) && tok.len() >= p.len() + 6)
-    {
-        return true;
-    }
-    if tok.len() < 28 {
-        return false;
-    }
-    let has_digit = tok.chars().any(|c| c.is_ascii_digit());
-    let has_alpha = tok.chars().any(|c| c.is_ascii_alphabetic());
-    let all_token = tok.chars().all(char_is_token);
-    has_digit && has_alpha && all_token
-}
-
-/// A token that starts like a filesystem path (`/`, `~/`, `./`, `../`). Base64
-/// secrets can contain `/` too, but they do not start with one of these.
-fn token_looks_like_path(tok: &str) -> bool {
-    tok.starts_with('/') || tok.starts_with("~/") || tok.starts_with("./") || tok.starts_with("../")
-}
-
-/// Mask secret-like spans in `line`. Returns the (possibly rewritten) line and
-/// whether anything was masked.
-fn redact_secret_line(line: &str) -> (String, bool) {
-    let mut masked = false;
-
-    // 1. `key <sep> value` where the key name hints at a secret.
-    if let Some(sep_idx) = line.find([':', '=']) {
-        let (key, rest) = line.split_at(sep_idx);
-        let key_lower = key.to_ascii_lowercase();
-        if SECRET_KEY_HINTS.iter().any(|h| key_lower.contains(h)) {
-            let sep = &rest[..1];
-            let value = &rest[1..];
-            if !value.trim().is_empty() {
-                let leading_ws: String = value.chars().take_while(|c| c.is_whitespace()).collect();
-                return (format!("{key}{sep}{leading_ws}REDACTED"), true);
-            }
-        }
-    }
-
-    // 2. Standalone high-entropy tokens anywhere in the line.
-    let mut out = String::with_capacity(line.len());
-    let mut cur = String::new();
-    let flush = |cur: &mut String, out: &mut String, masked: &mut bool| {
-        if !cur.is_empty() {
-            if token_looks_like_path(cur) {
-                // A path is judged segment by segment: a long absolute path
-                // with a digit anywhere is not a secret, a secret-looking
-                // segment inside it still is.
-                for (index, segment) in cur.split('/').enumerate() {
-                    if index > 0 {
-                        out.push('/');
-                    }
-                    if token_looks_secret(segment) {
-                        out.push_str("REDACTED");
-                        *masked = true;
-                    } else {
-                        out.push_str(segment);
-                    }
-                }
-            } else if token_looks_secret(cur) {
-                out.push_str("REDACTED");
-                *masked = true;
-            } else {
-                out.push_str(cur);
-            }
-            cur.clear();
-        }
-    };
-    for c in line.chars() {
-        if char_is_token(c) {
-            cur.push(c);
-        } else {
-            flush(&mut cur, &mut out, &mut masked);
-            out.push(c);
-        }
-    }
-    flush(&mut cur, &mut out, &mut masked);
-    (out, masked)
-}
-
-/// Apply line-level secret redaction to `text`. Returns the redacted text and
-/// the number of lines that had a value masked.
-///
-/// The `redacted_excerpt`-tier masker for every transcript- or file-derived
-/// excerpt: instruction bodies here, and in core the recorder titles,
-/// commands and tool-error text served over RPC and MCP.
-pub fn redact_secret_like_text(text: &str) -> (String, usize) {
-    let mut redacted_lines = 0usize;
-    let mut out = String::with_capacity(text.len());
-    for segment in text.split_inclusive('\n') {
-        let (body, nl) = match segment.strip_suffix('\n') {
-            Some(b) => (b, "\n"),
-            None => (segment, ""),
-        };
-        let (line, masked) = redact_secret_line(body);
-        if masked {
-            redacted_lines += 1;
-        }
-        out.push_str(&line);
-        out.push_str(nl);
-    }
-    (out, redacted_lines)
 }
 
 /// Truncate `bytes` to at most `max` bytes on a UTF-8 char boundary, returning
