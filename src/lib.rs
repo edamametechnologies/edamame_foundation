@@ -28,6 +28,7 @@ pub mod consent_documents;
 pub mod consent_documents_db;
 pub mod console_user;
 pub mod cve_detection_params_db;
+pub mod dev_tree_attestation;
 pub mod file_reveal;
 #[cfg(all(
     any(target_os = "macos", target_os = "windows", target_os = "linux"),

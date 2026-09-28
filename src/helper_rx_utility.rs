@@ -620,6 +620,17 @@ pub async fn utility_scan_secret_content(paths_json: &str) -> Result<String> {
         .map_err(|e| anyhow::anyhow!("Failed to serialize secret-content matches: {}", e))
 }
 
+/// Dev-tree attestation (`dev_tree_attestation::attest_dev_trees`): which
+/// toolchain markers and git index facts hold for each path. Thin delegate;
+/// the standalone core calls the same function in-process.
+pub async fn utility_attest_dev_trees(paths_json: &str) -> Result<String> {
+    let paths: Vec<String> = serde_json::from_str(paths_json)
+        .map_err(|e| anyhow::anyhow!("Failed to parse dev-tree attestation paths: {}", e))?;
+    let attestations = crate::dev_tree_attestation::attest_dev_trees(&paths);
+    serde_json::to_string(&attestations)
+        .map_err(|e| anyhow::anyhow!("Failed to serialize dev-tree attestations: {}", e))
+}
+
 /// Validate the caller-supplied home directory for an agent-surface utility
 /// order.
 ///
