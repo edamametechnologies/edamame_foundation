@@ -21,8 +21,11 @@
 //!    - a JavaScript project root: `package.json` next to a `node_modules`
 //!      holding a package manager's install state (`.package-lock.json`
 //!      from npm, `.modules.yaml` from pnpm, `.yarn-state.yml` /
-//!      `.yarn-integrity` from yarn) -- the tree an `esbuild` / `swc` /
-//!      `node_modules/.bin` binary writes its output into.
+//!      `.yarn-integrity` from yarn), or next to a `node_modules` and a bun
+//!      lockfile (`bun.lock` / `bun.lockb`, bun keeps no state inside
+//!      `node_modules`) -- the tree an `esbuild` / `swc` /
+//!      `node_modules/.bin` binary writes its output into, and the tree
+//!      `bun init` scaffolds.
 //! 2. Is the path inside a PEP 405 virtual environment (`pyvenv.cfg` at the
 //!    venv root)?
 //! 3. Is the path inside a git work tree, is it an entry of that work tree's
@@ -262,19 +265,30 @@ fn build_tree_marker(dir: &Path) -> Option<&'static str> {
     if dir.join("CMakeCache.txt").is_file() {
         return Some("cmake_build");
     }
-    if dir.join("package.json").is_file()
-        && [
-            ".package-lock.json",
-            ".modules.yaml",
-            ".yarn-state.yml",
-            ".yarn-integrity",
-        ]
-        .iter()
-        .any(|state| dir.join("node_modules").join(state).is_file())
-    {
+    if dir.join("package.json").is_file() && js_install_state(dir) {
         return Some("node_project");
     }
     None
+}
+
+/// A package manager has installed into the project at `dir`: npm, pnpm and
+/// yarn leave their state inside `node_modules/`; bun keeps none there and
+/// writes its lockfile (`bun.lock`, the binary `bun.lockb` before bun 1.2)
+/// at the project root next to the `node_modules/` it populated.
+fn js_install_state(dir: &Path) -> bool {
+    let node_modules = dir.join("node_modules");
+    [
+        ".package-lock.json",
+        ".modules.yaml",
+        ".yarn-state.yml",
+        ".yarn-integrity",
+    ]
+    .iter()
+    .any(|state| node_modules.join(state).is_file())
+        || (node_modules.is_dir()
+            && ["bun.lock", "bun.lockb"]
+                .iter()
+                .any(|lock| dir.join(lock).is_file()))
 }
 
 /// `dir` is a Go build work directory (`$WORK`, `go-build<digits>`) and
@@ -593,6 +607,19 @@ mod tests {
         std::fs::write(node.join("node_modules/.package-lock.json"), "{}").unwrap();
         let bundle = node.join("dist/sum.js");
         std::fs::write(&bundle, "").unwrap();
+        // bun: lockfile at the root, nothing inside node_modules.
+        let bun = root.join("bunproj");
+        std::fs::create_dir_all(bun.join("node_modules")).unwrap();
+        std::fs::write(bun.join("package.json"), "{}").unwrap();
+        std::fs::write(bun.join("bun.lock"), "{}").unwrap();
+        let claude_md = bun.join("CLAUDE.md");
+        std::fs::write(&claude_md, "").unwrap();
+        // A bun lockfile without node_modules is not an installed project.
+        let bun_bare = root.join("bunbare");
+        std::fs::create_dir_all(&bun_bare).unwrap();
+        std::fs::write(bun_bare.join("package.json"), "{}").unwrap();
+        std::fs::write(bun_bare.join("bun.lock"), "{}").unwrap();
+        std::fs::write(bun_bare.join("y.js"), "").unwrap();
         // A package.json without install state is not a project root.
         let bare = root.join("bare");
         std::fs::create_dir_all(bare.join("node_modules")).unwrap();
@@ -606,6 +633,8 @@ mod tests {
             &not_work.join("evil"),
             &bundle,
             &bare.join("x.js"),
+            &claude_md,
+            &bun_bare.join("y.js"),
         ]
         .iter()
         .map(|p| p.to_string_lossy().to_string())
@@ -622,6 +651,8 @@ mod tests {
         assert_eq!(kind(&not_work.join("evil")), None);
         assert_eq!(kind(&bundle).as_deref(), Some("node_project"));
         assert_eq!(kind(&bare.join("x.js")), None);
+        assert_eq!(kind(&claude_md).as_deref(), Some("node_project"));
+        assert_eq!(kind(&bun_bare.join("y.js")), None);
         let _ = std::fs::remove_dir_all(&root);
     }
 
