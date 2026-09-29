@@ -47,10 +47,4 @@ jobs:
 
       - name: Check all features
         run: |
-          # Every feature except model-signatures, which by design refuses to
-          # compile until the production root public keys are embedded
-          # (threatmodels-rs authenticity.rs).
-          features=$(cargo metadata --no-deps --format-version 1 \
-            | jq -r '.packages[] | select(.name=="edamame_foundation") | .features | keys
-                     | map(select(. != "model-signatures" and . != "default")) | join(",")')
-          cargo hack check --features "$features" --all-targets
+          cargo hack check --all-features --all-targets
