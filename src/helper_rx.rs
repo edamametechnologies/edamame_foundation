@@ -566,6 +566,7 @@ pub async fn rpc_run(
             "get_neighbors" => utility_get_neighbors(arg1).await,
             "helper_check" => utility_helper_check().await,
             "helper_flags" => utility_helper_flags().await,
+            "model_authenticity" => utility_model_authenticity().await,
             "get_logs" => utility_get_logs().await,
             "get_managed_secrets" => utility_get_managed_secrets().await,
 

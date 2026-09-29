@@ -53,6 +53,8 @@ pub mod logger;
 /// Managed (MDM) configuration: policy readers and the secrets file (2.0.2).
 pub mod managed_config;
 pub mod mcp_tool_integrity;
+/// Authenticity of the downloaded models (`model-signatures`, 2.0.3).
+pub mod model_authenticity;
 pub mod order;
 pub mod order_type;
 pub mod peer_ids;

@@ -183,6 +183,16 @@ pub async fn utility_helper_flags() -> Result<String> {
     Ok(crate::helper_state::get_helper_flags())
 }
 
+/// The helper's model authenticity snapshot: its threat model is the copy
+/// it runs elevated scripts from, and its lists are the ones capture
+/// matches. Thin delegate to the shared snapshot, which a standalone core
+/// reads directly. Helpers before 2.0.3 do not know this order.
+pub async fn utility_model_authenticity() -> Result<String> {
+    let snapshot = crate::model_authenticity::snapshot().await;
+    serde_json::to_string(&snapshot)
+        .map_err(|e| anyhow::anyhow!("Failed to serialize the model authenticity snapshot: {}", e))
+}
+
 pub async fn utility_get_logs() -> Result<String> {
     let logs = get_all_logs();
     Ok(logs)

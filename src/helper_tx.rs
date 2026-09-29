@@ -48,6 +48,7 @@ pub const UTILITY_ORDER_NAMES: &[&str] = &[
     "kill_process",
     "mdns_resolve",
     "merge_custom_whitelists",
+    "model_authenticity",
     "read_instruction_content",
     "restart_capture",
     "reveal_path_in_file_manager",
