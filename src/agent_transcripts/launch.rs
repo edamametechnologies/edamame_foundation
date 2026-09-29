@@ -16,22 +16,29 @@
 //!
 //! - [`SessionLaunchContext`], the child side: the working directory the
 //!   harness recorded when the session started, the first in-transcript
-//!   timestamp, and whether a program rather than a person started it (Claude
-//!   Code `entrypoint: sdk-*`, Codex `originator: codex_exec`). The harness
-//!   writes these fields; the model's text is never read for them.
+//!   timestamp, and whether a program rather than a person started it (a
+//!   Claude Code `entrypoint`, a Codex `originator` / `source` the params list
+//!   as programmatic). The harness writes these fields; the model's text is
+//!   never read for them.
 //! - [`AgentLaunchCall`], the parent side: a shell tool call that starts an
-//!   agent CLI, directly (`claude`, `codex`, `cursor-agent`) or through a
-//!   script the same transcript wrote whose body starts one, with the call's
-//!   timestamp, the time its result came back when it ran in the foreground,
-//!   and the absolute directories the command names.
+//!   agent CLI, directly or through a script the same transcript wrote whose
+//!   body starts one, with the call's timestamp, the time its result came
+//!   back when it ran in the foreground, and the absolute directories the
+//!   command names.
+//!
+//! What counts as an agent CLI, a shell, a wrapper, a working-directory
+//! argument or a programmatic start is data: it comes from the
+//! agent-visibility params (`workspace_attribution`, see
+//! [`crate::agent_visibility_params::WorkspaceAttributionJSON`]). This module
+//! keeps the mechanics: the shell grammar, the transcript line structure and
+//! the incremental scan.
 //!
 //! Scanning is streaming and incremental: transcripts are append-only JSONL,
 //! so a per-file state remembers the offset of the last complete line and a
 //! grown file is read from there, never re-read from the start. A session's
-//! Task subagent transcripts (`<session>/subagents/*.jsonl` for Claude Code,
-//! `<id>/subagents/*.jsonl` for Cursor) are scanned with it: an orchestrator's
-//! subagents are where the launches usually are, and the walker does not
-//! collect subagents as sessions of their own.
+//! Task subagent transcripts are scanned with it: an orchestrator's subagents
+//! are where the launches usually are, and the walker does not collect
+//! subagents as sessions of their own.
 
 use std::collections::{BTreeSet, HashMap};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
@@ -44,14 +51,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::{CollectOptions, CollectedRawSession};
+use crate::agent_visibility_params::{self, ProgramOptionsJSON, WorkspaceAttributionJSON};
 
-/// Agent CLIs whose invocation starts a session EDAMAME observes. Same set as
-/// `agent_cli_insight::AGENT_CLI_BINARIES` (the headless CLIs of the
-/// supported agents).
-const AGENT_CLI_NAMES: &[&str] = &["claude", "codex", "cursor-agent"];
-
-/// Package names that start an agent CLI through `npx` / `bunx` / `node`.
-const AGENT_CLI_PACKAGE_MARKERS: &[&str] = &["@anthropic-ai/claude-code", "@openai/codex"];
+// Resource bounds of the scanner (not attribution rules): they cap memory and
+// I/O whatever a transcript contains.
 
 /// Launch calls kept per session (the most recent ones win).
 const MAX_LAUNCHES_PER_SESSION: usize = 64;
@@ -68,12 +71,10 @@ const MAX_LINE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_SCAN_BYTES_PER_FILE: u64 = 256 * 1024 * 1024;
 /// Lines read looking for the launch context before giving up.
 const CONTEXT_MAX_LINES: u64 = 400;
-/// Subagent transcripts older than the collection window by more than this
-/// are not scanned (a launch must precede the child it started, and the
-/// child is inside the window).
-const SUBAGENT_LOOKBACK_MARGIN: Duration = Duration::from_secs(60 * 60);
 /// Transcript files whose scan state is kept.
 const MAX_CACHED_FILES: usize = 8192;
+/// Bytes hashed to tell an appended file from a rewritten one.
+const HEAD_FINGERPRINT_BYTES: usize = 256;
 
 /// What a session's own transcript says about how it started.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -84,10 +85,9 @@ pub struct SessionLaunchContext {
     pub cwd: String,
     /// First in-transcript timestamp. `None` for formats without timestamps.
     pub started_at: Option<DateTime<Utc>>,
-    /// A program, not a person, started the session: Claude Code
-    /// `entrypoint` `sdk-*` (`claude -p`, the Agent SDK) or Codex
-    /// `originator` `codex_exec` / `source` `exec`. Interactive sessions
-    /// (terminal, IDE, desktop app) are `false`.
+    /// A program, not a person, started the session (`claude -p`, the Agent
+    /// SDK, `codex exec`). Interactive sessions (terminal, IDE, desktop app)
+    /// are `false`.
     pub headless: bool,
 }
 
@@ -100,20 +100,23 @@ pub struct AgentLaunchCall {
     /// Timestamp of the call's result when it ran in the foreground (the
     /// launched agent started before this).
     pub finished_at: Option<DateTime<Utc>>,
-    /// The call returned before its work finished (`&`, `run_in_background`,
-    /// `Start-Process`, ...): a launched agent may start later than
+    /// The call returned before its work finished (`&`, a background flag, a
+    /// detaching program): a launched agent may start later than
     /// `finished_at`.
     pub background: bool,
     /// Absolute directories the command names, normalized to `/` separators:
-    /// literal paths, `~/...` for `~`, `$HOME` and `%USERPROFILE%`,
-    /// `$TMPDIR/...` for `$TMPDIR`, `%TEMP%` and `$env:TEMP`, plus the shell's
-    /// working directory at the time of the call.
+    /// literal paths, `~/...` for the home directory (`~`, `$HOME`, ...),
+    /// `$TMPDIR/...` for the per-user temporary directory (`$TMPDIR`,
+    /// `%TEMP%`, ...), plus the shell's working directory at the time of the
+    /// call.
     pub dirs: Vec<String>,
 }
 
 /// Incremental scan state of one transcript file.
 #[derive(Debug, Clone, Default)]
 struct FileScan {
+    /// Signature of the params the state was computed under.
+    params_signature: String,
     mtime_ns: u128,
     size: u64,
     /// End of the last complete line consumed.
@@ -134,9 +137,6 @@ struct FileScan {
     head_fingerprint: u64,
 }
 
-/// Bytes hashed to tell an appended file from a rewritten one.
-const HEAD_FINGERPRINT_BYTES: usize = 256;
-
 static FILE_SCANS: Lazy<undeadlock::CustomDashMap<String, FileScan>> =
     Lazy::new(|| undeadlock::CustomDashMap::new("agent_launch_file_scans"));
 
@@ -144,17 +144,21 @@ static FILE_SCANS: Lazy<undeadlock::CustomDashMap<String, FileScan>> =
 /// session whose transcript is a JSONL file (its own, or the `.jsonl` twin of
 /// a Cursor `.txt` export), scanning its subagent transcripts too.
 pub(crate) fn attach_launch_facts(sessions: &mut [CollectedRawSession], options: &CollectOptions) {
+    let params = agent_visibility_params::workspace_attribution();
+    let vocab = &params.workspace_attribution;
     let horizon = SystemTime::now()
-        .checked_sub(
-            Duration::from_secs(options.active_window_minutes.saturating_mul(60))
-                + SUBAGENT_LOOKBACK_MARGIN,
-        )
+        .checked_sub(Duration::from_secs(
+            options
+                .active_window_minutes
+                .saturating_mul(60)
+                .saturating_add(vocab.subagent_lookback_margin_secs),
+        ))
         .unwrap_or(UNIX_EPOCH);
     for session in sessions.iter_mut() {
         let Some(main) = jsonl_source(&session.source_path) else {
             continue;
         };
-        let Some(main_scan) = scan_file(&main) else {
+        let Some(main_scan) = scan_file(&main, vocab, &params.signature) else {
             continue;
         };
         let mut launches: Vec<AgentLaunchCall> = main_scan
@@ -162,8 +166,8 @@ pub(crate) fn attach_launch_facts(sessions: &mut [CollectedRawSession], options:
             .iter()
             .map(|(_, call)| call.clone())
             .collect();
-        for sub in subagent_transcripts(&main, horizon) {
-            if let Some(sub_scan) = scan_file(&sub) {
+        for sub in subagent_transcripts(&main, &vocab.subagent_directory, horizon) {
+            if let Some(sub_scan) = scan_file(&sub, vocab, &params.signature) {
                 launches.extend(sub_scan.launches.iter().map(|(_, call)| call.clone()));
             }
         }
@@ -209,16 +213,19 @@ fn jsonl_source(source_path: &str) -> Option<PathBuf> {
     }
 }
 
-/// Subagent transcripts of a session file modified after `horizon`: Claude
-/// Code keeps them in `<dir>/<stem>/subagents/`, Cursor in
-/// `<dir>/subagents/` when the transcript sits in a directory named after it.
-fn subagent_transcripts(main: &Path, horizon: SystemTime) -> Vec<PathBuf> {
+/// Subagent transcripts of a session file modified after `horizon`: in
+/// `<dir>/<stem>/<subagents>/` (Claude Code), or in `<dir>/<subagents>/` when
+/// the transcript sits in a directory named after it (Cursor).
+fn subagent_transcripts(main: &Path, subagents: &str, horizon: SystemTime) -> Vec<PathBuf> {
     let (Some(dir), Some(stem)) = (main.parent(), main.file_stem().and_then(|s| s.to_str())) else {
         return Vec::new();
     };
-    let mut roots = vec![dir.join(stem).join("subagents")];
+    if subagents.is_empty() {
+        return Vec::new();
+    }
+    let mut roots = vec![dir.join(stem).join(subagents)];
     if dir.file_name().and_then(|n| n.to_str()) == Some(stem) {
-        roots.push(dir.join("subagents"));
+        roots.push(dir.join(subagents));
     }
     let mut out = Vec::new();
     for root in roots {
@@ -254,7 +261,7 @@ fn mtime_ns(meta: &std::fs::Metadata) -> u128 {
 }
 
 /// Current scan of `path`, read incrementally from the cached state.
-fn scan_file(path: &Path) -> Option<FileScan> {
+fn scan_file(path: &Path, vocab: &WorkspaceAttributionJSON, signature: &str) -> Option<FileScan> {
     let key = path.to_string_lossy().to_string();
     let meta = std::fs::metadata(path).ok()?;
     let size = meta.len();
@@ -262,15 +269,18 @@ fn scan_file(path: &Path) -> Option<FileScan> {
     let cached = FILE_SCANS.get(&key).map(|entry| (*entry).clone());
     let head = head_fingerprint(path);
     let mut scan = match cached {
+        // A state computed under other params is recomputed from the start.
+        Some(scan) if scan.params_signature != signature => FileScan::default(),
         Some(scan) if scan.size == size && scan.mtime_ns == mtime => return Some(scan),
         // Appended to: continue from the last complete line.
         Some(scan) if size >= scan.size && head == Some(scan.head_fingerprint) => scan,
         // Truncated or rewritten: start over.
         _ => FileScan::default(),
     };
-    if scan_increment(path, &mut scan, size).is_err() {
+    if scan_increment(path, &mut scan, size, vocab).is_err() {
         return None;
     }
+    scan.params_signature = signature.to_string();
     scan.size = size;
     scan.mtime_ns = mtime;
     scan.head_fingerprint = head.unwrap_or(0);
@@ -311,7 +321,12 @@ fn evict_oldest() {
     }
 }
 
-fn scan_increment(path: &Path, scan: &mut FileScan, size: u64) -> std::io::Result<()> {
+fn scan_increment(
+    path: &Path,
+    scan: &mut FileScan,
+    size: u64,
+    vocab: &WorkspaceAttributionJSON,
+) -> std::io::Result<()> {
     if scan.offset >= size || scan.offset >= MAX_SCAN_BYTES_PER_FILE {
         return Ok(());
     }
@@ -330,7 +345,7 @@ fn scan_increment(path: &Path, scan: &mut FileScan, size: u64) -> std::io::Resul
         scan.offset += consumed as u64;
         scan.lines_seen += 1;
         if !oversized {
-            process_line(&line, scan);
+            process_line(&line, scan, vocab);
         }
     }
     Ok(())
@@ -370,6 +385,9 @@ fn read_line_capped<R: BufRead>(
     }
 }
 
+// Transcript line structure (mechanics of the Anthropic and Codex JSONL
+// formats, not attribution data).
+
 /// Markers of a line carrying a tool call (the closing quote keeps
 /// `"tool_use_id"` and `"function_call_output"` out).
 const CALL_LINE_MARKERS: &[&str] = &[
@@ -385,7 +403,7 @@ const RESULT_LINE_MARKERS: &[&str] = &[
     "\"custom_tool_call_output\"",
 ];
 
-fn process_line(line: &[u8], scan: &mut FileScan) {
+fn process_line(line: &[u8], scan: &mut FileScan, vocab: &WorkspaceAttributionJSON) {
     // JSONL is UTF-8; a line that is not cannot be parsed either.
     let Ok(text) = std::str::from_utf8(line) else {
         return;
@@ -404,11 +422,11 @@ fn process_line(line: &[u8], scan: &mut FileScan) {
     };
     let line_ts = line_timestamp(&value);
     if wants_context {
-        absorb_context(&value, line_ts, scan);
+        absorb_context(&value, line_ts, scan, vocab);
     }
     for block in structured_blocks(&value) {
         match block_kind(block) {
-            BlockKind::Call => absorb_tool_call(block, &value, line_ts, scan),
+            BlockKind::Call => absorb_tool_call(block, &value, line_ts, scan, vocab),
             BlockKind::Result => {
                 if let Some(id) = result_id(block) {
                     if let Some(seq) = scan.pending.remove(&id) {
@@ -459,7 +477,12 @@ fn ts_from_value(value: &Value) -> Option<DateTime<Utc>> {
     }
 }
 
-fn absorb_context(value: &Value, line_ts: Option<DateTime<Utc>>, scan: &mut FileScan) {
+fn absorb_context(
+    value: &Value,
+    line_ts: Option<DateTime<Utc>>,
+    scan: &mut FileScan,
+    vocab: &WorkspaceAttributionJSON,
+) {
     if scan.context.started_at.is_none() {
         scan.context.started_at = line_ts;
     }
@@ -474,7 +497,11 @@ fn absorb_context(value: &Value, line_ts: Option<DateTime<Utc>>, scan: &mut File
     if !scan.entrypoint_seen {
         if let Some(entrypoint) = value.get("entrypoint").and_then(|v| v.as_str()) {
             scan.entrypoint_seen = true;
-            scan.context.headless = entrypoint.trim().to_ascii_lowercase().starts_with("sdk");
+            let entrypoint = entrypoint.trim().to_ascii_lowercase();
+            scan.context.headless = vocab
+                .headless_entrypoint_prefixes
+                .iter()
+                .any(|prefix| !prefix.is_empty() && entrypoint.starts_with(prefix.as_str()));
         }
     }
     // Codex: the first line of a rollout.
@@ -485,12 +512,15 @@ fn absorb_context(value: &Value, line_ts: Option<DateTime<Utc>>, scan: &mut File
                     scan.context.cwd = cwd.trim().to_string();
                 }
             }
-            let originator = meta
-                .get("originator")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let source = meta.get("source").and_then(|v| v.as_str()).unwrap_or("");
-            scan.context.headless = originator == "codex_exec" || source == "exec";
+            let field = |key: &str| {
+                meta.get(key)
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_ascii_lowercase()
+            };
+            let (originator, source) = (field("originator"), field("source"));
+            scan.context.headless = vocab.headless_originators.contains(&originator)
+                || vocab.headless_sources.contains(&source);
             if let Some(ts) = meta.get("timestamp").and_then(ts_from_value) {
                 scan.context.started_at = Some(ts);
             }
@@ -573,9 +603,9 @@ fn call_arguments(block: &Value) -> Option<Value> {
     block.get("action").filter(|v| v.is_object()).cloned()
 }
 
-fn str_field<'a>(object: &'a Value, keys: &[&str]) -> Option<&'a str> {
+fn str_field<'a>(object: &'a Value, keys: &[String]) -> Option<&'a str> {
     keys.iter()
-        .find_map(|k| object.get(*k).and_then(|v| v.as_str()))
+        .find_map(|k| object.get(k.as_str()).and_then(|v| v.as_str()))
         .map(str::trim)
         .filter(|s| !s.is_empty())
 }
@@ -585,45 +615,54 @@ fn absorb_tool_call(
     line: &Value,
     line_ts: Option<DateTime<Utc>>,
     scan: &mut FileScan,
+    vocab: &WorkspaceAttributionJSON,
 ) {
     // A patch (Codex `apply_patch`, Cursor `ApplyPatch`) arrives as a string.
     if let Some(patch) = block.get("input").and_then(|v| v.as_str()) {
-        remember_patched_scripts(patch, scan);
+        remember_patched_scripts(patch, scan, vocab);
         return;
     }
     let Some(args) = call_arguments(block) else {
         return;
     };
     // A file write: remember the script when its body starts an agent CLI.
-    if let Some(path) = str_field(&args, &["file_path", "path", "target_file", "filePath"]) {
+    if let Some(path) = str_field(&args, &vocab.write_path_keys) {
         let mut body = String::new();
-        for key in ["content", "contents", "new_string", "code_edit", "text"] {
-            if let Some(text) = args.get(key).and_then(|v| v.as_str()) {
+        for key in &vocab.write_content_keys {
+            if let Some(text) = args.get(key.as_str()).and_then(|v| v.as_str()) {
                 body.push_str(text);
                 body.push('\n');
             }
         }
-        if let Some(edits) = args.get("edits").and_then(|v| v.as_array()) {
-            for edit in edits {
-                if let Some(text) = edit.get("new_string").and_then(|v| v.as_str()) {
-                    body.push_str(text);
-                    body.push('\n');
+        for key in &vocab.write_edit_list_keys {
+            if let Some(edits) = args.get(key.as_str()).and_then(|v| v.as_array()) {
+                for edit in edits {
+                    for content_key in &vocab.write_content_keys {
+                        if let Some(text) = edit.get(content_key.as_str()).and_then(|v| v.as_str())
+                        {
+                            body.push_str(text);
+                            body.push('\n');
+                        }
+                    }
                 }
             }
         }
-        if !body.is_empty() && script_starts_agent(&body) {
-            remember_script(path, scan);
+        if !body.is_empty() && script_starts_agent(&body, vocab) {
+            remember_script(path, scan, vocab);
         }
     }
-    let Some(command) = command_text(&args) else {
+    let Some(command) = command_text(&args, vocab) else {
         return;
     };
-    let shell_cwd = str_field(&args, &["workdir", "working_directory", "cwd", "directory"])
-        .or_else(|| str_field(line, &["cwd"]))
+    let shell_cwd = str_field(&args, &vocab.working_directory_keys)
+        .or_else(|| line.get("cwd").and_then(|v| v.as_str()).map(str::trim))
         .unwrap_or("")
         .to_string();
     let lexed = lex_shell(&command);
-    let mut direct = lexed.commands.iter().any(|words| starts_agent_cli(words));
+    let mut direct = lexed
+        .commands
+        .iter()
+        .any(|words| starts_agent_cli(words, vocab));
     // A heredoc is written to a file (`cat > run.sh <<EOF`) or fed to the
     // program it follows (`bash <<EOF`, `python3 - <<EOF`). A body that starts
     // an agent CLI (as a shell command, or as a name a program spawns) makes
@@ -633,22 +672,23 @@ fn absorb_tool_call(
         lex_shell(body)
             .commands
             .iter()
-            .any(|words| starts_agent_cli(words))
+            .any(|words| starts_agent_cli(words, vocab))
     });
     let literal_body = lexed
         .heredocs
         .iter()
-        .any(|body| names_agent_cli_literal(body));
+        .any(|body| names_agent_cli_literal(body, vocab));
     if shell_body || literal_body {
         let targets: Vec<String> = lexed.redirect_targets.clone();
         for target in targets {
-            remember_script(&target, scan);
+            remember_script(&target, scan, vocab);
         }
         direct |= lexed.commands.iter().any(|words| {
-            command_word_index(words)
+            command_word_index(words, vocab)
                 .map(|i| {
-                    let name = exe_basename(&words[i]);
-                    (is_shell(&name) && shell_body) || (is_interpreter(&name) && literal_body)
+                    let name = exe_basename(&words[i], vocab);
+                    (is_shell(&name, vocab) && shell_body)
+                        || (is_interpreter(&name, vocab) && literal_body)
                 })
                 .unwrap_or(false)
         });
@@ -656,21 +696,25 @@ fn absorb_tool_call(
     let via_script = lexed
         .commands
         .iter()
-        .any(|words| runs_script(words, &scan.agent_scripts));
+        .any(|words| runs_script(words, &scan.agent_scripts, vocab));
     if !direct && !via_script {
         return;
     }
     let background = lexed.background
-        || lexed.commands.iter().any(|words| detaches(words))
-        || ["run_in_background", "is_background", "background"]
+        || lexed.commands.iter().any(|words| detaches(words, vocab))
+        || vocab
+            .background_flag_keys
             .iter()
-            .any(|k| args.get(*k).and_then(|v| v.as_bool()) == Some(true))
-        || args.get("block_until_ms").and_then(|v| v.as_u64()) == Some(0);
+            .any(|k| args.get(k.as_str()).and_then(|v| v.as_bool()) == Some(true))
+        || vocab
+            .background_wait_keys
+            .iter()
+            .any(|k| args.get(k.as_str()).and_then(|v| v.as_u64()) == Some(0));
     let call = AgentLaunchCall {
         at: line_ts,
         finished_at: None,
         background,
-        dirs: named_directories(&lexed, &shell_cwd),
+        dirs: named_directories(&lexed, &shell_cwd, vocab),
     };
     let seq = scan.next_seq;
     scan.next_seq += 1;
@@ -688,18 +732,12 @@ fn absorb_tool_call(
     }
 }
 
-/// Extensions of files a command can run as a program.
-const SCRIPT_EXTENSIONS: &[&str] = &[
-    "sh", "bash", "zsh", "fish", "ps1", "psm1", "cmd", "bat", "py", "js", "mjs", "cjs", "ts", "rb",
-    "pl",
-];
-
-fn remember_script(path: &str, scan: &mut FileScan) {
+fn remember_script(path: &str, scan: &mut FileScan, vocab: &WorkspaceAttributionJSON) {
     let base = file_basename_lower(path);
     // A document that mentions an agent (`README.md`) is not something a
     // command runs; a script has a script extension or none.
     let runnable = match base.rsplit_once('.') {
-        Some((stem, ext)) => !stem.is_empty() && SCRIPT_EXTENSIONS.contains(&ext),
+        Some((stem, ext)) => !stem.is_empty() && vocab.script_extensions.iter().any(|e| e == ext),
         None => true,
     };
     if runnable && !base.is_empty() && scan.agent_scripts.len() < MAX_AGENT_SCRIPTS_PER_FILE {
@@ -708,21 +746,22 @@ fn remember_script(path: &str, scan: &mut FileScan) {
 }
 
 /// Files a patch adds or updates whose added lines start an agent CLI.
-fn remember_patched_scripts(patch: &str, scan: &mut FileScan) {
+fn remember_patched_scripts(patch: &str, scan: &mut FileScan, vocab: &WorkspaceAttributionJSON) {
     let mut current: Option<String> = None;
     let mut added = String::new();
     let flush = |path: Option<String>, body: &mut String, scan: &mut FileScan| {
         if let Some(path) = path {
-            if script_starts_agent(body) {
-                remember_script(&path, scan);
+            if script_starts_agent(body, vocab) {
+                remember_script(&path, scan, vocab);
             }
         }
         body.clear();
     };
     for line in patch.lines() {
-        let header = line
-            .strip_prefix("*** Add File:")
-            .or_else(|| line.strip_prefix("*** Update File:"));
+        let header = vocab
+            .patch_file_headers
+            .iter()
+            .find_map(|h| line.strip_prefix(h.as_str()));
         if let Some(path) = header {
             flush(current.take(), &mut added, scan);
             current = Some(path.trim().to_string());
@@ -734,11 +773,11 @@ fn remember_patched_scripts(patch: &str, scan: &mut FileScan) {
     flush(current, &mut added, scan);
 }
 
-/// The shell command of a call: `command` / `cmd` as a string, or as an argv
+/// The shell command of a call: a command key as a string, or as an argv
 /// array (`["bash", "-lc", "<script>"]` yields the script).
-fn command_text(args: &Value) -> Option<String> {
-    for key in ["command", "cmd"] {
-        match args.get(key) {
+fn command_text(args: &Value, vocab: &WorkspaceAttributionJSON) -> Option<String> {
+    for key in &vocab.command_keys {
+        match args.get(key.as_str()) {
             Some(Value::String(s)) if !s.trim().is_empty() => return Some(s.clone()),
             Some(Value::Array(items)) => {
                 let argv: Vec<&str> = items.iter().filter_map(|v| v.as_str()).collect();
@@ -746,7 +785,7 @@ fn command_text(args: &Value) -> Option<String> {
                     continue;
                 }
                 if argv.len() >= 3
-                    && is_shell(&exe_basename(argv[0]))
+                    && is_shell(&exe_basename(argv[0], vocab), vocab)
                     && argv[1].starts_with('-')
                     && argv[1].to_ascii_lowercase().contains('c')
                 {
@@ -772,7 +811,7 @@ fn command_text(args: &Value) -> Option<String> {
 }
 
 // ---------------------------------------------------------------------------
-// Shell lexing
+// Shell lexing (grammar mechanics)
 // ---------------------------------------------------------------------------
 
 /// A shell command split into simple commands.
@@ -1045,25 +1084,25 @@ fn file_basename_lower(word: &str) -> String {
 
 /// Basename of an executable word, lower-cased, without a Windows launcher
 /// extension (`C:\...\claude.exe` -> `claude`).
-fn exe_basename(word: &str) -> String {
+fn exe_basename(word: &str, vocab: &WorkspaceAttributionJSON) -> String {
     let base = file_basename_lower(word);
-    for ext in [".exe", ".cmd", ".bat", ".ps1"] {
-        if let Some(stem) = base.strip_suffix(ext) {
+    if let Some((stem, ext)) = base.rsplit_once('.') {
+        if !stem.is_empty() && vocab.executable_extensions.iter().any(|e| e == ext) {
             return stem.to_string();
         }
     }
     base
 }
 
-fn is_shell(name: &str) -> bool {
-    matches!(
-        name,
-        "sh" | "bash" | "zsh" | "dash" | "ksh" | "fish" | "pwsh" | "powershell"
-    )
+fn is_shell(name: &str, vocab: &WorkspaceAttributionJSON) -> bool {
+    vocab.shell_programs.iter().any(|s| s == name)
 }
 
-fn is_interpreter(name: &str) -> bool {
-    name.starts_with("python") || matches!(name, "node" | "bun" | "deno" | "ruby" | "perl")
+fn is_interpreter(name: &str, vocab: &WorkspaceAttributionJSON) -> bool {
+    vocab
+        .interpreter_program_prefixes
+        .iter()
+        .any(|p| !p.is_empty() && name.starts_with(p.as_str()))
 }
 
 fn is_assignment(word: &str) -> bool {
@@ -1075,32 +1114,25 @@ fn is_assignment(word: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-/// Options of a wrapper command that take a value as the next word.
-fn option_takes_value(wrapper: &str, option: &str) -> bool {
-    match wrapper {
-        "env" => matches!(
-            option,
-            "-u" | "--unset" | "-C" | "--chdir" | "-S" | "--split-string"
-        ),
-        "sudo" | "doas" => matches!(
-            option,
-            "-u" | "-g" | "-C" | "-D" | "-h" | "-p" | "-r" | "-t" | "-U"
-        ),
-        "nice" => matches!(option, "-n" | "--adjustment"),
-        "ionice" => matches!(option, "-c" | "-n" | "-p"),
-        "timeout" | "gtimeout" => matches!(option, "-s" | "--signal" | "-k" | "--kill-after"),
-        "xargs" => matches!(
-            option,
-            "-n" | "-I" | "-P" | "-L" | "-s" | "-d" | "-E" | "-a"
-        ),
-        "stdbuf" => matches!(option, "-i" | "-o" | "-e"),
-        _ => false,
-    }
+/// `option` is one of `program`'s options in `table`.
+fn program_option(table: &[ProgramOptionsJSON], program: &str, option: &str) -> bool {
+    table
+        .iter()
+        .any(|p| p.program == program && p.options.iter().any(|o| o == option))
+}
+
+/// `option` is one of `program`'s options in `table`, ignoring case
+/// (PowerShell parameters).
+fn program_option_ignore_case(table: &[ProgramOptionsJSON], program: &str, option: &str) -> bool {
+    table
+        .iter()
+        .any(|p| p.program == program && p.options.iter().any(|o| o.eq_ignore_ascii_case(option)))
 }
 
 /// Index of the word a simple command runs, skipping variable assignments
 /// and wrapper commands (`env`, `nohup`, `timeout 900`, `sudo -u x`, ...).
-fn command_word_index(words: &[String]) -> Option<usize> {
+/// `None` when the command runs nothing or only looks a program up.
+fn command_word_index(words: &[String], vocab: &WorkspaceAttributionJSON) -> Option<usize> {
     let mut i = 0usize;
     while i < words.len() {
         let word = &words[i];
@@ -1108,159 +1140,176 @@ fn command_word_index(words: &[String]) -> Option<usize> {
             i += 1;
             continue;
         }
-        let name = exe_basename(word);
-        match name.as_str() {
-            "env" | "nohup" | "exec" | "command" | "builtin" | "time" | "caffeinate" | "setsid"
-            | "stdbuf" | "unbuffer" | "sudo" | "doas" | "nice" | "ionice" | "xargs" | "then"
-            | "do" | "else" | "elif" | "if" | "while" | "until" | "!" | "start-process"
-            | "start" | "call" | "timeout" | "gtimeout" | "cmd" => {
-                let wrapper = name.clone();
-                i += 1;
-                while i < words.len() {
-                    let w = &words[i];
-                    let is_option = w.starts_with('-')
-                        || (wrapper == "cmd" && w.starts_with('/'))
-                        || (wrapper == "start" && w.starts_with('/'))
-                        || (wrapper == "env" && is_assignment(w));
-                    if !is_option {
-                        break;
-                    }
-                    if wrapper == "command" && (w == "-v" || w == "-V") {
-                        return None;
-                    }
-                    if wrapper == "start-process" && w.eq_ignore_ascii_case("-filepath") {
-                        return (i + 1 < words.len()).then_some(i + 1);
-                    }
-                    i += if option_takes_value(&wrapper, w) {
-                        2
-                    } else {
-                        1
-                    };
-                }
-                if matches!(wrapper.as_str(), "timeout" | "gtimeout") && i < words.len() {
-                    // The duration.
-                    i += 1;
-                }
-                if wrapper == "start" && i < words.len() && words[i].is_empty() {
-                    // `start "" <command>`: the window title.
-                    i += 1;
-                }
+        let name = exe_basename(word, vocab);
+        if !vocab.wrapper_programs.contains(&name) {
+            return Some(i);
+        }
+        let slash_options = vocab.wrapper_slash_option_programs.contains(&name);
+        i += 1;
+        while i < words.len() {
+            let w = &words[i];
+            let is_option = w.starts_with('-')
+                || (slash_options && w.starts_with('/'))
+                || (is_assignment(w) && i > 0);
+            if !is_option {
+                break;
             }
-            _ => return Some(i),
+            if program_option(&vocab.lookup_options, &name, w) {
+                return None;
+            }
+            if program_option_ignore_case(&vocab.wrapper_program_options, &name, w) {
+                return (i + 1 < words.len()).then_some(i + 1);
+            }
+            i += if program_option(&vocab.wrapper_value_options, &name, w) {
+                2
+            } else {
+                1
+            };
+        }
+        if vocab.wrapper_duration_programs.contains(&name) && i < words.len() {
+            // The duration.
+            i += 1;
+        }
+        if vocab.wrapper_title_programs.contains(&name) && i < words.len() && words[i].is_empty() {
+            // `start "" <command>`: the window title.
+            i += 1;
         }
     }
     None
 }
 
+/// The word names an agent CLI, directly or as its package.
+fn names_agent_cli(word: &str, vocab: &WorkspaceAttributionJSON) -> bool {
+    let lower = word.to_ascii_lowercase();
+    vocab
+        .agent_cli_programs
+        .contains(&exe_basename(word, vocab))
+        || vocab
+            .agent_cli_package_markers
+            .iter()
+            .any(|m| !m.is_empty() && lower.contains(m.as_str()))
+}
+
 /// The simple command starts an agent CLI.
-fn starts_agent_cli(words: &[String]) -> bool {
-    let Some(i) = command_word_index(words) else {
+fn starts_agent_cli(words: &[String], vocab: &WorkspaceAttributionJSON) -> bool {
+    let Some(i) = command_word_index(words, vocab) else {
         return false;
     };
-    let name = exe_basename(&words[i]);
-    if AGENT_CLI_NAMES.contains(&name.as_str()) {
+    let name = exe_basename(&words[i], vocab);
+    if vocab.agent_cli_programs.contains(&name) {
         return true;
     }
     let rest = &words[i + 1..];
     let first_arg = rest.iter().find(|w| !w.starts_with('-'));
-    match name.as_str() {
-        // The Cursor CLI's agent subcommand.
-        "cursor" => first_arg.map(|w| w == "agent").unwrap_or(false),
-        "npx" | "bunx" | "pnpx" | "node" | "bun" | "deno" => first_arg
-            .map(|w| {
-                let lower = w.to_ascii_lowercase();
-                AGENT_CLI_NAMES.contains(&exe_basename(w).as_str())
-                    || AGENT_CLI_PACKAGE_MARKERS.iter().any(|m| lower.contains(m))
-                    || lower.contains("/claude-code/")
-            })
-            .unwrap_or(false),
-        "pnpm" | "yarn" => {
-            rest.first()
-                .map(|w| w == "dlx" || w == "exec")
-                .unwrap_or(false)
-                && rest.iter().skip(1).any(|w| {
-                    AGENT_CLI_NAMES.contains(&exe_basename(w).as_str())
-                        || AGENT_CLI_PACKAGE_MARKERS.iter().any(|m| w.contains(m))
-                })
+    if let Some(arg) = first_arg {
+        let arg = arg.to_ascii_lowercase();
+        if vocab
+            .agent_cli_subcommands
+            .iter()
+            .any(|c| c.program == name && c.subcommand == arg)
+        {
+            return true;
         }
-        shell if is_shell(shell) => {
-            // `bash -lc '<script>'`, `pwsh -Command '<script>'`.
-            let powershell = matches!(shell, "pwsh" | "powershell");
-            let mut k = 0;
-            while k < rest.len() {
-                let w = &rest[k];
-                if !w.starts_with('-') {
-                    break;
-                }
-                let lower = w.to_ascii_lowercase();
-                let takes_script = if powershell {
-                    lower == "-c" || lower == "-command"
-                } else {
-                    !lower.starts_with("--") && lower[1..].contains('c')
-                };
-                if takes_script {
-                    return rest
-                        .get(k + 1)
-                        .map(|script| {
-                            lex_shell(script)
-                                .commands
-                                .iter()
-                                .any(|c| starts_agent_cli(c))
-                        })
-                        .unwrap_or(false);
-                }
-                k += 1;
-            }
-            false
-        }
-        _ => false,
     }
+    if vocab.package_runner_programs.contains(&name) {
+        return first_arg
+            .map(|w| names_agent_cli(w, vocab))
+            .unwrap_or(false);
+    }
+    if vocab.package_exec_programs.contains(&name) {
+        return rest
+            .first()
+            .map(|w| {
+                vocab
+                    .package_exec_subcommands
+                    .contains(&w.to_ascii_lowercase())
+            })
+            .unwrap_or(false)
+            && rest.iter().skip(1).any(|w| names_agent_cli(w, vocab));
+    }
+    if is_shell(&name, vocab) {
+        // `bash -lc '<script>'`, `pwsh -Command '<script>'`.
+        let powershell = vocab.powershell_programs.contains(&name);
+        let mut k = 0;
+        while k < rest.len() {
+            let w = &rest[k];
+            if !w.starts_with('-') {
+                break;
+            }
+            let lower = w.to_ascii_lowercase();
+            let takes_script = if powershell {
+                vocab.powershell_script_options.contains(&lower)
+            } else {
+                // POSIX shells: a short option cluster carrying `c`.
+                !lower.starts_with("--") && lower[1..].contains('c')
+            };
+            if takes_script {
+                return rest
+                    .get(k + 1)
+                    .map(|script| {
+                        lex_shell(script)
+                            .commands
+                            .iter()
+                            .any(|c| starts_agent_cli(c, vocab))
+                    })
+                    .unwrap_or(false);
+            }
+            k += 1;
+        }
+    }
+    false
 }
 
 /// The simple command detaches what it runs from the calling shell.
-fn detaches(words: &[String]) -> bool {
-    words.first().map(|w| {
-        matches!(
-            exe_basename(w).as_str(),
-            "start-process" | "start" | "setsid" | "daemonize" | "disown"
-        )
-    }) == Some(true)
+fn detaches(words: &[String], vocab: &WorkspaceAttributionJSON) -> bool {
+    words
+        .first()
+        .map(|w| vocab.detaching_programs.contains(&exe_basename(w, vocab)))
+        .unwrap_or(false)
 }
 
 /// A script body (shell, or a scripting language that spawns the CLI by
 /// name) starts an agent CLI.
-fn script_starts_agent(body: &str) -> bool {
+fn script_starts_agent(body: &str, vocab: &WorkspaceAttributionJSON) -> bool {
     lex_shell(body)
         .commands
         .iter()
-        .any(|words| starts_agent_cli(words))
-        || names_agent_cli_literal(body)
+        .any(|words| starts_agent_cli(words, vocab))
+        || names_agent_cli_literal(body, vocab)
 }
 
 /// A program spawns an agent CLI by name: `subprocess.run(["claude", "-p",
 /// ...])`, `spawn('codex', [...])`.
-fn names_agent_cli_literal(body: &str) -> bool {
-    AGENT_CLI_NAMES
-        .iter()
-        .any(|name| body.contains(&format!("\"{name}\"")) || body.contains(&format!("'{name}'")))
+fn names_agent_cli_literal(body: &str, vocab: &WorkspaceAttributionJSON) -> bool {
+    vocab.agent_cli_programs.iter().any(|name| {
+        !name.is_empty()
+            && (body.contains(&format!("\"{name}\"")) || body.contains(&format!("'{name}'")))
+    })
 }
 
 /// The simple command runs one of `scripts`: as its program (`./agents.sh`,
-/// `timeout 900 $FS/run.sh`) or as the script of a shell or interpreter
-/// (`bash agents.sh`, `python3 spawn.py`, `. ./env.sh`). Naming a script
-/// (`chmod +x run.sh`, `cat run.sh`) is not running it.
-fn runs_script(words: &[String], scripts: &BTreeSet<String>) -> bool {
+/// `timeout 900 $FS/run.sh`) or as the script of a shell, an interpreter or
+/// a `source` (`bash agents.sh`, `python3 spawn.py`, `. ./env.sh`). Naming a
+/// script (`chmod +x run.sh`, `cat run.sh`) is not running it.
+fn runs_script(
+    words: &[String],
+    scripts: &BTreeSet<String>,
+    vocab: &WorkspaceAttributionJSON,
+) -> bool {
     if scripts.is_empty() {
         return false;
     }
-    let Some(i) = command_word_index(words) else {
+    let Some(i) = command_word_index(words, vocab) else {
         return false;
     };
     if scripts.contains(&file_basename_lower(&words[i])) {
         return true;
     }
-    let name = exe_basename(&words[i]);
-    if !(is_shell(&name) || is_interpreter(&name) || name == "source" || name == ".") {
+    let name = exe_basename(&words[i], vocab);
+    if !(is_shell(&name, vocab)
+        || is_interpreter(&name, vocab)
+        || vocab.source_programs.contains(&name))
+    {
         return false;
     }
     words[i + 1..]
@@ -1270,9 +1319,29 @@ fn runs_script(words: &[String], scripts: &BTreeSet<String>) -> bool {
         .unwrap_or(false)
 }
 
+/// The variable spelling `lower` starts with, when what follows it does not
+/// continue the variable's name (`$HOMEBREW` is not `$HOME`).
+fn variable_prefix<'a>(lower: &str, spellings: &'a [String]) -> Option<&'a str> {
+    spellings
+        .iter()
+        .filter(|s| !s.is_empty() && lower.starts_with(s.as_str()))
+        .find(|s| {
+            let rest = &lower[s.len()..];
+            let continues_name = rest
+                .chars()
+                .next()
+                .map(|c| c.is_ascii_alphanumeric() || c == '_')
+                .unwrap_or(false);
+            // A bare `$NAME` / `$env:NAME` ends where the name does; a braced
+            // or percent spelling ends at its delimiter (`${TMPDIR}x`).
+            !(continues_name && s.starts_with('$') && !s.ends_with('}'))
+        })
+        .map(String::as_str)
+}
+
 /// Normalize one word into an absolute directory reference, or `None` when
 /// it is relative or unresolvable (`$BASE/x`).
-fn normalize_named_path(word: &str) -> Option<String> {
+fn normalize_named_path(word: &str, vocab: &WorkspaceAttributionJSON) -> Option<String> {
     let w = word
         .trim()
         .trim_matches(|c| c == '"' || c == '\'')
@@ -1280,48 +1349,24 @@ fn normalize_named_path(word: &str) -> Option<String> {
     if w.is_empty() {
         return None;
     }
+    // Text that happens to start with a slash (a comment, a regex) is not a
+    // path.
+    if w.contains(['\n', '\r', '\t']) {
+        return None;
+    }
     let lower = w.to_ascii_lowercase();
-    const HOME_PREFIXES: &[&str] = &[
-        "${home}",
-        "$home",
-        "%userprofile%",
-        "${env:userprofile}",
-        "$env:userprofile",
-    ];
-    const TEMP_PREFIXES: &[&str] = &[
-        "${tmpdir}",
-        "$tmpdir",
-        "%temp%",
-        "%tmp%",
-        "${env:temp}",
-        "$env:temp",
-        "${env:tmp}",
-        "$env:tmp",
-    ];
     let (prefix, rest): (&str, &str) = if w == "~" || w.starts_with("~/") || w.starts_with("~\\") {
         ("~", &w[1..])
-    } else if let Some(p) = HOME_PREFIXES.iter().find(|p| lower.starts_with(**p)) {
-        let rest = &w[p.len()..];
-        // `$HOMEBREW_PREFIX` is not `$HOME`.
+    } else if let Some(spelling) = variable_prefix(&lower, &vocab.home_variables) {
+        let rest = &w[spelling.len()..];
         if !(rest.is_empty() || rest.starts_with('/') || rest.starts_with('\\')) {
             return None;
         }
         ("~", rest)
-    } else if let Some(p) = TEMP_PREFIXES.iter().find(|p| lower.starts_with(**p)) {
-        let rest = &w[p.len()..];
-        if rest
-            .chars()
-            .next()
-            .map(|c| c.is_ascii_alphanumeric() || c == '_')
-            .unwrap_or(false)
-            && p.starts_with('$')
-            && !p.ends_with('}')
-        {
-            // `$TMPDIRX` is another variable; `${TMPDIR}x` is `$TMPDIR` + `x`
-            // (macOS sets it with a trailing slash).
-            return None;
-        }
-        ("$TMPDIR", rest)
+    } else if let Some(spelling) = variable_prefix(&lower, &vocab.temp_variables) {
+        // macOS sets `$TMPDIR` with a trailing slash: `${TMPDIR}x` is
+        // `$TMPDIR` + `x`.
+        ("$TMPDIR", &w[spelling.len()..])
     } else if w.starts_with('/') {
         ("", w)
     } else {
@@ -1336,11 +1381,6 @@ fn normalize_named_path(word: &str) -> Option<String> {
             return None;
         }
     };
-    // Text that happens to start with a slash (a comment, a regex) is not a
-    // path.
-    if w.contains(['\n', '\r', '\t']) {
-        return None;
-    }
     let mut comps: Vec<&str> = Vec::new();
     for comp in rest.split(['/', '\\']) {
         if comp.is_empty() || comp == "." {
@@ -1357,47 +1397,47 @@ fn normalize_named_path(word: &str) -> Option<String> {
     let joined = comps.join("/");
     Some(match prefix {
         "" if w.starts_with('/') => format!("/{joined}"),
-        "" => {
-            // `C:\x` / `C:/x`: the drive is the first component.
-            joined
-        }
+        // `C:\x` / `C:/x`: the drive is the first component.
+        "" => joined,
         p if joined.is_empty() => p.to_string(),
         p => format!("{p}/{joined}"),
     })
 }
 
 /// Absolute directories a launch command names, the shell's working
-/// directory first, then `cd` targets (relative ones resolved against it),
-/// then every other absolute path word.
-fn named_directories(lexed: &Lexed, shell_cwd: &str) -> Vec<String> {
+/// directory first, then directory changes (relative ones resolved against
+/// it), then every other absolute path word.
+fn named_directories(
+    lexed: &Lexed,
+    shell_cwd: &str,
+    vocab: &WorkspaceAttributionJSON,
+) -> Vec<String> {
     let mut dirs: Vec<String> = Vec::new();
     let push = |dir: String, dirs: &mut Vec<String>| {
         if !dir.is_empty() && !dirs.contains(&dir) && dirs.len() < MAX_DIRS_PER_LAUNCH {
             dirs.push(dir);
         }
     };
-    let cwd = normalize_named_path(shell_cwd);
+    let cwd = normalize_named_path(shell_cwd, vocab);
     if let Some(cwd) = cwd.clone() {
         push(cwd, &mut dirs);
     }
     for words in &lexed.commands {
-        let Some(i) = command_word_index(words) else {
+        let Some(i) = command_word_index(words, vocab) else {
             continue;
         };
-        let name = exe_basename(&words[i]);
-        if matches!(
-            name.as_str(),
-            "cd" | "pushd" | "set-location" | "sl" | "chdir"
-        ) {
-            if let Some(target) = words.get(i + 1).filter(|w| !w.starts_with('-')) {
-                match normalize_named_path(target) {
-                    Some(abs) => push(abs, &mut dirs),
-                    None => {
-                        if let (Some(base), false) = (cwd.as_deref(), target.contains('$')) {
-                            let joined = format!("{}/{}", base.trim_end_matches('/'), target);
-                            if let Some(abs) = normalize_named_path(&joined) {
-                                push(abs, &mut dirs);
-                            }
+        let name = exe_basename(&words[i], vocab);
+        if !vocab.change_directory_programs.contains(&name) {
+            continue;
+        }
+        if let Some(target) = words.get(i + 1).filter(|w| !w.starts_with('-')) {
+            match normalize_named_path(target, vocab) {
+                Some(abs) => push(abs, &mut dirs),
+                None => {
+                    if let (Some(base), false) = (cwd.as_deref(), target.contains('$')) {
+                        let joined = format!("{}/{}", base.trim_end_matches('/'), target);
+                        if let Some(abs) = normalize_named_path(&joined, vocab) {
+                            push(abs, &mut dirs);
                         }
                     }
                 }
@@ -1409,7 +1449,7 @@ fn named_directories(lexed: &Lexed, shell_cwd: &str) -> Vec<String> {
             Some((name, value)) if name.starts_with('-') || is_assignment(word) => value,
             _ => word.as_str(),
         };
-        if let Some(abs) = normalize_named_path(value) {
+        if let Some(abs) = normalize_named_path(value, vocab) {
             push(abs, &mut dirs);
         }
     }
@@ -1419,6 +1459,11 @@ fn named_directories(lexed: &Lexed, shell_cwd: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The rules production reads.
+    fn vocab() -> std::sync::Arc<crate::agent_visibility_params::AgentVisibilityParams> {
+        agent_visibility_params::workspace_attribution()
+    }
 
     fn words(cmd: &str) -> Vec<Vec<String>> {
         lex_shell(cmd).commands
@@ -1441,6 +1486,8 @@ mod tests {
 
     #[test]
     fn lexer_tells_background_from_redirections() {
+        let p = vocab();
+        let v = &p.workspace_attribution;
         assert!(!lex_shell("cargo test 2>&1 | tail").background);
         assert!(!lex_shell("cargo test &> out.log").background);
         assert!(!lex_shell("a && b || c").background);
@@ -1448,7 +1495,7 @@ mod tests {
         // PowerShell's call operator is not a background job.
         let lexed = lex_shell(r#"& "C:\Program Files\claude\claude.exe" -p hi"#);
         assert!(!lexed.background);
-        assert!(lexed.commands.iter().any(|w| starts_agent_cli(w)));
+        assert!(lexed.commands.iter().any(|w| starts_agent_cli(w, v)));
     }
 
     #[test]
@@ -1524,7 +1571,9 @@ mod tests {
 
     #[test]
     fn agent_cli_is_recognised_in_command_position_only() {
-        let starts = |cmd: &str| words(cmd).iter().any(|w| starts_agent_cli(w));
+        let p = vocab();
+        let v = &p.workspace_attribution;
+        let starts = |cmd: &str| words(cmd).iter().any(|w| starts_agent_cli(w, v));
         assert!(starts("claude -p 'fix the build'"));
         assert!(starts(
             "cd /tmp/x && env -u CLAUDECODE -u CLAUDE_PID claude -p \"$P\""
@@ -1534,11 +1583,13 @@ mod tests {
         assert!(starts("npx @anthropic-ai/claude-code -p hi"));
         assert!(starts("/Users/me/.local/bin/claude -p hi"));
         assert!(starts(r#"bash -lc "cd /tmp/y && claude -p hi""#));
+        assert!(starts(r#"pwsh -NoProfile -Command "claude -p hi""#));
         assert!(starts(
             r#"Start-Process -FilePath claude -ArgumentList '-p','hi'"#
         ));
         assert!(starts("cursor agent -p hi"));
         assert!(!starts("pgrep -f claude"));
+        assert!(!starts("command -v claude"));
         assert!(!starts("ls ~/.claude/projects"));
         assert!(!starts("echo claude"));
         assert!(!starts("cat claude.md"));
@@ -1546,63 +1597,51 @@ mod tests {
 
     #[test]
     fn named_paths_expand_home_and_temp_markers() {
+        let p = vocab();
+        let v = &p.workspace_attribution;
+        let n = |w: &str| normalize_named_path(w, v);
         assert_eq!(
-            normalize_named_path("/private/tmp/edsim-agents/").as_deref(),
+            n("/private/tmp/edsim-agents/").as_deref(),
             Some("/private/tmp/edsim-agents")
         );
         assert_eq!(
-            normalize_named_path("$HOME/Library/Caches/x").as_deref(),
+            n("$HOME/Library/Caches/x").as_deref(),
             Some("~/Library/Caches/x")
         );
-        assert_eq!(normalize_named_path("${HOME}").as_deref(), Some("~"));
+        assert_eq!(n("${HOME}").as_deref(), Some("~"));
+        assert_eq!(n("~/code/x").as_deref(), Some("~/code/x"));
         assert_eq!(
-            normalize_named_path("~/code/x").as_deref(),
-            Some("~/code/x")
-        );
-        assert_eq!(
-            normalize_named_path("${TMPDIR}edsim-agents").as_deref(),
+            n("${TMPDIR}edsim-agents").as_deref(),
             Some("$TMPDIR/edsim-agents")
         );
+        assert_eq!(n("$TMPDIR/edsim").as_deref(), Some("$TMPDIR/edsim"));
+        assert_eq!(n("%TEMP%\\edsim\\a1").as_deref(), Some("$TMPDIR/edsim/a1"));
+        assert_eq!(n("$env:TEMP\\edsim").as_deref(), Some("$TMPDIR/edsim"));
+        assert_eq!(n("%USERPROFILE%\\src\\app").as_deref(), Some("~/src/app"));
         assert_eq!(
-            normalize_named_path("$TMPDIR/edsim").as_deref(),
-            Some("$TMPDIR/edsim")
-        );
-        assert_eq!(
-            normalize_named_path("%TEMP%\\edsim\\a1").as_deref(),
-            Some("$TMPDIR/edsim/a1")
-        );
-        assert_eq!(
-            normalize_named_path("$env:TEMP\\edsim").as_deref(),
-            Some("$TMPDIR/edsim")
-        );
-        assert_eq!(
-            normalize_named_path("%USERPROFILE%\\src\\app").as_deref(),
-            Some("~/src/app")
-        );
-        assert_eq!(
-            normalize_named_path(r"C:\Users\me\AppData\Local\Temp\x").as_deref(),
+            n(r"C:\Users\me\AppData\Local\Temp\x").as_deref(),
             Some("C:/Users/me/AppData/Local/Temp/x")
         );
+        assert_eq!(n("/tmp/run-$ID/x").as_deref(), Some("/tmp"));
+        assert_eq!(n("$HOMEBREW_PREFIX/bin"), None);
+        assert_eq!(n("$TMPDIRX/a"), None);
+        assert_eq!(n("$env:TEMPLATE_DIR/a"), None);
+        assert_eq!(n("relative/dir"), None);
+        assert_eq!(n("$BASE/edsim"), None);
+        assert_eq!(n("/ Catalog labels / naming"), None);
+        assert_eq!(n("/a\nb"), None);
         assert_eq!(
-            normalize_named_path("/tmp/run-$ID/x").as_deref(),
-            Some("/tmp")
-        );
-        assert_eq!(normalize_named_path("$HOMEBREW_PREFIX/bin"), None);
-        assert_eq!(normalize_named_path("$TMPDIRX/a"), None);
-        assert_eq!(normalize_named_path("relative/dir"), None);
-        assert_eq!(normalize_named_path("$BASE/edsim"), None);
-        assert_eq!(normalize_named_path("/ Catalog labels / naming"), None);
-        assert_eq!(normalize_named_path("/a\nb"), None);
-        assert_eq!(
-            normalize_named_path("/Users/me/Mon Drive (x)/jarvis").as_deref(),
+            n("/Users/me/Mon Drive (x)/jarvis").as_deref(),
             Some("/Users/me/Mon Drive (x)/jarvis")
         );
     }
 
     #[test]
     fn named_directories_resolve_relative_cd_against_the_shell_cwd() {
+        let p = vocab();
+        let v = &p.workspace_attribution;
         let lexed = lex_shell("cd sub && claude -p hi; mkdir -p /private/tmp/a --dir=/opt/data/x");
-        let dirs = named_directories(&lexed, "/Users/me/proj");
+        let dirs = named_directories(&lexed, "/Users/me/proj", v);
         assert_eq!(
             dirs,
             vec![
@@ -1616,12 +1655,14 @@ mod tests {
 
     #[test]
     fn running_a_script_is_not_naming_it() {
+        let p = vocab();
+        let v = &p.workspace_attribution;
         let scripts: BTreeSet<String> = ["agents.sh".to_string(), "spawn.py".to_string()].into();
         let runs = |cmd: &str| {
             lex_shell(cmd)
                 .commands
                 .iter()
-                .any(|w| runs_script(w, &scripts))
+                .any(|w| runs_script(w, &scripts, v))
         };
         assert!(runs("./agents.sh 1 /private/tmp/edsim-agents"));
         assert!(runs(
@@ -1637,21 +1678,31 @@ mod tests {
 
     #[test]
     fn scripts_that_start_agents_are_recognised() {
-        assert!(script_starts_agent("#!/bin/bash\ncd \"$D\" || exit 1\nclaude -p \"$P\" --output-format json > out.json 2>&1\n"));
+        let p = vocab();
+        let v = &p.workspace_attribution;
         assert!(script_starts_agent(
-            "import subprocess\nsubprocess.run([\"codex\", \"exec\", prompt])\n"
+            "#!/bin/bash\ncd \"$D\" || exit 1\nclaude -p \"$P\" --output-format json > out.json 2>&1\n",
+            v
+        ));
+        assert!(script_starts_agent(
+            "import subprocess\nsubprocess.run([\"codex\", \"exec\", prompt])\n",
+            v
         ));
         assert!(!script_starts_agent(
-            "#!/bin/bash\ncargo test\nls ~/.claude\n"
+            "#!/bin/bash\ncargo test\nls ~/.claude\n",
+            v
         ));
     }
 
     #[test]
     fn patches_register_agent_scripts() {
+        let p = vocab();
+        let v = &p.workspace_attribution;
         let mut scan = FileScan::default();
         remember_patched_scripts(
             "*** Begin Patch\n*** Add File: tools/spawn.sh\n+#!/bin/sh\n+codex exec -C \"$1\" \"$2\"\n*** Update File: README.md\n+claude is mentioned here\n*** End Patch\n",
             &mut scan,
+            v,
         );
         assert!(scan.agent_scripts.contains("spawn.sh"));
         assert!(!scan.agent_scripts.contains("readme.md"));
@@ -1664,9 +1715,10 @@ mod tests {
     }
 
     fn feed(scan: &mut FileScan, lines: &[serde_json::Value]) {
+        let p = vocab();
         for l in lines {
             scan.lines_seen += 1;
-            process_line(&line(l.clone()), scan);
+            process_line(&line(l.clone()), scan, &p.workspace_attribution);
         }
     }
 
@@ -1753,6 +1805,7 @@ mod tests {
                 serde_json::json!({"timestamp":"2026-09-28T10:03:00Z","type":"response_item","payload":{"type":"function_call_output","call_id":"c1","output":"ok"}}),
             ],
         );
+        assert!(!codex.context.headless);
         assert_eq!(codex.launches.len(), 1);
         let (_, call) = &codex.launches[0];
         assert_eq!(call.dirs, vec!["/home/me/app/sub".to_string()]);
@@ -1777,6 +1830,7 @@ mod tests {
 
     #[test]
     fn incremental_scan_resumes_after_the_last_complete_line() {
+        let p = vocab();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("s.jsonl");
         let first = line(
@@ -1789,16 +1843,20 @@ mod tests {
         let mut bytes = first.clone();
         bytes.extend_from_slice(&call[..call.len() / 2]);
         std::fs::write(&path, &bytes).unwrap();
-        let scan = scan_file(&path).expect("scan");
+        let scan = scan_file(&path, &p.workspace_attribution, &p.signature).expect("scan");
         assert_eq!(scan.offset, first.len() as u64);
         assert!(scan.launches.is_empty());
         // The rest of the line lands: the next scan picks it up from the offset.
         let mut all = first.clone();
         all.extend_from_slice(&call);
         std::fs::write(&path, &all).unwrap();
-        let scan = scan_file(&path).expect("scan");
+        let scan = scan_file(&path, &p.workspace_attribution, &p.signature).expect("scan");
         assert_eq!(scan.offset, all.len() as u64);
         assert_eq!(scan.launches.len(), 1);
         assert!(scan.launches[0].1.background);
+        // State computed under other params is recomputed, not reused.
+        let rescan = scan_file(&path, &p.workspace_attribution, "another-signature").expect("scan");
+        assert_eq!(rescan.launches.len(), 1);
+        assert_eq!(rescan.params_signature, "another-signature");
     }
 }

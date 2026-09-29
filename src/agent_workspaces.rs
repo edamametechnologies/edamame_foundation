@@ -9,18 +9,17 @@
 //! [`attribute_session_workspaces`] files every session under one workspace,
 //! by the most robust link the transcripts establish:
 //!
-//! 1. **Launched**: a headless session (Claude Code `entrypoint: sdk-*`, Codex
-//!    `exec`, see [`SessionLaunchContext::headless`]) whose working directory
-//!    is, or is under, a directory that another session's agent-launching tool
-//!    call names, and which started inside that call's time window, belongs to
-//!    the launching session's workspace (transitively). The link is read from
-//!    the launching session's transcript; nothing in the child's own content is
+//! 1. **Launched**: a headless session (see
+//!    [`SessionLaunchContext::headless`]) whose working directory is, or is
+//!    under, a directory that another session's agent-launching tool call
+//!    names, and which started inside that call's time window, belongs to the
+//!    launching session's workspace (transitively). The link is read from the
+//!    launching session's transcript; nothing in the child's own content is
 //!    consulted, so a session cannot attach itself to a workspace by naming a
 //!    path, and an interactive session a person started is never re-filed.
 //! 2. **Temporary**: otherwise, a session whose own workspace directory lies in
-//!    a temporary root (`/tmp`, `/var/tmp`, macOS `/var/folders/*/*/T`, Windows
-//!    `%TEMP%`, `C:\Windows\Temp`, ...) joins one "Temporary sessions"
-//!    workspace per agent ([`temporary_workspace_slug`]).
+//!    a temporary root joins one temporary-sessions workspace per agent
+//!    ([`temporary_workspace_slug`]).
 //! 3. **Own**: every other session keeps its own workspace.
 //!
 //! Kernel process lineage (the child agent process descending from another
@@ -35,8 +34,12 @@
 //! [`unique_workspace_labels`] names the workspaces: the directory leaf,
 //! extended with as many parent components as needed to tell two workspaces
 //! apart (`edsim-agents/edsim-agent3`, `edsim-agents2/edsim-agent3`), the
-//! product name for an agent home, "Temporary sessions" for the temporary
-//! group. Labels depend only on the set of workspaces, never on input order.
+//! product name for an agent home, the params' label for the temporary group.
+//! Labels depend only on the set of workspaces, never on input order.
+//!
+//! The temporary roots, path aliases, home parents, time windows and label
+//! wording are data from the agent-visibility params
+//! ([`WorkspaceAttributionJSON`]); this module keeps the predicates.
 
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
@@ -45,25 +48,16 @@ use crate::agent_transcripts::launch::{AgentLaunchCall, SessionLaunchContext};
 use crate::agent_visibility::{
     agent_type_for_fleet_workspace_ref, canonicalize_project_slug, workspace_slug_for_session,
 };
+use crate::agent_visibility_params::WorkspaceAttributionJSON;
 use crate::supported_agents::fleet_workspace_display_name;
 
 /// Slug prefix of the per-agent temporary-sessions workspace. A colon never
 /// appears in a canonical project slug (`-[A-Za-z0-9-]+`).
 pub const TEMPORARY_WORKSPACE_PREFIX: &str = "temporary:";
 
-/// Label of the temporary-sessions workspace.
-pub const TEMPORARY_WORKSPACE_LABEL: &str = "Temporary sessions";
-
-/// Clock slack around a launch window (both timestamps come from harnesses on
-/// the same host).
-const LAUNCH_SLACK_SECS: i64 = 5;
-
-/// How long after a background launch (or one whose result was never seen) a
-/// child may start and still be attributed to it.
-const BACKGROUND_LAUNCH_WINDOW_SECS: i64 = 60 * 60;
-
-/// Longest launch chain followed (child -> parent -> grandparent ...).
-const MAX_LAUNCH_CHAIN: usize = 16;
+/// Slug components a single path component can split into (a directory name
+/// with `_`, `.` or spaces becomes several dash-separated tokens).
+const MAX_TOKENS_PER_COMPONENT: usize = 6;
 
 /// Workspace slug of the temporary-sessions group of `agent_type`.
 pub fn temporary_workspace_slug(agent_type: &str) -> String {
@@ -120,14 +114,20 @@ pub struct SessionWorkspace {
 
 /// File every session under one workspace (see the module docs). `home` is
 /// the home directory of the user whose transcripts these are (expands `~`
-/// and `$HOME` in launch commands). The result is index-aligned with
-/// `sessions` and independent of their order.
+/// in launch directories); `rules` are the params' workspace attribution
+/// rules. The result is index-aligned with `sessions` and independent of
+/// their order.
 pub fn attribute_session_workspaces(
     sessions: &[SessionWorkspaceInput<'_>],
     home: &str,
+    rules: &WorkspaceAttributionJSON,
 ) -> Vec<SessionWorkspace> {
-    let home = NormPath::parse(home);
-    let owns: Vec<SessionWorkspace> = sessions.iter().map(own_workspace).collect();
+    let paths = PathRules::new(rules);
+    let home = paths.parse(home);
+    let owns: Vec<SessionWorkspace> = sessions
+        .iter()
+        .map(|session| own_workspace(session, &paths))
+        .collect();
 
     // Visit candidates in a canonical order so ties resolve the same way
     // whatever order the caller collected the sessions in.
@@ -152,13 +152,13 @@ pub fn attribute_session_workspaces(
     let mut calls: Vec<Call> = Vec::new();
     for &parent in &order {
         for call in sessions[parent].launches {
-            let Some((from, until)) = launch_window(call, &sessions[parent]) else {
+            let Some((from, until)) = launch_window(call, &sessions[parent], rules) else {
                 continue;
             };
             let dirs: Vec<NamedDir> = call
                 .dirs
                 .iter()
-                .filter_map(|dir| NamedDir::resolve(dir, home.as_ref()))
+                .filter_map(|dir| NamedDir::resolve(dir, home.as_ref(), &paths))
                 .collect();
             if !dirs.is_empty() {
                 calls.push(Call {
@@ -178,7 +178,7 @@ pub fn attribute_session_workspaces(
             if !child.launch.headless {
                 continue;
             }
-            let Some(child_dir) = NormPath::parse(&child.launch.cwd) else {
+            let Some(child_dir) = paths.parse(&child.launch.cwd) else {
                 continue;
             };
             let Some(child_start) = child.launch.started_at.or(child.started_at) else {
@@ -194,7 +194,7 @@ pub fn attribute_session_workspaces(
                 let Some(specificity) = call
                     .dirs
                     .iter()
-                    .filter_map(|dir| dir.covers(&child_dir, home.as_ref()))
+                    .filter_map(|dir| dir.covers(&child_dir, home.as_ref(), &paths))
                     .max()
                 else {
                     continue;
@@ -211,6 +211,7 @@ pub fn attribute_session_workspaces(
         }
     }
 
+    let max_chain = usize::try_from(rules.max_launch_chain).unwrap_or(usize::MAX);
     (0..sessions.len())
         .map(|index| {
             let Some(parent) = parent_of[index] else {
@@ -220,7 +221,7 @@ pub fn attribute_session_workspaces(
             let mut chain = vec![index];
             let mut root = parent;
             loop {
-                if chain.contains(&root) || chain.len() > MAX_LAUNCH_CHAIN {
+                if chain.contains(&root) || chain.len() > max_chain {
                     // A cycle: no session in it was launched by another.
                     return owns[index].clone();
                 }
@@ -245,7 +246,7 @@ pub fn attribute_session_workspaces(
 }
 
 /// The workspace a session is filed under when nobody launched it.
-fn own_workspace(session: &SessionWorkspaceInput<'_>) -> SessionWorkspace {
+fn own_workspace(session: &SessionWorkspaceInput<'_>, paths: &PathRules) -> SessionWorkspace {
     let slug =
         workspace_slug_for_session(session.source_path, session.workspace_hint).unwrap_or_default();
     if slug.is_empty() {
@@ -259,9 +260,9 @@ fn own_workspace(session: &SessionWorkspaceInput<'_>) -> SessionWorkspace {
         .find(|dir| !dir.is_empty() && canonicalize_project_slug(dir) == slug)
         .unwrap_or("")
         .to_string();
-    let temporary = match NormPath::parse(&dir) {
-        Some(path) => path.temp_root_len().is_some(),
-        None => slug_names_temp_root(&slug),
+    let temporary = match paths.parse(&dir) {
+        Some(path) => paths.temp_root_len(&path).is_some(),
+        None => paths.slug_names_temp_root(&slug),
     };
     if temporary {
         return SessionWorkspace {
@@ -283,9 +284,11 @@ fn own_workspace(session: &SessionWorkspaceInput<'_>) -> SessionWorkspace {
 fn launch_window(
     call: &AgentLaunchCall,
     parent: &SessionWorkspaceInput<'_>,
+    rules: &WorkspaceAttributionJSON,
 ) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
-    let slack = Duration::seconds(LAUNCH_SLACK_SECS);
-    let background = Duration::seconds(BACKGROUND_LAUNCH_WINDOW_SECS);
+    let seconds = |s: u64| Duration::seconds(i64::try_from(s).unwrap_or(i64::MAX / 1000));
+    let slack = seconds(rules.launch_clock_slack_secs);
+    let background = seconds(rules.background_launch_window_secs);
     match call.at {
         Some(at) => {
             let until = match (call.background, call.finished_at) {
@@ -303,57 +306,13 @@ fn launch_window(
     }
 }
 
-/// A canonical slug whose first components are a temporary root (used when no
-/// exact directory is known, e.g. Cursor).
-fn slug_names_temp_root(slug: &str) -> bool {
-    let tokens: Vec<String> = slug
-        .trim_start_matches('-')
-        .split('-')
-        .filter(|t| !t.is_empty())
-        .map(str::to_string)
-        .collect();
-    let lower: Vec<String> = tokens.iter().map(|t| t.to_ascii_lowercase()).collect();
-    let lower: Vec<&str> = lower.iter().map(String::as_str).collect();
-    // Windows: `C--Users-me-AppData-Local-Temp-x`, `C--Windows-Temp-x`.
-    if lower
-        .first()
-        .map(|d| d.len() == 1 && d.chars().all(|c| c.is_ascii_alphabetic()))
-        == Some(true)
-    {
-        let rest = &lower[1..];
-        return matches!(rest, ["windows", "temp", ..] | ["temp", ..] | ["tmp", ..])
-            || rest
-                .windows(3)
-                .enumerate()
-                .any(|(i, w)| i >= 2 && rest[0] == "users" && w == ["appdata", "local", "temp"]);
-    }
-    let rest: &[&str] = match lower.as_slice() {
-        ["private", r @ ..] if matches!(r.first(), Some(&"tmp") | Some(&"var")) => r,
-        r => r,
-    };
-    if matches!(rest, ["tmp", ..] | ["var", "tmp", ..] | ["dev", "shm", ..]) {
-        return true;
-    }
-    // macOS `/var/folders/<xx>/<id>/T/`; the id may have been split on `_`.
-    if matches!(rest, ["var", "folders", ..]) {
-        let offset = lower.len() - rest.len();
-        return tokens
-            .iter()
-            .enumerate()
-            .skip(offset + 3)
-            .take(4)
-            .any(|(_, t)| t == "T");
-    }
-    false
-}
-
 // ---------------------------------------------------------------------------
 // Paths
 // ---------------------------------------------------------------------------
 
 /// An absolute path, normalized for comparison: `/` separators, a lower-cased
-/// drive (`C:\x` and MSYS `/c/x` both give drive `c`), and macOS `/private`
-/// dropped in front of `/tmp`, `/var` and `/etc`.
+/// drive (`C:\x` and the Git Bash spelling `/c/x` both give drive `c`), and
+/// the params' path aliases applied (macOS `/private/tmp` is `/tmp`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct NormPath {
     drive: Option<char>,
@@ -361,46 +320,6 @@ struct NormPath {
 }
 
 impl NormPath {
-    fn parse(path: &str) -> Option<NormPath> {
-        let path = path.trim();
-        if path.is_empty() {
-            return None;
-        }
-        let unified = path.replace('\\', "/");
-        let bytes = unified.as_bytes();
-        let (drive, rest) =
-            if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
-                (Some((bytes[0] as char).to_ascii_lowercase()), &unified[2..])
-            } else if unified.starts_with('/') {
-                (None, unified.as_str())
-            } else {
-                return None;
-            };
-        let mut comps: Vec<String> = rest
-            .split('/')
-            .filter(|c| !c.is_empty() && *c != ".")
-            .map(str::to_string)
-            .collect();
-        let mut drive = drive;
-        // MSYS / Git Bash: `/c/Users/me` is `C:\Users\me`.
-        if drive.is_none()
-            && comps.len() >= 2
-            && comps[0].len() == 1
-            && comps[0].chars().all(|c| c.is_ascii_alphabetic())
-        {
-            drive = comps[0].chars().next().map(|c| c.to_ascii_lowercase());
-            comps.remove(0);
-        }
-        if drive.is_none()
-            && comps.len() >= 2
-            && comps[0] == "private"
-            && matches!(comps[1].as_str(), "tmp" | "var" | "etc")
-        {
-            comps.remove(0);
-        }
-        Some(NormPath { drive, comps })
-    }
-
     fn join(&self, tail: &[String]) -> NormPath {
         let mut comps = self.comps.clone();
         comps.extend(tail.iter().cloned());
@@ -428,52 +347,238 @@ impl NormPath {
                 .zip(&self.comps)
                 .all(|(a, b)| self.comp_eq(a, b))
     }
+}
 
-    /// Length of the temporary root this path lies in (or is).
-    fn temp_root_len(&self) -> Option<usize> {
-        let lower: Vec<String> = self.comps.iter().map(|c| c.to_ascii_lowercase()).collect();
-        let lower: Vec<&str> = lower.iter().map(String::as_str).collect();
-        if self.drive.is_some() {
-            return match lower.as_slice() {
-                ["windows", "temp", ..] => Some(2),
-                ["temp", ..] | ["tmp", ..] => Some(1),
-                ["users", _, "appdata", "local", "temp", ..] => Some(5),
-                _ => None,
-            };
+/// One component of a root pattern.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CompPattern {
+    /// Any single component (`*`).
+    Any,
+    Literal(String),
+}
+
+/// A root pattern from the params: `/var/folders/*/*/T`, `?:/Windows/Temp`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RootPattern {
+    /// `?:` (any drive) rather than a Unix root.
+    on_drive: bool,
+    comps: Vec<CompPattern>,
+}
+
+impl RootPattern {
+    fn parse(pattern: &str) -> Option<RootPattern> {
+        let (on_drive, rest) = match pattern.strip_prefix("?:") {
+            Some(rest) => (true, rest),
+            None if pattern.starts_with('/') => (false, pattern),
+            None => return None,
+        };
+        let comps = rest
+            .split('/')
+            .filter(|c| !c.is_empty())
+            .map(|c| {
+                if c == "*" {
+                    CompPattern::Any
+                } else {
+                    CompPattern::Literal(c.to_string())
+                }
+            })
+            .collect();
+        Some(RootPattern { on_drive, comps })
+    }
+
+    /// Components of `path` this root spans, when `path` is it or lies in it.
+    fn matches(&self, path: &NormPath) -> Option<usize> {
+        if self.on_drive != path.drive.is_some() || path.comps.len() < self.comps.len() {
+            return None;
         }
-        match lower.as_slice() {
-            ["tmp", ..] => Some(1),
-            ["var", "tmp", ..] | ["dev", "shm", ..] => Some(2),
-            // macOS per-user temp: `/var/folders/<xx>/<id>/T` (the `C` cache
-            // sibling is not temporary).
-            ["var", "folders", _, _, ..] if self.comps.get(4).map(String::as_str) == Some("T") => {
-                Some(5)
+        self.comps
+            .iter()
+            .zip(&path.comps)
+            .all(|(pattern, comp)| match pattern {
+                CompPattern::Any => true,
+                CompPattern::Literal(literal) => path.comp_eq(literal, comp),
+            })
+            .then_some(self.comps.len())
+    }
+
+    /// Tokens of a canonical slug this root spans, when the slug's directory
+    /// is it or lies in it. A path component can have become several tokens.
+    fn matches_tokens(&self, tokens: &[String], ignore_case: bool) -> bool {
+        fn walk(pattern: &[Vec<String>], tokens: &[String], ignore_case: bool) -> bool {
+            let Some((first, rest)) = pattern.split_first() else {
+                return true;
+            };
+            if first.is_empty() {
+                // `*`: one component, one or more tokens.
+                return (1..=MAX_TOKENS_PER_COMPONENT.min(tokens.len()))
+                    .any(|n| walk(rest, &tokens[n..], ignore_case));
             }
-            _ => None,
+            tokens.len() >= first.len()
+                && first.iter().zip(tokens).all(|(a, b)| {
+                    if ignore_case {
+                        a.eq_ignore_ascii_case(b)
+                    } else {
+                        a == b
+                    }
+                })
+                && walk(rest, &tokens[first.len()..], ignore_case)
+        }
+        let pattern: Vec<Vec<String>> = self
+            .comps
+            .iter()
+            .map(|c| match c {
+                CompPattern::Any => Vec::new(),
+                CompPattern::Literal(literal) => slug_tokens(literal),
+            })
+            .collect();
+        walk(&pattern, tokens, ignore_case)
+    }
+}
+
+/// Dash-separated tokens of a canonical slug (or of a name, canonicalized).
+fn slug_tokens(text: &str) -> Vec<String> {
+    canonicalize_project_slug(text)
+        .split('-')
+        .filter(|t| !t.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// The params' path rules, decoded once per attribution or labelling run.
+struct PathRules {
+    temp_roots: Vec<RootPattern>,
+    home_parents: Vec<RootPattern>,
+    /// (prefix, canonical) component lists of the path aliases.
+    aliases: Vec<(Vec<String>, Vec<String>)>,
+}
+
+impl PathRules {
+    fn new(rules: &WorkspaceAttributionJSON) -> Self {
+        let split = |p: &str| -> Vec<String> {
+            p.split('/')
+                .filter(|c| !c.is_empty())
+                .map(str::to_string)
+                .collect()
+        };
+        PathRules {
+            temp_roots: rules
+                .temp_roots
+                .iter()
+                .filter_map(|r| RootPattern::parse(r))
+                .collect(),
+            home_parents: rules
+                .home_parent_directories
+                .iter()
+                .filter_map(|r| RootPattern::parse(r))
+                .collect(),
+            aliases: rules
+                .path_aliases
+                .iter()
+                .map(|a| (split(&a.prefix), split(&a.canonical)))
+                .filter(|(prefix, _)| !prefix.is_empty())
+                .collect(),
         }
     }
 
-    /// Specific enough to name one workspace's surroundings: deeper than a
-    /// temporary root, the home directory, a top-level directory or somebody's
-    /// home (`/Users/x`, `/home/x`, `C:\Users\x`).
-    fn is_specific(&self, home: Option<&NormPath>) -> bool {
-        if let Some(root) = self.temp_root_len() {
-            return self.comps.len() > root;
+    /// Normalize an absolute path; `None` for a relative or empty one.
+    fn parse(&self, path: &str) -> Option<NormPath> {
+        let path = path.trim();
+        if path.is_empty() {
+            return None;
         }
-        if let Some(home) = home {
-            if self.starts_with(home) {
-                return self.comps.len() > home.comps.len();
+        let unified = path.replace('\\', "/");
+        let bytes = unified.as_bytes();
+        let (mut drive, rest) =
+            if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+                (Some((bytes[0] as char).to_ascii_lowercase()), &unified[2..])
+            } else if unified.starts_with('/') {
+                (None, unified.as_str())
+            } else {
+                return None;
+            };
+        let mut comps: Vec<String> = rest
+            .split('/')
+            .filter(|c| !c.is_empty() && *c != ".")
+            .map(str::to_string)
+            .collect();
+        // Git Bash / MSYS: `/c/Users/me` is `C:\Users\me`.
+        if drive.is_none()
+            && comps.len() >= 2
+            && comps[0].len() == 1
+            && comps[0].chars().all(|c| c.is_ascii_alphabetic())
+        {
+            drive = comps[0].chars().next().map(|c| c.to_ascii_lowercase());
+            comps.remove(0);
+        }
+        if drive.is_none() {
+            if let Some((prefix, canonical)) = self.aliases.iter().find(|(prefix, _)| {
+                comps.len() >= prefix.len() && comps[..prefix.len()] == prefix[..]
+            }) {
+                comps.splice(..prefix.len(), canonical.iter().cloned());
             }
         }
-        let n = self.comps.len();
-        if n < 2 {
+        Some(NormPath { drive, comps })
+    }
+
+    /// Length of the temporary root `path` lies in (or is).
+    fn temp_root_len(&self, path: &NormPath) -> Option<usize> {
+        self.temp_roots.iter().filter_map(|r| r.matches(path)).max()
+    }
+
+    /// A canonical slug whose directory lies in a temporary root (when no
+    /// exact directory is known, e.g. Cursor).
+    fn slug_names_temp_root(&self, slug: &str) -> bool {
+        let tokens = slug_tokens(slug);
+        let Some(first) = tokens.first() else {
+            return false;
+        };
+        // `C--Users-me-AppData-Local-Temp-x`: a drive, then Windows rules.
+        if first.len() == 1 && first.chars().all(|c| c.is_ascii_alphabetic()) {
+            return self
+                .temp_roots
+                .iter()
+                .filter(|r| r.on_drive)
+                .any(|r| r.matches_tokens(&tokens[1..], true));
+        }
+        let mut unix = tokens.clone();
+        for (prefix, canonical) in &self.aliases {
+            let prefix_tokens: Vec<String> = prefix.iter().flat_map(|c| slug_tokens(c)).collect();
+            if !prefix_tokens.is_empty()
+                && unix.len() >= prefix_tokens.len()
+                && unix[..prefix_tokens.len()] == prefix_tokens[..]
+            {
+                let canonical_tokens: Vec<String> =
+                    canonical.iter().flat_map(|c| slug_tokens(c)).collect();
+                unix.splice(..prefix_tokens.len(), canonical_tokens);
+                break;
+            }
+        }
+        self.temp_roots
+            .iter()
+            .filter(|r| !r.on_drive)
+            .any(|r| r.matches_tokens(&unix, false))
+    }
+
+    /// Specific enough to name one workspace's surroundings: deeper than a
+    /// temporary root, than the home directory, than a top-level directory,
+    /// and not somebody's home (a home parent's child).
+    fn is_specific(&self, dir: &NormPath, home: Option<&NormPath>) -> bool {
+        if let Some(root) = self.temp_root_len(dir) {
+            return dir.comps.len() > root;
+        }
+        if let Some(home) = home {
+            if dir.starts_with(home) {
+                return dir.comps.len() > home.comps.len();
+            }
+        }
+        if dir.comps.len() < 2 {
             return false;
         }
-        !(n == 2
-            && matches!(
-                self.comps[0].to_ascii_lowercase().as_str(),
-                "users" | "home"
-            ))
+        !self
+            .home_parents
+            .iter()
+            .filter_map(|p| p.matches(dir))
+            .any(|len| dir.comps.len() <= len + 1)
     }
 }
 
@@ -486,7 +591,7 @@ enum NamedDir {
 }
 
 impl NamedDir {
-    fn resolve(dir: &str, home: Option<&NormPath>) -> Option<NamedDir> {
+    fn resolve(dir: &str, home: Option<&NormPath>, paths: &PathRules) -> Option<NamedDir> {
         let split = |rest: &str| -> Vec<String> {
             rest.split(['/', '\\'])
                 .filter(|c| !c.is_empty())
@@ -500,18 +605,23 @@ impl NamedDir {
         if let Some(rest) = dir.strip_prefix('~') {
             return Some(NamedDir::Path(home?.join(&split(rest))));
         }
-        NormPath::parse(dir).map(NamedDir::Path)
+        paths.parse(dir).map(NamedDir::Path)
     }
 
     /// How many components of `child` this directory pins down, when `child`
     /// is it or lies under it.
-    fn covers(&self, child: &NormPath, home: Option<&NormPath>) -> Option<usize> {
+    fn covers(
+        &self,
+        child: &NormPath,
+        home: Option<&NormPath>,
+        paths: &PathRules,
+    ) -> Option<usize> {
         match self {
             NamedDir::Path(dir) => {
-                (dir.is_specific(home) && child.starts_with(dir)).then_some(dir.comps.len())
+                (paths.is_specific(dir, home) && child.starts_with(dir)).then_some(dir.comps.len())
             }
             NamedDir::UnderTemp(tail) => {
-                let root = child.temp_root_len()?;
+                let root = paths.temp_root_len(child)?;
                 let rest = &child.comps[root..];
                 (rest.len() >= tail.len()
                     && tail.iter().zip(rest).all(|(a, b)| child.comp_eq(a, b)))
@@ -534,30 +644,23 @@ pub struct WorkspaceLabelInput<'a> {
     pub dir: &'a str,
 }
 
-/// Short product name of an agent, for labels.
-pub fn agent_product_name(agent_type: &str) -> String {
-    match agent_type {
-        "claude_code" => "Claude Code".to_string(),
-        "cursor" => "Cursor".to_string(),
-        other => fleet_workspace_display_name(other)
-            .map(str::to_string)
-            .unwrap_or_else(|| other.to_string()),
-    }
-}
-
 /// Unique labels for a set of workspaces (index-aligned with `inputs`; pass
 /// each slug once). An agent home is named after its product; the
-/// temporary-sessions group is "Temporary sessions", with the agent in
+/// temporary-sessions group gets the params' label, with the agent in
 /// parentheses when more than one agent has one; any other workspace is named
 /// after its directory leaf, extended with parent components until no other
 /// workspace in the set carries the same label (case-insensitively). A slug
 /// without a known directory is named from its dash-separated tokens.
-pub fn unique_workspace_labels(inputs: &[WorkspaceLabelInput<'_>]) -> Vec<String> {
+pub fn unique_workspace_labels(
+    inputs: &[WorkspaceLabelInput<'_>],
+    rules: &WorkspaceAttributionJSON,
+) -> Vec<String> {
     enum Kind {
         Fixed(String),
         Temporary(String),
         Path(Vec<String>),
     }
+    let paths = PathRules::new(rules);
     let kinds: Vec<Kind> = inputs
         .iter()
         .map(|input| {
@@ -576,7 +679,7 @@ pub fn unique_workspace_labels(inputs: &[WorkspaceLabelInput<'_>]) -> Vec<String
             if let Some(name) = fleet {
                 return Kind::Fixed(name.to_string());
             }
-            let comps: Vec<String> = match NormPath::parse(input.dir) {
+            let comps: Vec<String> = match paths.parse(input.dir) {
                 Some(path) if !path.comps.is_empty() => path.comps,
                 _ => input
                     .slug
@@ -599,13 +702,14 @@ pub fn unique_workspace_labels(inputs: &[WorkspaceLabelInput<'_>]) -> Vec<String
         .map(|kind| match kind {
             Kind::Fixed(name) => name.clone(),
             Kind::Temporary(agent) if temporary_count > 1 => {
-                format!(
-                    "{} ({})",
-                    TEMPORARY_WORKSPACE_LABEL,
-                    agent_product_name(agent)
-                )
+                let agent_label = rules
+                    .agent_labels
+                    .get(agent)
+                    .cloned()
+                    .unwrap_or_else(|| agent.clone());
+                format!("{} ({})", rules.temporary_workspace_label, agent_label)
             }
-            Kind::Temporary(_) => TEMPORARY_WORKSPACE_LABEL.to_string(),
+            Kind::Temporary(_) => rules.temporary_workspace_label.clone(),
             Kind::Path(_) => String::new(),
         })
         .collect();
@@ -659,6 +763,13 @@ pub fn unique_workspace_labels(inputs: &[WorkspaceLabelInput<'_>]) -> Vec<String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The rules production reads.
+    fn rules() -> WorkspaceAttributionJSON {
+        crate::agent_visibility_params::workspace_attribution()
+            .workspace_attribution
+            .clone()
+    }
 
     fn ts(s: &str) -> Option<DateTime<Utc>> {
         Some(DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc))
@@ -727,7 +838,7 @@ mod tests {
 
     fn attribute(fixtures: &[Fixture], home: &str) -> Vec<SessionWorkspace> {
         let inputs: Vec<SessionWorkspaceInput<'_>> = fixtures.iter().map(Fixture::input).collect();
-        attribute_session_workspaces(&inputs, home)
+        attribute_session_workspaces(&inputs, home, &rules())
     }
 
     const HOME: &str = "/Users/me";
@@ -761,23 +872,67 @@ mod tests {
                     "2026-09-28T19:24:57.489Z",
                     Some("2026-09-28T19:25:21.500Z"),
                     false,
-                    &["/Users/me/Programming/edamame_core", "~/Library/Caches/edamame-agents/fp-sim", "/private/var/tmp/edsim-agents"],
+                    &[
+                        "/Users/me/Programming/edamame_core",
+                        "~/Library/Caches/edamame-agents/fp-sim",
+                        "/private/var/tmp/edsim-agents",
+                    ],
                 ),
-            Fixture::new("claude_code", "af803020", &format!("{PROJECTS}/-private-tmp-edsim-agents-edsim-agent1/af803020.jsonl"))
-                .cwd("/private/tmp/edsim-agents/edsim-agent1", "2026-09-28T19:22:33.370Z", true),
-            Fixture::new("claude_code", "6b50b607", &format!("{PROJECTS}/-private-var-folders-7t-sg03pq8s3cs-cdqz92n1zs680000gn-T-edsim-agents-edsim-agent2/6b50b607.jsonl"))
-                .cwd(&format!("{tmpdir}/edsim-agents/edsim-agent2"), "2026-09-28T19:22:48.710Z", true),
-            Fixture::new("claude_code", "5b5b738e", &format!("{PROJECTS}/-private-var-tmp-edsim-agents-edsim-agent3/5b5b738e.jsonl"))
-                .cwd("/private/var/tmp/edsim-agents/edsim-agent3", "2026-09-28T19:23:13.829Z", true),
-            Fixture::new("claude_code", "8c173b20", &format!("{PROJECTS}/-private-var-tmp-edsim-agents-edsim-agent3/8c173b20.jsonl"))
-                .cwd("/private/var/tmp/edsim-agents/edsim-agent3", "2026-09-28T19:25:00.767Z", true),
-            Fixture::new("claude_code", "67abf14b", &format!("{PROJECTS}/-private-tmp-edsim-agents-edsim-agent4/67abf14b.jsonl"))
-                .cwd("/private/tmp/edsim-agents/edsim-agent4", "2026-09-28T19:23:39.082Z", true),
-            Fixture::new("claude_code", "8a99f90c", &format!("{PROJECTS}/-Users-me-Library-Caches-edamame-agents-sim-home-agents-edsim-agent5/8a99f90c.jsonl"))
-                .cwd("/Users/me/Library/Caches/edamame-agents/sim-home/agents/edsim-agent5", "2026-09-28T19:24:04.927Z", true),
-            Fixture::new("codex", "01a0e979", "/Users/me/.codex/sessions/2026/09/28/rollout-01a0e979.jsonl")
-                .hint("/Users/me/.codex")
-                .cwd("/private/tmp/edsim-agents/edsim-agent6", "2026-09-28T19:24:20.886Z", true),
+            Fixture::new(
+                "claude_code",
+                "af803020",
+                &format!("{PROJECTS}/-private-tmp-edsim-agents-edsim-agent1/af803020.jsonl"),
+            )
+            .cwd("/private/tmp/edsim-agents/edsim-agent1", "2026-09-28T19:22:33.370Z", true),
+            Fixture::new(
+                "claude_code",
+                "6b50b607",
+                &format!(
+                    "{PROJECTS}/-private-var-folders-7t-sg03pq8s3cs-cdqz92n1zs680000gn-T-edsim-agents-edsim-agent2/6b50b607.jsonl"
+                ),
+            )
+            .cwd(
+                &format!("{tmpdir}/edsim-agents/edsim-agent2"),
+                "2026-09-28T19:22:48.710Z",
+                true,
+            ),
+            Fixture::new(
+                "claude_code",
+                "5b5b738e",
+                &format!("{PROJECTS}/-private-var-tmp-edsim-agents-edsim-agent3/5b5b738e.jsonl"),
+            )
+            .cwd("/private/var/tmp/edsim-agents/edsim-agent3", "2026-09-28T19:23:13.829Z", true),
+            Fixture::new(
+                "claude_code",
+                "8c173b20",
+                &format!("{PROJECTS}/-private-var-tmp-edsim-agents-edsim-agent3/8c173b20.jsonl"),
+            )
+            .cwd("/private/var/tmp/edsim-agents/edsim-agent3", "2026-09-28T19:25:00.767Z", true),
+            Fixture::new(
+                "claude_code",
+                "67abf14b",
+                &format!("{PROJECTS}/-private-tmp-edsim-agents-edsim-agent4/67abf14b.jsonl"),
+            )
+            .cwd("/private/tmp/edsim-agents/edsim-agent4", "2026-09-28T19:23:39.082Z", true),
+            Fixture::new(
+                "claude_code",
+                "8a99f90c",
+                &format!(
+                    "{PROJECTS}/-Users-me-Library-Caches-edamame-agents-sim-home-agents-edsim-agent5/8a99f90c.jsonl"
+                ),
+            )
+            .cwd(
+                "/Users/me/Library/Caches/edamame-agents/sim-home/agents/edsim-agent5",
+                "2026-09-28T19:24:04.927Z",
+                true,
+            ),
+            Fixture::new(
+                "codex",
+                "01a0e979",
+                "/Users/me/.codex/sessions/2026/09/28/rollout-01a0e979.jsonl",
+            )
+            .hint("/Users/me/.codex")
+            .cwd("/private/tmp/edsim-agents/edsim-agent6", "2026-09-28T19:24:20.886Z", true),
         ]
     }
 
@@ -952,11 +1107,7 @@ mod tests {
                 "a",
                 &format!("{PROJECTS}/-private-tmp-edsim-agents-edsim-agent1/a.jsonl"),
             )
-            .cwd(
-                "/private/tmp/edsim-agents/edsim-agent1",
-                "2026-09-28T19:22:33Z",
-                true,
-            ),
+            .cwd("/private/tmp/edsim-agents/edsim-agent1", "2026-09-28T19:22:33Z", true),
             Fixture::new(
                 "claude_code",
                 "b",
@@ -970,12 +1121,8 @@ mod tests {
                 true,
             ),
             // A person's session in /tmp groups too.
-            Fixture::new(
-                "claude_code",
-                "c",
-                &format!("{PROJECTS}/-tmp-scratch/c.jsonl"),
-            )
-            .cwd("/tmp/scratch", "2026-09-28T19:00:00Z", false),
+            Fixture::new("claude_code", "c", &format!("{PROJECTS}/-tmp-scratch/c.jsonl"))
+                .cwd("/tmp/scratch", "2026-09-28T19:00:00Z", false),
             // Cursor: no recorded cwd, the slug names the temp root.
             Fixture::new(
                 "cursor",
@@ -1015,12 +1162,20 @@ mod tests {
                 "2026-09-28T19:00:00Z",
                 true,
             ),
+            Fixture::new("claude_code", "h", &format!("{PROJECTS}/-Users-me-tmp-app/h.jsonl"))
+                .cwd("/Users/me/tmp/app", "2026-09-28T19:00:00Z", true),
+            // Cursor on Windows, slug only: `%TEMP%` and the per-user macOS
+            // temp by slug tokens.
             Fixture::new(
-                "claude_code",
-                "h",
-                &format!("{PROJECTS}/-Users-me-tmp-app/h.jsonl"),
-            )
-            .cwd("/Users/me/tmp/app", "2026-09-28T19:00:00Z", true),
+                "cursor",
+                "i",
+                "C:/Users/me/.cursor/projects/c-Users-me-AppData-Local-Temp-w/agent-transcripts/i/i.jsonl",
+            ),
+            Fixture::new(
+                "cursor",
+                "j",
+                "/Users/me/.cursor/projects/private-var-folders-7t-sg03pq8s3cs-cdqz92n1zs680000gn-T-w/agent-transcripts/j/j.jsonl",
+            ),
         ];
         let out = attribute(&fixtures, HOME);
         for i in [0, 1, 2, 4] {
@@ -1036,6 +1191,8 @@ mod tests {
         assert_eq!(out[5].slug, "temporary:codex");
         assert_eq!(out[6].link, WorkspaceLink::Own);
         assert_eq!(out[7].link, WorkspaceLink::Own);
+        assert_eq!(out[8].slug, "temporary:cursor");
+        assert_eq!(out[9].slug, "temporary:cursor");
     }
 
     #[test]
@@ -1101,12 +1258,11 @@ mod tests {
     fn windows_and_linux_path_shapes_link() {
         // Cursor on Windows (no timestamps: the parent's lifetime is the
         // window) launching Claude Code through PowerShell in %TEMP%.
-        let cursor_parent = Fixture::new(
+        let mut cursor_parent = Fixture::new(
             "cursor",
             "cp",
             "C:/Users/me/.cursor/projects/c-Users-me-src-app/agent-transcripts/cp/cp.jsonl",
         );
-        let mut cursor_parent = cursor_parent;
         cursor_parent.launch = SessionLaunchContext {
             cwd: String::new(),
             started_at: ts("2026-09-28T09:00:00Z"),
@@ -1118,7 +1274,8 @@ mod tests {
             background: true,
             dirs: vec!["$TMPDIR/agents".to_string()],
         });
-        let fixtures = vec![
+        let fixtures =
+            vec![
             cursor_parent,
             Fixture::new(
                 "claude_code",
@@ -1130,8 +1287,7 @@ mod tests {
                 "2026-09-28T09:10:00Z",
                 true,
             ),
-            // Codex on Linux launching Claude Code in a subdirectory (MSYS
-            // spelling from Git Bash is folded the same way).
+            // Codex on Linux launching Claude Code in a subdirectory.
             Fixture::new(
                 "codex",
                 "lp",
@@ -1151,6 +1307,25 @@ mod tests {
                 "/home/me/.claude/projects/-home-me-src-svc-tools/lc.jsonl",
             )
             .cwd("/home/me/src/svc/tools", "2026-09-28T11:02:00Z", true),
+            // Git Bash spelling of a Windows directory in the launch command.
+            Fixture::new(
+                "claude_code",
+                "gp",
+                "C:/Users/me/.claude/projects/C--Users-me-src-web/gp.jsonl",
+            )
+            .cwd("C:\\Users\\me\\src\\web", "2026-09-28T12:00:00Z", false)
+            .launch(
+                "2026-09-28T12:01:00Z",
+                None,
+                true,
+                &["/c/Users/me/src/web/jobs"],
+            ),
+            Fixture::new(
+                "claude_code",
+                "gc",
+                "C:/Users/me/.claude/projects/C--Users-me-src-web-jobs-1/gc.jsonl",
+            )
+            .cwd("C:\\Users\\me\\src\\web\\jobs\\1", "2026-09-28T12:02:00Z", true),
         ];
         let out = attribute(&fixtures, "/home/me");
         assert_eq!(out[1].link, WorkspaceLink::Launched);
@@ -1158,6 +1333,11 @@ mod tests {
         assert_eq!(out[3].link, WorkspaceLink::Launched);
         assert_eq!(out[3].slug, canonicalize_project_slug("/home/me/src/svc"));
         assert_eq!(out[3].dir, "/home/me/src/svc");
+        assert_eq!(out[5].link, WorkspaceLink::Launched);
+        assert_eq!(
+            out[5].slug,
+            canonicalize_project_slug("C--Users-me-src-web")
+        );
     }
 
     #[test]
@@ -1176,27 +1356,85 @@ mod tests {
     }
 
     #[test]
+    fn a_wider_background_window_in_the_params_reaches_later_children() {
+        let fixtures = vec![
+            Fixture::new("claude_code", "p", &format!("{PROJECTS}/{CORE}/p.jsonl"))
+                .cwd(
+                    "/Users/me/Programming/edamame_core",
+                    "2026-09-28T10:00:00Z",
+                    false,
+                )
+                .launch("2026-09-28T10:01:00Z", None, true, &["/private/tmp/batch"]),
+            Fixture::new(
+                "claude_code",
+                "late",
+                &format!("{PROJECTS}/-private-tmp-batch-9/late.jsonl"),
+            )
+            .cwd("/private/tmp/batch/9", "2026-09-28T13:00:00Z", true),
+        ];
+        let inputs: Vec<SessionWorkspaceInput<'_>> = fixtures.iter().map(Fixture::input).collect();
+        let mut narrow = rules();
+        narrow.background_launch_window_secs = 3600;
+        assert_eq!(
+            attribute_session_workspaces(&inputs, HOME, &narrow)[1].link,
+            WorkspaceLink::Temporary
+        );
+        let mut wide = rules();
+        wide.background_launch_window_secs = 6 * 3600;
+        assert_eq!(
+            attribute_session_workspaces(&inputs, HOME, &wide)[1].link,
+            WorkspaceLink::Launched
+        );
+    }
+
+    #[test]
     fn path_normalization_folds_platform_spellings() {
+        let r = rules();
+        let paths = PathRules::new(&r);
         // Git Bash and native spellings of one Windows directory.
         assert_eq!(
-            NormPath::parse("/c/Users/me/AppData/Local/Temp/x"),
-            NormPath::parse("C:\\Users\\me\\AppData\\Local\\Temp\\x")
+            paths.parse("/c/Users/me/AppData/Local/Temp/x"),
+            paths.parse("C:\\Users\\me\\AppData\\Local\\Temp\\x")
         );
         // macOS firmlinks.
-        assert_eq!(NormPath::parse("/private/tmp/x"), NormPath::parse("/tmp/x"));
-        assert_eq!(
-            NormPath::parse("/private/var/tmp/x"),
-            NormPath::parse("/var/tmp/x")
-        );
-        assert_eq!(NormPath::parse("relative/x"), None);
-        let win = NormPath::parse("C:\\Users\\Me\\Src").unwrap();
-        assert!(win.starts_with(&NormPath::parse("c:/users/me").unwrap()));
-        let mac = NormPath::parse("/Users/Me/src").unwrap();
-        assert!(!mac.starts_with(&NormPath::parse("/users/me").unwrap()));
+        assert_eq!(paths.parse("/private/tmp/x"), paths.parse("/tmp/x"));
+        assert_eq!(paths.parse("/private/var/tmp/x"), paths.parse("/var/tmp/x"));
+        assert_eq!(paths.parse("relative/x"), None);
+        let win = paths.parse("C:\\Users\\Me\\Src").unwrap();
+        assert!(win.starts_with(&paths.parse("c:/users/me").unwrap()));
+        let mac = paths.parse("/Users/Me/src").unwrap();
+        assert!(!mac.starts_with(&paths.parse("/users/me").unwrap()));
+        // Temporary roots, from the params.
+        for temp in [
+            "/tmp/x",
+            "/private/tmp/x",
+            "/var/tmp/x",
+            "/private/var/folders/7t/abc/T/x",
+            "C:\\Windows\\Temp\\x",
+            "C:\\Users\\me\\AppData\\Local\\Temp\\x",
+        ] {
+            assert!(
+                paths.temp_root_len(&paths.parse(temp).unwrap()).is_some(),
+                "{temp}"
+            );
+        }
+        for not_temp in [
+            "/private/var/folders/7t/abc/C/x",
+            "/Users/me/tmp/x",
+            "C:\\Users\\me\\AppData\\Local\\Programs\\x",
+        ] {
+            assert!(
+                paths
+                    .temp_root_len(&paths.parse(not_temp).unwrap())
+                    .is_none(),
+                "{not_temp}"
+            );
+        }
     }
 
     #[test]
     fn vanished_workspaces_get_unique_labels() {
+        let r = rules();
         let inputs = [
             WorkspaceLabelInput {
                 slug: "-private-var-tmp-edsim-agents-edsim-agent3",
@@ -1232,7 +1470,7 @@ mod tests {
                 dir: "",
             },
         ];
-        let labels = unique_workspace_labels(&inputs);
+        let labels = unique_workspace_labels(&inputs, &r);
         assert_eq!(labels[0], "edsim-agents/edsim-agent3");
         assert_eq!(labels[1], "edsim-agents2/edsim-agent3");
         assert_eq!(labels[2], "edamame_core");
@@ -1241,7 +1479,7 @@ mod tests {
         assert_eq!(labels[5], "Codex");
         // A project named like an agent home is told apart from it.
         assert_eq!(labels[6], "code/codex");
-        assert_eq!(labels[7], "Temporary sessions");
+        assert_eq!(labels[7], r.temporary_workspace_label);
         let unique: std::collections::BTreeSet<String> =
             labels.iter().map(|l| l.to_ascii_lowercase()).collect();
         assert_eq!(unique.len(), labels.len());
@@ -1249,6 +1487,7 @@ mod tests {
 
     #[test]
     fn labels_are_stable_and_order_independent() {
+        let r = rules();
         let inputs = [
             WorkspaceLabelInput {
                 slug: "-data-x-edsim-agent3",
@@ -1271,17 +1510,29 @@ mod tests {
                 dir: "/srv/solo",
             },
         ];
-        let first = unique_workspace_labels(&inputs);
-        assert_eq!(first, unique_workspace_labels(&inputs));
+        let first = unique_workspace_labels(&inputs, &r);
+        assert_eq!(first, unique_workspace_labels(&inputs, &r));
         let mut reversed_inputs = inputs;
         reversed_inputs.reverse();
-        let mut reversed = unique_workspace_labels(&reversed_inputs);
+        let mut reversed = unique_workspace_labels(&reversed_inputs, &r);
         reversed.reverse();
         assert_eq!(first, reversed);
         assert_eq!(first[0], "x/edsim-agent3");
         assert_eq!(first[1], "y/edsim-agent3");
-        assert_eq!(first[2], "Temporary sessions (Codex)");
-        assert_eq!(first[3], "Temporary sessions (Claude Code)");
+        assert_eq!(
+            first[2],
+            format!(
+                "{} ({})",
+                r.temporary_workspace_label, r.agent_labels["codex"]
+            )
+        );
+        assert_eq!(
+            first[3],
+            format!(
+                "{} ({})",
+                r.temporary_workspace_label, r.agent_labels["claude_code"]
+            )
+        );
         assert_eq!(first[4], "solo");
     }
 }

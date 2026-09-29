@@ -16,6 +16,9 @@
 //! - augmentation next-step prompt templates + Enlightenment Coach templates
 //! - unified history-retention policy (age + entry caps) for the agent
 //!   history stores
+//! - workspace attribution: the agent-CLI launch vocabulary, programmatic
+//!   start markers, temporary roots, path conventions, time windows and label
+//!   wording `agent_workspaces` and `agent_transcripts::launch` read
 //!
 //! Unlike the CVE params struct, `AgentVisibilityParamsJSON` carries NO
 //! `#[serde(default)]` fields: this model was born complete, the published
@@ -199,6 +202,139 @@ pub struct HistoryRetentionJSON {
     pub coach_max_cached_insights: usize,
 }
 
+/// A program and the options of it the launch recognizer treats specially.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct ProgramOptionsJSON {
+    /// Lowercased program basename.
+    pub program: String,
+    /// Options, matched as written (POSIX options are case-sensitive;
+    /// PowerShell ones are compared case-insensitively by the caller).
+    pub options: Vec<String>,
+}
+
+/// A program whose subcommand starts an agent (`cursor agent`).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct ProgramSubcommandJSON {
+    pub program: String,
+    pub subcommand: String,
+}
+
+/// A path prefix another spelling of the same directory uses (macOS
+/// `/private/tmp` is `/tmp`).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct PathAliasJSON {
+    pub prefix: String,
+    pub canonical: String,
+}
+
+/// Which workspace an agent session is filed under on the Agents view
+/// (`agent_workspaces::attribute_session_workspaces`) and what the
+/// transcript scanner (`agent_transcripts::launch`) recognizes as an agent
+/// launch. Program names, extensions and markers are lowercased by
+/// [`AgentVisibilityParams::new_from_json`]; keys, options, roots and
+/// labels are kept as written.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct WorkspaceAttributionJSON {
+    /// Agent CLIs whose invocation starts a session EDAMAME observes.
+    pub agent_cli_programs: Vec<String>,
+    /// `program subcommand` pairs that start an agent (`cursor agent`).
+    pub agent_cli_subcommands: Vec<ProgramSubcommandJSON>,
+    /// Package names / paths that start an agent through a package runner.
+    pub agent_cli_package_markers: Vec<String>,
+    /// Programs that run a package or script named by their first argument.
+    pub package_runner_programs: Vec<String>,
+    /// Package managers that run a package through a subcommand.
+    pub package_exec_programs: Vec<String>,
+    /// Those subcommands (`dlx`, `exec`).
+    pub package_exec_subcommands: Vec<String>,
+    /// Shells (`bash -c '<script>'` runs `<script>`).
+    pub shell_programs: Vec<String>,
+    /// The PowerShell shells among them.
+    pub powershell_programs: Vec<String>,
+    /// PowerShell options whose value is a script (`-Command`).
+    pub powershell_script_options: Vec<String>,
+    /// Interpreter names by prefix (`python` covers `python3.12`).
+    pub interpreter_program_prefixes: Vec<String>,
+    /// Programs that run a script in the current shell (`source`, `.`).
+    pub source_programs: Vec<String>,
+    /// Programs that run the command that follows them (`env`, `nohup`,
+    /// `timeout`, `sudo`, ...), and shell keywords that precede a command.
+    pub wrapper_programs: Vec<String>,
+    /// Wrapper options that take a value as the next word.
+    pub wrapper_value_options: Vec<ProgramOptionsJSON>,
+    /// Wrappers whose options start with `/` (`cmd /c`).
+    pub wrapper_slash_option_programs: Vec<String>,
+    /// Wrappers followed by a duration before the command (`timeout 900`).
+    pub wrapper_duration_programs: Vec<String>,
+    /// Wrappers followed by a window title before the command (`start ""`).
+    pub wrapper_title_programs: Vec<String>,
+    /// Wrapper options whose value is the command (`Start-Process
+    /// -FilePath`).
+    pub wrapper_program_options: Vec<ProgramOptionsJSON>,
+    /// Options that make a wrapper a lookup, not a run (`command -v`).
+    pub lookup_options: Vec<ProgramOptionsJSON>,
+    /// Programs that detach what they run from the calling shell.
+    pub detaching_programs: Vec<String>,
+    /// Programs that change the shell's working directory.
+    pub change_directory_programs: Vec<String>,
+    /// Extensions a Windows launcher adds to a program name (without dot).
+    pub executable_extensions: Vec<String>,
+    /// Extensions of files a command can run as a program (without dot).
+    pub script_extensions: Vec<String>,
+    /// Tool-call argument keys carrying the shell command.
+    pub command_keys: Vec<String>,
+    /// Tool-call argument keys carrying the command's working directory.
+    pub working_directory_keys: Vec<String>,
+    /// Tool-call argument keys carrying the path a file write targets.
+    pub write_path_keys: Vec<String>,
+    /// Tool-call argument keys carrying the written text.
+    pub write_content_keys: Vec<String>,
+    /// Tool-call argument keys carrying a list of edits (each `new_string`).
+    pub write_edit_list_keys: Vec<String>,
+    /// Tool-call argument keys whose `true` runs the command in the
+    /// background.
+    pub background_flag_keys: Vec<String>,
+    /// Tool-call argument keys whose `0` returns before the command ends.
+    pub background_wait_keys: Vec<String>,
+    /// Patch lines naming a file the patch writes.
+    pub patch_file_headers: Vec<String>,
+    /// Spellings of the home directory in a command (`$HOME`,
+    /// `%USERPROFILE%`), matched case-insensitively as a prefix.
+    pub home_variables: Vec<String>,
+    /// Spellings of the per-user temporary directory (`$TMPDIR`, `%TEMP%`).
+    pub temp_variables: Vec<String>,
+    /// Claude Code `entrypoint` prefixes of a programmatic start
+    /// (`sdk-cli`, `sdk-ts`).
+    pub headless_entrypoint_prefixes: Vec<String>,
+    /// Codex `session_meta.originator` values of a programmatic start.
+    pub headless_originators: Vec<String>,
+    /// Codex `session_meta.source` values of a programmatic start.
+    pub headless_sources: Vec<String>,
+    /// Directory next to a session transcript holding its Task subagents'.
+    pub subagent_directory: String,
+    /// Temporary roots, `/`-separated: `*` is one path component, `?:` any
+    /// drive (`?:/Users/*/AppData/Local/Temp`).
+    pub temp_roots: Vec<String>,
+    /// Prefixes another spelling of the same directory uses.
+    pub path_aliases: Vec<PathAliasJSON>,
+    /// Directories whose children are users' homes (`/Users`, `/home`).
+    pub home_parent_directories: Vec<String>,
+    /// Clock slack around a launch window, in seconds.
+    pub launch_clock_slack_secs: u64,
+    /// How long after a background launch (or one whose result was never
+    /// seen) a child may start and still be attributed to it, in seconds.
+    pub background_launch_window_secs: u64,
+    /// Subagent transcripts older than the collection window by more than
+    /// this are not scanned, in seconds.
+    pub subagent_lookback_margin_secs: u64,
+    /// Longest launch chain followed (child, parent, grandparent, ...).
+    pub max_launch_chain: u64,
+    /// Label of the temporary-sessions workspace.
+    pub temporary_workspace_label: String,
+    /// Short agent names, for labels that name an agent.
+    pub agent_labels: std::collections::BTreeMap<String, String>,
+}
+
 /// Raw JSON shape of `agent-visibility-params-db.json`. No serde defaults:
 /// the published JSON always carries every field; a missing field fails the
 /// parse and the embedded snapshot (which has all fields) stays in effect.
@@ -238,6 +374,9 @@ pub struct AgentVisibilityParamsJSON {
     pub augmentation_coach_templates: Vec<AugmentationCoachTemplateJSON>,
     /// Unified history-retention policy for the agent history stores.
     pub history_retention: HistoryRetentionJSON,
+    /// Workspace attribution of agent sessions (see
+    /// [`WorkspaceAttributionJSON`]).
+    pub workspace_attribution: WorkspaceAttributionJSON,
 }
 
 /// Normalized runtime snapshot of the agent-visibility params.
@@ -262,6 +401,9 @@ pub struct AgentVisibilityParams {
     pub augmentation_coach_templates: Vec<AugmentationCoachTemplateJSON>,
     /// Unified history-retention policy for the agent history stores.
     pub history_retention: HistoryRetentionJSON,
+    /// Workspace attribution, program names / extensions / markers
+    /// lowercased.
+    pub workspace_attribution: WorkspaceAttributionJSON,
 }
 
 impl CloudSignature for AgentVisibilityParams {
@@ -323,6 +465,76 @@ fn normalize_model_pricing(pricing: &ModelPricingJSON) -> ModelPricingJSON {
     }
 }
 
+/// Lowercases what the launch recognizer compares case-insensitively:
+/// program names, extensions, package markers, variable spellings and the
+/// start markers. Keys, options, roots and labels are kept as written.
+fn normalize_workspace_attribution(w: &WorkspaceAttributionJSON) -> WorkspaceAttributionJSON {
+    let lower =
+        |xs: &[String]| -> Vec<String> { xs.iter().map(|x| x.to_ascii_lowercase()).collect() };
+    let lower_programs = |xs: &[ProgramOptionsJSON]| -> Vec<ProgramOptionsJSON> {
+        xs.iter()
+            .map(|p| ProgramOptionsJSON {
+                program: p.program.to_ascii_lowercase(),
+                options: p.options.clone(),
+            })
+            .collect()
+    };
+    WorkspaceAttributionJSON {
+        agent_cli_programs: lower(&w.agent_cli_programs),
+        agent_cli_subcommands: w
+            .agent_cli_subcommands
+            .iter()
+            .map(|c| ProgramSubcommandJSON {
+                program: c.program.to_ascii_lowercase(),
+                subcommand: c.subcommand.to_ascii_lowercase(),
+            })
+            .collect(),
+        agent_cli_package_markers: lower(&w.agent_cli_package_markers),
+        package_runner_programs: lower(&w.package_runner_programs),
+        package_exec_programs: lower(&w.package_exec_programs),
+        package_exec_subcommands: lower(&w.package_exec_subcommands),
+        shell_programs: lower(&w.shell_programs),
+        powershell_programs: lower(&w.powershell_programs),
+        powershell_script_options: lower(&w.powershell_script_options),
+        interpreter_program_prefixes: lower(&w.interpreter_program_prefixes),
+        source_programs: lower(&w.source_programs),
+        wrapper_programs: lower(&w.wrapper_programs),
+        wrapper_value_options: lower_programs(&w.wrapper_value_options),
+        wrapper_slash_option_programs: lower(&w.wrapper_slash_option_programs),
+        wrapper_duration_programs: lower(&w.wrapper_duration_programs),
+        wrapper_title_programs: lower(&w.wrapper_title_programs),
+        wrapper_program_options: lower_programs(&w.wrapper_program_options),
+        lookup_options: lower_programs(&w.lookup_options),
+        detaching_programs: lower(&w.detaching_programs),
+        change_directory_programs: lower(&w.change_directory_programs),
+        executable_extensions: lower(&w.executable_extensions),
+        script_extensions: lower(&w.script_extensions),
+        command_keys: w.command_keys.clone(),
+        working_directory_keys: w.working_directory_keys.clone(),
+        write_path_keys: w.write_path_keys.clone(),
+        write_content_keys: w.write_content_keys.clone(),
+        write_edit_list_keys: w.write_edit_list_keys.clone(),
+        background_flag_keys: w.background_flag_keys.clone(),
+        background_wait_keys: w.background_wait_keys.clone(),
+        patch_file_headers: w.patch_file_headers.clone(),
+        home_variables: lower(&w.home_variables),
+        temp_variables: lower(&w.temp_variables),
+        headless_entrypoint_prefixes: lower(&w.headless_entrypoint_prefixes),
+        headless_originators: lower(&w.headless_originators),
+        headless_sources: lower(&w.headless_sources),
+        subagent_directory: w.subagent_directory.clone(),
+        temp_roots: w.temp_roots.clone(),
+        path_aliases: w.path_aliases.clone(),
+        home_parent_directories: w.home_parent_directories.clone(),
+        launch_clock_slack_secs: w.launch_clock_slack_secs,
+        background_launch_window_secs: w.background_launch_window_secs,
+        subagent_lookback_margin_secs: w.subagent_lookback_margin_secs,
+        max_launch_chain: w.max_launch_chain,
+        temporary_workspace_label: w.temporary_workspace_label.clone(),
+        agent_labels: w.agent_labels.clone(),
+    }
+}
+
 impl AgentVisibilityParams {
     pub fn new_from_json(json: &AgentVisibilityParamsJSON) -> Self {
         Self {
@@ -366,6 +578,7 @@ impl AgentVisibilityParams {
             augmentation_prompt_templates: json.augmentation_prompt_templates.clone(),
             augmentation_coach_templates: json.augmentation_coach_templates.clone(),
             history_retention: json.history_retention,
+            workspace_attribution: normalize_workspace_attribution(&json.workspace_attribution),
         }
     }
 }
@@ -522,6 +735,20 @@ pub fn history_retention() -> HistoryRetentionJSON {
     PARAMS_SNAPSHOT.load().history_retention
 }
 
+/// Workspace attribution rules: the agent-CLI launch vocabulary, start
+/// markers, temporary roots, path conventions, windows and labels (program
+/// names, extensions and markers lowercased). One snapshot per call, so a
+/// caller reads a consistent set while it scans.
+pub fn workspace_attribution() -> Arc<AgentVisibilityParams> {
+    PARAMS_SNAPSHOT.load().clone()
+}
+
+/// The params signature of the current snapshot: a scan state computed under
+/// another vocabulary is recomputed.
+pub fn params_signature() -> String {
+    PARAMS_SNAPSHOT.load().signature.clone()
+}
+
 /// Resolve the USD-per-1M-token price for a model id using longest /
 /// most-specific `match_substring` matching against the lowercased id.
 ///
@@ -614,6 +841,18 @@ mod tests {
         assert!(params.history_retention.history_retention_days > 0);
         assert!(params.history_retention.divergence_verdict_max_entries > 0);
         assert!(params.history_retention.coach_max_cached_insights > 0);
+        let w = &params.workspace_attribution;
+        assert!(!w.agent_cli_programs.is_empty());
+        assert!(!w.shell_programs.is_empty());
+        assert!(!w.temp_roots.is_empty());
+        assert!(!w.headless_entrypoint_prefixes.is_empty());
+        assert!(!w.subagent_directory.is_empty());
+        assert!(w.background_launch_window_secs > 0);
+        assert!(!w.temporary_workspace_label.is_empty());
+        assert!(w
+            .agent_cli_programs
+            .iter()
+            .all(|p| p == &p.to_ascii_lowercase()));
     }
 
     /// Catalog names and criticality are lowercased by `new_from_json` so
