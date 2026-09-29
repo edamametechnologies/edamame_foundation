@@ -11,7 +11,9 @@
 # Policy summary (see ./README.md for rationale):
 #   * advisories.vulnerability  = deny      (RustSec CVEs MUST fail CI)
 #   * advisories.yanked         = deny      (yanked versions MUST fail CI)
-#   * advisories.unmaintained   = warn      (triage, do not gate)
+#   * unmaintained advisories   = deny      (cargo-deny 0.18+ has no warn level
+#                                            for them: each one is replaced or
+#                                            ignored below with its replacement)
 #   * licenses.allow            = explicit  (anything else fails)
 #   * bans.multiple-versions    = warn      (visibility, not gate)
 #   * bans.wildcards            = warn      (real `foo = "*"` flagged; git-only
@@ -75,7 +77,6 @@ ignore = [
     # ---- unmaintained crates (no known CVE) -------------------------
     { id = "RUSTSEC-2024-0370", reason = "unmaintained: proc-macro-error 1.x, a build-time proc-macro helper with no runtime code. Pulled by envcrypt-macro 0.5.0 (envcrypt, latest release) and by glib-macros / gtk3-macros 0.18 (the Linux GTK3 stack behind file_icon_provider). TODO: drop once those crates move off proc-macro-error." },
     { id = "RUSTSEC-2024-0436", reason = "unmaintained: paste, a build-time proc-macro with no runtime code. EDAMAME's own macros use pastey (maintained successor); paste stays transitive through the Linux netlink crates (netlink-packet-core / netlink-packet-utils, via netstat2, if-watch, rtnetlink, netlink-proto). TODO: remove once those crates switch." },
-    { id = "RUSTSEC-2025-0069", reason = "unmaintained: daemonize crate (edamame_posture daemon spawn). TODO: replace with std::process::Command + setsid or maintained fork." },
     { id = "RUSTSEC-2025-0141", reason = "unmaintained: bincode (the project stopped development; the advisory covers every version, including the bincode 2.0.1 in the graph). edamame_foundation and edamame_core use it (serde) to encode session payloads on the mutually-authenticated core <-> helper gRPC channel. TODO: migrate to postcard, wincode or bitcode." },
     # ---- vulnerabilities (real CVEs, accepted only with rationale) -
     { id = "RUSTSEC-2023-0071", reason = "vulnerability: rsa Marvin attack, a timing side-channel on operations with the RSA PRIVATE key (decryption, signing). NOT APPLICABLE: rsa 0.9 comes only from jsonwebtoken's rust_crypto backend in edamame_core, which only VERIFIES RS256 token signatures with the issuer's public key from its JWKS (src/agentic/oauth.rs validate_token: DecodingKey::from_rsa_components + decode). No RSA private key exists in the process and nothing decrypts or signs with RSA. Alternative not taken: jsonwebtoken's aws_lc_rs backend drops the rsa crate but adds aws-lc-sys, a C/assembly build on every shipped target (iOS, Android, Windows, Linux, macOS)." },
