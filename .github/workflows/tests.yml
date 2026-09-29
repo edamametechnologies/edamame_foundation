@@ -458,8 +458,13 @@ jobs:
           dump_vulnerability_findings: true
           exit_on_vulnerability_findings: true
 
+      # The tests step is continue-on-error, so its failure surfaces only in
+      # these two steps. `!cancelled()` replaces the implicit `success()`:
+      # with it, a failing vulnerability gate above skipped both, and the run
+      # listed the gate as its only failure, which release_all.sh
+      # --ignore-dump soft-passes: a test failure read as a gate-only failure.
       - name: Slack alerts
-        if: steps.tests.outcome != 'success'
+        if: ${{ !cancelled() && steps.tests.outcome != 'success' }}
         uses: slackapi/slack-github-action@v1.26.0
         with:
           channel-id: 'C072J0U9TH7'
@@ -468,7 +473,7 @@ jobs:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
 
       - name: Fail job if tests failed
-        if: steps.tests.outcome != 'success'
+        if: ${{ !cancelled() && steps.tests.outcome != 'success' }}
         shell: bash
         run: |
           echo "## Test Results Summary (Native - ${{ matrix.os }}-${{ matrix.platform }})"
@@ -820,10 +825,12 @@ jobs:
           dump_vulnerability_findings: true
           exit_on_vulnerability_findings: true
 
+      # See the native job: `!cancelled()`, so a failing gate cannot skip
+      # these two steps and turn a test failure into a gate-only failure.
       - name: Slack alerts
         # Won't work on 18.04 because of glibc version
         # Won't work on ARM64 Alpine because of JavaScript support
-        if: steps.tests.outcome != 'success' && !contains(matrix.container_name, '18.04') && !contains(matrix.container_name, 'aarch64-musl')
+        if: ${{ !cancelled() && steps.tests.outcome != 'success' && !contains(matrix.container_name, '18.04') && !contains(matrix.container_name, 'aarch64-musl') }}
         uses: slackapi/slack-github-action@v1.26.0
         with:
           channel-id: 'C072J0U9TH7'
@@ -836,7 +843,7 @@ jobs:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
 
       - name: Fail job if tests failed
-        if: steps.tests.outcome != 'success'
+        if: ${{ !cancelled() && steps.tests.outcome != 'success' }}
         shell: bash
         run: |
           echo "## Test Results Summary (Container - ${{ matrix.container_name }})"
