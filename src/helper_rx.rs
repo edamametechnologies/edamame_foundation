@@ -455,10 +455,29 @@ pub async fn rpc_run(
                 // Perform update
                 let branch = BRANCH.lock().await.clone();
                 match update(&branch, false, "").await {
-                    Ok(_) => {
+                    Ok(threatmodels_rs::UpdateStatus::Updated) => {
                         info!(
                             "Updated model from backend successfully - new signature is: {}",
                             metrics.get_signature().await
+                        );
+                    }
+                    Ok(status) => {
+                        // Not updated (with model-signatures: the published
+                        // model is not covered by its signed manifest): the
+                        // order runs from this helper's own copy, the
+                        // embedded model or its last verified download,
+                        // whatever signature the app sent.
+                        let refusal = metrics
+                            .last_authenticity_error()
+                            .await
+                            .map(|e| format!(" (last download refused: {})", e))
+                            .unwrap_or_default();
+                        info!(
+                            "Threat model not updated ({:?}), running {} from the helper's copy (signature {}){}",
+                            status,
+                            threat,
+                            metrics.get_signature().await,
+                            refusal
                         );
                     }
                     Err(e) => {
