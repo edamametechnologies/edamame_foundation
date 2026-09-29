@@ -1088,10 +1088,18 @@ mod tests {
             assert_eq!(read.status, ManagedSecretsStatus::InsecurePermissions);
             assert!(read.secrets.is_none());
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
-            // Owned by the test user, not root.
+            // With root ownership required, a file owned by anyone else is
+            // refused. CI containers run the tests as root, where the file IS
+            // root-owned and loads.
+            use std::os::unix::fs::MetadataExt;
+            let expected_when_root_required = if std::fs::metadata(&path).unwrap().uid() == 0 {
+                ManagedSecretsStatus::Loaded
+            } else {
+                ManagedSecretsStatus::InsecurePermissions
+            };
             assert_eq!(
                 read_managed_secrets_at(&path, true).status,
-                ManagedSecretsStatus::InsecurePermissions
+                expected_when_root_required
             );
         }
         let read = read_managed_secrets_at(&path, false);

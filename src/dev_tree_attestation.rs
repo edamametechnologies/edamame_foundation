@@ -703,7 +703,10 @@ mod tests {
             let got = attest_dev_trees(&paths);
             let by_path = |suffix: &str| {
                 got.iter()
-                    .find(|a| a.path.ends_with(suffix))
+                    // Component-wise, so "/.env" also matches "...\\.env" on Windows.
+                    .find(|a| {
+                        std::path::Path::new(&a.path).ends_with(suffix.trim_start_matches('/'))
+                    })
                     .cloned()
                     .unwrap_or_else(|| panic!("{suffix} attested: {got:?}"))
             };
@@ -739,7 +742,8 @@ mod tests {
         std::fs::write(main.join(".env"), "A=1\n").unwrap();
         git(&main, &["add", "."]);
         git(&main, &["commit", "-q", "-m", "init"]);
-        git(&main, &["worktree", "add", "-q", "../wt", "-b", "wt"]);
+        // No -q: git before 2.17 (Ubuntu 18.04) rejects it for worktree add.
+        git(&main, &["worktree", "add", "../wt", "-b", "wt"]);
         let file = root.join("wt/.env");
         let got = attest_dev_trees(&[file.to_string_lossy().to_string()]);
         assert_eq!(got.len(), 1, "{got:?}");
