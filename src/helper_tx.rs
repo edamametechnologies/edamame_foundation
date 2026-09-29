@@ -296,6 +296,38 @@ async fn helper_run(
     }
 }
 
+/// The error for a request the helper failed: the message callers have always
+/// logged and matched (`HELPER_FATAL_ERROR` looks for "Fatal" in it), with the
+/// gRPC status kept as its source so [`helper_answered_with_error`] can read
+/// the status code instead of parsing text.
+fn helper_status_error(
+    ordertype: &str,
+    subordertype: &str,
+    status: tonic::Status,
+) -> anyhow::Error {
+    let message = format!(
+        "Error sending request {} / {} to helper: {:?}",
+        ordertype, subordertype, status
+    );
+    anyhow::Error::new(status).context(message)
+}
+
+/// Whether a failed order reached the helper and the helper answered it with
+/// an error. `helper_rx::rpc_run_safe` returns every order it ran and failed
+/// as an `Internal` status built from the error text, with no source; asking
+/// again gets the same answer (an order that helper does not implement, a
+/// version it refuses during an upgrade). Anything else -- a refused or broken
+/// connection, a timeout, a status tonic derived from an HTTP/2 error (it
+/// keeps that error as the source) -- left the order unanswered, and asking
+/// again can succeed once the helper is back.
+pub fn helper_answered_with_error(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause.downcast_ref::<tonic::Status>().is_some_and(|status| {
+            status.code() == tonic::Code::Internal && std::error::Error::source(status).is_none()
+        })
+    })
+}
+
 async fn helper_run_with_channel(
     ordertype: &str,
     subordertype: &str,
@@ -324,14 +356,7 @@ async fn helper_run_with_channel(
 
     let response = match timeout(Duration::from_secs(180), client.execute(request)).await {
         Ok(Ok(response)) => response,
-        Ok(Err(e)) => {
-            return Err(anyhow!(
-                "Error sending request {} / {} to helper: {:?}",
-                ordertype,
-                subordertype,
-                e
-            ))
-        }
+        Ok(Err(status)) => return Err(helper_status_error(ordertype, subordertype, status)),
         Err(_) => {
             return Err(anyhow!(
                 "Timeout sending request {} / {} to helper (180s exceeded)",
@@ -468,6 +493,55 @@ mod tests {
                 "order name {:?} is not snake_case",
                 name
             );
+        }
+    }
+
+    /// An order error the helper returned (`rpc_run_safe`: `Internal`, no
+    /// source) is told apart from an order that went unanswered, and the
+    /// message callers log and match keeps its old text.
+    #[test]
+    fn an_order_error_from_the_helper_is_told_apart_from_no_answer() {
+        let order_error = || {
+            tonic::Status::internal(
+                "Order error : unknown or unimplemented utilityorder attest_dev_trees",
+            )
+        };
+        let answered = helper_status_error("utilityorder", "attest_dev_trees", order_error());
+        assert!(helper_answered_with_error(&answered));
+        assert_eq!(
+            answered.to_string(),
+            format!(
+                "Error sending request utilityorder / attest_dev_trees to helper: {:?}",
+                order_error()
+            )
+        );
+        let fatal = helper_status_error(
+            "utilityorder",
+            "helper_check",
+            tonic::Status::internal("Fatal order error : invalid version format"),
+        );
+        assert!(fatal.to_string().contains("Fatal"), "{fatal}");
+
+        let mut from_http2 = tonic::Status::internal("h2 protocol error");
+        from_http2.set_source(std::sync::Arc::new(std::io::Error::other("stream reset")));
+        for unanswered in [
+            helper_status_error(
+                "utilityorder",
+                "scan_secret_content",
+                tonic::Status::unavailable("tcp connect error"),
+            ),
+            helper_status_error(
+                "utilityorder",
+                "scan_secret_content",
+                tonic::Status::cancelled("operation was canceled"),
+            ),
+            helper_status_error("utilityorder", "scan_secret_content", from_http2),
+            anyhow!(
+                "Timeout sending request utilityorder / scan_secret_content to helper (180s exceeded)"
+            ),
+            anyhow!("scan_secret_content helper utility timed out after 45s"),
+        ] {
+            assert!(!helper_answered_with_error(&unanswered), "{unanswered:#}");
         }
     }
 
