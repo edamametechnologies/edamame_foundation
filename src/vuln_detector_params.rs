@@ -4599,17 +4599,23 @@ mod tests {
         assert!(!is_platform_self_state_process_name(""));
     }
 
+    /// The published params must parse with this code. A `FormatError` means
+    /// they do not -- every client then keeps its embedded snapshot and
+    /// ignores the published tuning -- so it fails the test like any other
+    /// unexpected status instead of passing as a "transient" state: the
+    /// release order publishes threatmodels first, so the published JSON
+    /// carries every field the code on main reads.
     #[tokio::test]
     #[serial]
     #[ignore] // requires network access to GitHub
     async fn test_update_runs() {
         let status = update("main", false).await.expect("Update failed");
-        assert!(matches!(
-            status,
-            UpdateStatus::Updated
-                | UpdateStatus::NotUpdated
-                | UpdateStatus::SkippedCustom
-                | UpdateStatus::FormatError
-        ));
+        assert!(
+            matches!(
+                status,
+                UpdateStatus::Updated | UpdateStatus::NotUpdated | UpdateStatus::SkippedCustom
+            ),
+            "unexpected update status: {status:?}"
+        );
     }
 }
