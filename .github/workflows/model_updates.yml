@@ -1,0 +1,147 @@
+name: Model update tests
+
+# The CloudModel update path -- threat models (threat_factory), attack-pattern
+# detector params (vuln_detector_params) and agent visibility params
+# (agent_visibility_params) -- is covered only by #[ignore]d tests, because
+# they fetch the published models from
+# raw.githubusercontent.com/edamametechnologies/threatmodels, and nothing ran
+# them. This workflow runs exactly those tests, daily and on dispatch, against
+# threatmodels main, on the three desktop platforms (each fetches the threat
+# model of its own platform).
+#
+# The crate's other #[ignore]d tests read the developer's host (agent
+# configs, transcripts) and are not selected: `--ignored` only runs ignored
+# tests, and the name filters below pick the network ones.
+#
+# Every repository involved is public (edamame_foundation, threatmodels,
+# threatmodels-rs, flodbadd, undeadlock, edamame_backend, mdns): the fetches
+# are anonymous, so these hosted runners need no IP allow-list wait.
+
+on:
+  schedule:
+    - cron: '23 4 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions: read-all
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  model-update:
+    name: Model update (${{ matrix.os }})
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu
+            runs-on: ubuntu-latest
+          - os: macos
+            runs-on: macos-latest
+          - os: windows
+            runs-on: windows-2022
+    runs-on: ${{ matrix.runs-on }}
+
+    steps:
+      - name: Setup EDAMAME Posture
+        uses: edamametechnologies/edamame_posture_action@v1
+        with:
+          edamame_user: ${{ vars.EDAMAME_POSTURE_USER }}
+          edamame_domain: ${{ vars.EDAMAME_POSTURE_DOMAIN }}
+          edamame_pin: ${{ secrets.EDAMAME_POSTURE_PIN }}
+          edamame_id: ${{ github.run_id }}-model-update-${{ matrix.os }}
+          checkout: true
+          packet_capture: true
+          vulnerability_detection: true
+          vulnerability_detection_interval: "60"
+          agentic_mode: analyze
+          agentic_provider: edamame
+          agentic_interval: 600
+        env:
+          EDAMAME_LLM_API_KEY: ${{ secrets.EDAMAME_LLM_API_KEY }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install protobuf
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${{ matrix.os }}" in
+            ubuntu)
+              # Hosted runners sometimes hold the apt lock right after boot.
+              for attempt in 1 2 3 4 5; do
+                if sudo apt-get update -y && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y protobuf-compiler; then
+                  break
+                fi
+                echo "apt-get failed (attempt $attempt/5), retrying in 15s"
+                sleep 15
+              done
+              ;;
+            macos)
+              brew install protobuf
+              ;;
+            windows)
+              # Pin to 25.3.0: Chocolatey protoc 34.0.0 breaks PATH discovery for prost-build
+              choco install protoc --version=25.3.0 -y
+              ;;
+          esac
+          command -v protoc
+
+      - name: Configure Windows clang-cl toolchain
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: |
+          $clang = 'C:\Program Files\LLVM\bin\clang-cl.exe'
+          $llvmLib = 'C:\Program Files\LLVM\bin\llvm-lib.exe'
+          if (!(Test-Path $clang) -or !(Test-Path $llvmLib)) {
+            choco install llvm -y
+          }
+          if (!(Test-Path $clang) -or !(Test-Path $llvmLib)) {
+            throw "LLVM Windows toolchain not found"
+          }
+          "CC_x86_64_pc_windows_msvc=$clang" >> $env:GITHUB_ENV
+          "CXX_x86_64_pc_windows_msvc=$clang" >> $env:GITHUB_ENV
+          "AR_x86_64_pc_windows_msvc=$llvmLib" >> $env:GITHUB_ENV
+
+      - name: Run the model update tests
+        shell: bash
+        env:
+          # envcrypt compile inputs, scoped to the compile step (as in tests.yml).
+          EDAMAME_TARGET: ${{ secrets.EDAMAME_TARGET }}
+          EDAMAME_SERVER_PEM: ${{ secrets.EDAMAME_SERVER_PEM }}
+          EDAMAME_SERVER_KEY: ${{ secrets.EDAMAME_SERVER_KEY }}
+          EDAMAME_CA_PEM: ${{ secrets.EDAMAME_CA_PEM }}
+          EDAMAME_CLIENT_PEM: ${{ secrets.EDAMAME_CLIENT_PEM }}
+          EDAMAME_CLIENT_KEY: ${{ secrets.EDAMAME_CLIENT_KEY }}
+          EDAMAME_CLIENT_CA_PEM: ${{ secrets.EDAMAME_CLIENT_CA_PEM }}
+          LAMBDA_SIGNATURE: ${{ secrets.LAMBDA_SIGNATURE }}
+          CARGO_INCREMENTAL: 0
+        run: |
+          cargo test --lib -- --ignored --nocapture \
+            threat_factory::tests:: \
+            vuln_detector_params::tests::test_update_runs \
+            agent_visibility_params::tests::test_update_runs
+
+      - name: EDAMAME Posture vulnerability gate
+        if: always()
+        uses: edamametechnologies/edamame_posture_action@v1
+        with:
+          dump_vulnerability_findings: true
+          exit_on_vulnerability_findings: true
+
+      # Nobody watches a scheduled run: the alert is its failure signal.
+      - name: Slack alert on failure
+        if: failure()
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          channel-id: 'C072J0U9TH7'
+          slack-message: "Model update tests (${{ matrix.os }}) failed in ${{ github.repository }}: the published threat models or detector params could not be fetched or parsed by main. See https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+        continue-on-error: true
