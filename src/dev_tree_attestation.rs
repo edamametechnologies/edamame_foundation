@@ -45,6 +45,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 /// Cache Directory Tagging Specification signature
 /// (<https://bford.info/cachedir/>). The file must BEGIN with these bytes.
@@ -60,6 +61,11 @@ const MAX_GIT_INDEX_BYTES: u64 = 32 * 1024 * 1024;
 /// Paths attested per call. The detector sends at most one entry per FIM
 /// event / session process; the cap bounds a hostile burst.
 pub const MAX_ATTESTED_PATHS: usize = 512;
+/// Wall-clock budget of one [`attest_dev_trees`] batch, below the 45 s bound
+/// core puts on the helper's `attest_dev_trees` order for the same reason as
+/// `secret_content_scan::SECRET_CONTENT_SCAN_BUDGET`: a batch that outruns
+/// the order is lost whole. Checked between paths.
+pub const DEV_TREE_ATTESTATION_BUDGET: Duration = Duration::from_secs(25);
 
 /// Filesystem facts about one path. Every field is measured; `None` / `false`
 /// means "not observed", never "observed benign".
@@ -99,27 +105,54 @@ impl DevTreeAttestation {
     }
 }
 
-/// Attest every path (deduplicated, capped at [`MAX_ATTESTED_PATHS`]).
-/// Returns one entry per path that sits inside at least one recognised tree;
-/// paths inside none are omitted.
-pub fn attest_dev_trees(paths: &[String]) -> Vec<DevTreeAttestation> {
+/// Result of one [`attest_dev_trees`] batch.
+///
+/// Also the reply of the `attest_dev_trees` helper order when the caller asks
+/// for it with `helper_tx::BUDGETED_REPLY_ARG`; any other caller gets the bare
+/// `attestations` array.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DevTreeAttestationBatch {
+    /// One entry per attested path inside at least one recognised tree.
+    pub attestations: Vec<DevTreeAttestation>,
+    /// Paths were left unattested because the batch reached
+    /// [`DEV_TREE_ATTESTATION_BUDGET`] or [`MAX_ATTESTED_PATHS`]. An
+    /// unattested path keeps its pre-attestation grade.
+    pub truncated: bool,
+}
+
+/// Attest every path (deduplicated, capped at [`MAX_ATTESTED_PATHS`] and
+/// bounded by [`DEV_TREE_ATTESTATION_BUDGET`], in the order given). Returns
+/// one entry per path that sits inside at least one recognised tree; paths
+/// inside none are omitted.
+pub fn attest_dev_trees(paths: &[String]) -> DevTreeAttestationBatch {
+    let started = Instant::now();
+    attest_dev_trees_until(paths, || started.elapsed() >= DEV_TREE_ATTESTATION_BUDGET)
+}
+
+/// [`attest_dev_trees`] with the budget as a predicate, asked before each
+/// distinct path is attested.
+fn attest_dev_trees_until(
+    paths: &[String],
+    mut out_of_time: impl FnMut() -> bool,
+) -> DevTreeAttestationBatch {
     let mut walker = TreeWalker::default();
     let mut seen = std::collections::HashSet::new();
-    let mut out = Vec::new();
+    let mut batch = DevTreeAttestationBatch::default();
     for raw in paths {
         let trimmed = raw.trim();
         if trimmed.is_empty() || !seen.insert(trimmed.to_string()) {
             continue;
         }
-        if seen.len() > MAX_ATTESTED_PATHS {
+        if seen.len() > MAX_ATTESTED_PATHS || out_of_time() {
+            batch.truncated = true;
             break;
         }
         let attestation = walker.attest(trimmed);
         if !attestation.is_empty() {
-            out.push(attestation);
+            batch.attestations.push(attestation);
         }
     }
-    out
+    batch
 }
 
 #[derive(Default, Clone)]
@@ -506,6 +539,13 @@ mod tests {
     use super::*;
     use std::process::Command;
 
+    /// A complete batch's attestations (these fixtures never near the budget).
+    fn attested(paths: &[String]) -> Vec<DevTreeAttestation> {
+        let batch = attest_dev_trees(paths);
+        assert!(!batch.truncated, "{batch:?}");
+        batch.attestations
+    }
+
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "edamame_dev_tree_{}_{}_{}",
@@ -559,7 +599,7 @@ mod tests {
 
         // A CACHEDIR.TAG without the signature is not the marker.
         std::fs::write(target.join("CACHEDIR.TAG"), "hello").unwrap();
-        let got = attest_dev_trees(&[file.to_string_lossy().to_string()]);
+        let got = attested(&[file.to_string_lossy().to_string()]);
         assert!(got.is_empty(), "{got:?}");
 
         std::fs::write(
@@ -567,7 +607,7 @@ mod tests {
             "Signature: 8a477f597d28d172789f06886806bc55\n# cargo\n",
         )
         .unwrap();
-        let got = attest_dev_trees(&[file.to_string_lossy().to_string()]);
+        let got = attested(&[file.to_string_lossy().to_string()]);
         assert_eq!(got.len(), 1);
         assert_eq!(
             got[0].build_tree_root.as_deref(),
@@ -639,7 +679,7 @@ mod tests {
         .iter()
         .map(|p| p.to_string_lossy().to_string())
         .collect();
-        let got = attest_dev_trees(&paths);
+        let got = attested(&paths);
         let kind = |p: &Path| {
             got.iter()
                 .find(|a| a.path == p.to_string_lossy())
@@ -665,7 +705,7 @@ mod tests {
         std::fs::write(venv.join("pyvenv.cfg"), "home = /usr/bin\n").unwrap();
         let file = pkg.join("__init__.py");
         std::fs::write(&file, "").unwrap();
-        let got = attest_dev_trees(&[file.to_string_lossy().to_string()]);
+        let got = attested(&[file.to_string_lossy().to_string()]);
         assert_eq!(
             got[0].venv_root.as_deref(),
             Some(venv.to_string_lossy().as_ref())
@@ -700,7 +740,7 @@ mod tests {
                 .iter()
                 .map(|p| root.join(p).to_string_lossy().to_string())
                 .collect();
-            let got = attest_dev_trees(&paths);
+            let got = attested(&paths);
             let by_path = |suffix: &str| {
                 got.iter()
                     // Component-wise, so "/.env" also matches "...\\.env" on Windows.
@@ -745,7 +785,7 @@ mod tests {
         // No -q: git before 2.17 (Ubuntu 18.04) rejects it for worktree add.
         git(&main, &["worktree", "add", "../wt", "-b", "wt"]);
         let file = root.join("wt/.env");
-        let got = attest_dev_trees(&[file.to_string_lossy().to_string()]);
+        let got = attested(&[file.to_string_lossy().to_string()]);
         assert_eq!(got.len(), 1, "{got:?}");
         assert!(got[0].git_tracked && got[0].git_index_stat_clean, "{got:?}");
         let _ = std::fs::remove_dir_all(&root);
@@ -764,7 +804,7 @@ mod tests {
         )
         .unwrap();
         git(&root, &["add", "."]);
-        let got = attest_dev_trees(&[root.join(".env").to_string_lossy().to_string()]);
+        let got = attested(&[root.join(".env").to_string_lossy().to_string()]);
         assert!(got[0].git_tracked && got[0].git_index_stat_clean);
         assert!(
             got[0].tracked_content_secret_hits.unwrap_or(0) > 0,
@@ -778,7 +818,7 @@ mod tests {
         let root = scratch("fake_git");
         std::fs::create_dir_all(root.join(".git")).unwrap();
         std::fs::write(root.join("x.rs"), "").unwrap();
-        let got = attest_dev_trees(&[root.join("x.rs").to_string_lossy().to_string()]);
+        let got = attested(&[root.join("x.rs").to_string_lossy().to_string()]);
         assert!(got.is_empty(), "{got:?}");
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -790,5 +830,66 @@ mod tests {
         let mut truncated = b"DIRC\0\0\0\x02\0\0\0\x05".to_vec();
         truncated.extend_from_slice(&[0u8; 30]);
         assert!(GitIndex::parse(&truncated).is_none());
+    }
+
+    /// The budget stops the batch between paths: what was attested comes
+    /// back, and `truncated` says the rest was not.
+    #[test]
+    fn exhausted_budget_returns_the_attested_part_and_says_so() {
+        let root = scratch("budget");
+        let target = root.join("target");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("CACHEDIR.TAG"), CACHEDIR_TAG_SIGNATURE).unwrap();
+        let paths: Vec<String> = ["a.o", "b.o"]
+            .iter()
+            .map(|name| {
+                let file = target.join(name);
+                std::fs::write(&file, "").unwrap();
+                file.to_string_lossy().to_string()
+            })
+            .collect();
+
+        let mut asked = 0;
+        let batch = attest_dev_trees_until(&paths, || {
+            asked += 1;
+            asked > 1
+        });
+        assert!(batch.truncated, "{batch:?}");
+        assert_eq!(batch.attestations.len(), 1, "{batch:?}");
+        assert_eq!(batch.attestations[0].path, paths[0]);
+
+        let spent = attest_dev_trees_until(&paths, || true);
+        assert!(
+            spent.truncated && spent.attestations.is_empty(),
+            "{spent:?}"
+        );
+        // Blank paths are not paths left unattested.
+        assert!(!attest_dev_trees_until(&[String::new(), " ".to_string()], || true).truncated);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Distinct paths beyond `MAX_ATTESTED_PATHS` are left unattested, which
+    /// the batch reports like a spent budget.
+    #[test]
+    fn the_path_cap_truncates_the_batch() {
+        let paths: Vec<String> = (0..=MAX_ATTESTED_PATHS)
+            .map(|i| format!("/nonexistent-edamame-dev-tree/{i}"))
+            .collect();
+        assert!(attest_dev_trees(&paths).truncated);
+        assert!(!attest_dev_trees(&paths[..MAX_ATTESTED_PATHS]).truncated);
+    }
+
+    /// The field names are wire format: the `attest_dev_trees` helper reply
+    /// that core parses.
+    #[test]
+    fn dev_tree_attestation_batch_wire_shape() {
+        let batch = DevTreeAttestationBatch {
+            attestations: Vec::new(),
+            truncated: true,
+        };
+        assert_eq!(
+            serde_json::to_value(&batch).unwrap(),
+            serde_json::json!({ "attestations": [], "truncated": true })
+        );
     }
 }

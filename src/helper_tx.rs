@@ -67,6 +67,18 @@ pub const UTILITY_ORDER_NAMES: &[&str] = &[
 /// Utility orders whose response carries secrets: never logged, even at trace.
 pub const SECRET_BEARING_UTILITY_ORDERS: &[&str] = &["get_managed_secrets"];
 
+/// `arg2` a caller sends with `scan_secret_content` or `attest_dev_trees` to
+/// get the budgeted reply -- `SecretContentScan` / `DevTreeAttestationBatch`,
+/// the results plus a `truncated` flag -- instead of the bare result array.
+///
+/// Compatible in both directions across a helper / app version skew: helpers
+/// before 2.0.3 ignore `arg2` on these orders and answer with the bare array
+/// (complete: they have no budget), and cores before 2.0.3 send an empty
+/// `arg2` and get the bare array from a newer helper (stopped at the budget,
+/// so in time for their 45 s bound). Neither side is sent a shape it does not
+/// parse.
+pub const BUDGETED_REPLY_ARG: &str = "budgeted";
+
 // Version
 pub static CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
 

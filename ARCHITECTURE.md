@@ -131,6 +131,14 @@ service EDAMAMEHelper {
   transcripts from the user's real home).
 - `scan_secret_content` - Helper-side content scanner for sensitive paths
   surfaced by the attack pattern detector.
+- `attest_dev_trees` - Helper-side dev-tree attestation (toolchain build
+  trees, venvs, git index facts) for the same detector.
+
+Both detector orders stop at a 25 s budget, below the core's 45 s bound on
+the order, and report whether they did (`truncated`). The reply carrying that
+flag is sent only to a caller whose `arg2` is `helper_tx::BUDGETED_REPLY_ARG`;
+an empty `arg2` (cores before 2.0.3) gets the bare result array, and helpers
+before 2.0.3 ignore `arg2` on these orders.
 
 ### Serialization
 
