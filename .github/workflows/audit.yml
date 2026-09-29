@@ -51,7 +51,17 @@ jobs:
           edamame_pin: ${{ secrets.EDAMAME_POSTURE_PIN }}
           edamame_id: ${{ github.run_id }}-audit-${{ matrix.checks }}
           checkout: true
+          # With DEV_GITHUB_TOKEN (next step) cargo-deny fetches the git
+          # dependencies as edamamedev, and some are private (edamame_core for
+          # edamame_cli and edamame_posture). The org IP allow list refuses
+          # that until the Hub lists this hosted runner, and a public
+          # repository answers the default probe at once, so the wait probes a
+          # private repository with that same token. Without the secret the
+          # fetch is anonymous and the default probe stays (GITHUB_TOKEN cannot
+          # read edamame_core: that probe would 404 until the wait gave up).
           wait_for_api: true
+          wait_repository: ${{ secrets.DEV_GITHUB_TOKEN != '' && 'edamametechnologies/edamame_core' || '' }}
+          token: ${{ secrets.DEV_GITHUB_TOKEN || github.token }}
           packet_capture: true
           vulnerability_detection: true
           vulnerability_detection_interval: "60"
