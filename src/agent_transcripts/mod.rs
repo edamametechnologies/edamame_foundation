@@ -29,6 +29,7 @@ pub mod codex;
 pub mod craft;
 pub mod cursor;
 pub mod hermes;
+pub mod launch;
 pub mod openclaw;
 pub mod parsing;
 mod session_cache;
@@ -220,6 +221,19 @@ pub struct CollectedRawSession {
     /// for the same rolling helper/core compatibility reason.
     #[serde(default)]
     pub tool_error_details: Vec<ToolErrorDetail>,
+    /// How this session started, from the harness-written fields of its
+    /// transcript (working directory, first timestamp, programmatic start).
+    /// Set centrally by `collect` (adapters leave it default); see
+    /// [`launch`]. `#[serde(default)]` for the rolling helper/core
+    /// compatibility reason as [`economics_raw_text`].
+    #[serde(default)]
+    pub launch_context: launch::SessionLaunchContext,
+    /// Tool calls of this session (and of its Task subagents) that started an
+    /// agent CLI. Set centrally by `collect` (adapters leave it empty); see
+    /// [`launch`]. `#[serde(default)]` for the rolling helper/core
+    /// compatibility reason as [`economics_raw_text`].
+    #[serde(default)]
+    pub agent_launches: Vec<launch::AgentLaunchCall>,
 }
 
 /// Derive `derived_scope_any_lineage_paths` for an agent from its
@@ -659,6 +673,11 @@ pub fn collect(
             finish_session(session);
         }
     }
+
+    // Launch facts are read per call, outside the session cache: a session's
+    // subagent transcripts change without its own file changing, and the
+    // scanner keeps its own incremental per-file state.
+    launch::attach_launch_facts(&mut result.payload.sessions, options);
 
     // Having ingested a session is itself proof the store is present, so an
     // adapter must never report the agent as absent while returning its

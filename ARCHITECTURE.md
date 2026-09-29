@@ -53,6 +53,9 @@ src/
 ├── agent_plugin.rs                # Download, extract, install agent plugins
 ├── agent_plugin_icons.rs          # Embedded plugin icon assets (crate-internal)
 ├── supported_agents.rs            # Dynamic agent registry (index.json from GitHub)
+├── agent_workspaces.rs            # Which workspace a session is filed under
+│                                  # (own / launched by another session /
+│                                  # temporary group) and unique labels.
 ├── agent_transcripts/             # Per-agent transcript adapters used by the
 │   │                              # external observer in edamame_core. Compiles
 │   │                              # on every target; mobile callers get empty
@@ -71,6 +74,11 @@ src/
 │   ├── session_cache.rs           # Process-wide per-file session cache keyed
 │   │                              # by (path, mtime, len); holds the finished
 │   │                              # session, evicts oldest transcript first.
+│   ├── launch.rs                  # How each session started (recorded cwd,
+│   │                              # first timestamp, headless) and its tool
+│   │                              # calls that launched an agent CLI, read
+│   │                              # incrementally per file (subagent
+│   │                              # transcripts with their session).
 │   ├── parsing.rs                 # Path / URL / port / tool / command
 │   │                              # extractors mirroring the Node-side
 │   │                              # session_prediction_adapter.mjs.

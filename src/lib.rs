@@ -21,6 +21,7 @@ pub mod agent_trust_controls;
 pub mod agent_visibility;
 pub mod agent_visibility_params;
 pub mod agent_visibility_params_db;
+pub mod agent_workspaces;
 pub mod ai_governance_detail;
 pub mod backend;
 pub mod cloud_model_fallback;

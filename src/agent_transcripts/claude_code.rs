@@ -201,6 +201,8 @@ pub(crate) fn build_payload(
                     workspace_hint: String::new(),
                     tool_events: Vec::new(),
                     denylist_bypass_events: Vec::new(),
+                    launch_context: Default::default(),
+                    agent_launches: Vec::new(),
                 }
             },
         ) {
