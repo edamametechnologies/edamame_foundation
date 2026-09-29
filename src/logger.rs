@@ -1,15 +1,19 @@
+use arc_swap::{ArcSwap, ArcSwapOption};
 use fmt::MakeWriter;
 use lazy_static::lazy_static;
 use regex::Regex;
 use sentry_tracing::EventFilter;
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::HashMap,
     env::{current_exe, var},
     fs::{create_dir_all, read_dir, remove_file, File},
     io::{self, Write},
     mem::forget,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, Once},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Once, OnceLock,
+    },
     time::{Duration, Instant, SystemTime},
 };
 use tracing::Level;
@@ -88,39 +92,103 @@ fn prune_stale_logs(log_dir: &Path, stem: &str, current_pid: u32) {
 }
 
 lazy_static! {
-    static ref LOGGER: Mutex<Option<Arc<Logger>>> = Mutex::new(None);
     static ref ANSI_ESCAPE_REGEX: Regex =
         Regex::new(r"\x1b\[[0-9;]*m").expect("Failed to compile ANSI escape regex");
 }
 
+// No lock in the logging path. Every log line of every thread goes through
+// `MemoryWriter`, and the Sentry `before_send` runs on the thread that logged
+// an error: a lock there serializes all logging, and an instrumented
+// (undeadlock) lock cannot be used at all, because its diagnostics are emitted
+// through tracing, i.e. back into this logger. Write-once values are
+// `OnceLock`s, the ring is lock-free (`MemoryWriterData`), and the Sentry dedup
+// table is a snapshot replaced whole (`SENTRY_DEDUP`).
+static LOGGER: OnceLock<Arc<Logger>> = OnceLock::new();
 static PANIC_HOOK_INIT: Once = Once::new();
-static EXECUTABLE_TYPE: Mutex<Option<String>> = Mutex::new(None);
+static EXECUTABLE_TYPE: OnceLock<String> = OnceLock::new();
 
+/// The in-memory log ring the `get_*_logs` calls read: the last
+/// `MAX_LOG_LINES` lines, newest first.
+///
+/// A line claims the next index with one `fetch_add` and publishes itself in
+/// its slot with one `ArcSwap` store. A reader that races a writer wrapping
+/// the ring can read, for an index, the line one lap newer (or the one it
+/// replaces, while the store is in flight), never a torn line.
 pub struct MemoryWriterData {
-    logs: VecDeque<String>,
-    lines: usize,
-    to_take: usize,
+    slots: Box<[ArcSwapOption<String>]>,
+    /// Lines ever written: the index the next line takes.
+    next: AtomicUsize,
+    /// Lines below this index were flushed.
+    floor: AtomicUsize,
+    /// Lines below this index were returned by `get_new_logs`.
+    taken: AtomicUsize,
 }
 
 impl MemoryWriterData {
     pub fn new() -> Self {
         Self {
-            logs: VecDeque::new(),
-            lines: 0,
-            to_take: 0,
+            slots: (0..MAX_LOG_LINES).map(|_| ArcSwapOption::empty()).collect(),
+            next: AtomicUsize::new(0),
+            floor: AtomicUsize::new(0),
+            taken: AtomicUsize::new(0),
         }
+    }
+
+    fn push(&self, line: String) {
+        let index = self.next.fetch_add(1, Ordering::AcqRel);
+        self.slots[index % MAX_LOG_LINES].store(Some(Arc::new(line)));
+    }
+
+    /// Lines `[from, end)` still in the ring, newest first.
+    fn lines_since(&self, from: usize, end: usize) -> Vec<String> {
+        let start = from
+            .max(self.floor.load(Ordering::Acquire))
+            .max(end.saturating_sub(MAX_LOG_LINES));
+        (start..end)
+            .rev()
+            .filter_map(|index| self.slots[index % MAX_LOG_LINES].load_full())
+            .map(|line| (*line).clone())
+            .collect()
+    }
+
+    /// Every line in the ring, newest first.
+    fn all(&self) -> Vec<String> {
+        self.lines_since(0, self.next.load(Ordering::Acquire))
+    }
+
+    /// The lines written since the previous call, newest first (at most the
+    /// ring's size).
+    fn take_new(&self) -> Vec<String> {
+        let end = self.next.load(Ordering::Acquire);
+        let from = self.taken.swap(end, Ordering::AcqRel);
+        self.lines_since(from, end)
+    }
+
+    /// Forget every line written so far and free them.
+    fn flush(&self) {
+        let end = self.next.load(Ordering::Acquire);
+        self.floor.fetch_max(end, Ordering::AcqRel);
+        self.taken.fetch_max(end, Ordering::AcqRel);
+        for slot in self.slots.iter() {
+            slot.store(None);
+        }
+    }
+
+    #[cfg(test)]
+    fn is_empty(&self) -> bool {
+        self.all().is_empty()
     }
 }
 
 #[derive(Clone)]
 pub struct MemoryWriter {
-    data: Arc<Mutex<MemoryWriterData>>,
+    data: Arc<MemoryWriterData>,
 }
 
 impl MemoryWriter {
     pub fn new() -> Self {
         Self {
-            data: Arc::new(Mutex::new(MemoryWriterData::new())),
+            data: Arc::new(MemoryWriterData::new()),
         }
     }
 
@@ -136,28 +204,7 @@ impl MemoryWriter {
         let log_line_formatted = ANSI_ESCAPE_REGEX.replace_all(&log_line_sanitized, "");
         let log_line_formatted = log_line_formatted.trim().to_string();
 
-        let mut locked_data = match self.data.lock() {
-            Ok(data) => data,
-            Err(e) => {
-                eprintln!("Error locking data: {}", e);
-                return Ok(());
-            }
-        };
-
-        if locked_data.logs.len() >= MAX_LOG_LINES {
-            locked_data.logs.pop_back();
-            locked_data.lines -= 1;
-        }
-
-        locked_data.logs.push_front(log_line_formatted.clone());
-        if locked_data.lines < MAX_LOG_LINES {
-            locked_data.lines += 1;
-        }
-        if locked_data.to_take < MAX_LOG_LINES {
-            locked_data.to_take += 1;
-        }
-
-        drop(locked_data);
+        self.data.push(log_line_formatted);
 
         Ok(())
     }
@@ -269,48 +316,15 @@ impl Logger {
     }
 
     pub fn get_new_logs(&self) -> String {
-        let logs: Vec<String> = match self.memory_writer.data.lock() {
-            Ok(mut locked_data) => {
-                let count = locked_data.to_take;
-                let logs = locked_data
-                    .logs
-                    .iter()
-                    .take(count)
-                    .cloned()
-                    .collect::<Vec<String>>();
-                locked_data.to_take = 0;
-                logs
-            }
-            Err(e) => {
-                eprintln!("Error locking memory writer for new logs: {}", e);
-                return String::new();
-            }
-        };
-        build_log_output(&logs)
+        build_log_output(&self.memory_writer.data.take_new())
     }
 
     pub fn get_all_logs(&self) -> String {
-        let logs = match self.memory_writer.data.lock() {
-            Ok(locked_data) => locked_data.logs.iter().cloned().collect::<Vec<String>>(),
-            Err(e) => {
-                eprintln!("Error locking memory writer for all logs: {}", e);
-                return String::new();
-            }
-        };
-        build_log_output(&logs)
+        build_log_output(&self.memory_writer.data.all())
     }
 
     pub fn flush_logs(&self) {
-        match self.memory_writer.data.lock() {
-            Ok(mut locked_data) => {
-                locked_data.logs.clear();
-                locked_data.lines = 0;
-                locked_data.to_take = 0;
-            }
-            Err(e) => {
-                eprintln!("Error locking memory writer for flush: {}", e);
-            }
-        }
+        self.memory_writer.data.flush();
     }
 }
 
@@ -412,7 +426,32 @@ const SENTRY_DEDUP_WINDOW_SECS: u64 = 60;
 const SENTRY_DEDUP_MAX_ENTRIES: usize = 500;
 
 lazy_static! {
-    static ref SENTRY_DEDUP: Mutex<HashMap<u64, Instant>> = Mutex::new(HashMap::new());
+    /// Fingerprint -> last time an event with it was sent. Replaced whole on
+    /// each error event (`rcu`): error events are rare, and this runs inside
+    /// Sentry's `before_send`, on the thread that logged the error, where no
+    /// lock may be taken (see `LOGGER`).
+    static ref SENTRY_DEDUP: ArcSwap<HashMap<u64, Instant>> = ArcSwap::from_pointee(HashMap::new());
+}
+
+/// Whether an event with `fingerprint` seen at `now` is a repeat inside the
+/// dedup window; records it otherwise (and prunes the table past its size).
+fn sentry_event_is_repeat(fingerprint: u64, now: Instant) -> bool {
+    let mut repeat = false;
+    SENTRY_DEDUP.rcu(|seen| {
+        repeat = seen
+            .get(&fingerprint)
+            .is_some_and(|last| now.duration_since(*last).as_secs() < SENTRY_DEDUP_WINDOW_SECS);
+        let mut next = HashMap::clone(seen);
+        if !repeat {
+            next.insert(fingerprint, now);
+            if next.len() > SENTRY_DEDUP_MAX_ENTRIES {
+                let cutoff = now - Duration::from_secs(SENTRY_DEDUP_WINDOW_SECS);
+                next.retain(|_, ts| *ts > cutoff);
+            }
+        }
+        next
+    });
+    repeat
 }
 
 fn sentry_event_fingerprint(event: &sentry::protocol::Event) -> u64 {
@@ -536,20 +575,8 @@ fn init_sentry(url: &str, release: &str) {
                 // sanitized writer output. Always on, debug builds included.
                 let event = scrub_sentry_event(event);
                 let fp = sentry_event_fingerprint(&event);
-                let now = Instant::now();
-                let mut dedup = match SENTRY_DEDUP.lock() {
-                    Ok(g) => g,
-                    Err(_) => return Some(event),
-                };
-                if let Some(last) = dedup.get(&fp) {
-                    if now.duration_since(*last).as_secs() < SENTRY_DEDUP_WINDOW_SECS {
-                        return None;
-                    }
-                }
-                dedup.insert(fp, now);
-                if dedup.len() > SENTRY_DEDUP_MAX_ENTRIES {
-                    let cutoff = now - std::time::Duration::from_secs(SENTRY_DEDUP_WINDOW_SECS);
-                    dedup.retain(|_, ts| *ts > cutoff);
+                if sentry_event_is_repeat(fp, Instant::now()) {
+                    return None;
                 }
                 Some(event)
             })),
@@ -564,6 +591,10 @@ fn init_sentry(url: &str, release: &str) {
     forget(sentry_guard);
 }
 
+/// Serializes `init_logger`: the first call sets everything up while any
+/// concurrent call waits, and every later call only flushes the ring.
+static LOGGER_INIT: Once = Once::new();
+
 pub fn init_logger(
     executable_type: &str,
     url: &str,
@@ -571,26 +602,38 @@ pub fn init_logger(
     provided_env_log_spec: &str,
     sentry_error_filter: &[&str],
 ) {
-    let mut logger_guard = match LOGGER.lock() {
-        Ok(guard) => guard,
-        Err(e) => {
-            eprintln!("Error locking LOGGER: {}", e);
-            return;
-        }
-    };
-    if logger_guard.is_some() {
+    let mut initialized_now = false;
+    // `call_once_force`: an initialization that panicked is run again by
+    // the next call instead of poisoning every later one.
+    LOGGER_INIT.call_once_force(|_| {
+        initialized_now = true;
+        init_logger_once(
+            executable_type,
+            url,
+            release,
+            provided_env_log_spec,
+            sentry_error_filter,
+        );
+    });
+    if !initialized_now {
         eprintln!("Logger already initialized, flushing logs");
-        logger_guard.as_ref().unwrap().flush_logs();
-        return;
+        if let Some(logger) = LOGGER.get() {
+            logger.flush_logs();
+        }
     }
+}
 
-    *logger_guard = Some(Arc::new(Logger::new()));
-    let logger = logger_guard.as_ref().unwrap();
+fn init_logger_once(
+    executable_type: &str,
+    url: &str,
+    release: &str,
+    provided_env_log_spec: &str,
+    sentry_error_filter: &[&str],
+) {
+    let logger = LOGGER.get_or_init(|| Arc::new(Logger::new()));
 
     // Store executable type for panic handler
-    if let Ok(mut exec_type) = EXECUTABLE_TYPE.lock() {
-        *exec_type = Some(executable_type.to_string());
-    }
+    let _ = EXECUTABLE_TYPE.set(executable_type.to_string());
 
     // Force backtrace
     std::env::set_var("RUST_BACKTRACE", "1");
@@ -614,9 +657,8 @@ pub fn init_logger(
 
             // Create panic artifact file
             let executable_type = EXECUTABLE_TYPE
-                .lock()
-                .ok()
-                .and_then(|exec_type| exec_type.as_ref().cloned())
+                .get()
+                .cloned()
                 .unwrap_or_else(|| "unknown".to_string());
             create_panic_artifact(&executable_type, msg, &location, &backtrace);
 
@@ -950,35 +992,17 @@ pub fn init_logger(
 }
 
 pub fn get_new_logs() -> String {
-    match LOGGER.lock() {
-        Ok(logger_guard) => {
-            if let Some(logger) = logger_guard.as_ref() {
-                logger.get_new_logs()
-            } else {
-                String::new()
-            }
-        }
-        Err(e) => {
-            eprintln!("Error accessing logger for new logs: {}", e);
-            String::new()
-        }
-    }
+    LOGGER
+        .get()
+        .map(|logger| logger.get_new_logs())
+        .unwrap_or_default()
 }
 
 pub fn get_all_logs() -> String {
-    match LOGGER.lock() {
-        Ok(logger_guard) => {
-            if let Some(logger) = logger_guard.as_ref() {
-                logger.get_all_logs()
-            } else {
-                String::new()
-            }
-        }
-        Err(e) => {
-            eprintln!("Error accessing logger for all logs: {}", e);
-            String::new()
-        }
-    }
+    LOGGER
+        .get()
+        .map(|logger| logger.get_all_logs())
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -1048,18 +1072,17 @@ mod tests {
 
         // Test MemoryWriter initialization
         let writer = MemoryWriter::new();
-        assert!(writer.data.lock().unwrap().logs.is_empty());
+        assert!(writer.data.is_empty());
 
         // Test log storage in memory writer
         {
-            let logger_guard = LOGGER.lock().unwrap();
-            let logger = logger_guard.as_ref().unwrap();
+            let logger = LOGGER.get().expect("logger initialized");
 
             let log_line = "This is a test log";
             logger.memory_writer.handle_log(log_line).unwrap();
 
-            let locked_data = logger.memory_writer.data.lock().unwrap();
-            assert!(locked_data.logs[0].contains("This is a test log"));
+            let lines = logger.memory_writer.data.all();
+            assert!(lines.iter().any(|line| line.contains("This is a test log")));
         }
 
         // Test get_new_logs

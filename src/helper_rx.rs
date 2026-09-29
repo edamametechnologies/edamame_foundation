@@ -9,16 +9,15 @@ use base64::Engine;
 use edamame_proto::edamame_helper_server::{EdamameHelper, EdamameHelperServer};
 use edamame_proto::{HelperRequest, HelperResponse};
 use lazy_static::lazy_static;
-use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::str;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::Arc;
 use tokio::sync::{broadcast, oneshot};
 use tonic::transport::{Certificate, Identity, Server, ServerTlsConfig};
 use tonic::{Code, Request, Response, Status};
 use tracing::{debug, error, info, trace, warn};
-use undeadlock::CustomMutex;
+use undeadlock::{CustomDashMap, CustomMutex};
 
 lazy_static! {
     pub static ref BRANCH: Arc<CustomMutex<String>> = Arc::new(CustomMutex::new("".to_string()));
@@ -33,11 +32,11 @@ lazy_static! {
     // where a caller treats the duplicate-rejection error as if the underlying operation
     // had failed, then aggressively rolls back state on its own behalf).
     //
-    // A plain `std::sync::Mutex` is used here because we only hold the lock for the
-    // small register / remove / subscribe critical sections; we never hold it across
-    // an `.await`.
-    static ref PENDING_ORDERS: Arc<StdMutex<HashMap<String, broadcast::Sender<Result<String, String>>>>> =
-        Arc::new(StdMutex::new(HashMap::new()));
+    // A concurrent map, not a mutex: registration is one `entry` operation, and the
+    // executor's `Drop` must clear its slot synchronously (it cannot `.await` a lock).
+    // No poisoning to recover from.
+    static ref PENDING_ORDERS: CustomDashMap<String, broadcast::Sender<Result<String, String>>> =
+        CustomDashMap::new("helper_pending_orders");
 }
 
 // Version
@@ -109,18 +108,15 @@ enum DedupRole {
 }
 
 fn register_order(key: &str) -> DedupRole {
-    // Recover from poisoning instead of panicking. A poisoned lock here would
-    // cascade into every subsequent helper order panicking (silent helper
-    // death); the protected map only tracks in-flight dedup senders, so
-    // recovering the inner value after a panic is safe.
-    let mut map = PENDING_ORDERS
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    match map.get(key) {
-        Some(tx) => DedupRole::Follower(tx.subscribe()),
-        None => {
+    // One entry operation: the lookup and the insert hold the key's shard
+    // together, so two identical orders cannot both become the executor.
+    match PENDING_ORDERS.entry(key.to_string()) {
+        dashmap::mapref::entry::Entry::Occupied(entry) => {
+            DedupRole::Follower(entry.get().subscribe())
+        }
+        dashmap::mapref::entry::Entry::Vacant(entry) => {
             let (tx, _) = broadcast::channel(PENDING_BROADCAST_CAPACITY);
-            map.insert(key.to_string(), tx.clone());
+            entry.insert(tx.clone());
             DedupRole::Executor(tx)
         }
     }
@@ -148,14 +144,9 @@ impl ExecutorGuard {
     fn complete(&self, shared: Result<String, String>) {
         // Remove from the map FIRST so any duplicate that arrives after this point
         // starts a fresh execution rather than joining a channel that's about to
-        // close.
-        // Recover from poisoning so the dedup slot is always cleared; leaving a
-        // stale entry would strand every future identical order on a closed
-        // broadcast channel.
-        PENDING_ORDERS
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .remove(&self.key);
+        // close. Leaving a stale entry would strand every future identical order
+        // on a closed broadcast channel.
+        PENDING_ORDERS.remove(&self.key);
         self.completed.store(true, Ordering::Release);
         // `send` returns Err if no followers ever subscribed; that's fine -- nobody
         // was waiting, so there is nothing to deliver.
@@ -172,12 +163,8 @@ impl Drop for ExecutorGuard {
             "ExecutorGuard dropped without completion (panic or cancellation): key={}",
             self.key
         );
-        // Recover from poisoning so the dedup slot is always cleared (see
-        // `complete`).
-        PENDING_ORDERS
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .remove(&self.key);
+        // The dedup slot is always cleared (see `complete`).
+        PENDING_ORDERS.remove(&self.key);
         let _ = self
             .tx
             .send(Err("order canceled before completion".to_string()));
@@ -1985,10 +1972,7 @@ mod tests {
     }
 
     fn pending_orders_contains(key: &str) -> bool {
-        PENDING_ORDERS
-            .lock()
-            .expect("PENDING_ORDERS mutex poisoned")
-            .contains_key(key)
+        PENDING_ORDERS.contains_key(key)
     }
 
     #[tokio::test]

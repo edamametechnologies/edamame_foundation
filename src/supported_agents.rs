@@ -1,5 +1,5 @@
+use arc_swap::ArcSwapOption;
 use once_cell::sync::Lazy;
-use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -83,7 +83,10 @@ struct CachedRegistry {
     registry: LoadedSupportedAgents,
 }
 
-static REGISTRY_CACHE: Lazy<Mutex<Option<CachedRegistry>>> = Lazy::new(|| Mutex::new(None));
+/// The last loaded registry, replaced whole on reload: readers take a
+/// lock-free snapshot (no lock is held while a reload reads disk or the
+/// network, as before).
+static REGISTRY_CACHE: Lazy<ArcSwapOption<CachedRegistry>> = Lazy::new(ArcSwapOption::empty);
 
 /// An agent home override (`CODEX_HOME`, `HERMES_HOME`), or `None` when it
 /// is unset, empty or blank: `CODEX_HOME=""` must fall back to `~/.codex`,
@@ -332,12 +335,9 @@ impl SupportedAgentDefinition {
 }
 
 pub fn load_supported_agents() -> LoadedSupportedAgents {
-    {
-        let cache = REGISTRY_CACHE.lock();
-        if let Some(cached) = cache.as_ref() {
-            if cached.loaded_at.elapsed() < CACHE_TTL {
-                return cached.registry.clone();
-            }
+    if let Some(cached) = REGISTRY_CACHE.load_full() {
+        if cached.loaded_at.elapsed() < CACHE_TTL {
+            return cached.registry.clone();
         }
     }
 
@@ -345,10 +345,10 @@ pub fn load_supported_agents() -> LoadedSupportedAgents {
         .or_else(|| try_load_remote_registry())
         .unwrap_or_else(builtin_supported_agents);
 
-    *REGISTRY_CACHE.lock() = Some(CachedRegistry {
+    REGISTRY_CACHE.store(Some(std::sync::Arc::new(CachedRegistry {
         loaded_at: Instant::now(),
         registry: loaded.clone(),
-    });
+    })));
 
     loaded
 }

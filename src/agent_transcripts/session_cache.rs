@@ -46,6 +46,11 @@
 //! caller receives is performed OUTSIDE the cache mutex. Under the lock we only
 //! touch the `Arc` refcount and the LRU bookkeeping maps, so the critical
 //! section stays O(log n) and never holds across an allocation-heavy copy.
+//! The callers are synchronous and may run on an async runtime thread, where
+//! the (undeadlock) mutex cannot be awaited or block-locked, so `with_cache`
+//! tries it with a yield-then-sleep backoff: it waits like the old blocking
+//! mutex did, but at most `CACHE_LOCK_WAIT`, after which the caller treats the
+//! lookup as a miss and skips the insert -- a rebuild, never a wrong answer.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
@@ -53,7 +58,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use once_cell::sync::Lazy;
-use parking_lot::Mutex;
+use undeadlock::{CustomMutex, CustomMutexExt};
 
 use super::parsing::{parse_jsonl_transcript, parse_txt_transcript, ParsedTranscript};
 use super::CollectedRawSession;
@@ -193,12 +198,45 @@ impl LruCache {
     }
 }
 
-static CACHE: Lazy<Mutex<LruCache>> = Lazy::new(|| Mutex::new(LruCache::new()));
+static CACHE: Lazy<CustomMutex<LruCache>> = Lazy::new(|| CustomMutex::new(LruCache::new()));
+
+/// Tries `with_cache` makes with a plain yield before it starts sleeping. The
+/// critical sections are a map lookup or insert (microseconds), so a free
+/// lock is usually found here.
+const CACHE_LOCK_SPINS: usize = 64;
+/// Longest `with_cache` waits for the lock: covers a holder that was
+/// descheduled while holding it (many parallel collectors), and bounds the
+/// wait if something ever held it long.
+const CACHE_LOCK_WAIT: Duration = Duration::from_millis(50);
+
+/// Run `f` on the cache once the lock is free: yields, then sleeps with a
+/// backoff (10 us doubling to 1 ms), for at most `CACHE_LOCK_WAIT`; `None`
+/// when it stayed held that long (the caller proceeds without the cache).
+fn with_cache<R>(mut f: impl FnMut(&mut LruCache) -> R) -> Option<R> {
+    let deadline = Instant::now() + CACHE_LOCK_WAIT;
+    let mut backoff = Duration::from_micros(10);
+    let mut attempt = 0usize;
+    loop {
+        if let Some(result) = CACHE.try_with(&mut f) {
+            return Some(result);
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
+        attempt += 1;
+        if attempt < CACHE_LOCK_SPINS {
+            std::thread::yield_now();
+        } else {
+            std::thread::sleep(backoff);
+            backoff = (backoff * 2).min(Duration::from_millis(1));
+        }
+    }
+}
 
 /// Test-only: accounted bytes currently held, for the real-home benchmark.
 #[cfg(test)]
 pub(crate) fn cache_total_bytes() -> usize {
-    CACHE.lock().total_bytes
+    with_cache(|cache| cache.total_bytes).expect("session cache lock")
 }
 
 /// Bump when `CollectedRawSession` shape or adapter-derived fields (e.g.
@@ -288,7 +326,7 @@ where
 
     if let Some(key) = key.as_ref() {
         // Take the Arc under the lock, then copy the payload after releasing it.
-        let hit = CACHE.lock().get_fresh(key, max_age);
+        let hit = with_cache(|cache| cache.get_fresh(key, max_age)).flatten();
         if let Some(arc) = hit {
             return Some((*arc).clone());
         }
@@ -310,7 +348,12 @@ where
         // Clone for storage BEFORE taking the lock so the copy is not held
         // across the critical section.
         let stored = Arc::new(session.clone());
-        CACHE.lock().insert(key, stored, bytes, mtime_nanos);
+        let mut entry = Some((key, stored));
+        let _ = with_cache(|cache| {
+            if let Some((key, stored)) = entry.take() {
+                cache.insert(key, stored, bytes, mtime_nanos);
+            }
+        });
     }
 
     Some(session)
@@ -488,14 +531,16 @@ mod tests {
         // `modified_at` refresh then).
         {
             let key = oversized_cache_key(&path, false);
-            let mut cache = CACHE.lock();
-            let entry = cache
-                .map
-                .get_mut(&key)
-                .expect("the oversized session is cached");
-            entry.built_at = Instant::now()
-                .checked_sub(OVERSIZED_REBUILD_INTERVAL)
-                .expect("the clock is past the interval");
+            with_cache(|cache| {
+                let entry = cache
+                    .map
+                    .get_mut(&key)
+                    .expect("the oversized session is cached");
+                entry.built_at = Instant::now()
+                    .checked_sub(OVERSIZED_REBUILD_INTERVAL)
+                    .expect("the clock is past the interval");
+            })
+            .expect("session cache lock");
         }
         let mut rebuilt = false;
         get_or_build_session(&path, false, |parsed| {

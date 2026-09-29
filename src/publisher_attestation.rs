@@ -22,9 +22,8 @@
 //! enrichment tick re-queries the same handful of paths every cycle.
 
 use lazy_static::lazy_static;
-use std::collections::HashMap;
-use std::sync::Mutex;
 use std::time::UNIX_EPOCH;
+use undeadlock::CustomDashMap;
 
 /// Signing/provenance verdict for one binary path.
 #[derive(Debug, Clone, PartialEq)]
@@ -52,8 +51,8 @@ const CACHE_MAX_ENTRIES: usize = 4096;
 
 lazy_static! {
     /// path -> (mtime_secs, size, attestation).
-    static ref ATTESTATION_CACHE: Mutex<HashMap<String, (u64, u64, BinaryAttestation)>> =
-        Mutex::new(HashMap::new());
+    static ref ATTESTATION_CACHE: CustomDashMap<String, (u64, u64, BinaryAttestation)> =
+        CustomDashMap::new("publisher_attestation_cache");
 }
 
 /// Canonical OS install-path predicate (the canonical-path half of the
@@ -101,12 +100,12 @@ pub fn attest_binary(path: &str) -> BinaryAttestation {
         .unwrap_or(0);
     let size = metadata.len();
 
-    if let Ok(cache) = ATTESTATION_CACHE.lock() {
-        if let Some((cached_mtime, cached_size, attestation)) = cache.get(path) {
-            if *cached_mtime == mtime_secs && *cached_size == size {
-                return attestation.clone();
-            }
-        }
+    let cached = ATTESTATION_CACHE
+        .get(path)
+        .filter(|entry| entry.value().0 == mtime_secs && entry.value().1 == size)
+        .map(|entry| entry.value().2.clone());
+    if let Some(attestation) = cached {
+        return attestation;
     }
 
     let (platform_signed, publisher) = verify_platform_signature(path);
@@ -115,12 +114,10 @@ pub fn attest_binary(path: &str) -> BinaryAttestation {
         platform_signed,
         publisher,
     };
-    if let Ok(mut cache) = ATTESTATION_CACHE.lock() {
-        if cache.len() >= CACHE_MAX_ENTRIES {
-            cache.clear();
-        }
-        cache.insert(path.to_string(), (mtime_secs, size, attestation.clone()));
+    if ATTESTATION_CACHE.len() >= CACHE_MAX_ENTRIES {
+        ATTESTATION_CACHE.clear();
     }
+    ATTESTATION_CACHE.insert(path.to_string(), (mtime_secs, size, attestation.clone()));
     attestation
 }
 

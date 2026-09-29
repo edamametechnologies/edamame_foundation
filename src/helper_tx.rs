@@ -7,10 +7,10 @@ use edamame_proto::HelperRequest;
 use std::str;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use tokio::sync::Mutex;
 use tokio::time::timeout;
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Identity};
 use tracing::{debug, trace, warn};
+use undeadlock::{CustomMutex, CustomMutexExt};
 
 pub static HELPER_FATAL_ERROR: AtomicBool = AtomicBool::new(false);
 
@@ -85,8 +85,11 @@ pub static CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Cached gRPC channel and its credential fingerprint.
 /// The fingerprint (hash of ca_pem + client_pem + client_key) lets us
-/// detect credential rotation and rebuild the channel.
-static CHANNEL_CACHE: Mutex<Option<CachedChannel>> = Mutex::const_new(None);
+/// detect credential rotation and rebuild the channel. Held across the
+/// connect (up to its 120 s timeout), so debug builds report a slow connect
+/// as a long hold.
+static CHANNEL_CACHE: once_cell::sync::Lazy<CustomMutex<Option<CachedChannel>>> =
+    once_cell::sync::Lazy::new(|| CustomMutex::new(None));
 
 struct CachedChannel {
     channel: Channel,
@@ -164,10 +167,10 @@ async fn get_or_create_channel(
 }
 
 /// Invalidate the cached channel so the next call creates a fresh connection.
+/// Best effort, as before: a caller building a channel right now holds the
+/// lock and replaces the entry anyway.
 fn invalidate_channel_cache() {
-    if let Ok(mut cache) = CHANNEL_CACHE.try_lock() {
-        *cache = None;
-    }
+    let _ = CHANNEL_CACHE.try_with(|cache| *cache = None);
 }
 
 pub async fn helper_run_utility(
