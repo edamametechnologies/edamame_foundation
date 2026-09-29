@@ -41,16 +41,21 @@ lazy_static! {
         let model = CloudModel::initialize(
             model_name.to_string(),
             builtin_data,
-            |data| {
-                let threat_metrics_json: ThreatMetricsJSON = serde_json::from_str(data)
-                    .with_context(|| "Failed to parse JSON data")?;
-                ThreatMetrics::new_from_json(&threat_metrics_json, get_platform())
-            },
+            parse_threat_model,
         )
         .expect("Failed to initialize CloudModel");
 
         model
     };
+}
+
+/// Parse a published threat model for this platform: the parser `THREATS`
+/// applies to its embedded snapshot and to every download (after the
+/// download verified, with `model-signatures`).
+pub fn parse_threat_model(data: &str) -> Result<ThreatMetrics> {
+    let threat_metrics_json: ThreatMetricsJSON =
+        serde_json::from_str(data).with_context(|| "Failed to parse JSON data")?;
+    ThreatMetrics::new_from_json(&threat_metrics_json, get_platform())
 }
 
 // Helper functions to get built-in versions and model names
@@ -167,11 +172,7 @@ pub async fn update(branch: &str, force: bool, platform: &str) -> Result<UpdateS
     // Access the model directly now
     // Perform the update with automatic date validation via CloudDate trait
     let status = THREATS
-        .update_with_date_check(branch, force, |data| {
-            let threat_metrics_json: ThreatMetricsJSON =
-                serde_json::from_str(data).with_context(|| "Failed to parse JSON data")?;
-            ThreatMetrics::new_from_json(&threat_metrics_json, get_platform())
-        })
+        .update_with_date_check(branch, force, parse_threat_model)
         .await?;
 
     match status {
