@@ -621,7 +621,13 @@ pub fn start_interface_monitor() {
 pub async fn utility_scan_secret_content(paths_json: &str, reply: &str) -> Result<String> {
     let paths: Vec<String> = serde_json::from_str(paths_json)
         .map_err(|e| anyhow::anyhow!("Failed to parse secret-content scan paths: {}", e))?;
-    let scan = crate::secret_content_scan::scan_secret_like_files(&paths);
+    // Up to the 25 s scan budget of file reads: on the blocking pool, so a
+    // slow scan does not hold an async worker the helper's other orders need.
+    let scan = tokio::task::spawn_blocking(move || {
+        crate::secret_content_scan::scan_secret_like_files(&paths)
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("Secret-content scan task failed: {}", e))?;
     if reply == crate::helper_tx::BUDGETED_REPLY_ARG {
         serde_json::to_string(&scan)
     } else {
@@ -637,7 +643,11 @@ pub async fn utility_scan_secret_content(paths_json: &str, reply: &str) -> Resul
 pub async fn utility_attest_dev_trees(paths_json: &str, reply: &str) -> Result<String> {
     let paths: Vec<String> = serde_json::from_str(paths_json)
         .map_err(|e| anyhow::anyhow!("Failed to parse dev-tree attestation paths: {}", e))?;
-    let batch = crate::dev_tree_attestation::attest_dev_trees(&paths);
+    // File system walks up to the attestation budget: off the async workers.
+    let batch =
+        tokio::task::spawn_blocking(move || crate::dev_tree_attestation::attest_dev_trees(&paths))
+            .await
+            .map_err(|e| anyhow::anyhow!("Dev-tree attestation task failed: {}", e))?;
     if reply == crate::helper_tx::BUDGETED_REPLY_ARG {
         serde_json::to_string(&batch)
     } else {
