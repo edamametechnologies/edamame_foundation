@@ -25,7 +25,17 @@
 //!      lockfile (`bun.lock` / `bun.lockb`, bun keeps no state inside
 //!      `node_modules`) -- the tree an `esbuild` / `swc` /
 //!      `node_modules/.bin` binary writes its output into, and the tree
-//!      `bun init` scaffolds.
+//!      `bun init` scaffolds,
+//!    - a SwiftPM build directory: `.build/` next to the package's
+//!      `Package.swift`, holding the `workspace-state.json` SwiftPM writes
+//!      there (SwiftPM 6 also tags `.build/` with `CACHEDIR.TAG`, which is
+//!      checked first; earlier toolchains do not),
+//!    - a Bazel workspace that has built: a workspace file (`MODULE.bazel`,
+//!      `WORKSPACE.bazel`, `WORKSPACE`) next to the output tree Bazel links
+//!      there (`bazel-out`, or `bazel-<workspace directory name>`). Bazel's
+//!      execution root (`<output base>/execroot/<workspace>/`, under
+//!      `/private/var/tmp/_bazel_<user>` on macOS) has the same shape: its
+//!      own `bazel-out/` next to links to the workspace's top-level files.
 //! 2. Is the path inside a PEP 405 virtual environment (`pyvenv.cfg` at the
 //!    venv root)?
 //! 3. Is the path inside a git work tree, is it an entry of that work tree's
@@ -77,7 +87,8 @@ pub struct DevTreeAttestation {
     /// (see the module docs for the recognised markers).
     pub build_tree_root: Option<String>,
     /// Which marker attested `build_tree_root`: `cachedir_tag`,
-    /// `cmake_build`, `go_build_work`, `node_project`.
+    /// `cmake_build`, `go_build_work`, `node_project`, `swiftpm_build`,
+    /// `bazel_workspace`.
     pub build_tree_kind: Option<String>,
     /// Innermost ancestor directory holding `pyvenv.cfg`.
     pub venv_root: Option<String>,
@@ -301,7 +312,47 @@ fn build_tree_marker(dir: &Path) -> Option<&'static str> {
     if dir.join("package.json").is_file() && js_install_state(dir) {
         return Some("node_project");
     }
+    if swiftpm_build_dir(dir) {
+        return Some("swiftpm_build");
+    }
+    if bazel_workspace(dir) {
+        return Some("bazel_workspace");
+    }
     None
+}
+
+/// A SwiftPM build directory: `.build/` next to the package manifest
+/// (`Package.swift`), holding the `workspace-state.json` SwiftPM writes on
+/// every dependency resolution, a package without dependencies included.
+fn swiftpm_build_dir(dir: &Path) -> bool {
+    dir.file_name().is_some_and(|name| name == ".build")
+        && dir.join("workspace-state.json").is_file()
+        && dir
+            .parent()
+            .is_some_and(|package| package.join("Package.swift").is_file())
+}
+
+/// Files that make a directory a Bazel workspace root: `MODULE.bazel`
+/// (Bzlmod), `WORKSPACE.bazel` and `WORKSPACE` (before it).
+const BAZEL_WORKSPACE_FILES: &[&str] = &["MODULE.bazel", "WORKSPACE.bazel", "WORKSPACE"];
+
+/// A Bazel workspace that has built: a workspace file next to the output
+/// tree Bazel links there -- `bazel-out`, or the `bazel-<workspace directory
+/// name>` link to the execution root. The link counts even when it dangles
+/// (the output base was expunged): Bazel created it.
+fn bazel_workspace(dir: &Path) -> bool {
+    if !BAZEL_WORKSPACE_FILES
+        .iter()
+        .any(|file| dir.join(file).is_file())
+    {
+        return false;
+    }
+    let entry = |name: &str| std::fs::symlink_metadata(dir.join(name)).is_ok();
+    entry("bazel-out")
+        || dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| entry(&format!("bazel-{name}")))
 }
 
 /// A package manager has installed into the project at `dir`: npm, pnpm and
@@ -693,6 +744,152 @@ mod tests {
         assert_eq!(kind(&bare.join("x.js")), None);
         assert_eq!(kind(&claude_md).as_deref(), Some("node_project"));
         assert_eq!(kind(&bun_bare.join("y.js")), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn kind_of(got: &[DevTreeAttestation], path: &Path) -> Option<(String, String)> {
+        got.iter()
+            .find(|a| a.path == path.to_string_lossy())
+            .and_then(|a| Some((a.build_tree_kind.clone()?, a.build_tree_root.clone()?)))
+    }
+
+    fn strings(paths: &[&PathBuf]) -> Vec<String> {
+        paths
+            .iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect()
+    }
+
+    fn touch(file: &Path) {
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(file, "").unwrap();
+    }
+
+    #[test]
+    fn swiftpm_build_dirs_are_found() {
+        let root = scratch("swiftpm");
+        // `swift build` of a package without dependencies (SwiftPM 5.x
+        // layout, no CACHEDIR.TAG).
+        let package = root.join("Probe");
+        let build = package.join(".build");
+        let product = build.join("arm64-apple-macosx/debug/Probe");
+        touch(&product);
+        std::fs::write(
+            package.join("Package.swift"),
+            "// swift-tools-version:5.9\n",
+        )
+        .unwrap();
+        std::fs::write(
+            build.join("workspace-state.json"),
+            r#"{"object":{"artifacts":[],"dependencies":[]},"version":6}"#,
+        )
+        .unwrap();
+        // A `.build/` with the state file but no manifest next to it.
+        let orphan = root.join("orphan/.build/x.o");
+        touch(&orphan);
+        std::fs::write(root.join("orphan/.build/workspace-state.json"), "{}").unwrap();
+        // A package whose `.build/` holds no state file.
+        let unresolved = root.join("unresolved/.build/y.o");
+        touch(&unresolved);
+        std::fs::write(root.join("unresolved/Package.swift"), "").unwrap();
+        // `build/` is not SwiftPM's directory.
+        let plain = root.join("plain/build/z.o");
+        touch(&plain);
+        std::fs::write(root.join("plain/Package.swift"), "").unwrap();
+        std::fs::write(root.join("plain/build/workspace-state.json"), "{}").unwrap();
+
+        let got = attested(&strings(&[&product, &orphan, &unresolved, &plain]));
+        let build_root = build.to_string_lossy().to_string();
+        assert_eq!(
+            kind_of(&got, &product),
+            Some(("swiftpm_build".to_string(), build_root.clone()))
+        );
+        assert_eq!(kind_of(&got, &orphan), None);
+        assert_eq!(kind_of(&got, &unresolved), None);
+        assert_eq!(kind_of(&got, &plain), None);
+
+        // SwiftPM 6 also tags `.build/` (checked on disk with Swift 6.2):
+        // the spec marker attests the same root first.
+        std::fs::write(build.join("CACHEDIR.TAG"), CACHEDIR_TAG_SIGNATURE).unwrap();
+        let got = attested(&strings(&[&product]));
+        assert_eq!(
+            kind_of(&got, &product),
+            Some(("cachedir_tag".to_string(), build_root))
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn bazel_workspaces_are_found() {
+        let root = scratch("bazel");
+        // A Bzlmod workspace after a build: `MODULE.bazel` and `bazel-out`
+        // (a link in real Bazel; a directory here, the entry is what counts).
+        let ws = root.join("ws");
+        let generated = ws.join("bazel-out/darwin_arm64-fastbuild/bin/app/gen.cc");
+        let source = ws.join("app/main.cc");
+        touch(&generated);
+        touch(&source);
+        std::fs::write(ws.join("MODULE.bazel"), "module(name = \"ws\")\n").unwrap();
+        // A `WORKSPACE` project with only the `bazel-<directory name>` link.
+        let legacy = root.join("legacy");
+        let header = legacy.join("lib/x.h");
+        touch(&header);
+        std::fs::create_dir_all(legacy.join("bazel-legacy")).unwrap();
+        std::fs::write(legacy.join("WORKSPACE"), "").unwrap();
+        // The execution root under the output base: its own `bazel-out/`
+        // next to the workspace file.
+        let execroot = root.join("output_base/execroot/_main");
+        let tool = execroot.join("bazel-out/k8-fastbuild/bin/tool");
+        touch(&tool);
+        std::fs::write(execroot.join("WORKSPACE.bazel"), "").unwrap();
+        // A workspace that never built, and a `bazel-out` without one.
+        let unbuilt = root.join("unbuilt/a.cc");
+        touch(&unbuilt);
+        std::fs::write(root.join("unbuilt/MODULE.bazel"), "").unwrap();
+        let stray = root.join("stray/bazel-out/b.o");
+        touch(&stray);
+
+        let got = attested(&strings(&[
+            &generated, &source, &header, &tool, &unbuilt, &stray,
+        ]));
+        let bazel = |root: &Path| {
+            Some((
+                "bazel_workspace".to_string(),
+                root.to_string_lossy().to_string(),
+            ))
+        };
+        assert_eq!(kind_of(&got, &generated), bazel(&ws));
+        assert_eq!(kind_of(&got, &source), bazel(&ws));
+        assert_eq!(kind_of(&got, &header), bazel(&legacy));
+        assert_eq!(kind_of(&got, &tool), bazel(&execroot));
+        assert_eq!(kind_of(&got, &unbuilt), None);
+        assert_eq!(kind_of(&got, &stray), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Bazel's convenience links outlive the output base (`bazel clean
+    /// --expunge`): a dangling `bazel-out` still marks the workspace.
+    #[cfg(unix)]
+    #[test]
+    fn a_dangling_bazel_out_link_still_marks_the_workspace() {
+        let root = scratch("bazel_link");
+        let ws = root.join("ws");
+        let source = ws.join("src/main.rs");
+        touch(&source);
+        std::fs::write(ws.join("MODULE.bazel"), "").unwrap();
+        std::os::unix::fs::symlink(
+            root.join("expunged/execroot/_main/bazel-out"),
+            ws.join("bazel-out"),
+        )
+        .unwrap();
+        let got = attested(&strings(&[&source]));
+        assert_eq!(
+            kind_of(&got, &source),
+            Some((
+                "bazel_workspace".to_string(),
+                ws.to_string_lossy().to_string()
+            ))
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
