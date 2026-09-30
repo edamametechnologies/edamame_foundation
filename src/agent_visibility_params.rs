@@ -37,6 +37,8 @@
 //! - MCP discovery: where the servers an agent acquires outside its global
 //!   MCP config are declared (plugin trees, project configs, installed-plugin
 //!   manifests, extensions)
+//! - MCP credential markers: the header and environment-variable names that
+//!   make a server's authentication a shared secret
 //!
 //! Unlike the CVE params struct, `AgentVisibilityParamsJSON` carries NO
 //! `#[serde(default)]` fields: this model was born complete, the published
@@ -645,6 +647,26 @@ pub struct McpDiscoveryJSON {
     pub openclaw_extension_manifest: String,
 }
 
+/// The header and environment-variable names that mark an MCP server entry
+/// as carrying a credential, so its authentication is a shared secret
+/// (`agent_visibility::classify_auth`). Header markers are lowercased and
+/// environment-variable needles uppercased by
+/// [`AgentVisibilityParams::new_from_json`].
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct McpCredentialMarkersJSON {
+    /// Header names that carry a credential (`authorization`), compared whole
+    /// with the lowercased header name.
+    pub header_names: Vec<String>,
+    /// Substrings of a header name that carries a credential (`api-key`,
+    /// `token`).
+    pub header_needles: Vec<String>,
+    /// Substrings of an environment-variable name passed to the server that
+    /// make it a credential (`TOKEN`, `SECRET`). A plain substring test, unlike
+    /// the `_`-bounded [`AgentVisibilityParamsJSON::agent_secret_env_key_needles`]
+    /// of the component inventory.
+    pub env_key_needles: Vec<String>,
+}
+
 /// Raw JSON shape of `agent-visibility-params-db.json`. No serde defaults:
 /// the published JSON always carries every field; a missing field fails the
 /// parse and the embedded snapshot (which has all fields) stays in effect.
@@ -699,6 +721,8 @@ pub struct AgentVisibilityParamsJSON {
     pub host_privilege: HostPrivilegeJSON,
     /// MCP discovery locations (see [`McpDiscoveryJSON`]).
     pub mcp_discovery: McpDiscoveryJSON,
+    /// MCP credential markers (see [`McpCredentialMarkersJSON`]).
+    pub mcp_credential_markers: McpCredentialMarkersJSON,
 }
 
 /// Normalized runtime snapshot of the agent-visibility params.
@@ -738,6 +762,9 @@ pub struct AgentVisibilityParams {
     pub host_privilege: HostPrivilegeJSON,
     /// MCP discovery locations, suffixes lowercased.
     pub mcp_discovery: McpDiscoveryJSON,
+    /// MCP credential markers, header markers lowercased and
+    /// environment-variable needles uppercased.
+    pub mcp_credential_markers: McpCredentialMarkersJSON,
 }
 
 impl CloudSignature for AgentVisibilityParams {
@@ -943,6 +970,8 @@ fn normalize_instruction_references(r: &InstructionReferencesJSON) -> Instructio
 
 impl AgentVisibilityParams {
     pub fn new_from_json(json: &AgentVisibilityParamsJSON) -> Self {
+        let lower =
+            |xs: &[String]| -> Vec<String> { xs.iter().map(|x| x.to_ascii_lowercase()).collect() };
         Self {
             date: json.date.clone(),
             signature: json.signature.clone(),
@@ -998,6 +1027,16 @@ impl AgentVisibilityParams {
                     .map(|suffix| suffix.to_ascii_lowercase())
                     .collect(),
                 ..json.mcp_discovery.clone()
+            },
+            mcp_credential_markers: McpCredentialMarkersJSON {
+                header_names: lower(&json.mcp_credential_markers.header_names),
+                header_needles: lower(&json.mcp_credential_markers.header_needles),
+                env_key_needles: json
+                    .mcp_credential_markers
+                    .env_key_needles
+                    .iter()
+                    .map(|n| n.to_ascii_uppercase())
+                    .collect(),
             },
         }
     }
@@ -1200,6 +1239,12 @@ pub fn mcp_discovery() -> McpDiscoveryJSON {
     PARAMS_SNAPSHOT.load().mcp_discovery.clone()
 }
 
+/// MCP credential markers: header and environment-variable names that make a
+/// server's authentication a shared secret.
+pub fn mcp_credential_markers() -> McpCredentialMarkersJSON {
+    PARAMS_SNAPSHOT.load().mcp_credential_markers.clone()
+}
+
 /// The params signature of the current snapshot: a scan state computed under
 /// another vocabulary is recomputed.
 pub fn params_signature() -> String {
@@ -1324,6 +1369,10 @@ mod tests {
         assert!(!inv.workspace_toplevel_files.is_empty());
         assert!(!inv.workspace_config_directories.is_empty());
         assert!(!inv.workspace_subdirectories.is_empty());
+        let credentials = &params.mcp_credential_markers;
+        assert!(!credentials.header_names.is_empty());
+        assert!(!credentials.header_needles.is_empty());
+        assert!(!credentials.env_key_needles.is_empty());
         let discovery = &params.mcp_discovery;
         assert!(!discovery.plugin_config_suffixes.is_empty());
         assert!(!discovery.plugin_skip_directories.is_empty());

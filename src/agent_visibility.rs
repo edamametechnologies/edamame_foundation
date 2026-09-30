@@ -2980,11 +2980,17 @@ fn parse_json_server(name: &str, entry: &serde_json::Value) -> RawMcpServer {
         .and_then(|v| v.as_str())
         .map(|s| s.to_ascii_lowercase());
     let headers_obj = entry.get("headers").and_then(|v| v.as_object());
+    // A credential-bearing header (the params' `mcp_credential_markers`).
     let has_auth_header = headers_obj
         .map(|h| {
+            let markers = agent_visibility_params::mcp_credential_markers();
             h.keys().any(|k| {
                 let kl = k.to_ascii_lowercase();
-                kl == "authorization" || kl.contains("api-key") || kl.contains("token")
+                markers.header_names.iter().any(|name| *name == kl)
+                    || markers
+                        .header_needles
+                        .iter()
+                        .any(|needle| kl.contains(needle.as_str()))
             })
         })
         .unwrap_or(false);
@@ -3326,15 +3332,17 @@ fn classify_auth(server: &RawMcpServer) -> AuthStrength {
     AuthStrength::None
 }
 
+/// Whether an environment variable passed to the server carries a credential:
+/// its uppercased name contains one of the params' `mcp_credential_markers`
+/// environment-variable needles.
 fn env_keys_look_like_secret(env_keys: &[String]) -> bool {
+    let markers = agent_visibility_params::mcp_credential_markers();
     env_keys.iter().any(|k| {
         let kl = k.to_ascii_uppercase();
-        kl.contains("TOKEN")
-            || kl.contains("KEY")
-            || kl.contains("SECRET")
-            || kl.contains("PASSWORD")
-            || kl.contains("CREDENTIAL")
-            || kl.contains("PAT")
+        markers
+            .env_key_needles
+            .iter()
+            .any(|needle| kl.contains(needle.as_str()))
     })
 }
 
@@ -8080,6 +8088,26 @@ bob ALL=(ALL) NOPASSWD: ALL
         assert_eq!(ep.auth_strength, AuthStrength::Shared);
         // env captured by KEY only, never value.
         assert_eq!(ep.env_keys, vec!["API_TOKEN".to_string()]);
+    }
+
+    #[test]
+    fn credential_headers_are_shared_auth() {
+        // A whole credential header name, or a credential fragment in one
+        // (the params' `mcp_credential_markers`), case-insensitively.
+        for header in ["Authorization", "X-Api-Key", "x-access-token"] {
+            let ep = endpoint_from_json(
+                "cursor",
+                "hdrsrv",
+                &format!(r#"{{"url":"https://example.com/mcp","headers":{{"{header}":"x"}}}}"#),
+            );
+            assert_eq!(ep.auth_strength, AuthStrength::Shared, "{header}");
+        }
+        let ep = endpoint_from_json(
+            "cursor",
+            "hdrsrv",
+            r#"{"url":"https://example.com/mcp","headers":{"X-Source":"plugin"}}"#,
+        );
+        assert_eq!(ep.auth_strength, AuthStrength::None);
     }
 
     #[test]
