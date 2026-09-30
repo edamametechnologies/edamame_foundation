@@ -892,6 +892,12 @@ pub struct CveDetectionParamsJSON {
     /// shells). Being their child says nothing about a relationship between
     /// two applications. Command shells are deliberately not roles.
     pub desktop_session_root_roles: Vec<String>,
+    /// IPv4 ranges (CIDR) on the host's own side of the access network:
+    /// `192.0.0.0/29`, the RFC 7335 service continuity prefix (DS-Lite B4 /
+    /// AFTR, the 464XLAT CLAT). A flow to one ends at the CPE / tunnel
+    /// endpoint, never at a remote peer, so it is not external egress. A
+    /// range wider than a /16 is ignored.
+    pub access_network_plumbing_ipv4_cidrs: Vec<String>,
 }
 
 fn normalize_runtime_perfdata_entry(entry: &RuntimePerfdataEntryJSON) -> RuntimePerfdataEntryJSON {
@@ -1066,6 +1072,8 @@ pub struct CveDetectionParams {
     pub agent_process_names: BTreeMap<String, Vec<String>>,
     pub version_layout_directories: HashSet<String>,
     pub desktop_session_root_roles: HashSet<String>,
+    /// `access_network_plumbing_ipv4_cidrs` parsed as (network, mask).
+    pub access_network_plumbing_ipv4_ranges: Vec<(u32, u32)>,
 }
 
 impl CloudSignature for CveDetectionParams {
@@ -1180,6 +1188,24 @@ fn normalized_platform_owned_user_store(
         owner_prefixes: lowercase_token_list(&store.owner_prefixes),
         direct_owner_prefixes: lowercase_token_list(&store.direct_owner_prefixes),
     }
+}
+
+/// Narrowest accepted prefix for a range the detector treats as "not
+/// external": a wider one (a publishing mistake) would blind egress
+/// detection for it, so it is ignored.
+const ACCESS_NETWORK_PLUMBING_MIN_PREFIX_LEN: u32 = 16;
+
+/// `a.b.c.d/len` as (network, mask); `None` for anything else, or for a
+/// range wider than [`ACCESS_NETWORK_PLUMBING_MIN_PREFIX_LEN`].
+fn parse_access_network_plumbing_cidr(cidr: &str) -> Option<(u32, u32)> {
+    let (address, len) = cidr.trim().split_once('/')?;
+    let address: std::net::Ipv4Addr = address.trim().parse().ok()?;
+    let len: u32 = len.trim().parse().ok()?;
+    if !(ACCESS_NETWORK_PLUMBING_MIN_PREFIX_LEN..=32).contains(&len) {
+        return None;
+    }
+    let mask = u32::MAX << (32 - len);
+    Some((u32::from(address) & mask, mask))
 }
 
 /// Layouts normalized like path fragments; one without a container root is
@@ -1840,6 +1866,11 @@ impl CveDetectionParams {
                 .collect(),
             version_layout_directories: lowercase_token_set(&json.version_layout_directories),
             desktop_session_root_roles: lowercase_token_set(&json.desktop_session_root_roles),
+            access_network_plumbing_ipv4_ranges: json
+                .access_network_plumbing_ipv4_cidrs
+                .iter()
+                .filter_map(|cidr| parse_access_network_plumbing_cidr(cidr))
+                .collect(),
         }
     }
 
@@ -3529,6 +3560,17 @@ pub fn is_desktop_session_root_role(tool_name: &str) -> bool {
         .contains(tool_name)
 }
 
+/// True when `address` is in one of the `access_network_plumbing_ipv4_cidrs`
+/// ranges.
+pub fn is_access_network_plumbing_ipv4(address: std::net::Ipv4Addr) -> bool {
+    let address = u32::from(address);
+    PARAMS_SNAPSHOT
+        .load()
+        .access_network_plumbing_ipv4_ranges
+        .iter()
+        .any(|(network, mask)| address & mask == *network)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4981,6 +5023,34 @@ mod tests {
         assert!(!is_version_layout_directory("claude"));
         assert!(is_desktop_session_root_role("explorer"));
         assert!(!is_desktop_session_root_role("bash"));
+    }
+
+    /// Plumbing ranges parse as strict CIDRs; anything else, or anything
+    /// wider than a /16, is ignored rather than read as "not external".
+    #[test]
+    fn test_access_network_plumbing_ranges() {
+        let p = params_from_edited_snapshot(|value| {
+            value["access_network_plumbing_ipv4_cidrs"] = serde_json::json!([
+                "192.0.0.0/29", "10.0.0.0/8", "0.0.0.0/0", "bad", "192.0.0.6", "198.51.100.1/32"
+            ]);
+        });
+        assert_eq!(
+            p.access_network_plumbing_ipv4_ranges,
+            vec![(0xC000_0000, 0xFFFF_FFF8), (0xC633_6401, 0xFFFF_FFFF)]
+        );
+        for (address, plumbing) in [
+            ([192, 0, 0, 0], true),
+            ([192, 0, 0, 7], true),
+            ([192, 0, 0, 8], false),
+            ([192, 0, 0, 9], false),
+            ([10, 0, 0, 1], false),
+        ] {
+            assert_eq!(
+                is_access_network_plumbing_ipv4(std::net::Ipv4Addr::from(address)),
+                plumbing,
+                "{address:?}"
+            );
+        }
     }
 
     /// The published params must parse with this code. A `FormatError` means
