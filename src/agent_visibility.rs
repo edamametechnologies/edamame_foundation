@@ -548,8 +548,10 @@ pub struct HostPrivilege {
     /// The login user can become root WITHOUT a password: a `NOPASSWD`
     /// sudoers rule on unix that allows `ALL`, an escalatable binary, a
     /// command path the user can write, or a command the grader cannot pin
-    /// down (`sudoers_grading`). (Windows UAC elevation policy is not
-    /// assessed, so this stays `false` there.)
+    /// down (`sudoers_grading`). On Windows: an administrator whose
+    /// processes run elevated (UAC off, or the built-in Administrator outside
+    /// Admin Approval Mode) or elevate without a prompt
+    /// (`ConsentPromptBehaviorAdmin=0`), see `windows_elevation`.
     pub passwordless_root: bool,
     /// Commands the user may run as root without a password that do NOT
     /// reach root: specific commands, none of them escalatable or writable
@@ -1783,6 +1785,120 @@ fn home_owner_ids(home: &Path) -> (Option<u32>, Option<u32>) {
     }
 }
 
+/// The account with `uid`: its name and primary gid, from the system's user
+/// database (Directory Services on macOS, NSS on Linux).
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn account_for_uid(uid: u32) -> Option<(String, u32)> {
+    let mut size: usize = 16 * 1024;
+    loop {
+        // SAFETY: a zeroed `passwd` is a valid out-parameter; `entry`, `buf`
+        // and `found` outlive the call, which writes at most `buf.len()` bytes
+        // into `buf`; the name is copied out before `buf` is dropped.
+        let mut entry: libc::passwd = unsafe { std::mem::zeroed() };
+        let mut buf = vec![0 as libc::c_char; size];
+        let mut found: *mut libc::passwd = std::ptr::null_mut();
+        let rc = unsafe {
+            libc::getpwuid_r(uid as libc::uid_t, &mut entry, buf.as_mut_ptr(), buf.len(), &mut found)
+        };
+        if rc == libc::ERANGE && size < 1024 * 1024 {
+            size *= 4;
+            continue;
+        }
+        if rc != 0 || found.is_null() || entry.pw_name.is_null() {
+            return None;
+        }
+        let name = unsafe { std::ffi::CStr::from_ptr(entry.pw_name) }
+            .to_string_lossy()
+            .into_owned();
+        return (!name.is_empty()).then_some((name, entry.pw_gid as u32));
+    }
+}
+
+/// The account that owns `home`: name, uid and primary gid. The name is the
+/// one the sudoers policy and the group lists use, which the home folder's
+/// name need not be.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn account_for_home(home: &Path) -> Option<(String, u32, u32)> {
+    use std::os::unix::fs::MetadataExt;
+    let uid = std::fs::metadata(home).ok()?.uid();
+    let (name, gid) = account_for_uid(uid)?;
+    Some((name, uid, gid))
+}
+
+/// The group id type `getgrouplist` takes.
+#[cfg(target_os = "macos")]
+type GroupListId = libc::c_int;
+#[cfg(target_os = "linux")]
+type GroupListId = libc::gid_t;
+
+/// Every group of `user` (name, gid) from the system's group resolution
+/// (`getgrouplist`: Directory Services on macOS, NSS on Linux). It sees the
+/// memberships `/etc/group` does not list: macOS keeps them in Directory
+/// Services (its `/etc/group` names only root in `admin`), and a Linux host
+/// can take them from LDAP or SSSD. A group without a name keeps its gid (an
+/// empty name). `None` when the lookup fails.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn system_groups_for_user(user: &str, primary_gid: u32) -> Option<Vec<(String, u32)>> {
+    let name = std::ffi::CString::new(user).ok()?;
+    let mut capacity: usize = 64;
+    let gids: Vec<u32> = loop {
+        let mut groups: Vec<GroupListId> = vec![0 as GroupListId; capacity];
+        let mut count = capacity as libc::c_int;
+        // SAFETY: `groups` has room for `count` ids and outlives the call,
+        // which writes at most `count` of them and sets `count` to the number
+        // written (Linux: the number needed when the list is too small).
+        let rc = unsafe {
+            libc::getgrouplist(
+                name.as_ptr(),
+                primary_gid as GroupListId,
+                groups.as_mut_ptr(),
+                &mut count,
+            )
+        };
+        if rc >= 0 {
+            let written = (count.max(0) as usize).min(groups.len());
+            break groups[..written].iter().map(|g| *g as u32).collect();
+        }
+        if capacity >= 65536 {
+            return None;
+        }
+        capacity = (count.max(0) as usize).max(capacity * 2).min(65536);
+    };
+    let mut out: Vec<(String, u32)> = Vec::new();
+    for gid in gids {
+        if !out.iter().any(|(_, g)| *g == gid) {
+            out.push((group_name(gid).unwrap_or_default(), gid));
+        }
+    }
+    Some(out)
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn group_name(gid: u32) -> Option<String> {
+    let mut size: usize = 16 * 1024;
+    loop {
+        // SAFETY: as in `account_for_uid`, for `getgrgid_r`.
+        let mut entry: libc::group = unsafe { std::mem::zeroed() };
+        let mut buf = vec![0 as libc::c_char; size];
+        let mut found: *mut libc::group = std::ptr::null_mut();
+        let rc = unsafe {
+            libc::getgrgid_r(gid as libc::gid_t, &mut entry, buf.as_mut_ptr(), buf.len(), &mut found)
+        };
+        if rc == libc::ERANGE && size < 1024 * 1024 {
+            size *= 4;
+            continue;
+        }
+        if rc != 0 || found.is_null() || entry.gr_name.is_null() {
+            return None;
+        }
+        return Some(
+            unsafe { std::ffi::CStr::from_ptr(entry.gr_name) }
+                .to_string_lossy()
+                .into_owned(),
+        );
+    }
+}
+
 /// `lstat` of one path node for `sudoers_grading::path_replaceable_by`.
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 fn sudo_command_node(path: &str) -> Option<crate::sudoers_grading::NodeMeta> {
@@ -1816,9 +1932,11 @@ fn sudo_command_replaceable(path: &str, uid: Option<u32>) -> bool {
     })
 }
 
-/// macOS/Linux host-privilege assessment, file-based (no process spawn). Reads
-/// the group database (`/etc/group`) for admin membership and the sudoers
-/// policy (`/etc/sudoers` + `/etc/sudoers.d/*`) for `NOPASSWD` rules that
+/// macOS/Linux host-privilege assessment (no process spawn) for the account
+/// that owns `home`, from the system's user and group resolution
+/// (`getpwuid_r`, `getgrouplist`: Directory Services on macOS, NSS on Linux;
+/// the group files only when that fails), and the sudoers policy
+/// (`/etc/sudoers` + `/etc/sudoers.d/*`) for `NOPASSWD` rules that
 /// apply to the user, a group the user is in, or `ALL`, graded by what they
 /// allow (`sudoers_grading`): `ALL`, an escalatable binary or a command path
 /// the user can write is passwordless root; any other specific command is
@@ -1828,8 +1946,15 @@ fn sudo_command_replaceable(path: &str, uid: Option<u32>) -> bool {
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 fn assess_host_privilege(home: &Path) -> HostPrivilege {
     let privilege = agent_visibility_params::host_privilege();
-    let user = user_from_home(home);
-    let (uid, primary_gid) = home_owner_ids(home);
+    let account = account_for_home(home);
+    let user = account
+        .as_ref()
+        .map(|(name, ..)| name.clone())
+        .unwrap_or_else(|| user_from_home(home));
+    let (uid, primary_gid) = match &account {
+        Some((_, uid, gid)) => (Some(*uid), Some(*gid)),
+        None => home_owner_ids(home),
+    };
     let platform = if cfg!(target_os = "macos") {
         "macos"
     } else {
@@ -1856,11 +1981,23 @@ fn assess_host_privilege(home: &Path) -> HostPrivilege {
     let mut admin_user = elevated_session;
     let mut user_groups: Vec<String> = Vec::new();
     let mut user_gids: Vec<u32> = Vec::new();
-    for group_file in &privilege.group_files {
-        let Ok(text) = std::fs::read_to_string(group_file) else {
-            continue;
-        };
-        for (g, gid) in groups_for_user(&text, &user, primary_gid) {
+    let system_groups = account
+        .as_ref()
+        .and_then(|(name, _, gid)| system_groups_for_user(name, *gid));
+    let memberships: Vec<(String, u32)> = match system_groups {
+        Some(groups) => groups,
+        None => {
+            let mut from_files = Vec::new();
+            for group_file in &privilege.group_files {
+                if let Ok(text) = std::fs::read_to_string(group_file) {
+                    from_files.extend(groups_for_user(&text, &user, primary_gid));
+                }
+            }
+            from_files
+        }
+    };
+    for (g, gid) in memberships {
+        if !g.is_empty() {
             if admin_groups.iter().any(|admin| *admin == g) && !user_groups.contains(&g) {
                 admin_user = true;
                 evidence.push(format!("member of '{}' group", g));
@@ -1868,9 +2005,9 @@ fn assess_host_privilege(home: &Path) -> HostPrivilege {
             if !user_groups.contains(&g) {
                 user_groups.push(g);
             }
-            if !user_gids.contains(&gid) {
-                user_gids.push(gid);
-            }
+        }
+        if !user_gids.contains(&gid) {
+            user_gids.push(gid);
         }
     }
     if let Some(gid) = primary_gid {
@@ -1951,45 +2088,414 @@ fn assess_host_privilege(home: &Path) -> HostPrivilege {
     }
 }
 
-/// Windows host-privilege assessment, best-effort via `whoami /groups`
-/// (spawned with `CREATE_NO_WINDOW` so no console flashes). Detects the
-/// Administrators SID and the High integrity level. UAC elevation policy is
-/// not parsed, so `passwordless_root` stays `false`.
+/// Windows host-privilege assessment for the account that owns `home` (the
+/// registry profile whose path is `home`), never the calling process: the
+/// helper runs as SYSTEM, which is always an administrator, and the folder
+/// name need not be the account name. Administrators membership comes from
+/// the account's local groups, nested groups included; the UAC policy decides
+/// whether an administrator elevates without a password or a prompt
+/// (`windows_elevation`).
 #[cfg(target_os = "windows")]
 fn assess_host_privilege(home: &Path) -> HostPrivilege {
-    let user = user_from_home(home);
-    let mut evidence: Vec<String> = Vec::new();
-    let mut admin_user = false;
-    let mut elevated_session = false;
-
-    let mut cmd = std::process::Command::new("whoami");
-    cmd.arg("/groups");
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    }
-    if let Ok(out) = cmd.output() {
-        let text = String::from_utf8_lossy(&out.stdout);
-        if text.contains("S-1-5-32-544") {
-            admin_user = true;
-            evidence.push("member of Administrators group".to_string());
-        }
-        if text.contains("S-1-16-12288") {
-            elevated_session = true;
-            evidence.push("running at High integrity (elevated)".to_string());
-        }
-    }
-    evidence.push("UAC elevation policy not assessed".to_string());
-
-    HostPrivilege {
-        elevated_session,
-        admin_user,
+    let unassessed = |evidence: String, user: String| HostPrivilege {
+        elevated_session: false,
+        admin_user: false,
         passwordless_root: false,
+        passwordless_sudo_commands: Vec::new(),
+        evidence: vec![evidence],
+        platform: "windows".to_string(),
+        user,
+        assessed: false,
+    };
+    let Some(account) = windows_account::account_for_profile(home) else {
+        return unassessed(
+            format!("no Windows account owns the profile {}", home.display()),
+            user_from_home(home),
+        );
+    };
+    let Some(admin_user) = windows_account::is_local_administrator(&account) else {
+        return unassessed(
+            format!("local groups of {} not readable", account.qualified_name()),
+            account.name.clone(),
+        );
+    };
+    let mut evidence: Vec<String> = Vec::new();
+    if admin_user {
+        evidence.push(format!(
+            "{} is a member of the Administrators group",
+            account.qualified_name()
+        ));
+    }
+    let elevation = windows_elevation(
+        admin_user,
+        account.is_builtin_administrator(),
+        &windows_account::uac_policy(),
+    );
+    evidence.extend(elevation.evidence);
+    HostPrivilege {
+        elevated_session: elevation.elevated_session,
+        admin_user,
+        passwordless_root: elevation.passwordless_root,
         passwordless_sudo_commands: Vec::new(),
         evidence,
         platform: "windows".to_string(),
-        user,
+        user: account.name.clone(),
         assessed: true,
+    }
+}
+
+/// The UAC policy values that decide an administrator's elevation
+/// (`HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System`); `None`
+/// when a value is absent, which leaves Windows' default.
+#[cfg(any(target_os = "windows", test))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct UacPolicy {
+    /// `EnableLUA` (default 1): 0 turns UAC off, administrators run elevated.
+    enable_lua: Option<u32>,
+    /// `ConsentPromptBehaviorAdmin` (default 5): 0 elevates administrators
+    /// without prompting.
+    consent_prompt_behavior_admin: Option<u32>,
+    /// `FilterAdministratorToken` (default 0): 0 leaves the built-in
+    /// Administrator outside Admin Approval Mode.
+    filter_administrator_token: Option<u32>,
+}
+
+#[cfg(any(target_os = "windows", test))]
+struct WindowsElevation {
+    elevated_session: bool,
+    passwordless_root: bool,
+    evidence: Vec<String>,
+}
+
+/// How an account reaches an elevated token under the UAC policy: already
+/// elevated when UAC is off or the account is the built-in Administrator
+/// outside Admin Approval Mode, and silently (the Windows counterpart of
+/// passwordless root) when UAC elevates administrators without prompting. A
+/// consent or credential prompt is neither: it needs the user on the secure
+/// desktop. A standard user never elevates on its own.
+#[cfg(any(target_os = "windows", test))]
+fn windows_elevation(admin_user: bool, builtin_admin: bool, policy: &UacPolicy) -> WindowsElevation {
+    let mut evidence = Vec::new();
+    if !admin_user {
+        return WindowsElevation {
+            elevated_session: false,
+            passwordless_root: false,
+            evidence,
+        };
+    }
+    let uac_off = policy.enable_lua == Some(0);
+    let builtin_unfiltered = builtin_admin && policy.filter_administrator_token.unwrap_or(0) == 0;
+    let silent = policy.consent_prompt_behavior_admin == Some(0);
+    if uac_off {
+        evidence.push("UAC is off (EnableLUA=0): administrator processes run elevated".to_string());
+    }
+    if builtin_unfiltered {
+        evidence.push(
+            "built-in Administrator account outside Admin Approval Mode: its processes run elevated"
+                .to_string(),
+        );
+    }
+    if silent && !uac_off {
+        evidence.push(
+            "UAC elevates administrators without prompting (ConsentPromptBehaviorAdmin=0)"
+                .to_string(),
+        );
+    }
+    let elevated_session = uac_off || builtin_unfiltered;
+    let passwordless_root = elevated_session || silent;
+    if !passwordless_root {
+        evidence.push(format!(
+            "UAC prompts administrators before elevating (ConsentPromptBehaviorAdmin={})",
+            policy.consent_prompt_behavior_admin.unwrap_or(5)
+        ));
+    }
+    WindowsElevation {
+        elevated_session,
+        passwordless_root,
+        evidence,
+    }
+}
+
+/// The Windows account behind a profile, its local groups and the UAC policy
+/// (registry and account APIs; the key paths are Windows' own).
+#[cfg(target_os = "windows")]
+mod windows_account {
+    use super::UacPolicy;
+    use std::path::Path;
+    use windows::core::{PCWSTR, PWSTR};
+    use windows::Win32::Foundation::{ERROR_NO_MORE_ITEMS, ERROR_SUCCESS};
+    use windows::Win32::NetworkManagement::NetManagement::{
+        NetApiBufferFree, NetUserGetLocalGroups, LG_INCLUDE_INDIRECT, LOCALGROUP_USERS_INFO_0,
+        MAX_PREFERRED_LENGTH, NERR_Success,
+    };
+    use windows::Win32::Security::{
+        CreateWellKnownSid, LookupAccountSidW, WinBuiltinAdministratorsSid, PSID,
+        SECURITY_MAX_SID_SIZE, SID_NAME_USE,
+    };
+    use windows::Win32::System::Registry::{
+        RegCloseKey, RegEnumKeyExW, RegGetValueW, RegOpenKeyExW, HKEY, HKEY_LOCAL_MACHINE,
+        KEY_READ, RRF_RT_REG_BINARY, RRF_RT_REG_DWORD,
+    };
+
+    const PROFILE_LIST: &str = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList";
+    const UAC_POLICY: &str = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System";
+
+    pub(super) struct WindowsAccount {
+        pub(super) sid: String,
+        pub(super) domain: String,
+        pub(super) name: String,
+    }
+
+    impl WindowsAccount {
+        pub(super) fn qualified_name(&self) -> String {
+            if self.domain.is_empty() {
+                self.name.clone()
+            } else {
+                format!("{}\\{}", self.domain, self.name)
+            }
+        }
+
+        /// The built-in Administrator (relative id 500).
+        pub(super) fn is_builtin_administrator(&self) -> bool {
+            self.sid.starts_with("S-1-5-21-") && self.sid.ends_with("-500")
+        }
+    }
+
+    fn wide(s: &str) -> Vec<u16> {
+        s.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    fn same_path(a: &Path, b: &Path) -> bool {
+        let normalize = |p: &Path| {
+            p.to_string_lossy()
+                .replace('/', "\\")
+                .trim_end_matches('\\')
+                .to_lowercase()
+        };
+        normalize(a) == normalize(b)
+    }
+
+    /// The SIDs of the profiles the registry lists.
+    fn profile_sids() -> Vec<String> {
+        let subkey = wide(PROFILE_LIST);
+        let mut sids = Vec::new();
+        // SAFETY: the key handle is opened and closed here; the name buffer
+        // outlives each call, which writes at most `len` UTF-16 units.
+        unsafe {
+            let mut hkey = HKEY::default();
+            if RegOpenKeyExW(HKEY_LOCAL_MACHINE, PCWSTR(subkey.as_ptr()), Some(0), KEY_READ, &mut hkey)
+                != ERROR_SUCCESS
+            {
+                return sids;
+            }
+            for index in 0..4096u32 {
+                let mut name = [0u16; 256];
+                let mut len = name.len() as u32;
+                let status = RegEnumKeyExW(
+                    hkey,
+                    index,
+                    Some(PWSTR(name.as_mut_ptr())),
+                    &mut len,
+                    None,
+                    None,
+                    None,
+                    None,
+                );
+                if status == ERROR_NO_MORE_ITEMS {
+                    break;
+                }
+                if status == ERROR_SUCCESS {
+                    sids.push(String::from_utf16_lossy(&name[..len as usize]));
+                }
+            }
+            let _ = RegCloseKey(hkey);
+        }
+        sids
+    }
+
+    /// The binary SID stored with a profile (`Sid`).
+    fn profile_sid_bytes(sid: &str) -> Option<Vec<u8>> {
+        let subkey = wide(&format!("{PROFILE_LIST}\\{sid}"));
+        let value = wide("Sid");
+        let mut size: u32 = 0;
+        // SAFETY: the first call reports the size; the second writes at most
+        // `size` bytes into a buffer of that size.
+        unsafe {
+            if RegGetValueW(
+                HKEY_LOCAL_MACHINE,
+                PCWSTR(subkey.as_ptr()),
+                PCWSTR(value.as_ptr()),
+                RRF_RT_REG_BINARY,
+                None,
+                None,
+                Some(&mut size),
+            ) != ERROR_SUCCESS
+                || size == 0
+            {
+                return None;
+            }
+            let mut buffer = vec![0u8; size as usize];
+            if RegGetValueW(
+                HKEY_LOCAL_MACHINE,
+                PCWSTR(subkey.as_ptr()),
+                PCWSTR(value.as_ptr()),
+                RRF_RT_REG_BINARY,
+                None,
+                Some(buffer.as_mut_ptr() as *mut core::ffi::c_void),
+                Some(&mut size),
+            ) != ERROR_SUCCESS
+            {
+                return None;
+            }
+            buffer.truncate(size as usize);
+            Some(buffer)
+        }
+    }
+
+    /// (domain, name) of a binary SID.
+    fn lookup_account(sid: &[u8]) -> Option<(String, String)> {
+        let mut name = vec![0u16; 256];
+        let mut name_len = name.len() as u32;
+        let mut domain = vec![0u16; 256];
+        let mut domain_len = domain.len() as u32;
+        let mut sid_use = SID_NAME_USE::default();
+        // SAFETY: `sid` holds a SID read from the registry or built by
+        // CreateWellKnownSid; the buffers outlive the call, which writes at
+        // most their lengths and sets them to the characters written.
+        unsafe {
+            LookupAccountSidW(
+                PCWSTR::null(),
+                PSID(sid.as_ptr() as *mut core::ffi::c_void),
+                Some(PWSTR(name.as_mut_ptr())),
+                &mut name_len,
+                Some(PWSTR(domain.as_mut_ptr())),
+                &mut domain_len,
+                &mut sid_use,
+            )
+            .ok()?;
+        }
+        Some((
+            String::from_utf16_lossy(&domain[..(domain_len as usize).min(domain.len())]),
+            String::from_utf16_lossy(&name[..(name_len as usize).min(name.len())]),
+        ))
+    }
+
+    /// The account whose profile directory is `home`.
+    pub(super) fn account_for_profile(home: &Path) -> Option<WindowsAccount> {
+        for sid in profile_sids() {
+            let Some(path) = crate::runner_cli::profile_path_from_sid(&sid) else {
+                continue;
+            };
+            if !same_path(&path, home) {
+                continue;
+            }
+            let (domain, name) = lookup_account(&profile_sid_bytes(&sid)?)?;
+            return Some(WindowsAccount { sid, domain, name });
+        }
+        None
+    }
+
+    /// The localized name of the built-in Administrators group.
+    fn administrators_group_name() -> Option<String> {
+        let mut sid = vec![0u8; SECURITY_MAX_SID_SIZE as usize];
+        let mut size = sid.len() as u32;
+        // SAFETY: the buffer has SECURITY_MAX_SID_SIZE bytes, enough for any
+        // SID; the call writes at most `size` bytes.
+        unsafe {
+            CreateWellKnownSid(
+                WinBuiltinAdministratorsSid,
+                None,
+                Some(PSID(sid.as_mut_ptr() as *mut core::ffi::c_void)),
+                &mut size,
+            )
+            .ok()?;
+        }
+        sid.truncate(size as usize);
+        lookup_account(&sid).map(|(_, name)| name)
+    }
+
+    /// The local groups of an account, nested ones included.
+    fn local_groups(qualified_name: &str) -> Option<Vec<String>> {
+        let user = wide(qualified_name);
+        let mut buffer: *mut u8 = std::ptr::null_mut();
+        let mut read: u32 = 0;
+        let mut total: u32 = 0;
+        // SAFETY: the API allocates `buffer` (freed below with
+        // NetApiBufferFree) holding `read` LOCALGROUP_USERS_INFO_0 entries.
+        unsafe {
+            let status = NetUserGetLocalGroups(
+                PCWSTR::null(),
+                PCWSTR(user.as_ptr()),
+                0,
+                LG_INCLUDE_INDIRECT,
+                &mut buffer,
+                MAX_PREFERRED_LENGTH,
+                &mut read,
+                &mut total,
+            );
+            if status != NERR_Success {
+                if !buffer.is_null() {
+                    let _ = NetApiBufferFree(Some(buffer as *const core::ffi::c_void));
+                }
+                return None;
+            }
+            // An account in no local group comes back as success without a
+            // buffer.
+            if buffer.is_null() || read == 0 {
+                if !buffer.is_null() {
+                    let _ = NetApiBufferFree(Some(buffer as *const core::ffi::c_void));
+                }
+                return Some(Vec::new());
+            }
+            let entries =
+                std::slice::from_raw_parts(buffer as *const LOCALGROUP_USERS_INFO_0, read as usize);
+            let groups = entries
+                .iter()
+                .filter_map(|entry| entry.lgrui0_name.to_string().ok())
+                .collect();
+            let _ = NetApiBufferFree(Some(buffer as *const core::ffi::c_void));
+            Some(groups)
+        }
+    }
+
+    /// Whether the account is in the Administrators group, directly or
+    /// through another group; `None` when its groups cannot be read.
+    pub(super) fn is_local_administrator(account: &WindowsAccount) -> Option<bool> {
+        let administrators = administrators_group_name()?;
+        let groups = local_groups(&account.qualified_name())?;
+        Some(
+            groups
+                .iter()
+                .any(|group| group.eq_ignore_ascii_case(&administrators)),
+        )
+    }
+
+    fn read_dword(subkey: &str, value: &str) -> Option<u32> {
+        let subkey = wide(subkey);
+        let value = wide(value);
+        let mut data: u32 = 0;
+        let mut size = std::mem::size_of::<u32>() as u32;
+        // SAFETY: the call writes at most `size` (4) bytes into `data`.
+        let status = unsafe {
+            RegGetValueW(
+                HKEY_LOCAL_MACHINE,
+                PCWSTR(subkey.as_ptr()),
+                PCWSTR(value.as_ptr()),
+                RRF_RT_REG_DWORD,
+                None,
+                Some(&mut data as *mut u32 as *mut core::ffi::c_void),
+                Some(&mut size),
+            )
+        };
+        (status == ERROR_SUCCESS).then_some(data)
+    }
+
+    pub(super) fn uac_policy() -> UacPolicy {
+        UacPolicy {
+            enable_lua: read_dword(UAC_POLICY, "EnableLUA"),
+            consent_prompt_behavior_admin: read_dword(UAC_POLICY, "ConsentPromptBehaviorAdmin"),
+            filter_administrator_token: read_dword(UAC_POLICY, "FilterAdministratorToken"),
+        }
     }
 }
 
@@ -6683,6 +7189,73 @@ pub fn hash_instruction_file(path: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn windows_elevation_follows_the_uac_policy() {
+        let defaults = UacPolicy {
+            enable_lua: Some(1),
+            consent_prompt_behavior_admin: Some(5),
+            filter_administrator_token: None,
+        };
+        // A standard user never elevates on its own, whatever the policy.
+        let e = windows_elevation(false, false, &UacPolicy { enable_lua: Some(0), ..defaults });
+        assert!(!e.passwordless_root && !e.elevated_session && e.evidence.is_empty());
+        // An administrator under the default policy is prompted.
+        let e = windows_elevation(true, false, &defaults);
+        assert!(!e.passwordless_root && !e.elevated_session);
+        assert_eq!(
+            e.evidence,
+            vec!["UAC prompts administrators before elevating (ConsentPromptBehaviorAdmin=5)"]
+        );
+        // Absent values take Windows' defaults.
+        assert!(!windows_elevation(true, false, &UacPolicy::default()).passwordless_root);
+        // Elevation without prompting: passwordless, not already elevated.
+        let e = windows_elevation(
+            true,
+            false,
+            &UacPolicy { consent_prompt_behavior_admin: Some(0), ..defaults },
+        );
+        assert!(e.passwordless_root && !e.elevated_session);
+        // UAC off: administrator processes run elevated.
+        let e = windows_elevation(true, false, &UacPolicy { enable_lua: Some(0), ..defaults });
+        assert!(e.passwordless_root && e.elevated_session);
+        // The built-in Administrator runs elevated unless it is filtered.
+        let e = windows_elevation(true, true, &defaults);
+        assert!(e.passwordless_root && e.elevated_session);
+        let e = windows_elevation(
+            true,
+            true,
+            &UacPolicy { filter_administrator_token: Some(1), ..defaults },
+        );
+        assert!(!e.passwordless_root && !e.elevated_session);
+    }
+
+    /// The system's group resolution sees the current account's primary
+    /// group (and, on macOS, the Directory Services memberships that
+    /// `/etc/group` omits).
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn the_system_group_list_of_the_current_account_has_its_primary_group() {
+        let uid = unsafe { libc::getuid() };
+        let (name, gid) = account_for_uid(uid).expect("the current uid has an account");
+        let groups = system_groups_for_user(&name, gid).expect("getgrouplist answers");
+        assert!(groups.iter().any(|(_, g)| *g == gid), "{groups:?}");
+    }
+
+    /// Diagnostic (run with `--ignored --nocapture`; as root on macOS/Linux
+    /// to read the sudoers policy): the host privilege of the home in
+    /// `EDAMAME_ASSESS_HOME`, or the current home, as the helper computes it.
+    #[test]
+    #[ignore]
+    fn host_privilege_of_this_host() {
+        let home = std::env::var("EDAMAME_ASSESS_HOME")
+            .map(PathBuf::from)
+            .ok()
+            .or_else(crate::agent_plugin::real_home_dir)
+            .expect("a home directory");
+        println!("{:#?}", assess_host_privilege(&home));
+    }
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]

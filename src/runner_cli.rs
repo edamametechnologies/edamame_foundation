@@ -545,7 +545,7 @@ fn sid_to_string(sid: &[u8]) -> String {
 }
 
 #[cfg(target_os = "windows")]
-fn profile_path_from_sid(sid: &str) -> Option<PathBuf> {
+pub(crate) fn profile_path_from_sid(sid: &str) -> Option<PathBuf> {
     let subkey = format!(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\{sid}");
     let subkey_w = widestring(subkey.as_str());
     let value_name = widestring("ProfileImagePath");
