@@ -944,22 +944,70 @@ pub fn agent_control_config(agent_type: &str, home: &Path) -> AgentControlConfig
         agent_type: agent_type.to_string(),
         ..Default::default()
     };
-    // Only Claude Code publishes a distinct enforcement plane today. Cursor and
-    // Codex express confinement through the single `sandbox.mode` /
-    // `sandbox_mode` value already captured by `declared_confinement_for_agent`.
-    if agent_type != "claude_code" {
-        return config;
-    }
     let Some(path) = agent_config_file(agent_type, home) else {
         return config;
     };
-    let Some(json) = read_json_config(&path) else {
-        return config;
-    };
-    config.assessed = true;
-    config.sources.push(path.to_string_lossy().to_string());
-    apply_claude_code_control_layer(&mut config, &json);
+    match agent_type {
+        "claude_code" => {
+            let Some(json) = read_json_config(&path) else {
+                return config;
+            };
+            config.assessed = true;
+            config.sources.push(path.to_string_lossy().to_string());
+            apply_claude_code_control_layer(&mut config, &json);
+        }
+        // `~/.cursor/cli-config.json`: `sandbox.mode` turns command
+        // confinement on or off, `permissions.allow` / `permissions.deny`
+        // hold the command rules.
+        "cursor" => {
+            let Some(json) = read_json_config(&path) else {
+                return config;
+            };
+            config.assessed = true;
+            config.sources.push(path.to_string_lossy().to_string());
+            let mode = json
+                .get("sandbox")
+                .and_then(|sandbox| sandbox.get("mode"))
+                .and_then(|v| v.as_str());
+            config.sandbox_enabled = mode.and_then(|mode| sandbox_mode_state(agent_type, mode));
+            if let Some(permissions) = json.get("permissions") {
+                let count = |key: &str| permissions.get(key).and_then(|v| v.as_array()).map(|a| a.len());
+                config.allow_rule_count = count("allow");
+                config.deny_rule_count = count("deny");
+            }
+        }
+        // `$CODEX_HOME/config.toml`: the top-level `sandbox_mode`.
+        "codex" => {
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                return config;
+            };
+            config.assessed = true;
+            config.sources.push(path.to_string_lossy().to_string());
+            config.sandbox_enabled = toml_top_level_string(&text, "sandbox_mode")
+                .and_then(|mode| sandbox_mode_state(agent_type, &mode));
+        }
+        _ => {}
+    }
     config
+}
+
+/// Whether an agent's own sandbox setting value turns command confinement on
+/// (`Some(true)`) or off (`Some(false)`), from the params'
+/// `sandbox_modes_on` / `sandbox_modes_off`; `None` for a value in neither.
+fn sandbox_mode_state(agent_type: &str, mode: &str) -> Option<bool> {
+    let confinement = agent_visibility_params::agent_confinement();
+    let listed = |modes: &std::collections::BTreeMap<String, Vec<String>>| {
+        modes
+            .get(agent_type)
+            .is_some_and(|values| values.iter().any(|v| v.eq_ignore_ascii_case(mode.trim())))
+    };
+    if listed(&confinement.sandbox_modes_off) {
+        Some(false)
+    } else if listed(&confinement.sandbox_modes_on) {
+        Some(true)
+    } else {
+        None
+    }
 }
 
 /// Overlay one settings layer onto `config`. A later layer wins per key; keys
@@ -10652,9 +10700,64 @@ skills/gtm-report and @rules/invariants.mdc.
         assert_eq!(control.default_mode.as_deref(), Some("acceptEdits"));
         assert!(control.summary().is_some_and(|s| s.contains("sandbox:on")));
 
-        // An agent with no enforcement plane of its own is not a claim.
+        // An agent whose config file is absent is not a claim.
         let cursor = agent_control_config("cursor", home);
         assert!(!cursor.assessed && cursor.sandbox_enabled.is_none());
+    }
+
+    #[test]
+    fn agent_control_config_reads_cursor_and_codex_sandbox_settings() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let home = tmp.path();
+        std::fs::create_dir_all(home.join(".cursor")).expect("mkdir");
+        let cursor_config = home.join(".cursor").join("cli-config.json");
+        std::fs::write(
+            &cursor_config,
+            r#"{"sandbox":{"mode":"enabled","networkAccess":"user_config_with_defaults"},
+                "approvalMode":"allowlist",
+                "permissions":{"allow":["Shell(ls)"],"deny":["Shell(curl)","Read(.env*)"]}}"#,
+        )
+        .expect("write");
+        let before = agent_control_config("cursor", home);
+        assert!(before.assessed);
+        assert_eq!(before.sandbox_enabled, Some(true));
+        assert_eq!(before.allow_rule_count, Some(1));
+        assert_eq!(before.deny_rule_count, Some(2));
+
+        // Turning the sandbox off and dropping a deny rule are weakenings.
+        std::fs::write(
+            &cursor_config,
+            r#"{"sandbox":{"mode":"disabled"},"permissions":{"allow":["Shell(ls)"],"deny":["Read(.env*)"]}}"#,
+        )
+        .expect("write");
+        let after = agent_control_config("cursor", home);
+        let knobs: Vec<String> = control_config_weakenings(&before, &after)
+            .into_iter()
+            .map(|w| w.knob)
+            .collect();
+        assert_eq!(knobs, vec!["sandbox.enabled", "permissions.deny"]);
+
+        // An unknown mode leaves the sandbox state unknown: no weakening.
+        std::fs::write(&cursor_config, r#"{"sandbox":{"mode":"experimental"}}"#).expect("write");
+        let unknown = agent_control_config("cursor", home);
+        assert!(unknown.assessed && unknown.sandbox_enabled.is_none());
+        assert!(control_config_weakenings(&before, &unknown).is_empty());
+
+        // Codex: the top-level sandbox_mode, not a table's.
+        std::fs::create_dir_all(home.join(".codex")).expect("mkdir");
+        let codex_config = home.join(".codex").join("config.toml");
+        std::fs::write(
+            &codex_config,
+            "sandbox_mode = \"workspace-write\"\n[mcp_servers.x]\nsandbox_mode = \"danger-full-access\"\n",
+        )
+        .expect("write");
+        let codex_before = agent_control_config("codex", home);
+        assert!(codex_before.assessed);
+        assert_eq!(codex_before.sandbox_enabled, Some(true));
+        std::fs::write(&codex_config, "sandbox_mode = \"danger-full-access\"\n").expect("write");
+        let codex_after = agent_control_config("codex", home);
+        assert_eq!(codex_after.sandbox_enabled, Some(false));
+        assert_eq!(control_config_weakenings(&codex_before, &codex_after).len(), 1);
     }
 
     #[test]

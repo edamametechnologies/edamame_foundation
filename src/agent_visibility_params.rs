@@ -588,6 +588,13 @@ pub struct AgentConfinementJSON {
     /// addition ranks with the default mode, so it never reads as a
     /// weakening on its own).
     pub default_permission_mode_rank: u8,
+    /// Per agent type, the values of the agent's own sandbox setting (Cursor
+    /// `sandbox.mode`, Codex `sandbox_mode`) that turn command confinement on
+    /// ...
+    pub sandbox_modes_on: std::collections::BTreeMap<String, Vec<String>>,
+    /// ... and off. A value in neither list leaves the sandbox state
+    /// unknown, so it never reads as a weakening on its own.
+    pub sandbox_modes_off: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 /// What the macOS / Linux host-privilege assessment
