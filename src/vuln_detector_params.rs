@@ -596,6 +596,22 @@ pub struct SecretContentSignatureJSON {
     pub markers: Vec<String>,
 }
 
+/// A sandboxed-application container whose data directory mirrors a user
+/// profile, so the per-user application data roots apply again inside it:
+/// macOS App Sandbox `Library/Containers/<bundle id>/Data/`, Windows MSIX
+/// `AppData/Local/Packages/<family>/LocalCache/`, Linux Flatpak
+/// `.var/app/<app id>/`. Relative to the profile and matched on a
+/// lowercased, `/`-separated path:
+/// `<container_root><container id>/<data_dir><inner root><owner>/...`.
+/// `data_dir` is empty when the container directory holds the mirrored
+/// roots itself.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct SandboxContainerLayoutJSON {
+    pub container_root: String,
+    pub data_dir: String,
+    pub inner_roots: Vec<String>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct CveDetectionParamsJSON {
     pub date: String,
@@ -812,6 +828,30 @@ pub struct CveDetectionParamsJSON {
     /// Secret-marker signatures (SSH/AWS/kube/git PEM headers, env
     /// `token=`/`secret=` markers) the secret-content scanner searches for.
     pub secret_content_signatures: Vec<SecretContentSignatureJSON>,
+    /// Per-user application data roots, relative to the profile directory
+    /// (lowercase, `/`): the FIRST component below one is the directory an
+    /// application creates for its own state (`library/application
+    /// support/<App>/`, `appdata/roaming/<Vendor>/`, `.config/<app>/`). Read
+    /// by the owned-store demotes of `token_exfiltration` and
+    /// `sensitive_material_egress`.
+    pub per_user_app_data_roots: Vec<String>,
+    /// Sandboxed-application containers that mirror a user profile (see
+    /// [`SandboxContainerLayoutJSON`]).
+    pub sandbox_container_layouts: Vec<SandboxContainerLayoutJSON>,
+    /// Install roots whose next path component names the installed product
+    /// on Windows and Linux (`/program files/`, `/appdata/local/programs/`),
+    /// found anywhere in a lowercased, `/`-separated process path.
+    pub application_install_roots: Vec<String>,
+    /// Install prefixes whose next component names the installed product
+    /// (`/opt/`, `/usr/lib/`, ...), matched at the start of the path.
+    pub application_install_prefixes: Vec<String>,
+    /// Tokens that name a layout, a platform, a vendor-neutral role or a
+    /// reverse-DNS prefix, never a product (`com`, `data`, `helper`,
+    /// `packages`, ...): dropped when an owner directory is matched against
+    /// the reading application.
+    pub owned_store_generic_tokens: Vec<String>,
+    /// Shortest owner token that can name a product.
+    pub owned_store_min_token_len: usize,
 }
 
 fn normalize_runtime_perfdata_entry(entry: &RuntimePerfdataEntryJSON) -> RuntimePerfdataEntryJSON {
@@ -974,6 +1014,12 @@ pub struct CveDetectionParams {
     pub secret_content_powershell_probe_read_verbs: Vec<String>,
     pub secret_content_powershell_dangerous_verbs: Vec<String>,
     pub secret_content_signatures: Vec<SecretContentSignatureJSON>,
+    pub per_user_app_data_roots: Vec<String>,
+    pub sandbox_container_layouts: Vec<SandboxContainerLayoutJSON>,
+    pub application_install_roots: Vec<String>,
+    pub application_install_prefixes: Vec<String>,
+    pub owned_store_generic_tokens: HashSet<String>,
+    pub owned_store_min_token_len: usize,
 }
 
 impl CloudSignature for CveDetectionParams {
@@ -1047,6 +1093,43 @@ fn normalize_app_self_temp_staging_entry(
             .map(|p| p.to_ascii_lowercase().replace('\\', "/"))
             .collect(),
     }
+}
+
+/// Path fragments lowercased with `/` separators, empty entries dropped (an
+/// empty fragment would match every path).
+fn normalized_path_fragments(list: &[String]) -> Vec<String> {
+    list.iter()
+        .map(|fragment| fragment.trim().to_ascii_lowercase().replace('\\', "/"))
+        .filter(|fragment| !fragment.is_empty())
+        .collect()
+}
+
+/// Names and tokens compared for equality with a lowercased value.
+fn lowercase_token_set(list: &[String]) -> HashSet<String> {
+    list.iter()
+        .map(|token| token.trim().to_ascii_lowercase())
+        .filter(|token| !token.is_empty())
+        .collect()
+}
+
+/// Layouts normalized like path fragments; one without a container root is
+/// dropped (it would read every profile directory as a container).
+fn normalized_sandbox_container_layouts(
+    layouts: &[SandboxContainerLayoutJSON],
+) -> Vec<SandboxContainerLayoutJSON> {
+    layouts
+        .iter()
+        .map(|layout| SandboxContainerLayoutJSON {
+            container_root: layout
+                .container_root
+                .trim()
+                .to_ascii_lowercase()
+                .replace('\\', "/"),
+            data_dir: layout.data_dir.trim().to_ascii_lowercase().replace('\\', "/"),
+            inner_roots: normalized_path_fragments(&layout.inner_roots),
+        })
+        .filter(|layout| !layout.container_root.is_empty())
+        .collect()
 }
 
 fn normalize_app_self_temp_staging(patterns: &AppSelfTempStagingJSON) -> AppSelfTempStagingJSON {
@@ -1660,6 +1743,16 @@ impl CveDetectionParams {
                     markers: sig.markers.iter().map(|m| m.to_ascii_lowercase()).collect(),
                 })
                 .collect(),
+            per_user_app_data_roots: normalized_path_fragments(&json.per_user_app_data_roots),
+            sandbox_container_layouts: normalized_sandbox_container_layouts(
+                &json.sandbox_container_layouts,
+            ),
+            application_install_roots: normalized_path_fragments(&json.application_install_roots),
+            application_install_prefixes: normalized_path_fragments(
+                &json.application_install_prefixes,
+            ),
+            owned_store_generic_tokens: lowercase_token_set(&json.owned_store_generic_tokens),
+            owned_store_min_token_len: json.owned_store_min_token_len,
         }
     }
 
@@ -3271,6 +3364,40 @@ pub fn recent_sensitive_open_file_ttl_secs() -> u64 {
     PARAMS_SNAPSHOT.load().recent_sensitive_open_file_ttl_secs
 }
 
+/// Per-user application data roots, profile-relative (lowercase, `/`).
+pub fn per_user_app_data_roots() -> Vec<String> {
+    PARAMS_SNAPSHOT.load().per_user_app_data_roots.clone()
+}
+
+/// Sandboxed-application container layouts (lowercase, `/`).
+pub fn sandbox_container_layouts() -> Vec<SandboxContainerLayoutJSON> {
+    PARAMS_SNAPSHOT.load().sandbox_container_layouts.clone()
+}
+
+/// Install roots whose next component names the product (lowercase, `/`).
+pub fn application_install_roots() -> Vec<String> {
+    PARAMS_SNAPSHOT.load().application_install_roots.clone()
+}
+
+/// Install prefixes whose next component names the product (lowercase, `/`).
+pub fn application_install_prefixes() -> Vec<String> {
+    PARAMS_SNAPSHOT.load().application_install_prefixes.clone()
+}
+
+/// True when a lowercase token names a layout, platform or role rather than
+/// a product (`owned_store_generic_tokens`).
+pub fn is_owned_store_generic_token(token: &str) -> bool {
+    PARAMS_SNAPSHOT
+        .load()
+        .owned_store_generic_tokens
+        .contains(token)
+}
+
+/// Shortest owner token that can name a product.
+pub fn owned_store_min_token_len() -> usize {
+    PARAMS_SNAPSHOT.load().owned_store_min_token_len
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4597,6 +4724,67 @@ mod tests {
         assert!(!is_platform_self_state_process_name("python3"));
         assert!(!is_platform_self_state_process_name("bash"));
         assert!(!is_platform_self_state_process_name(""));
+    }
+
+    /// The embedded snapshot with `edit` applied, loaded the way an update
+    /// loads a published JSON.
+    fn params_from_edited_snapshot(edit: impl FnOnce(&mut serde_json::Value)) -> CveDetectionParams {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&CVE_DETECTION_PARAMS_DB).expect("embedded snapshot is valid JSON");
+        edit(&mut value);
+        let json: CveDetectionParamsJSON =
+            serde_json::from_value(value).expect("edited snapshot must parse");
+        CveDetectionParams::new_from_json(&json)
+    }
+
+    /// The per-user store ownership lists load lowercased with `/`
+    /// separators, and an empty entry (which would match every path) is
+    /// dropped rather than kept.
+    #[test]
+    fn test_per_user_store_ownership_lists_are_normalized() {
+        let p = params_from_edited_snapshot(|value| {
+            value["per_user_app_data_roots"] = serde_json::json!(["Library\\Caches\\", " "]);
+            value["application_install_roots"] = serde_json::json!(["\\Program Files\\", ""]);
+            value["application_install_prefixes"] = serde_json::json!(["/OPT/"]);
+            value["owned_store_generic_tokens"] = serde_json::json!(["Helper", ""]);
+            value["sandbox_container_layouts"] = serde_json::json!([
+                {"container_root": "Library\\Containers\\", "data_dir": "Data\\",
+                 "inner_roots": ["Library\\Caches\\"]},
+                {"container_root": "", "data_dir": "", "inner_roots": ["config/"]},
+            ]);
+        });
+        assert_eq!(p.per_user_app_data_roots, vec!["library/caches/"]);
+        assert_eq!(p.application_install_roots, vec!["/program files/"]);
+        assert_eq!(p.application_install_prefixes, vec!["/opt/"]);
+        assert_eq!(
+            p.owned_store_generic_tokens,
+            HashSet::from(["helper".to_string()])
+        );
+        assert_eq!(
+            p.sandbox_container_layouts,
+            vec![SandboxContainerLayoutJSON {
+                container_root: "library/containers/".to_string(),
+                data_dir: "data/".to_string(),
+                inner_roots: vec!["library/caches/".to_string()],
+            }]
+        );
+    }
+
+    /// The shipped snapshot carries the per-user store ownership model.
+    #[test]
+    fn test_per_user_store_ownership_defaults() {
+        assert!(per_user_app_data_roots()
+            .iter()
+            .all(|root| !root.starts_with('/') && root.ends_with('/')));
+        assert!(!per_user_app_data_roots().is_empty());
+        assert!(!sandbox_container_layouts().is_empty());
+        assert!(application_install_roots()
+            .iter()
+            .chain(application_install_prefixes().iter())
+            .all(|root| root.starts_with('/') && root.ends_with('/')));
+        assert!(is_owned_store_generic_token("helper"));
+        assert!(!is_owned_store_generic_token("zoom"));
+        assert!(owned_store_min_token_len() > 0);
     }
 
     /// The published params must parse with this code. A `FormatError` means
