@@ -191,6 +191,53 @@ pub fn parse_txt_transcript(raw_text: &str) -> ParsedTranscript {
 /// Parse a `.jsonl` transcript (Claude Code / Cursor JSONL format).
 /// Each line is a JSON object with `role` ("user" | "assistant") and
 /// `message.content` array containing `{ type: "text", text: ... }`.
+/// The role of one JSONL transcript line: Claude Code nests it in `message`,
+/// Codex rollouts in `payload`; a top-level `role` is accepted too.
+fn jsonl_line_role(value: &serde_json::Value) -> &str {
+    value
+        .get("message")
+        .and_then(|m| m.get("role"))
+        .or_else(|| value.get("payload").and_then(|p| p.get("role")))
+        .or_else(|| value.get("role"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+}
+
+/// The content of one JSONL transcript line (`message.content` for Claude
+/// Code, `payload.content` for Codex): a string or an array of blocks.
+fn jsonl_line_content(value: &serde_json::Value) -> Option<&serde_json::Value> {
+    value
+        .get("message")
+        .and_then(|m| m.get("content"))
+        .or_else(|| value.get("payload").and_then(|p| p.get("content")))
+}
+
+/// The text of a content value: the string itself, or the text blocks of an
+/// array (`text`, Codex's `input_text` / `output_text`); tool calls and tool
+/// results are not text.
+fn content_text(content: &serde_json::Value) -> String {
+    if let Some(text) = content.as_str() {
+        return text.to_string();
+    }
+    content
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let kind = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                    if matches!(kind, "text" | "input_text" | "output_text") {
+                        item.get("text").and_then(|v| v.as_str()).map(str::to_owned)
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default()
+}
+
 pub fn parse_jsonl_transcript(raw_text: &str) -> ParsedTranscript {
     let mut user_sections = Vec::new();
     let mut assistant_sections = Vec::new();
@@ -205,12 +252,22 @@ pub fn parse_jsonl_transcript(raw_text: &str) -> ParsedTranscript {
             Ok(v) => v,
             Err(_) => continue,
         };
-        let role = value.get("role").and_then(|v| v.as_str()).unwrap_or("");
-        let content = value
-            .get("message")
-            .and_then(|m| m.get("content"))
-            .and_then(|c| c.as_array());
-        if let Some(items) = content {
+        // A message the user sent while the agent was working: Claude Code
+        // records it as a `queued_command` attachment, not a user turn.
+        if let Some(attachment) = value.get("attachment") {
+            if attachment.get("type").and_then(|v| v.as_str()) == Some("queued_command") {
+                if let Some(prompt) = attachment.get("prompt") {
+                    let text = content_text(prompt);
+                    if !text.trim().is_empty() {
+                        user_sections.push(text.trim().to_string());
+                    }
+                }
+            }
+            continue;
+        }
+        let role = jsonl_line_role(&value);
+        let content = jsonl_line_content(&value);
+        if let Some(items) = content.and_then(|c| c.as_array()) {
             // Collect `tool_use` INPUT arguments (the url/query/command the
             // agent chose) but never `tool_result` bodies -- the latter carry
             // arbitrary fetched/searched content whose every domain-shaped
@@ -223,22 +280,7 @@ pub fn parse_jsonl_transcript(raw_text: &str) -> ParsedTranscript {
                 }
             }
         }
-        let text = content
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(|item| {
-                        let kind = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                        if kind == "text" {
-                            item.get("text").and_then(|v| v.as_str()).map(str::to_owned)
-                        } else {
-                            None
-                        }
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            })
-            .unwrap_or_default();
+        let text = content.map(content_text).unwrap_or_default();
         let trimmed = text.trim();
         if trimmed.is_empty() {
             continue;
@@ -3557,6 +3599,39 @@ mod host_plausibility_tests {
                 "{good} must survive extraction: {hosts:?}"
             );
         }
+    }
+
+    #[test]
+    fn jsonl_reads_claude_code_and_codex_line_shapes() {
+        // Claude Code nests the role in `message` (content a string or text
+        // blocks) and records a message sent mid-turn as a `queued_command`
+        // attachment; Codex rollouts nest it in `payload`.
+        let raw = concat!(
+            r#"{"type":"user","message":{"role":"user","content":"check the release steps"}}"#,
+            "\n",
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Starting."},{"type":"tool_use","name":"Bash","input":{"command":"gh release view"}}]}}"#,
+            "\n",
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"v2.0.2 from https://example.org"}]}}"#,
+            "\n",
+            r#"{"type":"attachment","attachment":{"type":"queued_command","prompt":[{"type":"text","text":"also restrict SSH on the runners"}]}}"#,
+            "\n",
+            r#"{"type":"attachment","attachment":{"type":"queued_command","prompt":"and push when green"}}"#,
+            "\n",
+            r#"{"type":"attachment","attachment":{"type":"file","content":"not a message"}}"#,
+            "\n",
+            r#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"run the codex task"}]}}"#,
+            "\n",
+            r#"{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Codex done."}]}}"#,
+        );
+        let parsed = parse_jsonl_transcript(raw);
+        assert_eq!(
+            parsed.user_text,
+            "check the release steps\n\nalso restrict SSH on the runners\n\nand push when green\n\nrun the codex task"
+        );
+        assert_eq!(parsed.assistant_text, "Starting.\n\nCodex done.");
+        assert!(parsed.tool_input_text.contains("gh release view"));
+        // A tool result is never user text.
+        assert!(!parsed.user_text.contains("example.org"));
     }
 
     #[test]
