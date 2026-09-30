@@ -655,6 +655,46 @@ pub struct DevTreeMarkersJSON {
     pub venv_config_file: String,
 }
 
+/// OS temp roots by role, matched on a lowercased, `/`-separated path:
+/// - `windows_user_temp_marker` (`/appdata/local/temp/`) and
+///   `windows_system_temp_marker` (`/windows/temp/`, where elevated
+///   installers stage): found anywhere in the path; the temp root ends with
+///   the marker;
+/// - `posix_temp_roots` (`/tmp/`, `/var/tmp/` and their `/private`
+///   spellings, which `notify` reports on macOS): at the start of the path;
+/// - `macos_per_user_temp_trees` (`/private/var/folders/`): every path below
+///   is in an OS temp directory, though the tree is not itself a temp root;
+/// - the macOS per-user temp root `<macos_per_user_temp_parent><xx>/<hash>/
+///   <macos_per_user_temp_leaf>` (`/var/folders/.../t`).
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct OsTempRootsJSON {
+    pub windows_user_temp_marker: String,
+    pub windows_system_temp_marker: String,
+    pub posix_temp_roots: Vec<String>,
+    pub macos_per_user_temp_trees: Vec<String>,
+    pub macos_per_user_temp_parent: String,
+    pub macos_per_user_temp_leaf: String,
+}
+
+/// The name of a per-invocation temp scratch directory: optional leading
+/// dots, `prefix` (`tmp`), optional dots, then an alphanumeric random token
+/// of at least `min_token_len` characters (`.tmpTbnGVs` from Rust
+/// `tempfile`, `tmp.A1b2C3d4e5` from `mktemp -d`, `tmpab12cd34` from
+/// Python's `TemporaryDirectory`).
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct TempScratchNameJSON {
+    pub prefix: String,
+    pub min_token_len: usize,
+}
+
+/// The name of an ephemeral PowerShell stub in the Windows per-user temp
+/// root: `<name_prefix><random><name_suffix>` (`.tmp*.ps1`).
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct WindowsTempPowershellStubJSON {
+    pub name_prefix: String,
+    pub name_suffix: String,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 pub struct PlatformOwnedUserStoreJSON {
     pub library_root: String,
@@ -995,6 +1035,14 @@ pub struct CveDetectionParamsJSON {
     /// reads as shared infrastructure (VPN / proxy / CDN egress) rather than
     /// a C2 endpoint.
     pub shared_infrastructure_min_local_processes: usize,
+    /// OS temp roots by role (see [`OsTempRootsJSON`]).
+    pub os_temp_roots: OsTempRootsJSON,
+    /// Per-invocation temp scratch directory names (see
+    /// [`TempScratchNameJSON`]).
+    pub temp_scratch_name: TempScratchNameJSON,
+    /// Ephemeral PowerShell stub names in the Windows per-user temp root
+    /// (see [`WindowsTempPowershellStubJSON`]).
+    pub windows_temp_powershell_stub: WindowsTempPowershellStubJSON,
 }
 
 fn normalize_runtime_perfdata_entry(entry: &RuntimePerfdataEntryJSON) -> RuntimePerfdataEntryJSON {
@@ -1186,6 +1234,9 @@ pub struct CveDetectionParams {
     pub memory_scrape_per_invocation_min_hex_run: usize,
     pub relay_min_credential_classes: usize,
     pub shared_infrastructure_min_local_processes: usize,
+    pub os_temp_roots: OsTempRootsJSON,
+    pub temp_scratch_name: TempScratchNameJSON,
+    pub windows_temp_powershell_stub: WindowsTempPowershellStubJSON,
 }
 
 impl CloudSignature for CveDetectionParams {
@@ -1299,6 +1350,21 @@ fn normalized_platform_owned_user_store(
         library_state_directories: lowercase_token_list(&store.library_state_directories),
         owner_prefixes: lowercase_token_list(&store.owner_prefixes),
         direct_owner_prefixes: lowercase_token_list(&store.direct_owner_prefixes),
+    }
+}
+
+/// Temp roots lowercased with `/` separators; empty list entries dropped.
+/// An empty single root stays empty and never matches (the detector
+/// checks).
+fn normalized_os_temp_roots(roots: &OsTempRootsJSON) -> OsTempRootsJSON {
+    let fragment = |value: &str| value.trim().to_ascii_lowercase().replace('\\', "/");
+    OsTempRootsJSON {
+        windows_user_temp_marker: fragment(&roots.windows_user_temp_marker),
+        windows_system_temp_marker: fragment(&roots.windows_system_temp_marker),
+        posix_temp_roots: normalized_path_fragments(&roots.posix_temp_roots),
+        macos_per_user_temp_trees: normalized_path_fragments(&roots.macos_per_user_temp_trees),
+        macos_per_user_temp_parent: fragment(&roots.macos_per_user_temp_parent),
+        macos_per_user_temp_leaf: fragment(&roots.macos_per_user_temp_leaf),
     }
 }
 
@@ -2043,6 +2109,23 @@ impl CveDetectionParams {
             relay_min_credential_classes: json.relay_min_credential_classes,
             shared_infrastructure_min_local_processes: json
                 .shared_infrastructure_min_local_processes,
+            os_temp_roots: normalized_os_temp_roots(&json.os_temp_roots),
+            temp_scratch_name: TempScratchNameJSON {
+                prefix: json.temp_scratch_name.prefix.trim().to_ascii_lowercase(),
+                min_token_len: json.temp_scratch_name.min_token_len,
+            },
+            windows_temp_powershell_stub: WindowsTempPowershellStubJSON {
+                name_prefix: json
+                    .windows_temp_powershell_stub
+                    .name_prefix
+                    .trim()
+                    .to_ascii_lowercase(),
+                name_suffix: json
+                    .windows_temp_powershell_stub
+                    .name_suffix
+                    .trim()
+                    .to_ascii_lowercase(),
+            },
         }
     }
 
@@ -3864,6 +3947,21 @@ pub fn shared_infrastructure_min_local_processes() -> usize {
         .shared_infrastructure_min_local_processes
 }
 
+/// OS temp roots by role (lowercase, `/`).
+pub fn os_temp_roots() -> OsTempRootsJSON {
+    PARAMS_SNAPSHOT.load().os_temp_roots.clone()
+}
+
+/// Per-invocation temp scratch directory name shape (lowercase prefix).
+pub fn temp_scratch_name() -> TempScratchNameJSON {
+    PARAMS_SNAPSHOT.load().temp_scratch_name.clone()
+}
+
+/// Ephemeral PowerShell stub name shape (lowercase).
+pub fn windows_temp_powershell_stub() -> WindowsTempPowershellStubJSON {
+    PARAMS_SNAPSHOT.load().windows_temp_powershell_stub.clone()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5477,6 +5575,34 @@ mod tests {
         assert!(is_publisher_org_stop_token("developer"));
         assert!(!is_publisher_org_stop_token("google"));
         assert!(publisher_org_min_token_len() > 0);
+    }
+
+    /// The temp model loads lowercased with `/` separators; empty list
+    /// entries are dropped.
+    #[test]
+    fn test_os_temp_roots_are_normalized() {
+        let p = params_from_edited_snapshot(|value| {
+            value["os_temp_roots"]["windows_user_temp_marker"] =
+                serde_json::json!("\\AppData\\Local\\Temp\\");
+            value["os_temp_roots"]["posix_temp_roots"] = serde_json::json!(["/TMP/", ""]);
+            value["os_temp_roots"]["macos_per_user_temp_leaf"] = serde_json::json!("T");
+            value["temp_scratch_name"]["prefix"] = serde_json::json!("TMP");
+            value["windows_temp_powershell_stub"]["name_suffix"] = serde_json::json!(".PS1");
+        });
+        assert_eq!(
+            p.os_temp_roots.windows_user_temp_marker,
+            "/appdata/local/temp/"
+        );
+        assert_eq!(p.os_temp_roots.posix_temp_roots, vec!["/tmp/"]);
+        assert_eq!(p.os_temp_roots.macos_per_user_temp_leaf, "t");
+        assert_eq!(p.temp_scratch_name.prefix, "tmp");
+        assert_eq!(p.windows_temp_powershell_stub.name_suffix, ".ps1");
+        let shipped = os_temp_roots();
+        assert_eq!(shipped.windows_system_temp_marker, "/windows/temp/");
+        assert!(shipped
+            .posix_temp_roots
+            .contains(&"/private/var/tmp/".to_string()));
+        assert!(temp_scratch_name().min_token_len > 0);
     }
 
     #[test]
