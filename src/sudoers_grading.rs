@@ -1305,6 +1305,46 @@ bob ALL=(ALL) NOPASSWD: ALL
     }
 
     #[test]
+    fn linux_mint_and_cloud_init_drop_ins() {
+        // test-mint's drop-ins (2026-09-30): cloud-init's rule for the image
+        // user, and Mint's tools granted to every user, tags glued to the
+        // command.
+        let sources = vec![
+            SudoersSource {
+                name: "90-cloud-init-users".to_string(),
+                text: "packer ALL=(ALL) NOPASSWD:ALL\nalice ALL=(ALL) NOPASSWD:ALL\n".to_string(),
+            },
+            SudoersSource {
+                name: "mintdrivers".to_string(),
+                text: "ALL ALL = NOPASSWD:/usr/bin/mintdrivers-remove-live-media\nALL ALL = NOPASSWD:/usr/bin/mintdrivers-load-broadcom-modules\n".to_string(),
+            },
+            SudoersSource {
+                name: "mintupdate".to_string(),
+                text: "ALL ALL = NOPASSWD:/usr/bin/mint-refresh-cache\nALL ALL = NOPASSWD:/usr/lib/linuxmint/mintUpdate/dpkg_lock_check.sh\n".to_string(),
+            },
+        ];
+        let grants = grade_passwordless_sudo(&sources, &alice(), &params(), &never_writable);
+        assert_eq!(grants.len(), 3);
+        assert_eq!(
+            grants[0].evidence_line(),
+            "NOPASSWD for 'alice' in 90-cloud-init-users: root via ALL (all commands)"
+        );
+        let limited: Vec<&str> = grants[1..].iter().flat_map(|g| g.limited_commands()).collect();
+        assert_eq!(
+            limited,
+            vec![
+                "/usr/bin/mintdrivers-remove-live-media",
+                "/usr/bin/mintdrivers-load-broadcom-modules",
+                "/usr/bin/mint-refresh-cache",
+                "/usr/lib/linuxmint/mintUpdate/dpkg_lock_check.sh",
+            ]
+        );
+        // Without the cloud-init rule, the host is limited, not root.
+        let grants = grade_passwordless_sudo(&sources[1..], &alice(), &params(), &never_writable);
+        assert!(!grants.iter().any(SudoFileGrant::reaches_root));
+    }
+
+    #[test]
     fn tags_written_without_spaces_are_tags() {
         // Sudoers files usually chain tags with no space (`sudo -l` re-spaces
         // them): each tag applies, and no colon is taken for a host-group
