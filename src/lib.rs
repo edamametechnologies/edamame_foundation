@@ -73,6 +73,7 @@ pub mod runtime;
 pub mod score;
 pub mod secret_content_scan;
 pub mod secret_store;
+pub mod sudoers_grading;
 pub mod supported_agents;
 pub mod threat;
 pub mod threat_factory;

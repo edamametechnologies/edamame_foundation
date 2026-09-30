@@ -2000,6 +2000,7 @@ mod tests {
             elevated_session: false,
             admin_user: true,
             passwordless_root,
+            passwordless_sudo_commands: vec![],
             evidence: vec![],
             platform: "macOS".to_string(),
             user: "alice".to_string(),

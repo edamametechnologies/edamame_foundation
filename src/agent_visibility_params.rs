@@ -592,10 +592,13 @@ pub struct AgentConfinementJSON {
 
 /// What the macOS / Linux host-privilege assessment
 /// (`agent_visibility::assess_host_privilege`) reads and matches: who is
-/// already elevated, which groups make a user an administrator, and where the
-/// group database and the sudoers policy live. The sudoers grammar
-/// (`NOPASSWD`, `%group`, `ALL`, `Defaults`) and the Windows well-known SIDs
-/// stay in code. Kept as written.
+/// already elevated, which groups make a user an administrator, where the
+/// group database and the sudoers policy live, and which commands a
+/// passwordless sudo rule may allow before it counts as root
+/// (`sudoers_grading`). The sudoers grammar (`NOPASSWD`, tags, aliases,
+/// `%group`, `ALL`, `Defaults`) and the Windows well-known SIDs stay in code.
+/// Binary names and environment-variable names are lowercased / uppercased
+/// by [`AgentVisibilityParams::new_from_json`], the rest kept as written.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct HostPrivilegeJSON {
     /// Users whose session is already elevated (`root`).
@@ -610,6 +613,24 @@ pub struct HostPrivilegeJSON {
     pub sudoers_files: Vec<String>,
     /// Directories whose files are sudoers drop-ins scanned the same way.
     pub sudoers_directories: Vec<String>,
+    /// Basenames of binaries that reach root when sudo runs them without a
+    /// password, whatever arguments the rule names: they open a shell, run a
+    /// command, load code, or write / replace / re-permission any file as root
+    /// (the GTFOBins sudo set, restricted to those; pure file readers are not
+    /// listed). A passwordless rule for one of them grades as passwordless
+    /// root; a rule for any other specific command is the lower "passwordless
+    /// sudo for N commands" signal. Compared with the lowercased basename.
+    pub escalatable_binaries: Vec<String>,
+    /// Interpreter and toolchain families that are escalatable under a
+    /// version suffix too: `python` covers `python3`, `python3.12` and
+    /// `python-3.12` (digits and dots after the name, optionally after a
+    /// dash). Compared with the lowercased basename.
+    pub escalatable_binary_families: Vec<String>,
+    /// Environment variables that let the caller run code inside any command
+    /// (`LD_PRELOAD`, `DYLD_INSERT_LIBRARIES`, `BASH_ENV`, ...). A sudoers
+    /// `Defaults env_keep` that keeps one of them makes every passwordless
+    /// command root-equivalent. Compared uppercased.
+    pub escalatable_environment_variables: Vec<String>,
 }
 
 /// Where the MCP servers an agent acquires outside its global MCP config are
@@ -788,7 +809,8 @@ pub struct AgentVisibilityParams {
     pub agent_harnesses: AgentHarnessesJSON,
     /// Agent confinement rules, needles lowercased.
     pub agent_confinement: AgentConfinementJSON,
-    /// Host-privilege assessment rules, as written.
+    /// Host-privilege assessment rules, binary names lowercased and
+    /// environment-variable names uppercased.
     pub host_privilege: HostPrivilegeJSON,
     /// MCP discovery locations, suffixes lowercased.
     pub mcp_discovery: McpDiscoveryJSON,
@@ -988,6 +1010,24 @@ fn normalize_agent_confinement(c: &AgentConfinementJSON) -> AgentConfinementJSON
     }
 }
 
+/// Lowercases the escalatable binary names and families (compared with a
+/// lowercased basename) and uppercases the escalatable environment variables;
+/// users, groups and paths are kept as written.
+fn normalize_host_privilege(h: &HostPrivilegeJSON) -> HostPrivilegeJSON {
+    let lower =
+        |xs: &[String]| -> Vec<String> { xs.iter().map(|x| x.to_ascii_lowercase()).collect() };
+    HostPrivilegeJSON {
+        escalatable_binaries: lower(&h.escalatable_binaries),
+        escalatable_binary_families: lower(&h.escalatable_binary_families),
+        escalatable_environment_variables: h
+            .escalatable_environment_variables
+            .iter()
+            .map(|v| v.to_ascii_uppercase())
+            .collect(),
+        ..h.clone()
+    }
+}
+
 /// Lowercases every reference rule: tokens are compared lowercased.
 fn normalize_instruction_references(r: &InstructionReferencesJSON) -> InstructionReferencesJSON {
     let lower =
@@ -1050,7 +1090,7 @@ impl AgentVisibilityParams {
             instruction_references: normalize_instruction_references(&json.instruction_references),
             agent_harnesses: json.agent_harnesses.clone(),
             agent_confinement: normalize_agent_confinement(&json.agent_confinement),
-            host_privilege: json.host_privilege.clone(),
+            host_privilege: normalize_host_privilege(&json.host_privilege),
             mcp_discovery: McpDiscoveryJSON {
                 plugin_config_suffixes: json
                     .mcp_discovery
@@ -1266,8 +1306,9 @@ pub fn agent_confinement() -> AgentConfinementJSON {
     PARAMS_SNAPSHOT.load().agent_confinement.clone()
 }
 
-/// Host-privilege assessment rules: elevated users, administrator groups, and
-/// the group database and sudoers policy locations.
+/// Host-privilege assessment rules: elevated users, administrator groups, the
+/// group database and sudoers policy locations, and the escalatable binaries
+/// and environment variables a passwordless sudo rule is graded against.
 pub fn host_privilege() -> HostPrivilegeJSON {
     PARAMS_SNAPSHOT.load().host_privilege.clone()
 }
@@ -1442,6 +1483,18 @@ mod tests {
         assert!(!privilege.group_files.is_empty());
         assert!(!privilege.sudoers_files.is_empty());
         assert!(!privilege.sudoers_directories.is_empty());
+        assert!(!privilege.escalatable_binaries.is_empty());
+        assert!(!privilege.escalatable_binary_families.is_empty());
+        assert!(!privilege.escalatable_environment_variables.is_empty());
+        assert!(privilege
+            .escalatable_binaries
+            .iter()
+            .chain(&privilege.escalatable_binary_families)
+            .all(|name| name == &name.to_ascii_lowercase() && !name.contains('/')));
+        assert!(privilege
+            .escalatable_environment_variables
+            .iter()
+            .all(|name| name == &name.to_ascii_uppercase()));
         let confinement = &params.agent_confinement;
         assert!(!confinement.container_name_needles.is_empty());
         assert!(!confinement.macos_container_directories.is_empty());

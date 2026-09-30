@@ -545,10 +545,24 @@ pub struct HostPrivilege {
     /// The login user is an administrator: member of `admin`/`sudo`/`wheel` on
     /// unix, or the Administrators group on Windows.
     pub admin_user: bool,
-    /// The login user can become root WITHOUT a password -- a `NOPASSWD`
-    /// sudoers rule on unix. (Windows UAC elevation policy is not assessed, so
-    /// this stays `false` there.)
+    /// The login user can become root WITHOUT a password: a `NOPASSWD`
+    /// sudoers rule on unix that allows `ALL`, an escalatable binary, a
+    /// command path the user can write, or a command the grader cannot pin
+    /// down (`sudoers_grading`). (Windows UAC elevation policy is not
+    /// assessed, so this stays `false` there.)
     pub passwordless_root: bool,
+    /// Commands the user may run as root without a password that do NOT
+    /// reach root: specific commands, none of them escalatable or writable
+    /// by the user (as written, sorted, deduplicated). Non-empty while
+    /// `passwordless_root` is false, this is the lower "passwordless sudo for
+    /// N commands" signal, never a blast-radius amplifier. Empty on Windows.
+    /// `#[serde(default)]`: core persists the bundle as its
+    /// `visibility_snapshot` (and an older helper's bundle lacks it), so a
+    /// 2.0.2 snapshot must still load (the app-upgrade exception in
+    /// `invariants.mdc`); absent reads as "none", refreshed on the next
+    /// structural collection.
+    #[serde(default)]
+    pub passwordless_sudo_commands: Vec<String>,
     /// Short human-readable evidence lines (e.g. the matched sudoers rule, the
     /// admin group, the integrity level).
     pub evidence: Vec<String>,
@@ -1162,6 +1176,20 @@ fn build_agent_sandbox_with_declared(
     }
 }
 
+/// The lower host signal "passwordless sudo for N commands" (see
+/// [`HostPrivilege::passwordless_sudo_commands`]), or `None` when the host is
+/// unassessed, grants passwordless root, or grants no limited command.
+pub fn passwordless_sudo_reason(host_privilege: &HostPrivilege) -> Option<String> {
+    if !host_privilege.assessed || host_privilege.passwordless_root {
+        return None;
+    }
+    match host_privilege.passwordless_sudo_commands.len() {
+        0 => None,
+        1 => Some("passwordless sudo for 1 command".to_string()),
+        n => Some(format!("passwordless sudo for {n} commands")),
+    }
+}
+
 /// One present, OS-unconfined agent whose compromise would carry outsized host
 /// blast radius. INC-7 aggregate signal feeding the `agents_with_blast_radius`
 /// internal threat. An agent qualifies when it runs unsandboxed AND at least
@@ -1241,6 +1269,10 @@ pub fn agents_with_blast_radius(
         let mut reasons: Vec<String> = vec!["unsandboxed (full user-file access)".to_string()];
         if passwordless_root {
             reasons.push("passwordless root on host".to_string());
+        } else if let Some(limited) = passwordless_sudo_reason(host_privilege) {
+            // Informational only: a command-limited rule is not an
+            // amplifier, it never makes an agent qualify on its own.
+            reasons.push(limited);
         }
         if critical_subprocess {
             reasons.push("observed critical subprocess (ssh/nc/docker/...)".to_string());
@@ -1667,62 +1699,89 @@ fn user_from_home(home: &Path) -> String {
         .unwrap_or_default()
 }
 
-/// Pure parse of an `/etc/group` body into the list of group names `user`
-/// belongs to via the trailing member list. Extracted so the policy logic is
-/// testable without touching the real filesystem.
+/// Pure parse of an `/etc/group` body into the (name, gid) of every group
+/// `user` belongs to: named in the trailing member list, or the account's
+/// primary group (`primary_gid`, which member lists usually omit).
+/// Extracted so the policy logic is testable without touching the real
+/// filesystem.
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-fn groups_for_user(group_file: &str, user: &str) -> Vec<String> {
+fn groups_for_user(group_file: &str, user: &str, primary_gid: Option<u32>) -> Vec<(String, u32)> {
     let mut groups = Vec::new();
     for line in group_file.lines() {
         // Format: name:passwd:gid:member1,member2,...
         let mut parts = line.splitn(4, ':');
         let gname = parts.next().unwrap_or("");
         let _passwd = parts.next();
-        let _gid = parts.next();
+        let Some(gid) = parts.next().and_then(|g| g.trim().parse::<u32>().ok()) else {
+            continue;
+        };
         let members = parts.next().unwrap_or("");
-        if !gname.is_empty() && members.split(',').any(|m| m.trim() == user) {
-            groups.push(gname.to_string());
+        let member = members.split(',').any(|m| m.trim() == user);
+        if !gname.is_empty() && (member || primary_gid == Some(gid)) {
+            groups.push((gname.to_string(), gid));
         }
     }
     groups
 }
 
-/// Pure scan of a sudoers policy body for `NOPASSWD` rules whose principal is
-/// the user, `ALL`, or one of the `%group` principals the user belongs to.
-/// Returns the matching principals (for evidence). Comment and blank lines are
-/// skipped; `Defaults`/alias lines never have a principal in column 0 so they
-/// are naturally ignored.
+/// The account's uid and primary gid, from its home directory's owner (the
+/// assessment runs privileged, for a user derived from the home path).
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-fn scan_sudoers_nopasswd(text: &str, user: &str, group_principals: &[String]) -> Vec<String> {
-    let mut hits = Vec::new();
-    for raw in text.lines() {
-        let line = raw.trim();
-        if line.is_empty() || line.starts_with('#') || !line.contains("NOPASSWD") {
-            continue;
-        }
-        let principal = line.split_whitespace().next().unwrap_or("");
-        if principal.is_empty() || principal == "Defaults" {
-            continue;
-        }
-        let applies = principal == user
-            || principal == "ALL"
-            || group_principals.iter().any(|g| g == principal);
-        if applies {
-            hits.push(principal.to_string());
-        }
+fn home_owner_ids(home: &Path) -> (Option<u32>, Option<u32>) {
+    use std::os::unix::fs::MetadataExt;
+    match std::fs::metadata(home) {
+        Ok(meta) => (Some(meta.uid()), Some(meta.gid())),
+        Err(_) => (None, None),
     }
-    hits
+}
+
+/// `lstat` of one path node for `sudoers_grading::path_replaceable_by`.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn sudo_command_node(path: &str) -> Option<crate::sudoers_grading::NodeMeta> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::symlink_metadata(path).ok()?;
+    Some(crate::sudoers_grading::NodeMeta {
+        uid: meta.uid(),
+        mode: meta.mode(),
+        is_dir: meta.is_dir(),
+        is_symlink: meta.file_type().is_symlink(),
+    })
+}
+
+/// Whether the account `uid` can replace the command at `path`: the path as
+/// written or as resolved (symlinks followed). An unknown uid cannot rule the
+/// path out.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn sudo_command_replaceable(path: &str, uid: Option<u32>) -> bool {
+    let Some(uid) = uid else {
+        return true;
+    };
+    if crate::sudoers_grading::path_replaceable_by(path, uid, &sudo_command_node) {
+        return true;
+    }
+    std::fs::canonicalize(path).is_ok_and(|resolved| {
+        crate::sudoers_grading::path_replaceable_by(
+            &resolved.to_string_lossy(),
+            uid,
+            &sudo_command_node,
+        )
+    })
 }
 
 /// macOS/Linux host-privilege assessment, file-based (no process spawn). Reads
 /// the group database (`/etc/group`) for admin membership and the sudoers
-/// policy (`/etc/sudoers` + `/etc/sudoers.d/*`) for a `NOPASSWD` rule that
-/// applies to the user, a group the user is in, or `ALL`. The elevated users,
-/// administrator groups and file locations are the params' `host_privilege`.
+/// policy (`/etc/sudoers` + `/etc/sudoers.d/*`) for `NOPASSWD` rules that
+/// apply to the user, a group the user is in, or `ALL`, graded by what they
+/// allow (`sudoers_grading`): `ALL`, an escalatable binary or a command path
+/// the user can write is passwordless root; any other specific command is
+/// the lower `passwordless_sudo_commands` signal. The elevated users,
+/// administrator groups, file locations and escalatable binaries are the
+/// params' `host_privilege`.
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 fn assess_host_privilege(home: &Path) -> HostPrivilege {
     let privilege = agent_visibility_params::host_privilege();
     let user = user_from_home(home);
+    let (uid, primary_gid) = home_owner_ids(home);
     let platform = if cfg!(target_os = "macos") {
         "macos"
     } else {
@@ -1748,68 +1807,82 @@ fn assess_host_privilege(home: &Path) -> HostPrivilege {
     };
     let mut admin_user = elevated_session;
     let mut user_groups: Vec<String> = Vec::new();
+    let mut user_gids: Vec<u32> = Vec::new();
     for group_file in &privilege.group_files {
         let Ok(text) = std::fs::read_to_string(group_file) else {
             continue;
         };
-        for g in groups_for_user(&text, &user) {
-            if admin_groups.iter().any(|admin| *admin == g) {
+        for (g, gid) in groups_for_user(&text, &user, primary_gid) {
+            if admin_groups.iter().any(|admin| *admin == g) && !user_groups.contains(&g) {
                 admin_user = true;
                 evidence.push(format!("member of '{}' group", g));
             }
-            user_groups.push(g);
+            if !user_groups.contains(&g) {
+                user_groups.push(g);
+            }
+            if !user_gids.contains(&gid) {
+                user_gids.push(gid);
+            }
+        }
+    }
+    if let Some(gid) = primary_gid {
+        if !user_gids.contains(&gid) {
+            user_gids.push(gid);
         }
     }
 
-    // Passwordless sudo: scan the sudoers policy for a NOPASSWD rule whose
-    // principal is the user, a `%group` the user belongs to, or `ALL`.
-    let mut passwordless_root = false;
+    // Passwordless sudo: grade every NOPASSWD rule whose principal is the
+    // user, a `%group` the user belongs to, `ALL` or a user alias naming them,
+    // by what it allows (`sudoers_grading`). Policy files are read in order;
+    // aliases and `Defaults` apply across them.
     let mut sudoers_readable = false;
-    let mut sources: Vec<PathBuf> = privilege.sudoers_files.iter().map(PathBuf::from).collect();
+    let mut paths: Vec<PathBuf> = privilege.sudoers_files.iter().map(PathBuf::from).collect();
     for directory in &privilege.sudoers_directories {
         let Ok(entries) = std::fs::read_dir(directory) else {
             continue;
         };
-        for e in entries.flatten() {
-            let p = e.path();
-            if p.is_file() {
-                sources.push(p);
-            }
-        }
+        let mut drop_ins: Vec<PathBuf> = entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_file())
+            .collect();
+        drop_ins.sort();
+        paths.extend(drop_ins);
     }
-    let group_principals: Vec<String> = user_groups.iter().map(|g| format!("%{}", g)).collect();
-    for src in &sources {
-        let Ok(text) = std::fs::read_to_string(src) else {
+    let mut sources: Vec<crate::sudoers_grading::SudoersSource> = Vec::new();
+    for path in &paths {
+        let Ok(text) = std::fs::read_to_string(path) else {
             continue;
         };
         sudoers_readable = true;
-        let where_ = src
-            .file_name()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_else(|| "sudoers".to_string());
-        // A single sudoers drop-in legitimately carries many NOPASSWD command
-        // rules for the same principal (one per allowed command). Collapse them
-        // to one evidence line per (principal, file) with a rule count so the
-        // panel shows the signal once instead of flooding with identical lines.
-        let mut counts: Vec<(String, usize)> = Vec::new();
-        for principal in scan_sudoers_nopasswd(&text, &user, &group_principals) {
-            passwordless_root = true;
-            if let Some(entry) = counts.iter_mut().find(|(p, _)| p == &principal) {
-                entry.1 += 1;
-            } else {
-                counts.push((principal, 1));
-            }
-        }
-        for (principal, count) in counts {
-            if count > 1 {
-                evidence.push(format!(
-                    "NOPASSWD for '{}' in {} ({} rules)",
-                    principal, where_, count
-                ));
-            } else {
-                evidence.push(format!("NOPASSWD for '{}' in {}", principal, where_));
-            }
-        }
+        sources.push(crate::sudoers_grading::SudoersSource {
+            name: path
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| "sudoers".to_string()),
+            text,
+        });
+    }
+    let principal = crate::sudoers_grading::SudoPrincipal {
+        user: &user,
+        uid,
+        groups: &user_groups,
+        gids: &user_gids,
+    };
+    let grants = crate::sudoers_grading::grade_passwordless_sudo(
+        &sources,
+        &principal,
+        &privilege,
+        &|path: &str| sudo_command_replaceable(path, uid),
+    );
+    let mut passwordless_root = false;
+    let mut limited: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for grant in &grants {
+        // One evidence line per (file, principal), naming the commands, so
+        // a drop-in with many rules shows once.
+        passwordless_root |= grant.reaches_root();
+        limited.extend(grant.limited_commands().map(str::to_string));
+        evidence.push(grant.evidence_line());
     }
     if !sudoers_readable {
         evidence.push(
@@ -1822,6 +1895,7 @@ fn assess_host_privilege(home: &Path) -> HostPrivilege {
         elevated_session,
         admin_user,
         passwordless_root,
+        passwordless_sudo_commands: limited.into_iter().collect(),
         evidence,
         platform,
         user,
@@ -1863,6 +1937,7 @@ fn assess_host_privilege(home: &Path) -> HostPrivilege {
         elevated_session,
         admin_user,
         passwordless_root: false,
+        passwordless_sudo_commands: Vec::new(),
         evidence,
         platform: "windows".to_string(),
         user,
@@ -1878,6 +1953,7 @@ fn assess_host_privilege(home: &Path) -> HostPrivilege {
         elevated_session: false,
         admin_user: false,
         passwordless_root: false,
+        passwordless_sudo_commands: Vec::new(),
         evidence: Vec::new(),
         platform: std::env::consts::OS.to_string(),
         user: user_from_home(home),
@@ -6562,68 +6638,70 @@ mod tests {
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
-    fn groups_for_user_matches_trailing_member_list_only() {
+    fn groups_for_user_matches_member_lists_and_the_primary_group() {
         let group_file = "\
 root:x:0:
 wheel:*:0:alice
 admin:*:80:alice,bob
 staff:*:20:bob
 sudo:x:27:alice
+malformed
 ";
-        let mut groups = groups_for_user(group_file, "alice");
-        groups.sort();
-        assert_eq!(groups, vec!["admin", "sudo", "wheel"]);
+        let names = |groups: Vec<(String, u32)>| {
+            let mut names: Vec<String> = groups.into_iter().map(|(name, _)| name).collect();
+            names.sort();
+            names
+        };
+        assert_eq!(
+            names(groups_for_user(group_file, "alice", None)),
+            vec!["admin", "sudo", "wheel"]
+        );
         // bob is in admin + staff but not wheel/sudo.
-        let mut bob = groups_for_user(group_file, "bob");
-        bob.sort();
-        assert_eq!(bob, vec!["admin", "staff"]);
-        // A user in no member list gets nothing.
-        assert!(groups_for_user(group_file, "carol").is_empty());
-    }
-
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
-    #[test]
-    fn scan_sudoers_nopasswd_matches_user_group_and_all() {
-        let group_principals = vec!["%admin".to_string(), "%wheel".to_string()];
-        // Direct user grant.
-        let by_user = "alice ALL=(ALL) NOPASSWD: ALL";
         assert_eq!(
-            scan_sudoers_nopasswd(by_user, "alice", &group_principals),
-            vec!["alice".to_string()]
+            names(groups_for_user(group_file, "bob", None)),
+            vec!["admin", "staff"]
         );
-        // Group grant via %admin.
-        let by_group = "%admin ALL=(ALL) NOPASSWD: ALL";
+        // A user in no member list gets nothing ...
+        assert!(groups_for_user(group_file, "carol", None).is_empty());
+        // ... except the primary group its home belongs to.
         assert_eq!(
-            scan_sudoers_nopasswd(by_group, "alice", &group_principals),
-            vec!["%admin".to_string()]
-        );
-        // Wildcard principal.
-        let by_all = "ALL ALL=(ALL) NOPASSWD: /usr/bin/whatever";
-        assert_eq!(
-            scan_sudoers_nopasswd(by_all, "alice", &group_principals),
-            vec!["ALL".to_string()]
+            groups_for_user(group_file, "carol", Some(20)),
+            vec![("staff".to_string(), 20)]
         );
     }
 
+    /// The live assessment path end to end on a synthetic policy: a
+    /// tcpdump rule stays passwordless root, a rule for a specific harmless
+    /// command becomes the lower signal with the commands named.
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
-    fn scan_sudoers_nopasswd_ignores_comments_defaults_and_password_rules() {
-        let group_principals = vec!["%admin".to_string()];
-        let text = "\
-# alice ALL=(ALL) NOPASSWD: ALL  -- commented out, must NOT match
-Defaults env_reset
-Defaults!/usr/bin/foo NOPASSWD
-%wheel ALL=(ALL) ALL
-bob ALL=(ALL) NOPASSWD: ALL
-%staff ALL=(ALL) NOPASSWD: ALL
-";
-        // alice is not bob, not in %staff, %admin is the only group she'd match
-        // and it isn't present -> no hits despite the commented line mentioning her.
-        assert!(scan_sudoers_nopasswd(text, "alice", &group_principals).is_empty());
-        // bob has a real NOPASSWD line.
+    fn graded_sudo_rules_drive_passwordless_root_and_the_limited_signal() {
+        use crate::sudoers_grading::{grade_passwordless_sudo, SudoPrincipal, SudoersSource};
+        let privilege = agent_visibility_params::host_privilege();
+        let groups = vec!["staff".to_string()];
+        let principal = SudoPrincipal {
+            user: "alice",
+            uid: Some(501),
+            groups: &groups,
+            gids: &[20],
+        };
+        let tcpdump = vec![SudoersSource {
+            name: "tcpdump-alice".to_string(),
+            text: "alice ALL=(ALL) NOPASSWD: /usr/sbin/tcpdump".to_string(),
+        }];
+        let grants = grade_passwordless_sudo(&tcpdump, &principal, &privilege, &|_| false);
+        assert!(grants.iter().any(|g| g.reaches_root()));
+
+        let limited = vec![SudoersSource {
+            name: "status".to_string(),
+            text: "%staff ALL=(root) NOPASSWD: /usr/bin/uptime, /usr/sbin/sysdiagnose-status"
+                .to_string(),
+        }];
+        let grants = grade_passwordless_sudo(&limited, &principal, &privilege, &|_| false);
+        assert!(!grants.iter().any(|g| g.reaches_root()));
         assert_eq!(
-            scan_sudoers_nopasswd(text, "bob", &group_principals),
-            vec!["bob".to_string()]
+            grants[0].evidence_line(),
+            "NOPASSWD for '%staff' in status (2 commands): limited to /usr/bin/uptime, /usr/sbin/sysdiagnose-status"
         );
     }
 
@@ -6632,6 +6710,7 @@ bob ALL=(ALL) NOPASSWD: ALL
             elevated_session: false,
             admin_user: passwordless_root,
             passwordless_root,
+            passwordless_sudo_commands: Vec::new(),
             evidence: Vec::new(),
             platform: "test".to_string(),
             user: "alice".to_string(),
@@ -6689,6 +6768,66 @@ bob ALL=(ALL) NOPASSWD: ALL
         let sandboxes = vec![agent_sandbox_fixture("cursor", Some(false))];
         let out = agents_with_blast_radius(&host, &sandboxes, &BTreeMap::new(), &BTreeMap::new());
         assert!(out.is_empty());
+    }
+
+    #[test]
+    fn command_limited_passwordless_sudo_is_not_an_amplifier() {
+        // Passwordless sudo for specific, non-escalatable commands never makes
+        // an agent qualify on its own ...
+        let mut host = host_privilege_fixture(true, false);
+        host.passwordless_sudo_commands = vec![
+            "/usr/bin/uptime".to_string(),
+            "/usr/local/sbin/backup-now".to_string(),
+        ];
+        let sandboxes = vec![agent_sandbox_fixture("cursor", Some(false))];
+        let out = agents_with_blast_radius(&host, &sandboxes, &BTreeMap::new(), &BTreeMap::new());
+        assert!(out.is_empty());
+        assert_eq!(
+            passwordless_sudo_reason(&host).as_deref(),
+            Some("passwordless sudo for 2 commands")
+        );
+        // ... but it is named, as the lower signal, when another amplifier
+        // qualifies the agent.
+        let mut critical = BTreeMap::new();
+        critical.insert("cursor".to_string(), 1u32);
+        let out = agents_with_blast_radius(&host, &sandboxes, &critical, &BTreeMap::new());
+        assert_eq!(out.len(), 1);
+        assert!(!out[0].passwordless_root);
+        assert!(out[0]
+            .reasons
+            .iter()
+            .any(|r| r == "passwordless sudo for 2 commands"));
+        assert!(!out[0]
+            .reasons
+            .iter()
+            .any(|r| r.contains("passwordless root")));
+        // Passwordless root subsumes the lower signal; an unassessed host
+        // claims neither.
+        host.passwordless_root = true;
+        assert_eq!(passwordless_sudo_reason(&host), None);
+        let out = agents_with_blast_radius(&host, &sandboxes, &BTreeMap::new(), &BTreeMap::new());
+        assert_eq!(
+            out[0]
+                .reasons
+                .iter()
+                .filter(|r| r.starts_with("passwordless"))
+                .collect::<Vec<_>>(),
+            vec!["passwordless root on host"]
+        );
+        let mut unassessed = host_privilege_fixture(false, false);
+        unassessed.passwordless_sudo_commands = vec!["/usr/bin/uptime".to_string()];
+        assert_eq!(passwordless_sudo_reason(&unassessed), None);
+    }
+
+    /// A visibility snapshot persisted by 2.0.2 (no `passwordless_sudo_commands`)
+    /// still loads.
+    #[test]
+    fn host_privilege_without_the_limited_signal_deserializes() {
+        let json = r#"{"elevated_session":false,"admin_user":true,"passwordless_root":true,
+            "evidence":["NOPASSWD for 'alice' in x"],"platform":"macos","user":"alice","assessed":true}"#;
+        let host: HostPrivilege = serde_json::from_str(json).unwrap();
+        assert!(host.passwordless_root);
+        assert!(host.passwordless_sudo_commands.is_empty());
     }
 
     #[test]
