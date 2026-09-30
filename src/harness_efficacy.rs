@@ -69,8 +69,8 @@ impl std::fmt::Display for HarnessActionClass {
     }
 }
 
-/// The confinement scope each known harness (see
-/// `agent_visibility::KNOWN_AGENT_HARNESSES`) documents itself as enforcing.
+/// The confinement scope each known harness (see the harness catalog,
+/// `agent_visibility_params::agent_harnesses`) documents itself as enforcing.
 /// Declared scope, not measured scope: a harness may be installed and not
 /// configured, which is exactly what an in-scope finding then exposes.
 ///

@@ -26,6 +26,8 @@
 //!   recognizes
 //! - instruction references: what makes a path in an instruction body a
 //!   reference to another instruction artifact (the skill reference graph)
+//! - agent-governance harness catalog: the products, their footprint markers,
+//!   CLI names, identity files, and the bin and config directories searched
 //!
 //! Unlike the CVE params struct, `AgentVisibilityParamsJSON` carries NO
 //! `#[serde(default)]` fields: this model was born complete, the published
@@ -463,6 +465,73 @@ pub struct InstructionReferencesJSON {
     pub document_extensions: Vec<String>,
 }
 
+/// One agent-governance harness product detected from its per-user footprint
+/// (`agent_visibility::detect_agent_harnesses`). Cloud-only control planes
+/// with no local footprint are out of scope: there is nothing on the host to
+/// detect.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct AgentHarnessJSON {
+    /// Stable lowercase product slug; also fills `{slug}` in
+    /// [`AgentHarnessesJSON::config_directories`].
+    pub slug: String,
+    pub display_name: String,
+    /// Public homepage, where an operator without a harness installs one.
+    pub homepage: String,
+    /// Extra `$HOME`-relative files or directories of the product's footprint.
+    pub markers: Vec<String>,
+    /// CLI names looked up in the per-user and system bin directories and on
+    /// `$PATH`.
+    pub binaries: Vec<String>,
+    /// `$HOME`-relative files whose name signals a governed-agent identity
+    /// (a W3C DID, a project id), read only when the footprint is present.
+    pub identity_files: Vec<String>,
+}
+
+/// A directory holding one directory per installed tool version, each with
+/// its own bin directory (nvm: `~/.nvm/versions/node/<v>/bin`).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct VersionedBinDirectoryJSON {
+    /// `$HOME`-relative, `/`-separated.
+    pub root: String,
+    /// The bin directory inside each version directory.
+    pub bin: String,
+}
+
+/// One list per desktop platform.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct PlatformListsJSON {
+    pub macos: Vec<String>,
+    pub linux: Vec<String>,
+    pub windows: Vec<String>,
+}
+
+/// The agent-governance harness catalog and where their footprints live.
+/// Kept as written: slugs, paths, names and keys are matched or joined
+/// exactly.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct AgentHarnessesJSON {
+    pub catalog: Vec<AgentHarnessJSON>,
+    /// Standard per-user config locations of every harness, `$HOME`-relative
+    /// and `/`-separated, with `{slug}` for the product slug
+    /// (`.config/{slug}`, `AppData/Roaming/{slug}`). Checked on every
+    /// platform: another platform's directory simply does not exist.
+    pub config_directories: Vec<String>,
+    /// Per-user bin directories (`$HOME`-relative) where a harness CLI may
+    /// live without being on the privileged helper's `$PATH`.
+    pub home_bin_directories: Vec<String>,
+    /// Version managers' per-version bin directories, newest version name
+    /// first.
+    pub versioned_bin_directories: Vec<VersionedBinDirectoryJSON>,
+    /// System package-manager bin directories searched regardless of
+    /// `$PATH` (the helper runs with a minimal one), per platform.
+    pub system_bin_directories: PlatformListsJSON,
+    /// Extensions (without the dot) a Windows CLI name may carry, tried in
+    /// order before the bare name.
+    pub windows_binary_extensions: Vec<String>,
+    /// JSON keys of an identity file that carry the identity, in order.
+    pub identity_keys: Vec<String>,
+}
+
 /// Raw JSON shape of `agent-visibility-params-db.json`. No serde defaults:
 /// the published JSON always carries every field; a missing field fails the
 /// parse and the embedded snapshot (which has all fields) stays in effect.
@@ -509,6 +578,8 @@ pub struct AgentVisibilityParamsJSON {
     pub instruction_inventory: InstructionInventoryJSON,
     /// Instruction reference rules (see [`InstructionReferencesJSON`]).
     pub instruction_references: InstructionReferencesJSON,
+    /// Agent-governance harness catalog (see [`AgentHarnessesJSON`]).
+    pub agent_harnesses: AgentHarnessesJSON,
 }
 
 /// Normalized runtime snapshot of the agent-visibility params.
@@ -540,6 +611,8 @@ pub struct AgentVisibilityParams {
     pub instruction_inventory: InstructionInventoryJSON,
     /// Instruction reference rules, lowercased.
     pub instruction_references: InstructionReferencesJSON,
+    /// Agent-governance harness catalog, as written.
+    pub agent_harnesses: AgentHarnessesJSON,
 }
 
 impl CloudSignature for AgentVisibilityParams {
@@ -771,6 +844,7 @@ impl AgentVisibilityParams {
             workspace_attribution: normalize_workspace_attribution(&json.workspace_attribution),
             instruction_inventory: normalize_instruction_inventory(&json.instruction_inventory),
             instruction_references: normalize_instruction_references(&json.instruction_references),
+            agent_harnesses: json.agent_harnesses.clone(),
         }
     }
 }
@@ -948,6 +1022,12 @@ pub fn instruction_references() -> InstructionReferencesJSON {
     PARAMS_SNAPSHOT.load().instruction_references.clone()
 }
 
+/// The agent-governance harness catalog: products, footprint markers, CLI
+/// names, identity files, and the bin and config directories searched.
+pub fn agent_harnesses() -> AgentHarnessesJSON {
+    PARAMS_SNAPSHOT.load().agent_harnesses.clone()
+}
+
 /// The params signature of the current snapshot: a scan state computed under
 /// another vocabulary is recomputed.
 pub fn params_signature() -> String {
@@ -1072,6 +1152,17 @@ mod tests {
         assert!(!inv.workspace_toplevel_files.is_empty());
         assert!(!inv.workspace_config_directories.is_empty());
         assert!(!inv.workspace_subdirectories.is_empty());
+        let harnesses = &params.agent_harnesses;
+        assert!(!harnesses.catalog.is_empty());
+        assert!(harnesses.catalog.iter().all(|h| !h.slug.is_empty()));
+        assert!(harnesses
+            .config_directories
+            .iter()
+            .all(|d| d.contains("{slug}")));
+        assert!(!harnesses.home_bin_directories.is_empty());
+        assert!(!harnesses.versioned_bin_directories.is_empty());
+        assert!(!harnesses.windows_binary_extensions.is_empty());
+        assert!(!harnesses.identity_keys.is_empty());
         let refs = &params.instruction_references;
         assert!(!refs.basenames.is_empty());
         assert!(!refs.folder_segments.is_empty());

@@ -19,7 +19,8 @@
 //! collectors simply find nothing on disk).
 
 use crate::agent_visibility_params::{
-    self, FleetWorkspaceReferenceJSON, InstructionInventoryJSON, InstructionReferencesJSON,
+    self, AgentHarnessJSON, AgentHarnessesJSON, FleetWorkspaceReferenceJSON,
+    InstructionInventoryJSON, InstructionReferencesJSON,
 };
 // The URL and excerpt maskers moved to the shared redaction module (2.0.2);
 // re-exported so `agent_visibility::redact_secret_like_text` keeps working.
@@ -1293,101 +1294,37 @@ pub struct AgentHarness {
     pub identity: Option<String>,
 }
 
-/// Known agent harnesses with a detectable, cross-platform per-user footprint.
-/// Each row is `(slug, display_name, homepage, extra_markers, binaries)`:
-/// - `slug` also drives the standard per-user config locations checked
-///   automatically: `~/.{slug}`, `~/.config/{slug}`, (macOS)
-///   `~/Library/Application Support/{slug}`, and (Windows)
-///   `~/AppData/Roaming/{slug}` + `~/AppData/Local/{slug}`.
-/// - `extra_markers` are additional `$HOME`-relative files/dirs to check.
-/// - `binaries` are CLI names looked up in the standard per-user bin dirs (so
-///   the helper-as-root path finds a user-installed binary) and on `$PATH`.
-///
-/// Kept deliberately small and limited to products we can actually detect on
-/// macOS/Windows/Linux from a per-user on-disk footprint. Extend by adding a
-/// row. Cloud-only control planes with no local footprint (a pure SaaS
-/// dashboard) are intentionally out of scope: there is nothing on the host to
-/// detect, so claiming detection would be dishonest.
-const KNOWN_AGENT_HARNESSES: &[(&str, &str, &str, &[&str], &[&str])] = &[
-    // AgentField (agentfield.ai): open-source agent control plane / harness.
-    // The `af` CLI scaffolds projects; `app.harness(...)` dispatches governed
-    // multi-turn coding tasks to Claude Code / Codex / Gemini CLI / OpenCode
-    // with budgets, turn caps, tool allow-lists, W3C-DID identity, and audit
-    // trails.
-    (
-        "agentfield",
-        "AgentField",
-        "https://agentfield.ai",
-        &[".af"],
-        &["agentfield", "af"],
-    ),
-    // Rippletide (rippletide.com): decision-runtime / policy-enforcement layer
-    // that validates every proposed agent action against business rules before
-    // it executes (local SDK + CLI footprint).
-    (
-        "rippletide",
-        "Rippletide",
-        "https://rippletide.com",
-        &[],
-        &["rippletide"],
-    ),
-    // nono (Apache-2.0): least-privilege OS sandbox for coding agents and
-    // delegated tools. Preferred local prevention layer after the EDAMAME
-    // tool-call firewall was retired in 1.7.0.
-    (
-        "nono",
-        "nono",
-        "https://github.com/always-further/nono",
-        &[".nono"],
-        &["nono"],
-    ),
-    // Anthropic Sandbox Runtime (srt, Apache-2.0): OS-level filesystem and
-    // network restrictions (sandbox-exec / Bubblewrap / Windows primitives).
-    // Beta research preview; detected via the `srt` CLI when installed.
-    (
-        "srt",
-        "Anthropic Sandbox Runtime",
-        "https://github.com/anthropic-experimental/sandbox-runtime",
-        &[".srt"],
-        &["srt"],
-    ),
-];
+// The harness catalog is data in the agent-visibility params
+// (`agent_visibility_params::agent_harnesses()`): each product's slug (which
+// also fills the standard per-user config locations, `~/.{slug}`,
+// `~/.config/{slug}`, `~/Library/Application Support/{slug}`,
+// `~/AppData/Roaming/{slug}`, `~/AppData/Local/{slug}`), display name,
+// homepage, extra `$HOME`-relative markers, CLI names and identity files,
+// plus the bin directories searched. It is deliberately limited to products
+// with a per-user on-disk footprint on macOS / Windows / Linux; a cloud-only
+// control plane leaves nothing on the host to detect, so claiming detection
+// would be dishonest. The AI Governance `expected_harness` facts name the
+// catalog's slugs.
 
-/// Stable slugs for every known harness row (detected or not). Used by AI
-/// Governance `expected_harness` failure facts.
-pub const KNOWN_AGENT_HARNESS_SLUGS: &[&str] = &["agentfield", "rippletide", "nono", "srt"];
-
-/// Iterator-friendly access to [`KNOWN_AGENT_HARNESS_SLUGS`].
-pub fn known_agent_harness_slugs() -> impl Iterator<Item = &'static str> {
-    KNOWN_AGENT_HARNESS_SLUGS.iter().copied()
+/// Slugs of every harness in the catalog (detected or not), in catalog
+/// order. Used by AI Governance `expected_harness` failure facts.
+pub fn known_agent_harness_slugs() -> Vec<String> {
+    agent_visibility_params::agent_harnesses()
+        .catalog
+        .into_iter()
+        .map(|harness| harness.slug)
+        .collect()
 }
 
-/// Standard per-user "bin" directories (relative to `$HOME`) where a harness
-/// CLI may live without being on the privileged process's `$PATH` -- so the
-/// helper running as root can still find a binary the user installed under
-/// their own home. The list is checked unconditionally on every OS; `/` is a
-/// valid path separator on Windows for `Path::join`, so the Windows-relative
-/// entries resolve there and are harmless no-ops on Unix.
-const HARNESS_HOME_BIN_DIRS: &[&str] = &[
-    ".local/bin",
-    "bin",
-    ".cargo/bin",
-    "go/bin",
-    ".npm-global/bin",
-    ".bun/bin",
-    ".deno/bin",
-    // Node version managers and package managers whose global installs land
-    // under $HOME (nvm is scanned separately: its bin dir is per version).
-    ".volta/bin",
-    ".yarn/bin",
-    "Library/pnpm",
-    ".local/share/pnpm",
-    // Windows-native per-user bin locations: npm's global prefix is
-    // %APPDATA%\npm (the shims sit directly there, no `bin` subdir); winget /
-    // Store execution aliases live under %LOCALAPPDATA%\Microsoft\WindowsApps.
-    "AppData/Roaming/npm",
-    "AppData/Local/Microsoft/WindowsApps",
-];
+/// Join a `/`-separated relative path onto `base` one component at a time,
+/// so the result carries the platform separator (`~/.config\agentfield` on
+/// Windows), as a chain of `Path::join` calls would.
+fn join_components(base: &Path, relative: &str) -> PathBuf {
+    relative
+        .split('/')
+        .filter(|component| !component.is_empty())
+        .fold(base.to_path_buf(), |path, component| path.join(component))
+}
 
 /// Render a path for evidence relative to `home` when possible (`~/...`) so the
 /// UI / threat text is compact and does not leak the absolute home prefix.
@@ -1406,63 +1343,68 @@ fn harness_path_dirs() -> Vec<PathBuf> {
         .unwrap_or_default()
 }
 
-/// System-wide package-manager bin directories, searched regardless of the
-/// process `$PATH`. The helper runs as root/SYSTEM with a minimal PATH (launchd
-/// gives `/usr/bin:/bin:/usr/sbin:/sbin`), so a harness CLI installed the
-/// usual way on a developer machine was invisible to it: `npm install -g`
-/// with Homebrew's node, or `brew install`, puts the binary in
-/// `/opt/homebrew/bin` (Apple Silicon) or `/usr/local/bin` (Intel), outside
-/// both `$HOME` and that PATH (2026-09-22: Rippletide installed through npm
-/// on a Mac read as "no harness").
+/// System-wide package-manager bin directories of this platform, searched
+/// regardless of the process `$PATH`. The helper runs as root/SYSTEM with a
+/// minimal PATH (launchd gives `/usr/bin:/bin:/usr/sbin:/sbin`), so a harness
+/// CLI installed the usual way on a developer machine was invisible to it:
+/// `npm install -g` with Homebrew's node, or `brew install`, puts the binary
+/// in `/opt/homebrew/bin` (Apple Silicon) or `/usr/local/bin` (Intel),
+/// outside both `$HOME` and that PATH (2026-09-22: Rippletide installed
+/// through npm on a Mac read as "no harness").
 ///
-/// Platform matrix: macOS adds Homebrew's two prefixes; Linux adds
-/// `/usr/local/bin` (npm/pip global default prefix), Linuxbrew and snap;
-/// Windows adds nothing, because npm's global shims live in `%APPDATA%\npm`
-/// (already a home bin dir) and machine-wide installers put their own
-/// directory on the machine PATH that SYSTEM inherits.
+/// Platform matrix (the params' `system_bin_directories`): macOS lists
+/// Homebrew's two prefixes; Linux `/usr/local/bin` (npm/pip global default
+/// prefix), Linuxbrew and snap; Windows nothing, because npm's global shims
+/// live in `%APPDATA%\npm` (already a home bin dir) and machine-wide
+/// installers put their own directory on the machine PATH that SYSTEM
+/// inherits. Other platforms search none.
 fn harness_system_bin_dirs() -> Vec<PathBuf> {
-    let dirs: &[&str] = if cfg!(target_os = "macos") {
-        &["/opt/homebrew/bin", "/usr/local/bin"]
+    let harnesses = agent_visibility_params::agent_harnesses();
+    let lists = &harnesses.system_bin_directories;
+    let dirs: &[String] = if cfg!(target_os = "macos") {
+        &lists.macos
     } else if cfg!(target_os = "linux") {
-        &[
-            "/usr/local/bin",
-            "/home/linuxbrew/.linuxbrew/bin",
-            "/snap/bin",
-        ]
+        &lists.linux
+    } else if cfg!(target_os = "windows") {
+        &lists.windows
     } else {
         &[]
     };
     dirs.iter().map(PathBuf::from).collect()
 }
 
-/// nvm keeps one `bin` directory per installed Node version
-/// (`~/.nvm/versions/node/<v>/bin`), which is where `npm install -g` puts CLIs
-/// for nvm users. Every installed version is searched, newest name first.
-fn harness_nvm_bin_dirs(home: &Path) -> Vec<PathBuf> {
-    let root = home.join(".nvm").join("versions").join("node");
-    let Ok(entries) = std::fs::read_dir(&root) else {
-        return Vec::new();
-    };
-    let mut dirs: Vec<PathBuf> = entries
-        .filter_map(|e| e.ok())
-        .map(|e| e.path().join("bin"))
-        .filter(|p| p.is_dir())
-        .collect();
-    dirs.sort();
-    dirs.reverse();
-    dirs
+/// Version managers keep one bin directory per installed version (nvm:
+/// `~/.nvm/versions/node/<v>/bin`, where `npm install -g` puts CLIs for nvm
+/// users). Every installed version is searched, newest name first.
+fn harness_versioned_bin_dirs(harnesses: &AgentHarnessesJSON, home: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for versioned in &harnesses.versioned_bin_directories {
+        let root = join_components(home, &versioned.root);
+        let Ok(entries) = std::fs::read_dir(&root) else {
+            continue;
+        };
+        let mut dirs: Vec<PathBuf> = entries
+            .filter_map(|e| e.ok())
+            .map(|e| e.path().join(&versioned.bin))
+            .filter(|p| p.is_dir())
+            .collect();
+        dirs.sort();
+        dirs.reverse();
+        out.extend(dirs);
+    }
+    out
 }
 
-/// Candidate executable file names for `bin` on this OS (Windows adds the common
-/// executable extensions).
-fn harness_binary_names(bin: &str) -> Vec<String> {
+/// Candidate executable file names for `bin` on this OS (Windows tries the
+/// catalog's executable extensions, then the bare name).
+fn harness_binary_names(harnesses: &AgentHarnessesJSON, bin: &str) -> Vec<String> {
     if cfg!(target_os = "windows") {
-        vec![
-            format!("{bin}.exe"),
-            format!("{bin}.cmd"),
-            format!("{bin}.bat"),
-            bin.to_string(),
-        ]
+        harnesses
+            .windows_binary_extensions
+            .iter()
+            .map(|ext| format!("{bin}.{ext}"))
+            .chain(std::iter::once(bin.to_string()))
+            .collect()
     } else {
         vec![bin.to_string()]
     }
@@ -1470,12 +1412,18 @@ fn harness_binary_names(bin: &str) -> Vec<String> {
 
 /// Look for harness CLI `bin` in the per-user home bin dirs and on `$PATH`.
 /// Returns a display string for the first match (for evidence).
-fn find_harness_binary(home: &Path, path_dirs: &[PathBuf], bin: &str) -> Option<String> {
-    let names = harness_binary_names(bin);
-    let home_dirs = HARNESS_HOME_BIN_DIRS
+fn find_harness_binary(
+    harnesses: &AgentHarnessesJSON,
+    home: &Path,
+    path_dirs: &[PathBuf],
+    bin: &str,
+) -> Option<String> {
+    let names = harness_binary_names(harnesses, bin);
+    let home_dirs = harnesses
+        .home_bin_directories
         .iter()
         .map(|rel| home.join(rel))
-        .chain(harness_nvm_bin_dirs(home));
+        .chain(harness_versioned_bin_dirs(harnesses, home));
     for dir in home_dirs {
         for name in &names {
             let candidate = dir.join(name);
@@ -1504,26 +1452,18 @@ fn find_harness_binary(home: &Path, path_dirs: &[PathBuf], bin: &str) -> Option<
 /// The exact identity file/key per product is not yet confirmed, so the
 /// candidate set is deliberately conservative and never lifts a token out of an
 /// arbitrary/general config blob.
-fn read_harness_identity(home: &Path, slug: &str) -> Option<String> {
-    // Per-slug candidate identity files (relative to `$HOME`). Only files whose
-    // *name* signals identity (`did` / `identity`) are probed, so we never lift
-    // an unrelated value out of a general config file.
-    let rels: &[&str] = match slug {
-        // AgentField issues a W3C-DID per governed agent/project. The exact
-        // on-disk location is unconfirmed; these are the plausible per-user
-        // spots under its standard config roots.
-        "agentfield" => &[
-            ".af/did",
-            ".af/identity",
-            ".af/identity.json",
-            ".config/agentfield/did",
-            ".config/agentfield/identity",
-            ".config/agentfield/identity.json",
-        ],
-        // No confirmed local identity file for other harnesses yet.
-        _ => &[],
-    };
-    for rel in rels {
+fn read_harness_identity(
+    harnesses: &AgentHarnessesJSON,
+    harness: &AgentHarnessJSON,
+    home: &Path,
+) -> Option<String> {
+    // The harness's candidate identity files (relative to `$HOME`). Only files
+    // whose *name* signals identity (`did` / `identity`) are listed, so we
+    // never lift an unrelated value out of a general config file. AgentField
+    // issues a W3C-DID per governed agent/project at a location not yet
+    // confirmed, so its entries are the plausible per-user spots under its
+    // standard config roots; other harnesses have no confirmed file yet.
+    for rel in &harness.identity_files {
         let path = home.join(rel);
         if !path.is_file() {
             continue;
@@ -1531,7 +1471,7 @@ fn read_harness_identity(home: &Path, slug: &str) -> Option<String> {
         let Ok(raw) = std::fs::read_to_string(&path) else {
             continue;
         };
-        if let Some(token) = extract_identity_token(&raw) {
+        if let Some(token) = extract_identity_token(&harnesses.identity_keys, &raw) {
             return Some(token);
         }
     }
@@ -1539,25 +1479,18 @@ fn read_harness_identity(home: &Path, slug: &str) -> Option<String> {
 }
 
 /// Extract a plausible identity token from a candidate file body. Accepts
-/// either a JSON object carrying a recognized identity key, or a short
+/// either a JSON object carrying one of `identity_keys`, or a short
 /// single-line token. Returns `None` for anything that does not look like an
 /// identity so the field stays honestly empty rather than fabricated.
-fn extract_identity_token(raw: &str) -> Option<String> {
+fn extract_identity_token(identity_keys: &[String], raw: &str) -> Option<String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() || trimmed.len() > 4096 {
         return None;
     }
     // JSON object: pull the first recognized identity key.
     if let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(trimmed) {
-        for key in [
-            "did",
-            "identity",
-            "agent_did",
-            "agent_id",
-            "project_id",
-            "id",
-        ] {
-            if let Some(serde_json::Value::String(s)) = map.get(key) {
+        for key in identity_keys {
+            if let Some(serde_json::Value::String(s)) = map.get(key.as_str()) {
                 let s = s.trim();
                 if is_plausible_identity(s) {
                     return Some(s.to_string());
@@ -1605,23 +1538,23 @@ pub fn detect_agent_harnesses(home: &Path) -> Vec<AgentHarness> {
 /// system package-manager dirs in production) so unit tests are deterministic
 /// regardless of the host's real `$PATH` and installs.
 fn detect_agent_harnesses_with(home: &Path, path_dirs: &[PathBuf]) -> Vec<AgentHarness> {
-    let mut out: Vec<AgentHarness> = KNOWN_AGENT_HARNESSES
+    let harnesses = agent_visibility_params::agent_harnesses();
+    let mut out: Vec<AgentHarness> = harnesses
+        .catalog
         .iter()
-        .map(|(slug, display, homepage, extra, binaries)| {
+        .map(|harness| {
             let mut evidence: Vec<String> = Vec::new();
 
-            // Standard per-user config locations for this slug.
-            let mut markers: Vec<PathBuf> = vec![
-                home.join(format!(".{slug}")),
-                home.join(".config").join(slug),
-                home.join("Library").join("Application Support").join(slug),
-                // Windows-native per-user config dirs (%APPDATA% / %LOCALAPPDATA%).
-                // Checked unconditionally like the macOS path above; harmless
-                // no-ops on Unix where these directories do not exist.
-                home.join("AppData").join("Roaming").join(slug),
-                home.join("AppData").join("Local").join(slug),
-            ];
-            for m in *extra {
+            // Standard per-user config locations for this slug. Every
+            // platform's are checked (the Windows %APPDATA% / %LOCALAPPDATA%
+            // and macOS Application Support ones are harmless no-ops where
+            // those directories do not exist), then the product's own markers.
+            let mut markers: Vec<PathBuf> = harnesses
+                .config_directories
+                .iter()
+                .map(|template| join_components(home, &template.replace("{slug}", &harness.slug)))
+                .collect();
+            for m in &harness.markers {
                 markers.push(home.join(m));
             }
             for m in &markers {
@@ -1631,8 +1564,8 @@ fn detect_agent_harnesses_with(home: &Path, path_dirs: &[PathBuf]) -> Vec<AgentH
             }
 
             // CLI binary (home bin dirs first for the helper-as-root case).
-            for bin in *binaries {
-                if let Some(found) = find_harness_binary(home, path_dirs, bin) {
+            for bin in &harness.binaries {
+                if let Some(found) = find_harness_binary(&harnesses, home, path_dirs, bin) {
                     evidence.push(found);
                 }
             }
@@ -1647,14 +1580,14 @@ fn detect_agent_harnesses_with(home: &Path, path_dirs: &[PathBuf]) -> Vec<AgentH
             let identity = if evidence.is_empty() {
                 None
             } else {
-                read_harness_identity(home, slug)
+                read_harness_identity(&harnesses, harness, home)
             };
 
             AgentHarness {
-                slug: (*slug).to_string(),
-                display_name: (*display).to_string(),
+                slug: harness.slug.clone(),
+                display_name: harness.display_name.clone(),
                 detected: !evidence.is_empty(),
-                homepage: (*homepage).to_string(),
+                homepage: harness.homepage.clone(),
                 evidence,
                 identity,
             }
@@ -6808,11 +6741,14 @@ bob ALL=(ALL) NOPASSWD: ALL
         let tmp = tempfile::TempDir::new().unwrap();
         // Empty PATH so the host's real PATH cannot flake the result.
         let harnesses = detect_agent_harnesses_with(tmp.path(), &[]);
-        assert_eq!(harnesses.len(), KNOWN_AGENT_HARNESSES.len());
+        assert_eq!(
+            harnesses.len(),
+            agent_visibility_params::agent_harnesses().catalog.len()
+        );
         assert!(harnesses
             .iter()
             .all(|h| !h.detected && h.evidence.is_empty()));
-        // Stable, sorted slugs (matches KNOWN_AGENT_HARNESSES after sort).
+        // Stable, sorted slugs (the params catalog after sort).
         let slugs: Vec<&str> = harnesses.iter().map(|h| h.slug.as_str()).collect();
         assert_eq!(slugs, vec!["agentfield", "nono", "rippletide", "srt"]);
     }
@@ -7036,27 +6972,50 @@ bob ALL=(ALL) NOPASSWD: ALL
 
     #[test]
     fn extract_identity_token_reads_plain_did() {
+        let keys = agent_visibility_params::agent_harnesses().identity_keys;
         assert_eq!(
-            extract_identity_token("did:web:agentfield.ai:projects:acme\n"),
+            extract_identity_token(&keys, "did:web:agentfield.ai:projects:acme\n"),
             Some("did:web:agentfield.ai:projects:acme".to_string())
         );
     }
 
     #[test]
     fn extract_identity_token_reads_json_did_key() {
+        let keys = agent_visibility_params::agent_harnesses().identity_keys;
         assert_eq!(
-            extract_identity_token(r#"{"did": "did:key:z6Mk-acme", "other": 1}"#),
+            extract_identity_token(&keys, r#"{"did": "did:key:z6Mk-acme", "other": 1}"#),
             Some("did:key:z6Mk-acme".to_string())
         );
     }
 
     #[test]
     fn extract_identity_token_rejects_prose_and_empty() {
+        let keys = agent_visibility_params::agent_harnesses().identity_keys;
         // Whitespace-bearing prose is not an identity (no fabrication).
-        assert_eq!(extract_identity_token("this is a config file"), None);
-        assert_eq!(extract_identity_token("   \n  "), None);
+        assert_eq!(extract_identity_token(&keys, "this is a config file"), None);
+        assert_eq!(extract_identity_token(&keys, "   \n  "), None);
         // JSON object without a recognized identity key yields nothing.
-        assert_eq!(extract_identity_token(r#"{"theme": "dark"}"#), None);
+        assert_eq!(extract_identity_token(&keys, r#"{"theme": "dark"}"#), None);
+    }
+
+    #[test]
+    fn known_agent_harness_slugs_come_from_the_catalog() {
+        assert_eq!(
+            known_agent_harness_slugs(),
+            vec!["agentfield", "rippletide", "nono", "srt"]
+        );
+    }
+
+    #[test]
+    fn harness_config_directories_join_with_the_platform_separator() {
+        let home = Path::new("/home/me");
+        assert_eq!(
+            join_components(home, "Library/Application Support/agentfield"),
+            home.join("Library")
+                .join("Application Support")
+                .join("agentfield")
+        );
+        assert_eq!(join_components(home, ".af"), home.join(".af"));
     }
 
     #[test]
