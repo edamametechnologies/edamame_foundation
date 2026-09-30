@@ -39,6 +39,8 @@
 //!   manifests, extensions)
 //! - MCP credential markers: the header and environment-variable names that
 //!   make a server's authentication a shared secret
+//! - delegation markers: the tool names and keys that mark a sub-agent spawn
+//!   in a transcript (recursion / delegation finding)
 //!
 //! Unlike the CVE params struct, `AgentVisibilityParamsJSON` carries NO
 //! `#[serde(default)]` fields: this model was born complete, the published
@@ -667,6 +669,32 @@ pub struct McpCredentialMarkersJSON {
     pub env_key_needles: Vec<String>,
 }
 
+/// The agent vocabulary that marks a sub-agent spawn in a transcript, for the
+/// recursion / delegation visibility finding
+/// (`agent_visibility::extract_spawn_markers`). The transcript line structure
+/// (`uuid` / `parentUuid` linkage, the `isSidechain` flag, `tool_use` content
+/// blocks, `name` / `input`) stays in code. Tool names and text markers are
+/// lowercased by [`AgentVisibilityParams::new_from_json`]; keys are matched
+/// as written.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct DelegationMarkersJSON {
+    /// Tool names whose call spawns a sub-agent (`task`), compared with the
+    /// lowercased tool name.
+    pub spawn_tool_names: Vec<String>,
+    /// Tool-call input keys (and top-level record keys) naming the sub-agent
+    /// or delegate (`subagent_type`); their presence marks a spawn, and the
+    /// first present one is the spawn reason.
+    pub spawn_target_keys: Vec<String>,
+    /// Tool-call input keys carrying the delegated goal, in order.
+    pub spawn_goal_keys: Vec<String>,
+    /// Markers of a spawn in a plain-text transcript line, compared with the
+    /// lowercased line.
+    pub text_markers: Vec<String>,
+    /// Keys whose value follows them in a plain-text line and names the
+    /// spawn reason, in order.
+    pub text_reason_keys: Vec<String>,
+}
+
 /// Raw JSON shape of `agent-visibility-params-db.json`. No serde defaults:
 /// the published JSON always carries every field; a missing field fails the
 /// parse and the embedded snapshot (which has all fields) stays in effect.
@@ -723,6 +751,8 @@ pub struct AgentVisibilityParamsJSON {
     pub mcp_discovery: McpDiscoveryJSON,
     /// MCP credential markers (see [`McpCredentialMarkersJSON`]).
     pub mcp_credential_markers: McpCredentialMarkersJSON,
+    /// Sub-agent spawn markers (see [`DelegationMarkersJSON`]).
+    pub delegation_markers: DelegationMarkersJSON,
 }
 
 /// Normalized runtime snapshot of the agent-visibility params.
@@ -765,6 +795,8 @@ pub struct AgentVisibilityParams {
     /// MCP credential markers, header markers lowercased and
     /// environment-variable needles uppercased.
     pub mcp_credential_markers: McpCredentialMarkersJSON,
+    /// Sub-agent spawn markers, tool names and text markers lowercased.
+    pub delegation_markers: DelegationMarkersJSON,
 }
 
 impl CloudSignature for AgentVisibilityParams {
@@ -1038,6 +1070,13 @@ impl AgentVisibilityParams {
                     .map(|n| n.to_ascii_uppercase())
                     .collect(),
             },
+            delegation_markers: DelegationMarkersJSON {
+                spawn_tool_names: lower(&json.delegation_markers.spawn_tool_names),
+                spawn_target_keys: json.delegation_markers.spawn_target_keys.clone(),
+                spawn_goal_keys: json.delegation_markers.spawn_goal_keys.clone(),
+                text_markers: lower(&json.delegation_markers.text_markers),
+                text_reason_keys: lower(&json.delegation_markers.text_reason_keys),
+            },
         }
     }
 }
@@ -1245,6 +1284,12 @@ pub fn mcp_credential_markers() -> McpCredentialMarkersJSON {
     PARAMS_SNAPSHOT.load().mcp_credential_markers.clone()
 }
 
+/// Sub-agent spawn markers of a transcript: spawn tool names, target and
+/// goal keys, and the plain-text markers (names and markers lowercased).
+pub fn delegation_markers() -> DelegationMarkersJSON {
+    PARAMS_SNAPSHOT.load().delegation_markers.clone()
+}
+
 /// The params signature of the current snapshot: a scan state computed under
 /// another vocabulary is recomputed.
 pub fn params_signature() -> String {
@@ -1369,6 +1414,12 @@ mod tests {
         assert!(!inv.workspace_toplevel_files.is_empty());
         assert!(!inv.workspace_config_directories.is_empty());
         assert!(!inv.workspace_subdirectories.is_empty());
+        let delegation = &params.delegation_markers;
+        assert!(!delegation.spawn_tool_names.is_empty());
+        assert!(!delegation.spawn_target_keys.is_empty());
+        assert!(!delegation.spawn_goal_keys.is_empty());
+        assert!(!delegation.text_markers.is_empty());
+        assert!(!delegation.text_reason_keys.is_empty());
         let credentials = &params.mcp_credential_markers;
         assert!(!credentials.header_names.is_empty());
         assert!(!credentials.header_needles.is_empty());

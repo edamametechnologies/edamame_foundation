@@ -19,8 +19,9 @@
 //! collectors simply find nothing on disk).
 
 use crate::agent_visibility_params::{
-    self, AgentConfinementJSON, AgentHarnessJSON, AgentHarnessesJSON, FleetWorkspaceReferenceJSON,
-    InstructionInventoryJSON, InstructionReferencesJSON, McpDiscoveryJSON,
+    self, AgentConfinementJSON, AgentHarnessJSON, AgentHarnessesJSON, DelegationMarkersJSON,
+    FleetWorkspaceReferenceJSON, InstructionInventoryJSON, InstructionReferencesJSON,
+    McpDiscoveryJSON,
 };
 // The URL and excerpt maskers moved to the shared redaction module (2.0.2);
 // re-exported so `agent_visibility::redact_secret_like_text` keeps working.
@@ -6080,29 +6081,29 @@ pub fn extract_spawn_markers(transcript: &str) -> Vec<RawSpawn> {
     }
 }
 
-/// Legacy text-scan extractor. Matches the common `Task(`, `subagent`,
-/// `spawn`, `delegate`, and `dispatch_agent` markers and infers depth from
-/// indentation hints. Used for non-JSONL transcripts.
+/// Legacy text-scan extractor. Matches the params' plain-text spawn markers
+/// (a `Task` tool name, `subagent_type`, `delegate_to`, `spawn_agent`,
+/// `dispatch_agent`) and infers depth from indentation hints. Used for
+/// non-JSONL transcripts.
 fn extract_spawn_markers_textual(transcript: &str) -> Vec<RawSpawn> {
+    let markers = agent_visibility_params::delegation_markers();
     let mut spawns = Vec::new();
     for line in transcript.lines() {
         if spawns.len() >= MAX_SPAWN_MARKERS {
             break;
         }
         let lower = line.to_ascii_lowercase();
-        let is_spawn = lower.contains("\"name\":\"task\"")
-            || lower.contains("\"name\": \"task\"")
-            || lower.contains("subagent_type")
-            || lower.contains("dispatch_agent")
-            || lower.contains("delegate_to")
-            || lower.contains("spawn_agent");
+        let is_spawn = markers
+            .text_markers
+            .iter()
+            .any(|marker| lower.contains(marker.as_str()));
         if !is_spawn {
             continue;
         }
         // Depth hint: count leading indentation in 2-space units, capped.
         let indent = line.len() - line.trim_start().len();
         let depth = ((indent / 2) as u32).min(16);
-        let reason = extract_marker_reason(&lower);
+        let reason = extract_marker_reason(&markers, &lower);
         let goal_text = line.trim().chars().take(400).collect::<String>();
         spawns.push(RawSpawn {
             depth,
@@ -6130,12 +6131,14 @@ struct StructRecord {
 /// * each line is parsed as a JSON object; `uuid` / `parentUuid` build the
 ///   parent linkage and `isSidechain` marks records produced *inside* a
 ///   sub-agent turn;
-/// * a record is a spawn when it carries a `Task` / `subagent` tool-use block
-///   (or a top-level `subagent_type` / `delegate_to` / `spawn_agent` key);
+/// * a record is a spawn when it carries a spawn tool-use block (`Task` /
+///   `subagent`, or one naming a delegate), or a top-level delegate key (the
+///   params' delegation markers);
 /// * a spawn's depth is `1 + (number of `isSidechain` ancestors)`, so a spawn
 ///   issued from the top-level agent is depth 1, a spawn issued from within a
 ///   sub-agent turn is depth 2, and so on -- capped at 16 with a cycle guard.
 fn extract_spawn_markers_structured(transcript: &str) -> Option<Vec<RawSpawn>> {
+    let markers = agent_visibility_params::delegation_markers();
     let mut records: Vec<StructRecord> = Vec::new();
     let mut by_uuid: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     let mut saw_object = false;
@@ -6173,7 +6176,7 @@ fn extract_spawn_markers_structured(transcript: &str) -> Option<Vec<RawSpawn>> {
             .or_else(|| value.get("is_sidechain"))
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-        let spawn = json_spawn_marker(&value);
+        let spawn = json_spawn_marker(&markers, &value);
 
         let idx = records.len();
         if let Some(u) = uuid {
@@ -6242,12 +6245,15 @@ fn sidechain_depth(
 
 /// Detect whether a parsed JSONL record represents a sub-agent spawn, returning
 /// `(spawn_reason, goal_text)` when it does. Recognises both the tool-use
-/// envelope shape (`message.content[].type == "tool_use"` with a `Task` /
-/// `subagent` name) and a bare top-level tool-use object, plus a top-level
-/// `subagent_type` / `delegate_to` / `spawn_agent` key as a last resort.
-fn json_spawn_marker(value: &serde_json::Value) -> Option<(Option<String>, String)> {
+/// envelope shape (`message.content[].type == "tool_use"` with a spawn tool
+/// name) and a bare top-level tool-use object, plus a top-level spawn target
+/// key (`subagent_type` / `delegate_to` / `spawn_agent`) as a last resort.
+fn json_spawn_marker(
+    markers: &DelegationMarkersJSON,
+    value: &serde_json::Value,
+) -> Option<(Option<String>, String)> {
     // Bare tool-use object on the line itself.
-    if let Some(found) = tool_use_spawn(value) {
+    if let Some(found) = tool_use_spawn(markers, value) {
         return Some(found);
     }
     // Standard envelope: message.content is an array of content blocks.
@@ -6257,14 +6263,14 @@ fn json_spawn_marker(value: &serde_json::Value) -> Option<(Option<String>, Strin
         .and_then(|c| c.as_array())
     {
         for item in content {
-            if let Some(found) = tool_use_spawn(item) {
+            if let Some(found) = tool_use_spawn(markers, item) {
                 return Some(found);
             }
         }
     }
     // Last resort: a top-level delegation key.
-    for key in ["subagent_type", "delegate_to", "spawn_agent"] {
-        if let Some(val) = value.get(key).and_then(|v| v.as_str()) {
+    for key in &markers.spawn_target_keys {
+        if let Some(val) = value.get(key.as_str()).and_then(|v| v.as_str()) {
             if !val.is_empty() {
                 return Some((Some(val.to_string()), val.to_string()));
             }
@@ -6275,7 +6281,10 @@ fn json_spawn_marker(value: &serde_json::Value) -> Option<(Option<String>, Strin
 
 /// Inspect a single content block / object for a `Task`-class tool use and, if
 /// found, derive `(spawn_reason, goal_text)` from its `input` payload.
-fn tool_use_spawn(item: &serde_json::Value) -> Option<(Option<String>, String)> {
+fn tool_use_spawn(
+    markers: &DelegationMarkersJSON,
+    item: &serde_json::Value,
+) -> Option<(Option<String>, String)> {
     let ty = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
     if !ty.eq_ignore_ascii_case("tool_use") && !ty.eq_ignore_ascii_case("tooluse") {
         return None;
@@ -6296,44 +6305,38 @@ fn tool_use_spawn(item: &serde_json::Value) -> Option<(Option<String>, String)> 
             .map(|s| s.to_string())
     };
 
-    let subagent_type = input_key("subagent_type");
-    let delegate_to = input_key("delegate_to");
-    let spawn_agent = input_key("spawn_agent");
+    // The delegate the call names, in the params' key order.
+    let target = markers
+        .spawn_target_keys
+        .iter()
+        .find_map(|key| input_key(key.as_str()));
 
-    let is_task = name_lower == "task"
-        || name_lower == "subagent"
-        || name_lower == "dispatch_agent"
-        || subagent_type.is_some()
-        || delegate_to.is_some()
-        || spawn_agent.is_some();
+    let is_task = markers
+        .spawn_tool_names
+        .iter()
+        .any(|tool| *tool == name_lower)
+        || target.is_some();
     if !is_task {
         return None;
     }
 
-    let reason = subagent_type
-        .clone()
-        .or_else(|| delegate_to.clone())
-        .or_else(|| spawn_agent.clone())
-        .or_else(|| (!name.is_empty()).then(|| name.clone()));
+    let reason = target.or_else(|| (!name.is_empty()).then(|| name.clone()));
 
-    let goal_text = input_key("description")
-        .or_else(|| input_key("prompt"))
-        .or_else(|| input_key("goal"))
-        .or_else(|| subagent_type.clone())
+    let goal_text = markers
+        .spawn_goal_keys
+        .iter()
+        .find_map(|key| input_key(key.as_str()))
         .or_else(|| (!name.is_empty()).then(|| name.clone()))
         .unwrap_or_else(|| "task".to_string());
 
     Some((reason, goal_text))
 }
 
-fn extract_marker_reason(lower: &str) -> Option<String> {
-    for key in [
-        "subagent_type",
-        "delegate_to",
-        "spawn_agent",
-        "dispatch_agent",
-    ] {
-        if let Some(idx) = lower.find(key) {
+/// The spawn reason of a plain-text line: the value after the first of the
+/// params' text reason keys found in the lowercased line.
+fn extract_marker_reason(markers: &DelegationMarkersJSON, lower: &str) -> Option<String> {
+    for key in &markers.text_reason_keys {
+        if let Some(idx) = lower.find(key.as_str()) {
             let tail = &lower[idx + key.len()..];
             let val: String = tail
                 .chars()
@@ -8653,6 +8656,38 @@ some normal line
         assert_eq!(spawns.len(), 1);
         assert_eq!(spawns[0].depth, 1);
         assert_eq!(spawns[0].goal_text, "do X");
+    }
+
+    #[test]
+    fn spawn_markers_follow_the_delegation_vocabulary() {
+        // A tool call naming a delegate is a spawn whatever its tool name; the
+        // first delegate key is the reason, the first goal key the goal.
+        let spawns = extract_spawn_markers(
+            r#"{"type":"tool_use","name":"Run","input":{"spawn_agent":"worker","delegate_to":"lead","goal":"g","prompt":"p"}}"#,
+        );
+        assert_eq!(spawns.len(), 1);
+        assert_eq!(spawns[0].spawn_reason.as_deref(), Some("lead"));
+        assert_eq!(spawns[0].goal_text, "p");
+        // A spawn tool without a delegate key: its name is reason and goal.
+        let spawns =
+            extract_spawn_markers(r#"{"type":"tool_use","name":"dispatch_agent","input":{}}"#);
+        assert_eq!(spawns.len(), 1);
+        assert_eq!(spawns[0].spawn_reason.as_deref(), Some("dispatch_agent"));
+        assert_eq!(spawns[0].goal_text, "dispatch_agent");
+        // A top-level delegate key on a record is the last resort.
+        let spawns = extract_spawn_markers(r#"{"uuid":"a","delegate_to":"reviewer"}"#);
+        assert_eq!(spawns.len(), 1);
+        assert_eq!(spawns[0].spawn_reason.as_deref(), Some("reviewer"));
+        // Any other tool is not a spawn.
+        assert!(extract_spawn_markers(
+            r#"{"type":"tool_use","name":"Bash","input":{"command":"ls"}}"#
+        )
+        .is_empty());
+        // Plain text: the value after the first reason key, depth from indent.
+        let spawns = extract_spawn_markers("  delegate_to: planner then spawn_agent=x");
+        assert_eq!(spawns.len(), 1);
+        assert_eq!(spawns[0].spawn_reason.as_deref(), Some("planner"));
+        assert_eq!(spawns[0].depth, 1);
     }
 
     #[test]
