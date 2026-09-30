@@ -612,6 +612,20 @@ pub struct SandboxContainerLayoutJSON {
     pub inner_roots: Vec<String>,
 }
 
+/// Per-user stores the operating system owns (macOS): below
+/// `library_root` (profile-relative, `library/`), the owner directory --
+/// the component below one of `library_state_directories` (`Caches`,
+/// `HTTPStorages`, ...), or a direct child of the root -- starts with one of
+/// `owner_prefixes` (`com.apple.`, `group.com.apple.`); a direct child may
+/// also start with one of `direct_owner_prefixes` (`apple`). Lowercase.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct PlatformOwnedUserStoreJSON {
+    pub library_root: String,
+    pub library_state_directories: Vec<String>,
+    pub owner_prefixes: Vec<String>,
+    pub direct_owner_prefixes: Vec<String>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct CveDetectionParamsJSON {
     pub date: String,
@@ -852,6 +866,17 @@ pub struct CveDetectionParamsJSON {
     pub owned_store_generic_tokens: Vec<String>,
     /// Shortest owner token that can name a product.
     pub owned_store_min_token_len: usize,
+    /// Per-user stores the operating system owns (see
+    /// [`PlatformOwnedUserStoreJSON`]).
+    pub platform_owned_user_store: PlatformOwnedUserStoreJSON,
+    /// Path prefixes of operating-system SERVICE images (daemons, XPC
+    /// services, the launch trampoline): `/system/library/`,
+    /// `/usr/libexec/`. General-purpose tools (`/usr/bin`) are not services.
+    pub os_service_image_path_prefixes: Vec<String>,
+    /// Binary roots on the macOS sealed system volume that hold only
+    /// platform daemons and helpers (`/system/library/`, `/usr/libexec/`,
+    /// `/usr/sbin/`; not `/usr/bin`, which holds general-purpose tools).
+    pub macos_sealed_system_binary_path_prefixes: Vec<String>,
 }
 
 fn normalize_runtime_perfdata_entry(entry: &RuntimePerfdataEntryJSON) -> RuntimePerfdataEntryJSON {
@@ -1020,6 +1045,9 @@ pub struct CveDetectionParams {
     pub application_install_prefixes: Vec<String>,
     pub owned_store_generic_tokens: HashSet<String>,
     pub owned_store_min_token_len: usize,
+    pub platform_owned_user_store: PlatformOwnedUserStoreJSON,
+    pub os_service_image_path_prefixes: Vec<String>,
+    pub macos_sealed_system_binary_path_prefixes: Vec<String>,
 }
 
 impl CloudSignature for CveDetectionParams {
@@ -1110,6 +1138,30 @@ fn lowercase_token_set(list: &[String]) -> HashSet<String> {
         .map(|token| token.trim().to_ascii_lowercase())
         .filter(|token| !token.is_empty())
         .collect()
+}
+
+/// Names, tokens and name prefixes lowercased, in order, empty entries
+/// dropped (an empty prefix would match every name).
+fn lowercase_token_list(list: &[String]) -> Vec<String> {
+    list.iter()
+        .map(|token| token.trim().to_ascii_lowercase())
+        .filter(|token| !token.is_empty())
+        .collect()
+}
+
+fn normalized_platform_owned_user_store(
+    store: &PlatformOwnedUserStoreJSON,
+) -> PlatformOwnedUserStoreJSON {
+    PlatformOwnedUserStoreJSON {
+        library_root: store
+            .library_root
+            .trim()
+            .to_ascii_lowercase()
+            .replace('\\', "/"),
+        library_state_directories: lowercase_token_list(&store.library_state_directories),
+        owner_prefixes: lowercase_token_list(&store.owner_prefixes),
+        direct_owner_prefixes: lowercase_token_list(&store.direct_owner_prefixes),
+    }
 }
 
 /// Layouts normalized like path fragments; one without a container root is
@@ -1753,6 +1805,15 @@ impl CveDetectionParams {
             ),
             owned_store_generic_tokens: lowercase_token_set(&json.owned_store_generic_tokens),
             owned_store_min_token_len: json.owned_store_min_token_len,
+            platform_owned_user_store: normalized_platform_owned_user_store(
+                &json.platform_owned_user_store,
+            ),
+            os_service_image_path_prefixes: normalized_path_fragments(
+                &json.os_service_image_path_prefixes,
+            ),
+            macos_sealed_system_binary_path_prefixes: normalized_path_fragments(
+                &json.macos_sealed_system_binary_path_prefixes,
+            ),
         }
     }
 
@@ -3398,6 +3459,24 @@ pub fn owned_store_min_token_len() -> usize {
     PARAMS_SNAPSHOT.load().owned_store_min_token_len
 }
 
+/// Per-user stores the operating system owns (lowercase, `/`).
+pub fn platform_owned_user_store() -> PlatformOwnedUserStoreJSON {
+    PARAMS_SNAPSHOT.load().platform_owned_user_store.clone()
+}
+
+/// Path prefixes of operating-system service images (lowercase, `/`).
+pub fn os_service_image_path_prefixes() -> Vec<String> {
+    PARAMS_SNAPSHOT.load().os_service_image_path_prefixes.clone()
+}
+
+/// Binary roots on the macOS sealed system volume (lowercase, `/`).
+pub fn macos_sealed_system_binary_path_prefixes() -> Vec<String> {
+    PARAMS_SNAPSHOT
+        .load()
+        .macos_sealed_system_binary_path_prefixes
+        .clone()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4785,6 +4864,34 @@ mod tests {
         assert!(is_owned_store_generic_token("helper"));
         assert!(!is_owned_store_generic_token("zoom"));
         assert!(owned_store_min_token_len() > 0);
+    }
+
+    /// The OS-owned store model loads lowercased; an empty owner prefix
+    /// (which would claim every directory for the OS) is dropped.
+    #[test]
+    fn test_platform_owned_user_store_is_normalized() {
+        let p = params_from_edited_snapshot(|value| {
+            value["platform_owned_user_store"] = serde_json::json!({
+                "library_root": "Library\\",
+                "library_state_directories": ["HTTPStorages"],
+                "owner_prefixes": ["COM.APPLE.", ""],
+                "direct_owner_prefixes": [" Apple "],
+            });
+            value["os_service_image_path_prefixes"] = serde_json::json!(["/System/Library/"]);
+            value["macos_sealed_system_binary_path_prefixes"] =
+                serde_json::json!(["/usr/sbin/", ""]);
+        });
+        assert_eq!(
+            p.platform_owned_user_store,
+            PlatformOwnedUserStoreJSON {
+                library_root: "library/".to_string(),
+                library_state_directories: vec!["httpstorages".to_string()],
+                owner_prefixes: vec!["com.apple.".to_string()],
+                direct_owner_prefixes: vec!["apple".to_string()],
+            }
+        );
+        assert_eq!(p.os_service_image_path_prefixes, vec!["/system/library/"]);
+        assert_eq!(p.macos_sealed_system_binary_path_prefixes, vec!["/usr/sbin/"]);
     }
 
     /// The published params must parse with this code. A `FormatError` means
