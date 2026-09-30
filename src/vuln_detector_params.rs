@@ -972,6 +972,13 @@ pub struct CveDetectionParamsJSON {
     /// caches, history and project state under the same roots deliberately
     /// do not match. A suffix belongs to one agent.
     pub agent_control_config_path_suffixes: BTreeMap<String, Vec<String>>,
+    /// Generic certificate / legal-entity vocabulary (lowercase) dropped
+    /// from a code-signing publisher's name (`Developer ID Application:
+    /// Google LLC (EQHXZ8M8AV)` -> `google`) before its organization tokens
+    /// are compared with a destination's owner.
+    pub publisher_org_stop_tokens: Vec<String>,
+    /// Shortest publisher organization token kept.
+    pub publisher_org_min_token_len: usize,
 }
 
 fn normalize_runtime_perfdata_entry(entry: &RuntimePerfdataEntryJSON) -> RuntimePerfdataEntryJSON {
@@ -1157,6 +1164,8 @@ pub struct CveDetectionParams {
     pub sensitive_material_labels: HashSet<String>,
     pub agent_instruction_labels: HashSet<String>,
     pub agent_control_config_path_suffixes: BTreeMap<String, Vec<String>>,
+    pub publisher_org_stop_tokens: HashSet<String>,
+    pub publisher_org_min_token_len: usize,
 }
 
 impl CloudSignature for CveDetectionParams {
@@ -1999,6 +2008,8 @@ impl CveDetectionParams {
                 })
                 .filter(|(agent, _)| !agent.is_empty())
                 .collect(),
+            publisher_org_stop_tokens: lowercase_token_set(&json.publisher_org_stop_tokens),
+            publisher_org_min_token_len: json.publisher_org_min_token_len,
         }
     }
 
@@ -3778,6 +3789,19 @@ pub fn agent_control_config_path_suffixes() -> BTreeMap<String, Vec<String>> {
         .clone()
 }
 
+/// True for a lowercase publisher-name token that names no organization.
+pub fn is_publisher_org_stop_token(token: &str) -> bool {
+    PARAMS_SNAPSHOT
+        .load()
+        .publisher_org_stop_tokens
+        .contains(token)
+}
+
+/// Shortest publisher organization token kept.
+pub fn publisher_org_min_token_len() -> usize {
+    PARAMS_SNAPSHOT.load().publisher_org_min_token_len
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5346,6 +5370,17 @@ mod tests {
         let shipped = agent_control_config_path_suffixes();
         assert!(shipped["claude_code"].contains(&"/.claude/settings.json".to_string()));
         assert!(shipped.values().flatten().all(|suffix| suffix.starts_with('/')));
+    }
+
+    #[test]
+    fn test_publisher_org_stop_tokens() {
+        let p = params_from_edited_snapshot(|value| {
+            value["publisher_org_stop_tokens"] = serde_json::json!(["LLC", " "]);
+        });
+        assert_eq!(p.publisher_org_stop_tokens, HashSet::from(["llc".to_string()]));
+        assert!(is_publisher_org_stop_token("developer"));
+        assert!(!is_publisher_org_stop_token("google"));
+        assert!(publisher_org_min_token_len() > 0);
     }
 
     /// The published params must parse with this code. A `FormatError` means
