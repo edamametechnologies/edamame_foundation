@@ -22,6 +22,8 @@
 //! - instruction inventory: the instruction directories, file names,
 //!   extensions and skill package markers `agent_visibility` walks and
 //!   recognizes
+//! - instruction references: what makes a path in an instruction body a
+//!   reference to another instruction artifact (the skill reference graph)
 //!
 //! Unlike the CVE params struct, `AgentVisibilityParamsJSON` carries NO
 //! `#[serde(default)]` fields: this model was born complete, the published
@@ -404,6 +406,28 @@ pub struct InstructionInventoryJSON {
     pub workspace_subdirectories: Vec<InstructionDirectoryJSON>,
 }
 
+/// What makes a path-like token in an instruction body a reference to
+/// another instruction artifact (`agent_visibility::extract_instruction_refs`,
+/// the edges of the skill reference graph). The tokenizer, fenced-block
+/// skipping and URL rejection stay in code. All values are lowercased by
+/// [`AgentVisibilityParams::new_from_json`].
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct InstructionReferencesJSON {
+    /// Well-known instruction file names that are a reference when written
+    /// with a path or as an explicit `@` mention (`agents.md`).
+    pub basenames: Vec<String>,
+    /// Directory segments whose artifacts are folders (`skills/`): the folder
+    /// name, or a document under it, is a reference.
+    pub folder_segments: Vec<String>,
+    /// Directory segments whose artifacts are files (`rules/`): only a
+    /// document file under them is a reference.
+    pub file_segments: Vec<String>,
+    /// Extensions (without the dot) of documents a reference can name. An
+    /// artifact extension outside this set is a config file a skill reads,
+    /// never a reference.
+    pub document_extensions: Vec<String>,
+}
+
 /// Raw JSON shape of `agent-visibility-params-db.json`. No serde defaults:
 /// the published JSON always carries every field; a missing field fails the
 /// parse and the embedded snapshot (which has all fields) stays in effect.
@@ -448,6 +472,8 @@ pub struct AgentVisibilityParamsJSON {
     pub workspace_attribution: WorkspaceAttributionJSON,
     /// Instruction inventory rules (see [`InstructionInventoryJSON`]).
     pub instruction_inventory: InstructionInventoryJSON,
+    /// Instruction reference rules (see [`InstructionReferencesJSON`]).
+    pub instruction_references: InstructionReferencesJSON,
 }
 
 /// Normalized runtime snapshot of the agent-visibility params.
@@ -477,6 +503,8 @@ pub struct AgentVisibilityParams {
     pub workspace_attribution: WorkspaceAttributionJSON,
     /// Instruction inventory rules, extensions and compared names lowercased.
     pub instruction_inventory: InstructionInventoryJSON,
+    /// Instruction reference rules, lowercased.
+    pub instruction_references: InstructionReferencesJSON,
 }
 
 impl CloudSignature for AgentVisibilityParams {
@@ -629,6 +657,18 @@ fn normalize_instruction_inventory(i: &InstructionInventoryJSON) -> InstructionI
     }
 }
 
+/// Lowercases every reference rule: tokens are compared lowercased.
+fn normalize_instruction_references(r: &InstructionReferencesJSON) -> InstructionReferencesJSON {
+    let lower =
+        |xs: &[String]| -> Vec<String> { xs.iter().map(|x| x.to_ascii_lowercase()).collect() };
+    InstructionReferencesJSON {
+        basenames: lower(&r.basenames),
+        folder_segments: lower(&r.folder_segments),
+        file_segments: lower(&r.file_segments),
+        document_extensions: lower(&r.document_extensions),
+    }
+}
+
 impl AgentVisibilityParams {
     pub fn new_from_json(json: &AgentVisibilityParamsJSON) -> Self {
         Self {
@@ -674,6 +714,7 @@ impl AgentVisibilityParams {
             history_retention: json.history_retention,
             workspace_attribution: normalize_workspace_attribution(&json.workspace_attribution),
             instruction_inventory: normalize_instruction_inventory(&json.instruction_inventory),
+            instruction_references: normalize_instruction_references(&json.instruction_references),
         }
     }
 }
@@ -845,6 +886,12 @@ pub fn instruction_inventory() -> InstructionInventoryJSON {
     PARAMS_SNAPSHOT.load().instruction_inventory.clone()
 }
 
+/// Instruction reference rules: what makes a path in an instruction body a
+/// reference to another instruction artifact (lowercased).
+pub fn instruction_references() -> InstructionReferencesJSON {
+    PARAMS_SNAPSHOT.load().instruction_references.clone()
+}
+
 /// The params signature of the current snapshot: a scan state computed under
 /// another vocabulary is recomputed.
 pub fn params_signature() -> String {
@@ -967,6 +1014,11 @@ mod tests {
         assert!(!inv.workspace_toplevel_files.is_empty());
         assert!(!inv.workspace_config_directories.is_empty());
         assert!(!inv.workspace_subdirectories.is_empty());
+        let refs = &params.instruction_references;
+        assert!(!refs.basenames.is_empty());
+        assert!(!refs.folder_segments.is_empty());
+        assert!(!refs.file_segments.is_empty());
+        assert!(!refs.document_extensions.is_empty());
     }
 
     /// Catalog names and criticality are lowercased by `new_from_json` so

@@ -18,7 +18,7 @@
 //! compiling for iOS/Android (where the agent plugins never install and the
 //! collectors simply find nothing on disk).
 
-use crate::agent_visibility_params::{self, InstructionInventoryJSON};
+use crate::agent_visibility_params::{self, InstructionInventoryJSON, InstructionReferencesJSON};
 // The URL and excerpt maskers moved to the shared redaction module (2.0.2);
 // re-exported so `agent_visibility::redact_secret_like_text` keeps working.
 pub use crate::redaction::redact_secret_like_text;
@@ -4536,39 +4536,17 @@ const MAX_INSTRUCTION_REFS: usize = 32;
 /// pathological one-line file being treated as one giant "path").
 const MAX_REF_LEN: usize = 256;
 
-/// Well-known top-level instruction filenames that qualify as references even
-/// without a recognizable directory segment (compared lowercased).
-const INSTRUCTION_REF_BASENAMES: &[&str] = &[
-    "skill.md",
-    "agents.md",
-    "claude.md",
-    "gemini.md",
-    "codex.md",
-    "rules.md",
-    "instructions.md",
-    "memory.md",
-    ".cursorrules",
-    "copilot-instructions.md",
-];
-
-/// Instruction directory segments whose artifacts are *folders* (`skills/foo`,
-/// `agents/foo`). A reference to the folder name -- or to any doc/support file
-/// under it -- names a concrete artifact, so a folder-name token qualifies.
-const INSTRUCTION_REF_FOLDER_DIR_SEGMENTS: &[&str] = &["skills/", "agents/", "subagents/"];
-
-/// Instruction directory segments whose artifacts are *files* (`rules/foo.mdc`,
-/// `commands/foo.md`). A reference must name an actual document file with a
-/// recognized doc extension; the bare directory (`rules/preferences`) names no
-/// artifact and must not become an edge.
-const INSTRUCTION_REF_FILE_DIR_SEGMENTS: &[&str] = &["commands/", "rules/", "prompts/"];
-
-/// Document extensions an instruction artifact body can carry. This is the doc
-/// subset of the inventory's artifact extensions; the config/data extensions
-/// (`json`, `toml`, `yaml`, `yml`) are deliberately excluded so a prose mention
-/// of a config file (`hooks.json`, `settings.json`, `cli-config.json`) never
-/// becomes a reference edge -- those are data the skill reads, not other
-/// instruction artifacts.
-const INSTRUCTION_REF_DOC_EXTS: &[&str] = &["md", "mdc", "txt"];
+// What qualifies a token as a reference is data in the agent-visibility
+// params (`agent_visibility_params::instruction_references()`): the
+// well-known instruction file names (a reference with a path or an explicit
+// `@` mention), the directory segments whose artifacts are folders
+// (`skills/foo` -- the folder name, or a document under it, names a concrete
+// artifact) and those whose artifacts are files (`rules/foo.mdc` -- the bare
+// directory names no artifact), and the document extensions. The config and
+// data extensions of the inventory (`json`, `toml`, `yaml`, `yml`) are not
+// document extensions, so a prose mention of a config file (`hooks.json`,
+// `settings.json`) never becomes a reference edge: those are data the skill
+// reads, not other instruction artifacts.
 
 /// Extract path-like references to *other* instruction artifacts from an
 /// instruction file body. Pure and metadata-only (invariant I5): the body is
@@ -4601,6 +4579,7 @@ const INSTRUCTION_REF_DOC_EXTS: &[&str] = &["md", "mdc", "txt"];
 ///   kept when written as an explicit `@AGENTS.md` mention or with a path.
 pub fn extract_instruction_refs(body: &[u8]) -> Vec<String> {
     let inventory = agent_visibility_params::instruction_inventory();
+    let references = agent_visibility_params::instruction_references();
     let text = String::from_utf8_lossy(body);
     let mut refs: BTreeSet<String> = BTreeSet::new();
     let mut in_fence = false;
@@ -4663,7 +4642,12 @@ pub fn extract_instruction_refs(body: &[u8]) -> Vec<String> {
                 continue;
             }
             if let Some(tok) = normalize_ref_token(raw_trim) {
-                if looks_like_instruction_ref(&tok, explicit, &inventory.artifact_extensions) {
+                if looks_like_instruction_ref(
+                    &tok,
+                    explicit,
+                    &inventory.artifact_extensions,
+                    &references,
+                ) {
                     refs.insert(tok);
                     if refs.len() >= MAX_INSTRUCTION_REFS * 4 {
                         // Hard stop scanning a pathological file once we have far
@@ -4710,8 +4694,14 @@ fn normalize_ref_token(raw: &str) -> Option<String> {
 /// Decide whether a normalized token names an instruction artifact. `explicit`
 /// is true when the raw token was written as an `@file` mention (which promotes
 /// an otherwise-ambiguous bare top-level basename to a real reference).
-/// `artifact_extensions` is the inventory's readable-artifact extension set.
-fn looks_like_instruction_ref(tok: &str, explicit: bool, artifact_extensions: &[String]) -> bool {
+/// `artifact_extensions` is the inventory's readable-artifact extension set,
+/// `references` the reference rules.
+fn looks_like_instruction_ref(
+    tok: &str,
+    explicit: bool,
+    artifact_extensions: &[String],
+    references: &InstructionReferencesJSON,
+) -> bool {
     if tok.contains("://") || tok.starts_with("mailto:") {
         return false; // web link / email, not an instruction file
     }
@@ -4724,7 +4714,7 @@ fn looks_like_instruction_ref(tok: &str, explicit: bool, artifact_extensions: &[
         .map(|e| e.to_ascii_lowercase());
     let is_doc_ext = ext
         .as_deref()
-        .map(|e| INSTRUCTION_REF_DOC_EXTS.contains(&e))
+        .map(|e| references.document_extensions.iter().any(|x| x == e))
         .unwrap_or(false);
     // A recognized-but-non-doc instruction extension is a config/data file
     // (`json`, `yaml`, `toml`, ...). These are data a skill reads, never other
@@ -4732,7 +4722,8 @@ fn looks_like_instruction_ref(tok: &str, explicit: bool, artifact_extensions: &[
     let is_config_ext = ext
         .as_deref()
         .map(|e| {
-            artifact_extensions.iter().any(|x| x == e) && !INSTRUCTION_REF_DOC_EXTS.contains(&e)
+            artifact_extensions.iter().any(|x| x == e)
+                && !references.document_extensions.iter().any(|x| x == e)
         })
         .unwrap_or(false);
 
@@ -4740,7 +4731,7 @@ fn looks_like_instruction_ref(tok: &str, explicit: bool, artifact_extensions: &[
     // .cursorrules, ...). A real reference either carries a path
     // (`.cursor/AGENTS.md`) or is an explicit `@AGENTS.md` mention; a bare
     // basename dropped into prose ("...or AGENTS.md") is a passing mention.
-    if INSTRUCTION_REF_BASENAMES.contains(&basename) {
+    if references.basenames.iter().any(|name| name == basename) {
         return has_sep || explicit;
     }
 
@@ -4748,9 +4739,10 @@ fn looks_like_instruction_ref(tok: &str, explicit: bool, artifact_extensions: &[
         return false;
     }
 
-    let in_folder_dir = INSTRUCTION_REF_FOLDER_DIR_SEGMENTS
+    let in_folder_dir = references
+        .folder_segments
         .iter()
-        .any(|seg| lower.contains(seg));
+        .any(|seg| lower.contains(seg.as_str()));
     // (b) Folder-instruction dir segment: the folder name itself
     // (`skills/gtm_report`, extension-less) or a *doc* under it
     // (`skills/gtm_report/SKILL.md`) is a concrete artifact reference. A
@@ -4763,9 +4755,10 @@ fn looks_like_instruction_ref(tok: &str, explicit: bool, artifact_extensions: &[
     if in_folder_dir {
         return ext.is_none() || is_doc_ext;
     }
-    let in_file_dir = INSTRUCTION_REF_FILE_DIR_SEGMENTS
+    let in_file_dir = references
+        .file_segments
         .iter()
-        .any(|seg| lower.contains(seg));
+        .any(|seg| lower.contains(seg.as_str()));
     // (c) File-instruction dir segment: must name an actual document file.
     if in_file_dir {
         return is_doc_ext;
