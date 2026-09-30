@@ -538,9 +538,12 @@ fn separator_colons(s: &str) -> Vec<usize> {
             if pos > 0 && s.as_bytes()[pos - 1] == b'%' {
                 return false;
             }
+            // The word the colon ends, also when tags are written without a
+            // space between them (`NOPASSWD:SETENV:`, as sudoers files
+            // usually spell them; `sudo -l` re-spaces them).
             let before = s[..pos].trim_end();
             let word = before
-                .rsplit(|c: char| c.is_whitespace() || c == ',' || c == ')')
+                .rsplit(|c: char| c.is_whitespace() || c == ',' || c == ')' || c == ':')
                 .next()
                 .unwrap_or("");
             !(TAGS.contains(&word) || DIGEST_ALGORITHMS.contains(&word))
@@ -1302,6 +1305,41 @@ bob ALL=(ALL) NOPASSWD: ALL
     }
 
     #[test]
+    fn tags_written_without_spaces_are_tags() {
+        // Sudoers files usually chain tags with no space (`sudo -l` re-spaces
+        // them): each tag applies, and no colon is taken for a host-group
+        // separator (which dropped the rule, or read `SETENV` as a command).
+        for rule in [
+            "alice ALL=(root) NOPASSWD:SETENV: /usr/bin/uptime",
+            "alice ALL=(root) SETENV:NOPASSWD: /usr/bin/uptime",
+            "alice ALL=(root) NOEXEC:SETENV:NOPASSWD: /usr/bin/uptime",
+            "alice ALL = SETENV:NOPASSWD:/usr/bin/uptime",
+        ] {
+            let grants = grade(rule);
+            assert_eq!(
+                reaches(&grants),
+                vec![SudoReach::Root(RootReason::CallerSetsEnvironment)],
+                "{rule}"
+            );
+            assert_eq!(grants[0].commands[0].command, "/usr/bin/uptime", "{rule}");
+        }
+        // Without SETENV the same command stays limited.
+        let grants = grade("alice ALL=(root) NOEXEC:NOPASSWD: /usr/bin/uptime");
+        assert_eq!(reaches(&grants), vec![SudoReach::Limited]);
+        // PASSWD chained after NOPASSWD turns it off.
+        assert!(grade("alice ALL=(root) NOPASSWD:PASSWD: /usr/bin/uptime").is_empty());
+        // A real host-group separator still splits, after chained tags.
+        let text = "alice ALL = NOPASSWD:SETENV: /usr/bin/uptime : buildhost = NOPASSWD:NOEXEC: /usr/bin/who";
+        assert_eq!(
+            reaches(&grade(text)),
+            vec![
+                SudoReach::Root(RootReason::CallerSetsEnvironment),
+                SudoReach::Limited
+            ]
+        );
+    }
+
+    #[test]
     fn host_groups_and_digests() {
         // A second host group granting ALL counts (the host is not graded).
         let text = "alice ALL = NOPASSWD: /usr/bin/uptime : buildhost = NOPASSWD: ALL";
@@ -1321,8 +1359,10 @@ bob ALL=(ALL) NOPASSWD: ALL
 
     #[test]
     fn this_macs_hand_made_rules_all_reach_root() {
-        // The three drop-ins on the dev Mac (2026-09-30), as `sudo -l`
-        // reported them; the user's own trees and ~/.cargo are writable.
+        // The three drop-ins on the dev Mac (2026-09-30), as written on disk
+        // (`NOPASSWD:SETENV:` without a space; `sudo -l` shows them re-spaced,
+        // which hid the chained-tag bug); the user's own trees and ~/.cargo
+        // are writable.
         let writable = |path: &str| path.starts_with("/Users/alice/");
         let sources = vec![
             SudoersSource {
@@ -1332,10 +1372,10 @@ bob ALL=(ALL) NOPASSWD: ALL
             SudoersSource {
                 name: "edamame_posture_cursor".to_string(),
                 text: "\
-alice ALL=(root) SETENV: NOPASSWD: /Users/alice/Programming/edamame_posture/target/release/edamame_posture *
-alice ALL=(root) SETENV: NOPASSWD: /Users/alice/.cargo/bin/cargo *
-alice ALL=(root) SETENV: NOPASSWD: /usr/bin/env *
-alice ALL=(root) SETENV: NOPASSWD: /usr/bin/bash *
+alice ALL=(root) NOPASSWD:SETENV: /Users/alice/Programming/edamame_posture/target/release/edamame_posture *
+alice ALL=(root) NOPASSWD:SETENV: /Users/alice/.cargo/bin/cargo *
+alice ALL=(root) NOPASSWD:SETENV: /usr/bin/env *
+alice ALL=(root) NOPASSWD:SETENV: /usr/bin/bash *
 ".to_string(),
             },
             SudoersSource {
@@ -1354,6 +1394,18 @@ alice ALL=(root) SETENV: NOPASSWD: /usr/bin/bash *
             .evidence_line()
             .starts_with("NOPASSWD for 'alice' in edamame_posture_cursor (4 commands): root via "));
         assert!(grants[1].evidence_line().ends_with(" +1 more"));
+        // The evidence names the commands, never a tag.
+        let commands: Vec<&str> = grants[1].commands.iter().map(|c| c.command.as_str()).collect();
+        assert_eq!(
+            commands,
+            vec![
+                "/Users/alice/Programming/edamame_posture/target/release/edamame_posture *",
+                "/Users/alice/.cargo/bin/cargo *",
+                "/usr/bin/env *",
+                "/usr/bin/bash *",
+            ]
+        );
+        assert!(!grants[1].evidence_line().contains("SETENV"));
     }
 
     #[test]
