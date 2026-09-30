@@ -18,7 +18,9 @@
 //!   history stores
 //! - workspace attribution: the agent-CLI launch vocabulary, programmatic
 //!   start markers, temporary roots, path conventions, time windows and label
-//!   wording `agent_workspaces` and `agent_transcripts::launch` read
+//!   wording `agent_workspaces` and `agent_transcripts::launch` read, plus the
+//!   transcript store's project directory and the references that name a
+//!   single-workspace agent's home (`agent_visibility`)
 //! - instruction inventory: the instruction directories, file names,
 //!   extensions and skill package markers `agent_visibility` walks and
 //!   recognizes
@@ -224,6 +226,32 @@ pub struct ProgramSubcommandJSON {
     pub subcommand: String,
 }
 
+/// A suffix that names a workspace only when the reference also contains a
+/// marker (`-claude` in a slug that contains `library`).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct ConditionalSuffixJSON {
+    pub suffix: String,
+    pub when_contains: String,
+}
+
+/// How a root path, dash-encoded slug or label names the home of a
+/// single-workspace agent (its fleet workspace). Matched against the
+/// lowercased reference with `/` separators; any matcher decides. The
+/// agent's product label (`Codex`) is the supported-agents registry's
+/// (`supported_agents::fleet_workspace_display_name`).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct FleetWorkspaceReferenceJSON {
+    pub agent_type: String,
+    /// The whole reference (`.codex`).
+    pub equals: Vec<String>,
+    /// Anywhere in the reference (`/.codex`, `/documents/codex/`).
+    pub contains: Vec<String>,
+    /// At the end of the reference (`-codex`).
+    pub ends_with: Vec<String>,
+    /// At the end, only when the reference also contains a marker.
+    pub conditional_suffixes: Vec<ConditionalSuffixJSON>,
+}
+
 /// A path prefix another spelling of the same directory uses (macOS
 /// `/private/tmp` is `/tmp`).
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -338,6 +366,13 @@ pub struct WorkspaceAttributionJSON {
     pub temporary_workspace_label: String,
     /// Short agent names, for labels that name an agent.
     pub agent_labels: std::collections::BTreeMap<String, String>,
+    /// Transcript store directories whose child names a project's workspace
+    /// slug (`~/.claude/projects/<slug>/...`), matched exactly against path
+    /// components.
+    pub project_directories: Vec<String>,
+    /// References to single-workspace agents' homes, in match order (the
+    /// first agent whose matchers hit wins).
+    pub fleet_workspace_references: Vec<FleetWorkspaceReferenceJSON>,
 }
 
 /// An instruction directory and the component kind its artifacts project to.
@@ -568,7 +603,9 @@ fn normalize_model_pricing(pricing: &ModelPricingJSON) -> ModelPricingJSON {
 
 /// Lowercases what the launch recognizer compares case-insensitively:
 /// program names, extensions, package markers, variable spellings and the
-/// start markers. Keys, options, roots and labels are kept as written.
+/// start markers, and the fleet-workspace matchers (compared with a
+/// lowercased reference). Keys, options, roots, project directories and
+/// labels are kept as written.
 fn normalize_workspace_attribution(w: &WorkspaceAttributionJSON) -> WorkspaceAttributionJSON {
     let lower =
         |xs: &[String]| -> Vec<String> { xs.iter().map(|x| x.to_ascii_lowercase()).collect() };
@@ -633,6 +670,25 @@ fn normalize_workspace_attribution(w: &WorkspaceAttributionJSON) -> WorkspaceAtt
         max_launch_chain: w.max_launch_chain,
         temporary_workspace_label: w.temporary_workspace_label.clone(),
         agent_labels: w.agent_labels.clone(),
+        project_directories: w.project_directories.clone(),
+        fleet_workspace_references: w
+            .fleet_workspace_references
+            .iter()
+            .map(|r| FleetWorkspaceReferenceJSON {
+                agent_type: r.agent_type.clone(),
+                equals: lower(&r.equals),
+                contains: lower(&r.contains),
+                ends_with: lower(&r.ends_with),
+                conditional_suffixes: r
+                    .conditional_suffixes
+                    .iter()
+                    .map(|c| ConditionalSuffixJSON {
+                        suffix: c.suffix.to_ascii_lowercase(),
+                        when_contains: c.when_contains.to_ascii_lowercase(),
+                    })
+                    .collect(),
+            })
+            .collect(),
     }
 }
 
@@ -998,6 +1054,8 @@ mod tests {
         assert!(!w.subagent_directory.is_empty());
         assert!(w.background_launch_window_secs > 0);
         assert!(!w.temporary_workspace_label.is_empty());
+        assert!(!w.project_directories.is_empty());
+        assert!(!w.fleet_workspace_references.is_empty());
         assert!(w
             .agent_cli_programs
             .iter()

@@ -18,7 +18,9 @@
 //! compiling for iOS/Android (where the agent plugins never install and the
 //! collectors simply find nothing on disk).
 
-use crate::agent_visibility_params::{self, InstructionInventoryJSON, InstructionReferencesJSON};
+use crate::agent_visibility_params::{
+    self, FleetWorkspaceReferenceJSON, InstructionInventoryJSON, InstructionReferencesJSON,
+};
 // The URL and excerpt maskers moved to the shared redaction module (2.0.2);
 // re-exported so `agent_visibility::redact_secret_like_text` keeps working.
 pub use crate::redaction::redact_secret_like_text;
@@ -5087,13 +5089,16 @@ const MAX_DIR_SCAN_ENTRIES: usize = 4096;
 
 /// Extract the encoded project slug from a Cursor/Claude transcript
 /// `source_path`. Both encode the workspace as the path component immediately
-/// after a `projects` directory:
+/// after a project directory of the transcript store (the params'
+/// `project_directories`, `projects`):
 ///
 /// - Cursor: `~/.cursor/projects/<slug>/agent-transcripts/<uuid>.jsonl`
 /// - Claude: `~/.claude/projects/<slug>/<uuid>.jsonl`
 ///
 /// Returns `None` for agents that do not use this scheme.
 pub fn project_slug_from_source_path(source_path: &str) -> Option<String> {
+    let params = agent_visibility_params::workspace_attribution();
+    let project_directories = &params.workspace_attribution.project_directories;
     let comps: Vec<String> = Path::new(source_path)
         .components()
         .filter_map(|c| match c {
@@ -5102,7 +5107,7 @@ pub fn project_slug_from_source_path(source_path: &str) -> Option<String> {
         })
         .collect();
     for i in 0..comps.len() {
-        if comps[i] == "projects" && i + 1 < comps.len() {
+        if project_directories.iter().any(|dir| *dir == comps[i]) && i + 1 < comps.len() {
             let slug = &comps[i + 1];
             if !slug.is_empty() {
                 return Some(slug.clone());
@@ -5443,7 +5448,7 @@ pub fn workspace_root_and_slug_for_session(
 /// Support folder name.
 pub fn workspace_display_label(root: &Path) -> String {
     if let Some(agent) = agent_type_for_fleet_workspace_ref(&root.to_string_lossy()) {
-        if let Some(name) = crate::supported_agents::fleet_workspace_display_name(agent) {
+        if let Some(name) = crate::supported_agents::fleet_workspace_display_name(&agent) {
             return name.to_string();
         }
     }
@@ -5462,7 +5467,7 @@ pub fn label_from_workspace_slug(slug: &str) -> String {
         return String::new();
     }
     if let Some(agent) = agent_type_for_fleet_workspace_ref(s) {
-        if let Some(name) = crate::supported_agents::fleet_workspace_display_name(agent) {
+        if let Some(name) = crate::supported_agents::fleet_workspace_display_name(&agent) {
             return name.to_string();
         }
     }
@@ -5486,65 +5491,49 @@ pub fn label_from_workspace_slug(slug: &str) -> String {
 /// Infer a fleet-workspace agent type from a root path, dash-encoded slug, or
 /// product label. Used by inventory labelling and Path attribution for idle
 /// seeds. Returns `None` for ordinary project workspaces.
-pub fn agent_type_for_fleet_workspace_ref(path_or_slug: &str) -> Option<&'static str> {
+///
+/// The path and slug matchers are the params' `fleet_workspace_references`,
+/// tried in order (the shared Codex store and the desktop sandbox cwd under
+/// `~/Documents/Codex/...`; Claude Desktop's app-support / Roaming / `.config`
+/// directory, never a bare `~/.claude`, or every Claude Code workspace would
+/// collapse to Desktop). An already-pretty product label (an inventory or
+/// seed row) is the registry's own name for one of those agents.
+pub fn agent_type_for_fleet_workspace_ref(path_or_slug: &str) -> Option<String> {
     let hay = path_or_slug.trim().to_ascii_lowercase().replace('\\', "/");
     if hay.is_empty() {
         return None;
     }
-    // Already-pretty product labels (inventory / prior seed rows).
-    match hay.as_str() {
-        "openclaw" => return Some("openclaw"),
-        "codex" => return Some("codex"),
-        "claude desktop" => return Some("claude_desktop"),
-        "hermes" => return Some("hermes"),
-        _ => {}
-    }
-    if hay.contains("/.hermes")
-        || hay.ends_with("/.hermes")
-        || hay.ends_with("-.hermes")
-        || hay.ends_with("-hermes")
-        || hay == ".hermes"
-    {
-        return Some("hermes");
-    }
-    if hay.contains("/.openclaw")
-        || hay.ends_with("/.openclaw")
-        || hay.ends_with("-.openclaw")
-        || hay.ends_with("-openclaw")
-        || hay == ".openclaw"
-    {
-        return Some("openclaw");
-    }
-    // Shared Codex store (`~/.codex`) and desktop sandbox cwd under
-    // `~/Documents/Codex/...` (collapsed onto the store by the transcript
-    // adapter; still recognised here for stale usage-only slugs).
-    if hay.contains("/.codex")
-        || hay.ends_with("/.codex")
-        || hay.ends_with("-.codex")
-        || hay.ends_with("-codex")
-        || hay == ".codex"
-        || hay.contains("/documents/codex/")
-        || hay.ends_with("/documents/codex")
-        || hay.contains("-documents-codex-")
-        || hay.ends_with("-documents-codex")
-    {
-        return Some("codex");
-    }
-    // Claude Desktop app-support / Roaming / `.config` -- never bare `~/.claude`
-    // (Claude Code), or every Claude Code workspace collapses to Desktop.
-    if hay.contains("/application support/claude")
-        || hay.contains("/appdata/roaming/claude")
-        || hay.ends_with("/.config/claude")
-        || hay.contains("/.config/claude/")
-        || hay.contains("-application support-claude")
-        // Canonical (fully dash-flattened) form of the same slug.
-        || hay.contains("-application-support-claude")
-        || hay.contains("-appdata-roaming-claude")
-        || (hay.ends_with("-claude") && hay.contains("library"))
-    {
-        return Some("claude_desktop");
-    }
-    None
+    let params = agent_visibility_params::workspace_attribution();
+    let references = &params.workspace_attribution.fleet_workspace_references;
+    let by_label = references.iter().find(|reference| {
+        crate::supported_agents::fleet_workspace_display_name(&reference.agent_type)
+            .is_some_and(|label| label.to_ascii_lowercase() == hay)
+    });
+    by_label
+        .or_else(|| {
+            references
+                .iter()
+                .find(|reference| fleet_reference_matches(reference, &hay))
+        })
+        .map(|reference| reference.agent_type.clone())
+}
+
+/// Whether a lowercased, `/`-separated reference hits any matcher of one
+/// fleet-workspace reference.
+fn fleet_reference_matches(reference: &FleetWorkspaceReferenceJSON, hay: &str) -> bool {
+    reference.equals.iter().any(|whole| hay == whole)
+        || reference
+            .contains
+            .iter()
+            .any(|needle| hay.contains(needle.as_str()))
+        || reference
+            .ends_with
+            .iter()
+            .any(|suffix| hay.ends_with(suffix.as_str()))
+        || reference.conditional_suffixes.iter().any(|conditional| {
+            hay.ends_with(conditional.suffix.as_str())
+                && hay.contains(conditional.when_contains.as_str())
+        })
 }
 
 /// A single workspace repository's discovered instruction inventory.
@@ -10274,7 +10263,7 @@ skills/gtm-report and @rules/invariants.mdc.
         ] {
             let slug = slug_from_workspace_dir(dir);
             assert_eq!(
-                agent_type_for_fleet_workspace_ref(&slug),
+                agent_type_for_fleet_workspace_ref(&slug).as_deref(),
                 Some(expect),
                 "slug {} did not map to {}",
                 slug,
@@ -10570,22 +10559,51 @@ sandbox_mode = \"danger-full-access\"
     #[test]
     fn agent_type_for_fleet_workspace_ref_classifies_homes() {
         assert_eq!(
-            agent_type_for_fleet_workspace_ref("/Users/me/.codex"),
+            agent_type_for_fleet_workspace_ref("/Users/me/.codex").as_deref(),
             Some("codex")
         );
         assert_eq!(
-            agent_type_for_fleet_workspace_ref("/Users/me/Documents/Codex/2026-07-21/do"),
+            agent_type_for_fleet_workspace_ref("/Users/me/Documents/Codex/2026-07-21/do")
+                .as_deref(),
             Some("codex")
         );
         assert_eq!(
             agent_type_for_fleet_workspace_ref("/Users/me/Programming/edamame_core"),
             None
         );
-        assert_eq!(agent_type_for_fleet_workspace_ref("Codex"), Some("codex"));
+        assert_eq!(
+            agent_type_for_fleet_workspace_ref("Codex").as_deref(),
+            Some("codex")
+        );
         assert_eq!(
             agent_type_for_fleet_workspace_ref("/Users/me/.claude"),
             None
         );
+        // Every matcher kind of the params, and the order between agents.
+        for (reference, expect) in [
+            (".hermes", Some("hermes")),
+            ("-Users-me-.openclaw", Some("openclaw")),
+            ("/Users/me/Documents/Codex", Some("codex")),
+            ("-Users-me-Documents-Codex-2026-07-21", Some("codex")),
+            ("/home/me/.config/Claude", Some("claude_desktop")),
+            (
+                "-Users-me-Library-Application-Support-Claude",
+                Some("claude_desktop"),
+            ),
+            (
+                "C:\\Users\\me\\AppData\\Roaming\\Claude\\x",
+                Some("claude_desktop"),
+            ),
+            ("Claude Desktop", Some("claude_desktop")),
+            ("-Users-me-src-claude", None),
+            ("Hermes", Some("hermes")),
+        ] {
+            assert_eq!(
+                agent_type_for_fleet_workspace_ref(reference).as_deref(),
+                expect,
+                "{reference}"
+            );
+        }
     }
 
     #[test]

@@ -675,7 +675,7 @@ pub fn unique_workspace_labels(
                 input.dir
             };
             let fleet = agent_type_for_fleet_workspace_ref(reference)
-                .and_then(fleet_workspace_display_name);
+                .and_then(|agent| fleet_workspace_display_name(&agent));
             if let Some(name) = fleet {
                 return Kind::Fixed(name.to_string());
             }
