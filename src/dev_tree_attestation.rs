@@ -42,6 +42,10 @@
 //!    index, and is the file unmodified relative to the index by git's own
 //!    stat check (same size and mtime, plus ctime on Unix)?
 //!
+//! The marker names come from the params (`vuln_detector_params`
+//! `dev_tree_markers`); the structure each one needs (a manifest NEXT TO an
+//! install state, a state file INSIDE the build directory, ...) is here.
+//!
 //! None of these facts is proof of benignity -- an attacker can plant any
 //! marker, `git init` a directory, or `git add` a payload. The detector uses
 //! them only to replace missing parent attribution in the bare-lineage LOW
@@ -52,8 +56,10 @@
 //! Called on both sides of the sandbox boundary: in-process by the
 //! standalone core and by the helper's `attest_dev_trees` utility order.
 
+use crate::vuln_detector_params::{self, DevTreeMarkersJSON};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -146,7 +152,7 @@ fn attest_dev_trees_until(
     paths: &[String],
     mut out_of_time: impl FnMut() -> bool,
 ) -> DevTreeAttestationBatch {
-    let mut walker = TreeWalker::default();
+    let mut walker = TreeWalker::new();
     let mut seen = std::collections::HashSet::new();
     let mut batch = DevTreeAttestationBatch::default();
     for raw in paths {
@@ -173,21 +179,30 @@ struct DirMarkers {
     git_dir: Option<PathBuf>,
 }
 
-/// Per-call caches: many FIM events share ancestors and one index.
-#[derive(Default)]
+/// Per-call caches: many FIM events share ancestors and one index. The
+/// marker names are read once per call.
 struct TreeWalker {
+    names: DevTreeMarkersJSON,
     dirs: HashMap<PathBuf, DirMarkers>,
     indexes: HashMap<PathBuf, Option<GitIndex>>,
 }
 
 impl TreeWalker {
+    fn new() -> Self {
+        Self {
+            names: vuln_detector_params::dev_tree_markers(),
+            dirs: HashMap::new(),
+            indexes: HashMap::new(),
+        }
+    }
+
     fn markers(&mut self, dir: &Path) -> DirMarkers {
         if let Some(found) = self.dirs.get(dir) {
             return found.clone();
         }
         let markers = DirMarkers {
-            build_tree: build_tree_marker(dir),
-            venv: dir.join("pyvenv.cfg").is_file(),
+            build_tree: build_tree_marker(dir, &self.names),
+            venv: named_file(dir, &self.names.venv_config_file),
             git_dir: resolve_git_dir(dir),
         };
         self.dirs.insert(dir.to_path_buf(), markers.clone());
@@ -209,7 +224,7 @@ impl TreeWalker {
             if result.build_tree_root.is_none() {
                 let kind = markers
                     .build_tree
-                    .or_else(|| go_build_work_marker(dir, path));
+                    .or_else(|| go_build_work_marker(dir, path, &self.names));
                 if let Some(kind) = kind {
                     result.build_tree_root = Some(dir.to_string_lossy().to_string());
                     result.build_tree_kind = Some(kind.to_string());
@@ -300,22 +315,28 @@ fn scan_measured_clean(path: &Path) -> bool {
         && std::fs::File::open(path).is_ok()
 }
 
+/// `dir/name` is a regular file. An empty name (a params publishing
+/// mistake) never matches: `dir.join("")` is `dir` itself.
+fn named_file(dir: &Path, name: &str) -> bool {
+    !name.is_empty() && dir.join(name).is_file()
+}
+
 /// Build-tree root markers a directory carries by itself (Go work dirs are
 /// recognised per path, see [`go_build_work_marker`]).
-fn build_tree_marker(dir: &Path) -> Option<&'static str> {
-    if has_cachedir_tag(dir) {
+fn build_tree_marker(dir: &Path, names: &DevTreeMarkersJSON) -> Option<&'static str> {
+    if has_cachedir_tag(dir, names) {
         return Some("cachedir_tag");
     }
-    if dir.join("CMakeCache.txt").is_file() {
+    if named_file(dir, &names.cmake_cache_file) {
         return Some("cmake_build");
     }
-    if dir.join("package.json").is_file() && js_install_state(dir) {
+    if named_file(dir, &names.node_manifest_file) && js_install_state(dir, names) {
         return Some("node_project");
     }
-    if swiftpm_build_dir(dir) {
+    if swiftpm_build_dir(dir, names) {
         return Some("swiftpm_build");
     }
-    if bazel_workspace(dir) {
+    if bazel_workspace(dir, names) {
         return Some("bazel_workspace");
     }
     None
@@ -324,63 +345,72 @@ fn build_tree_marker(dir: &Path) -> Option<&'static str> {
 /// A SwiftPM build directory: `.build/` next to the package manifest
 /// (`Package.swift`), holding the `workspace-state.json` SwiftPM writes on
 /// every dependency resolution, a package without dependencies included.
-fn swiftpm_build_dir(dir: &Path) -> bool {
-    dir.file_name().is_some_and(|name| name == ".build")
-        && dir.join("workspace-state.json").is_file()
+fn swiftpm_build_dir(dir: &Path, names: &DevTreeMarkersJSON) -> bool {
+    !names.swiftpm_build_directory.is_empty()
+        && dir
+            .file_name()
+            .is_some_and(|name| name == OsStr::new(&names.swiftpm_build_directory))
+        && named_file(dir, &names.swiftpm_state_file)
         && dir
             .parent()
-            .is_some_and(|package| package.join("Package.swift").is_file())
+            .is_some_and(|package| named_file(package, &names.swiftpm_manifest_file))
 }
 
-/// Files that make a directory a Bazel workspace root: `MODULE.bazel`
-/// (Bzlmod), `WORKSPACE.bazel` and `WORKSPACE` (before it).
-const BAZEL_WORKSPACE_FILES: &[&str] = &["MODULE.bazel", "WORKSPACE.bazel", "WORKSPACE"];
-
-/// A Bazel workspace that has built: a workspace file next to the output
+/// A Bazel workspace that has built: a workspace file (`MODULE.bazel` for
+/// Bzlmod, `WORKSPACE.bazel` and `WORKSPACE` before it) next to the output
 /// tree Bazel links there -- `bazel-out`, or the `bazel-<workspace directory
 /// name>` link to the execution root. The link counts even when it dangles
 /// (the output base was expunged): Bazel created it.
-fn bazel_workspace(dir: &Path) -> bool {
-    if !BAZEL_WORKSPACE_FILES
+fn bazel_workspace(dir: &Path, names: &DevTreeMarkersJSON) -> bool {
+    if !names
+        .bazel_workspace_files
         .iter()
-        .any(|file| dir.join(file).is_file())
+        .any(|file| named_file(dir, file))
     {
         return false;
     }
     let entry = |name: &str| std::fs::symlink_metadata(dir.join(name)).is_ok();
-    entry("bazel-out")
-        || dir
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| entry(&format!("bazel-{name}")))
+    (!names.bazel_output_link.is_empty() && entry(&names.bazel_output_link))
+        || (!names.bazel_workspace_link_prefix.is_empty()
+            && dir
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| {
+                    entry(&format!("{}{name}", names.bazel_workspace_link_prefix))
+                }))
 }
 
 /// A package manager has installed into the project at `dir`: npm, pnpm and
-/// yarn leave their state inside `node_modules/`; bun keeps none there and
-/// writes its lockfile (`bun.lock`, the binary `bun.lockb` before bun 1.2)
-/// at the project root next to the `node_modules/` it populated.
-fn js_install_state(dir: &Path) -> bool {
-    let node_modules = dir.join("node_modules");
-    [
-        ".package-lock.json",
-        ".modules.yaml",
-        ".yarn-state.yml",
-        ".yarn-integrity",
-    ]
-    .iter()
-    .any(|state| node_modules.join(state).is_file())
+/// yarn leave their state inside `node_modules/` (`.package-lock.json`,
+/// `.modules.yaml`, `.yarn-state.yml`, `.yarn-integrity`); bun keeps none
+/// there and writes its lockfile (`bun.lock`, the binary `bun.lockb` before
+/// bun 1.2) at the project root next to the `node_modules/` it populated.
+fn js_install_state(dir: &Path, names: &DevTreeMarkersJSON) -> bool {
+    if names.node_modules_directory.is_empty() {
+        return false;
+    }
+    let node_modules = dir.join(&names.node_modules_directory);
+    names
+        .node_install_state_files
+        .iter()
+        .any(|state| node_modules.join(state).is_file())
         || (node_modules.is_dir()
-            && ["bun.lock", "bun.lockb"]
+            && names
+                .bun_lockfiles
                 .iter()
                 .any(|lock| dir.join(lock).is_file()))
 }
 
 /// `dir` is a Go build work directory (`$WORK`, `go-build<digits>`) and
 /// `path` lies in one of its action directories (`b<NNN>/`) that holds the
-/// import configuration the go command writes before compiling or linking.
-fn go_build_work_marker(dir: &Path, path: &Path) -> Option<&'static str> {
+/// import configuration the go command writes before compiling or linking
+/// (`importcfg`, `importcfg.link`).
+fn go_build_work_marker(dir: &Path, path: &Path, names: &DevTreeMarkersJSON) -> Option<&'static str> {
+    if names.go_build_work_directory_prefix.is_empty() {
+        return None;
+    }
     let name = dir.file_name()?.to_str()?;
-    let digits = name.strip_prefix("go-build")?;
+    let digits = name.strip_prefix(names.go_build_work_directory_prefix.as_str())?;
     if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
@@ -391,13 +421,19 @@ fn go_build_work_marker(dir: &Path, path: &Path) -> Option<&'static str> {
         return None;
     }
     let action_dir = dir.join(action);
-    (action_dir.join("importcfg").is_file() || action_dir.join("importcfg.link").is_file())
+    names
+        .go_build_action_config_files
+        .iter()
+        .any(|file| action_dir.join(file).is_file())
         .then_some("go_build_work")
 }
 
-fn has_cachedir_tag(dir: &Path) -> bool {
+fn has_cachedir_tag(dir: &Path, names: &DevTreeMarkersJSON) -> bool {
     use std::io::Read;
-    let Ok(mut file) = std::fs::File::open(dir.join("CACHEDIR.TAG")) else {
+    if names.cachedir_tag_file.is_empty() {
+        return false;
+    }
+    let Ok(mut file) = std::fs::File::open(dir.join(&names.cachedir_tag_file)) else {
         return false;
     };
     let mut head = [0u8; 43];

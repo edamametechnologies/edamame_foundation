@@ -618,6 +618,43 @@ pub struct SandboxContainerLayoutJSON {
 /// `HTTPStorages`, ...), or a direct child of the root -- starts with one of
 /// `owner_prefixes` (`com.apple.`, `group.com.apple.`); a direct child may
 /// also start with one of `direct_owner_prefixes` (`apple`). Lowercase.
+/// File and directory NAMES (case-sensitive, as on disk) that mark a
+/// developer toolchain tree, read by `dev_tree_attestation` on disk and by
+/// the detector in the FIM stream:
+/// - `cachedir_tag_file`: the Cache Directory Tagging file (its content
+///   signature is fixed by the spec, see
+///   `dev_tree_attestation::CACHEDIR_TAG_SIGNATURE`);
+/// - `cmake_cache_file`: a CMake build directory;
+/// - `node_manifest_file` next to `node_modules_directory` holding one of
+///   `node_install_state_files` (npm, pnpm, yarn), or next to it and one of
+///   `bun_lockfiles`: a JavaScript project root;
+/// - `swiftpm_build_directory` holding `swiftpm_state_file`, next to
+///   `swiftpm_manifest_file`: a SwiftPM build directory;
+/// - one of `bazel_workspace_files` next to `bazel_output_link` or
+///   `bazel_workspace_link_prefix` + the directory name: a Bazel workspace
+///   that has built;
+/// - `go_build_work_directory_prefix` + digits, with an action directory
+///   holding one of `go_build_action_config_files`: a Go build work dir;
+/// - `venv_config_file`: a PEP 405 virtual environment root.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct DevTreeMarkersJSON {
+    pub cachedir_tag_file: String,
+    pub cmake_cache_file: String,
+    pub node_manifest_file: String,
+    pub node_modules_directory: String,
+    pub node_install_state_files: Vec<String>,
+    pub bun_lockfiles: Vec<String>,
+    pub swiftpm_build_directory: String,
+    pub swiftpm_state_file: String,
+    pub swiftpm_manifest_file: String,
+    pub bazel_workspace_files: Vec<String>,
+    pub bazel_output_link: String,
+    pub bazel_workspace_link_prefix: String,
+    pub go_build_work_directory_prefix: String,
+    pub go_build_action_config_files: Vec<String>,
+    pub venv_config_file: String,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 pub struct PlatformOwnedUserStoreJSON {
     pub library_root: String,
@@ -914,6 +951,13 @@ pub struct CveDetectionParamsJSON {
     /// Lockfiles and manifests an install legitimately rewrites (lowercase
     /// basenames).
     pub install_artifact_basenames: Vec<String>,
+    /// Developer toolchain tree markers (see [`DevTreeMarkersJSON`]).
+    pub dev_tree_markers: DevTreeMarkersJSON,
+    /// Suffixes (lowercase) of code and persistence definitions that are
+    /// never a data artifact, even where `benign_temp_artifact_suffixes`
+    /// lists them: PowerShell modules and the launchd / systemd / XDG
+    /// autostart / Task Scheduler definitions.
+    pub code_module_suffixes: Vec<String>,
 }
 
 fn normalize_runtime_perfdata_entry(entry: &RuntimePerfdataEntryJSON) -> RuntimePerfdataEntryJSON {
@@ -1094,6 +1138,8 @@ pub struct CveDetectionParams {
     pub dependency_tree_markers: Vec<String>,
     pub package_manager_runtimes: HashSet<String>,
     pub install_artifact_basenames: HashSet<String>,
+    pub dev_tree_markers: DevTreeMarkersJSON,
+    pub code_module_suffixes: Vec<String>,
 }
 
 impl CloudSignature for CveDetectionParams {
@@ -1207,6 +1253,35 @@ fn normalized_platform_owned_user_store(
         library_state_directories: lowercase_token_list(&store.library_state_directories),
         owner_prefixes: lowercase_token_list(&store.owner_prefixes),
         direct_owner_prefixes: lowercase_token_list(&store.direct_owner_prefixes),
+    }
+}
+
+/// On-disk names are trimmed but keep their case; empty list entries are
+/// dropped. An empty single name stays empty and its marker never matches
+/// (`dev_tree_attestation` checks).
+fn trimmed_dev_tree_markers(markers: &DevTreeMarkersJSON) -> DevTreeMarkersJSON {
+    let names = |list: &[String]| -> Vec<String> {
+        list.iter()
+            .map(|name| name.trim().to_string())
+            .filter(|name| !name.is_empty())
+            .collect()
+    };
+    DevTreeMarkersJSON {
+        cachedir_tag_file: markers.cachedir_tag_file.trim().to_string(),
+        cmake_cache_file: markers.cmake_cache_file.trim().to_string(),
+        node_manifest_file: markers.node_manifest_file.trim().to_string(),
+        node_modules_directory: markers.node_modules_directory.trim().to_string(),
+        node_install_state_files: names(&markers.node_install_state_files),
+        bun_lockfiles: names(&markers.bun_lockfiles),
+        swiftpm_build_directory: markers.swiftpm_build_directory.trim().to_string(),
+        swiftpm_state_file: markers.swiftpm_state_file.trim().to_string(),
+        swiftpm_manifest_file: markers.swiftpm_manifest_file.trim().to_string(),
+        bazel_workspace_files: names(&markers.bazel_workspace_files),
+        bazel_output_link: markers.bazel_output_link.trim().to_string(),
+        bazel_workspace_link_prefix: markers.bazel_workspace_link_prefix.trim().to_string(),
+        go_build_work_directory_prefix: markers.go_build_work_directory_prefix.trim().to_string(),
+        go_build_action_config_files: names(&markers.go_build_action_config_files),
+        venv_config_file: markers.venv_config_file.trim().to_string(),
     }
 }
 
@@ -1895,6 +1970,8 @@ impl CveDetectionParams {
             dependency_tree_markers: normalized_path_fragments(&json.dependency_tree_markers),
             package_manager_runtimes: lowercase_token_set(&json.package_manager_runtimes),
             install_artifact_basenames: lowercase_token_set(&json.install_artifact_basenames),
+            dev_tree_markers: trimmed_dev_tree_markers(&json.dev_tree_markers),
+            code_module_suffixes: lowercase_token_list(&json.code_module_suffixes),
         }
     }
 
@@ -3626,6 +3703,16 @@ pub fn is_install_artifact_basename(basename: &str) -> bool {
         .contains(basename)
 }
 
+/// Developer toolchain tree markers (names as on disk).
+pub fn dev_tree_markers() -> DevTreeMarkersJSON {
+    PARAMS_SNAPSHOT.load().dev_tree_markers.clone()
+}
+
+/// Code / persistence definition suffixes (lowercase).
+pub fn code_module_suffixes() -> Vec<String> {
+    PARAMS_SNAPSHOT.load().code_module_suffixes.clone()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5133,6 +5220,25 @@ mod tests {
         assert!(!is_package_manager_runtime_name("bash"));
         assert!(is_install_artifact_basename("go.sum"));
         assert!(!is_install_artifact_basename(".bashrc"));
+    }
+
+    /// Dev-tree markers are on-disk names: trimmed, case kept, empty list
+    /// entries dropped. Code-module suffixes load lowercased.
+    #[test]
+    fn test_dev_tree_markers_keep_their_case() {
+        let p = params_from_edited_snapshot(|value| {
+            value["dev_tree_markers"]["swiftpm_manifest_file"] = serde_json::json!(" Package.swift ");
+            value["dev_tree_markers"]["bazel_workspace_files"] =
+                serde_json::json!(["MODULE.bazel", " "]);
+            value["code_module_suffixes"] = serde_json::json!([".PSM1", ""]);
+        });
+        assert_eq!(p.dev_tree_markers.swiftpm_manifest_file, "Package.swift");
+        assert_eq!(p.dev_tree_markers.bazel_workspace_files, vec!["MODULE.bazel"]);
+        assert_eq!(p.code_module_suffixes, vec![".psm1"]);
+        let shipped = dev_tree_markers();
+        assert_eq!(shipped.cmake_cache_file, "CMakeCache.txt");
+        assert_eq!(shipped.venv_config_file, "pyvenv.cfg");
+        assert!(code_module_suffixes().iter().any(|suffix| suffix == ".plist"));
     }
 
     /// The published params must parse with this code. A `FormatError` means
