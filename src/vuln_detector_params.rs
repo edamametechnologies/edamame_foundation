@@ -979,6 +979,22 @@ pub struct CveDetectionParamsJSON {
     pub publisher_org_stop_tokens: Vec<String>,
     /// Shortest publisher organization token kept.
     pub publisher_org_min_token_len: usize,
+    /// `process_memory_scrape`: distinct targets one requester has to open
+    /// read-only within a tick before its reads read as an inventory sweep
+    /// rather than a targeted scrape (a theft names its victim).
+    pub memory_scrape_read_enumeration_min_distinct_targets: usize,
+    /// `process_memory_scrape` census: shortest hex run that marks a path
+    /// segment as naming one invocation (`<crate>-<hash>`, a GUID unpack
+    /// directory) rather than a tool.
+    pub memory_scrape_per_invocation_min_hex_run: usize,
+    /// `sensitive_material_egress` process-tree relay: distinct credential
+    /// classes the sibling must hold (a single ambient secret next door is
+    /// ordinary developer work).
+    pub relay_min_credential_classes: usize,
+    /// Distinct local processes reaching one blacklisted prefix before it
+    /// reads as shared infrastructure (VPN / proxy / CDN egress) rather than
+    /// a C2 endpoint.
+    pub shared_infrastructure_min_local_processes: usize,
 }
 
 fn normalize_runtime_perfdata_entry(entry: &RuntimePerfdataEntryJSON) -> RuntimePerfdataEntryJSON {
@@ -1166,6 +1182,10 @@ pub struct CveDetectionParams {
     pub agent_control_config_path_suffixes: BTreeMap<String, Vec<String>>,
     pub publisher_org_stop_tokens: HashSet<String>,
     pub publisher_org_min_token_len: usize,
+    pub memory_scrape_read_enumeration_min_distinct_targets: usize,
+    pub memory_scrape_per_invocation_min_hex_run: usize,
+    pub relay_min_credential_classes: usize,
+    pub shared_infrastructure_min_local_processes: usize,
 }
 
 impl CloudSignature for CveDetectionParams {
@@ -2017,6 +2037,12 @@ impl CveDetectionParams {
                 .collect(),
             publisher_org_stop_tokens: lowercase_token_set(&json.publisher_org_stop_tokens),
             publisher_org_min_token_len: json.publisher_org_min_token_len,
+            memory_scrape_read_enumeration_min_distinct_targets: json
+                .memory_scrape_read_enumeration_min_distinct_targets,
+            memory_scrape_per_invocation_min_hex_run: json.memory_scrape_per_invocation_min_hex_run,
+            relay_min_credential_classes: json.relay_min_credential_classes,
+            shared_infrastructure_min_local_processes: json
+                .shared_infrastructure_min_local_processes,
         }
     }
 
@@ -3812,6 +3838,32 @@ pub fn publisher_org_min_token_len() -> usize {
     PARAMS_SNAPSHOT.load().publisher_org_min_token_len
 }
 
+/// Read breadth at which process-memory reads are an inventory sweep.
+pub fn memory_scrape_read_enumeration_min_distinct_targets() -> usize {
+    PARAMS_SNAPSHOT
+        .load()
+        .memory_scrape_read_enumeration_min_distinct_targets
+}
+
+/// Hex run that marks a per-invocation path segment.
+pub fn memory_scrape_per_invocation_min_hex_run() -> usize {
+    PARAMS_SNAPSHOT
+        .load()
+        .memory_scrape_per_invocation_min_hex_run
+}
+
+/// Credential classes a process-tree relay sibling must hold.
+pub fn relay_min_credential_classes() -> usize {
+    PARAMS_SNAPSHOT.load().relay_min_credential_classes
+}
+
+/// Local processes that make a blacklisted prefix shared infrastructure.
+pub fn shared_infrastructure_min_local_processes() -> usize {
+    PARAMS_SNAPSHOT
+        .load()
+        .shared_infrastructure_min_local_processes
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5425,6 +5477,14 @@ mod tests {
         assert!(is_publisher_org_stop_token("developer"));
         assert!(!is_publisher_org_stop_token("google"));
         assert!(publisher_org_min_token_len() > 0);
+    }
+
+    #[test]
+    fn test_detector_thresholds_are_loaded() {
+        assert!(memory_scrape_read_enumeration_min_distinct_targets() > 1);
+        assert!(memory_scrape_per_invocation_min_hex_run() > 0);
+        assert!(relay_min_credential_classes() > 0);
+        assert!(shared_infrastructure_min_local_processes() > 0);
     }
 
     /// The published params must parse with this code. A `FormatError` means
