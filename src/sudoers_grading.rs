@@ -1329,7 +1329,10 @@ bob ALL=(ALL) NOPASSWD: ALL
             grants[0].evidence_line(),
             "NOPASSWD for 'alice' in 90-cloud-init-users: root via ALL (all commands)"
         );
-        let limited: Vec<&str> = grants[1..].iter().flat_map(|g| g.limited_commands()).collect();
+        let limited: Vec<&str> = grants[1..]
+            .iter()
+            .flat_map(|g| g.limited_commands())
+            .collect();
         assert_eq!(
             limited,
             vec![
@@ -1435,7 +1438,11 @@ alice ALL=(root) NOPASSWD:SETENV: /usr/bin/bash *
             .starts_with("NOPASSWD for 'alice' in edamame_posture_cursor (4 commands): root via "));
         assert!(grants[1].evidence_line().ends_with(" +1 more"));
         // The evidence names the commands, never a tag.
-        let commands: Vec<&str> = grants[1].commands.iter().map(|c| c.command.as_str()).collect();
+        let commands: Vec<&str> = grants[1]
+            .commands
+            .iter()
+            .map(|c| c.command.as_str())
+            .collect();
         assert_eq!(
             commands,
             vec![

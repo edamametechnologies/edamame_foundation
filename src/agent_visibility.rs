@@ -973,7 +973,12 @@ pub fn agent_control_config(agent_type: &str, home: &Path) -> AgentControlConfig
                 .and_then(|v| v.as_str());
             config.sandbox_enabled = mode.and_then(|mode| sandbox_mode_state(agent_type, mode));
             if let Some(permissions) = json.get("permissions") {
-                let count = |key: &str| permissions.get(key).and_then(|v| v.as_array()).map(|a| a.len());
+                let count = |key: &str| {
+                    permissions
+                        .get(key)
+                        .and_then(|v| v.as_array())
+                        .map(|a| a.len())
+                };
                 config.allow_rule_count = count("allow");
                 config.deny_rule_count = count("deny");
             }
@@ -1798,7 +1803,13 @@ fn account_for_uid(uid: u32) -> Option<(String, u32)> {
         let mut buf = vec![0 as libc::c_char; size];
         let mut found: *mut libc::passwd = std::ptr::null_mut();
         let rc = unsafe {
-            libc::getpwuid_r(uid as libc::uid_t, &mut entry, buf.as_mut_ptr(), buf.len(), &mut found)
+            libc::getpwuid_r(
+                uid as libc::uid_t,
+                &mut entry,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut found,
+            )
         };
         if rc == libc::ERANGE && size < 1024 * 1024 {
             size *= 4;
@@ -1882,7 +1893,13 @@ fn group_name(gid: u32) -> Option<String> {
         let mut buf = vec![0 as libc::c_char; size];
         let mut found: *mut libc::group = std::ptr::null_mut();
         let rc = unsafe {
-            libc::getgrgid_r(gid as libc::gid_t, &mut entry, buf.as_mut_ptr(), buf.len(), &mut found)
+            libc::getgrgid_r(
+                gid as libc::gid_t,
+                &mut entry,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut found,
+            )
         };
         if rc == libc::ERANGE && size < 1024 * 1024 {
             size *= 4;
@@ -2174,7 +2191,11 @@ struct WindowsElevation {
 /// consent or credential prompt is neither: it needs the user on the secure
 /// desktop. A standard user never elevates on its own.
 #[cfg(any(target_os = "windows", test))]
-fn windows_elevation(admin_user: bool, builtin_admin: bool, policy: &UacPolicy) -> WindowsElevation {
+fn windows_elevation(
+    admin_user: bool,
+    builtin_admin: bool,
+    policy: &UacPolicy,
+) -> WindowsElevation {
     let mut evidence = Vec::new();
     if !admin_user {
         return WindowsElevation {
@@ -2225,8 +2246,8 @@ mod windows_account {
     use windows::core::{PCWSTR, PWSTR};
     use windows::Win32::Foundation::{ERROR_NO_MORE_ITEMS, ERROR_SUCCESS};
     use windows::Win32::NetworkManagement::NetManagement::{
-        NetApiBufferFree, NetUserGetLocalGroups, LG_INCLUDE_INDIRECT, LOCALGROUP_USERS_INFO_0,
-        MAX_PREFERRED_LENGTH, NERR_Success,
+        NERR_Success, NetApiBufferFree, NetUserGetLocalGroups, LG_INCLUDE_INDIRECT,
+        LOCALGROUP_USERS_INFO_0, MAX_PREFERRED_LENGTH,
     };
     use windows::Win32::Security::{
         CreateWellKnownSid, LookupAccountSidW, WinBuiltinAdministratorsSid, PSID,
@@ -2283,8 +2304,13 @@ mod windows_account {
         // outlives each call, which writes at most `len` UTF-16 units.
         unsafe {
             let mut hkey = HKEY::default();
-            if RegOpenKeyExW(HKEY_LOCAL_MACHINE, PCWSTR(subkey.as_ptr()), Some(0), KEY_READ, &mut hkey)
-                != ERROR_SUCCESS
+            if RegOpenKeyExW(
+                HKEY_LOCAL_MACHINE,
+                PCWSTR(subkey.as_ptr()),
+                Some(0),
+                KEY_READ,
+                &mut hkey,
+            ) != ERROR_SUCCESS
             {
                 return sids;
             }
@@ -7199,7 +7225,14 @@ mod tests {
             filter_administrator_token: None,
         };
         // A standard user never elevates on its own, whatever the policy.
-        let e = windows_elevation(false, false, &UacPolicy { enable_lua: Some(0), ..defaults });
+        let e = windows_elevation(
+            false,
+            false,
+            &UacPolicy {
+                enable_lua: Some(0),
+                ..defaults
+            },
+        );
         assert!(!e.passwordless_root && !e.elevated_session && e.evidence.is_empty());
         // An administrator under the default policy is prompted.
         let e = windows_elevation(true, false, &defaults);
@@ -7214,11 +7247,21 @@ mod tests {
         let e = windows_elevation(
             true,
             false,
-            &UacPolicy { consent_prompt_behavior_admin: Some(0), ..defaults },
+            &UacPolicy {
+                consent_prompt_behavior_admin: Some(0),
+                ..defaults
+            },
         );
         assert!(e.passwordless_root && !e.elevated_session);
         // UAC off: administrator processes run elevated.
-        let e = windows_elevation(true, false, &UacPolicy { enable_lua: Some(0), ..defaults });
+        let e = windows_elevation(
+            true,
+            false,
+            &UacPolicy {
+                enable_lua: Some(0),
+                ..defaults
+            },
+        );
         assert!(e.passwordless_root && e.elevated_session);
         // The built-in Administrator runs elevated unless it is filtered.
         let e = windows_elevation(true, true, &defaults);
@@ -7226,7 +7269,10 @@ mod tests {
         let e = windows_elevation(
             true,
             true,
-            &UacPolicy { filter_administrator_token: Some(1), ..defaults },
+            &UacPolicy {
+                filter_administrator_token: Some(1),
+                ..defaults
+            },
         );
         assert!(!e.passwordless_root && !e.elevated_session);
     }
@@ -11330,7 +11376,10 @@ skills/gtm-report and @rules/invariants.mdc.
         std::fs::write(&codex_config, "sandbox_mode = \"danger-full-access\"\n").expect("write");
         let codex_after = agent_control_config("codex", home);
         assert_eq!(codex_after.sandbox_enabled, Some(false));
-        assert_eq!(control_config_weakenings(&codex_before, &codex_after).len(), 1);
+        assert_eq!(
+            control_config_weakenings(&codex_before, &codex_after).len(),
+            1
+        );
     }
 
     #[test]
