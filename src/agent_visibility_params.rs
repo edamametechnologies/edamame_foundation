@@ -34,6 +34,9 @@
 //! - host privilege: the elevated users, administrator groups, group
 //!   database and sudoers policy locations the host blast-radius assessment
 //!   reads
+//! - MCP discovery: where the servers an agent acquires outside its global
+//!   MCP config are declared (plugin trees, project configs, installed-plugin
+//!   manifests, extensions)
 //!
 //! Unlike the CVE params struct, `AgentVisibilityParamsJSON` carries NO
 //! `#[serde(default)]` fields: this model was born complete, the published
@@ -605,6 +608,43 @@ pub struct HostPrivilegeJSON {
     pub sudoers_directories: Vec<String>,
 }
 
+/// Where the MCP servers an agent acquires outside its global MCP config are
+/// declared (`agent_visibility::discover_mcp_endpoints`): plugin trees,
+/// project-scoped configs, installed-plugin manifests and extensions. Paths
+/// are `/`-separated and relative to the named agent's instruction root (the
+/// supported-agents registry's `resolve_instruction_root_with_home`, which
+/// owns the roots and the global MCP configs); the config formats stay in
+/// code. Suffixes are lowercased by [`AgentVisibilityParams::new_from_json`],
+/// the rest kept as written.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct McpDiscoveryJSON {
+    /// Suffixes of plugin-tree files that declare MCP servers (`mcp.json`
+    /// covers `.mcp.json` and `.cursor-mcp.json`), compared with the
+    /// lowercased file name.
+    pub plugin_config_suffixes: Vec<String>,
+    /// Directory names pruned from a plugin-tree walk (vendored and VCS
+    /// trees that never carry a plugin's own MCP config).
+    pub plugin_skip_directories: Vec<String>,
+    /// Cursor plugin trees, walked for MCP configs.
+    pub cursor_plugin_directories: Vec<String>,
+    /// Claude Code installed-plugins manifests naming each installed plugin's
+    /// path (its marketplace catalog is never walked blind).
+    pub claude_code_plugin_manifests: Vec<String>,
+    /// Claude Code project directories whose dash-encoded children name
+    /// project roots.
+    pub claude_code_project_directories: Vec<String>,
+    /// Project-scoped MCP config files, relative to a project root.
+    pub claude_code_project_config_files: Vec<String>,
+    /// Claude Desktop extension directories.
+    pub claude_desktop_extension_directories: Vec<String>,
+    /// The manifest inside each Claude Desktop extension.
+    pub claude_desktop_extension_manifest: String,
+    /// OpenClaw extension directories.
+    pub openclaw_extension_directories: Vec<String>,
+    /// The manifest inside each OpenClaw extension.
+    pub openclaw_extension_manifest: String,
+}
+
 /// Raw JSON shape of `agent-visibility-params-db.json`. No serde defaults:
 /// the published JSON always carries every field; a missing field fails the
 /// parse and the embedded snapshot (which has all fields) stays in effect.
@@ -657,6 +697,8 @@ pub struct AgentVisibilityParamsJSON {
     pub agent_confinement: AgentConfinementJSON,
     /// Host-privilege assessment rules (see [`HostPrivilegeJSON`]).
     pub host_privilege: HostPrivilegeJSON,
+    /// MCP discovery locations (see [`McpDiscoveryJSON`]).
+    pub mcp_discovery: McpDiscoveryJSON,
 }
 
 /// Normalized runtime snapshot of the agent-visibility params.
@@ -694,6 +736,8 @@ pub struct AgentVisibilityParams {
     pub agent_confinement: AgentConfinementJSON,
     /// Host-privilege assessment rules, as written.
     pub host_privilege: HostPrivilegeJSON,
+    /// MCP discovery locations, suffixes lowercased.
+    pub mcp_discovery: McpDiscoveryJSON,
 }
 
 impl CloudSignature for AgentVisibilityParams {
@@ -946,6 +990,15 @@ impl AgentVisibilityParams {
             agent_harnesses: json.agent_harnesses.clone(),
             agent_confinement: normalize_agent_confinement(&json.agent_confinement),
             host_privilege: json.host_privilege.clone(),
+            mcp_discovery: McpDiscoveryJSON {
+                plugin_config_suffixes: json
+                    .mcp_discovery
+                    .plugin_config_suffixes
+                    .iter()
+                    .map(|suffix| suffix.to_ascii_lowercase())
+                    .collect(),
+                ..json.mcp_discovery.clone()
+            },
         }
     }
 }
@@ -1141,6 +1194,12 @@ pub fn host_privilege() -> HostPrivilegeJSON {
     PARAMS_SNAPSHOT.load().host_privilege.clone()
 }
 
+/// MCP discovery locations: plugin trees, project configs, installed-plugin
+/// manifests and extensions (suffixes lowercased).
+pub fn mcp_discovery() -> McpDiscoveryJSON {
+    PARAMS_SNAPSHOT.load().mcp_discovery.clone()
+}
+
 /// The params signature of the current snapshot: a scan state computed under
 /// another vocabulary is recomputed.
 pub fn params_signature() -> String {
@@ -1265,6 +1324,17 @@ mod tests {
         assert!(!inv.workspace_toplevel_files.is_empty());
         assert!(!inv.workspace_config_directories.is_empty());
         assert!(!inv.workspace_subdirectories.is_empty());
+        let discovery = &params.mcp_discovery;
+        assert!(!discovery.plugin_config_suffixes.is_empty());
+        assert!(!discovery.plugin_skip_directories.is_empty());
+        assert!(!discovery.cursor_plugin_directories.is_empty());
+        assert!(!discovery.claude_code_plugin_manifests.is_empty());
+        assert!(!discovery.claude_code_project_directories.is_empty());
+        assert!(!discovery.claude_code_project_config_files.is_empty());
+        assert!(!discovery.claude_desktop_extension_directories.is_empty());
+        assert!(!discovery.claude_desktop_extension_manifest.is_empty());
+        assert!(!discovery.openclaw_extension_directories.is_empty());
+        assert!(!discovery.openclaw_extension_manifest.is_empty());
         let privilege = &params.host_privilege;
         assert!(!privilege.elevated_users.is_empty());
         assert!(!privilege.macos_admin_groups.is_empty());

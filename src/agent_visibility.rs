@@ -20,7 +20,7 @@
 
 use crate::agent_visibility_params::{
     self, AgentConfinementJSON, AgentHarnessJSON, AgentHarnessesJSON, FleetWorkspaceReferenceJSON,
-    InstructionInventoryJSON, InstructionReferencesJSON,
+    InstructionInventoryJSON, InstructionReferencesJSON, McpDiscoveryJSON,
 };
 // The URL and excerpt maskers moved to the shared redaction module (2.0.2);
 // re-exported so `agent_visibility::redact_secret_like_text` keeps working.
@@ -587,8 +587,7 @@ fn sandbox_container_needles<'c>(
 fn agent_config_file(agent_type: &str, home: &Path) -> Option<PathBuf> {
     let confinement = agent_visibility_params::agent_confinement();
     let file = confinement.config_files.get(agent_type)?;
-    let root = supported_agents::find_supported_agent(agent_type)?
-        .resolve_instruction_root_with_home(home)?;
+    let root = agent_instruction_root(agent_type, home)?;
     Some(join_components(&root, file))
 }
 
@@ -2287,7 +2286,8 @@ pub fn discover_mcp_endpoints(home: &Path) -> Vec<McpEndpoint> {
     endpoints
 }
 
-/// Whether a plugin-tree file is an MCP server declaration.
+/// Whether a plugin-tree file is an MCP server declaration: its lowercased
+/// name ends with one of the params' `plugin_config_suffixes`.
 ///
 /// Publishers do not agree on one name: the same Cursor marketplace cache holds
 /// `mcp.json` (Notion, Sentry) alongside `.mcp.json` and `.cursor-mcp.json`
@@ -2295,10 +2295,16 @@ pub fn discover_mcp_endpoints(home: &Path) -> Vec<McpEndpoint> {
 /// suffix covers all observed spellings and any future `<prefix>-mcp.json`
 /// without another hardcoded name list, while still rejecting unrelated JSON
 /// (`package.json`, `manifest.json`).
-fn is_plugin_mcp_config_name(path: &Path) -> bool {
+fn is_plugin_mcp_config_name(discovery: &McpDiscoveryJSON, path: &Path) -> bool {
     path.file_name()
         .and_then(|n| n.to_str())
-        .map(|n| n.to_ascii_lowercase().ends_with("mcp.json"))
+        .map(|n| {
+            let name = n.to_ascii_lowercase();
+            discovery
+                .plugin_config_suffixes
+                .iter()
+                .any(|suffix| name.ends_with(suffix.as_str()))
+        })
         .unwrap_or(false)
 }
 
@@ -2319,11 +2325,15 @@ fn agent_mcp_server_key(agent_type: &str) -> Option<String> {
 /// are handled by `parse_mcp_json_with_bare_fallback`.
 ///
 /// Traversal is bounded on four axes -- directory depth, directories visited,
-/// files parsed, and the global `MAX_MCP_ENDPOINTS` cap -- and prunes
-/// `node_modules` / `.git` subtrees, so a large or adversarial plugin tree
-/// cannot stall discovery. The depth cap also breaks any symlink cycle without
-/// tracking visited inodes.
-fn scan_plugin_trees_for_mcp_endpoints(roots: &[PathBuf], agent_type: &str) -> Vec<McpEndpoint> {
+/// files parsed, and the global `MAX_MCP_ENDPOINTS` cap -- and prunes the
+/// params' `plugin_skip_directories` (`node_modules` / `.git`), so a large or
+/// adversarial plugin tree cannot stall discovery. The depth cap also breaks
+/// any symlink cycle without tracking visited inodes.
+fn scan_plugin_trees_for_mcp_endpoints(
+    discovery: &McpDiscoveryJSON,
+    roots: &[PathBuf],
+    agent_type: &str,
+) -> Vec<McpEndpoint> {
     let server_key = agent_mcp_server_key(agent_type);
     let mut endpoints: Vec<McpEndpoint> = Vec::new();
     let mut files_parsed = 0usize;
@@ -2357,12 +2367,17 @@ fn scan_plugin_trees_for_mcp_endpoints(roots: &[PathBuf], agent_type: &str) -> V
                 let skip = path
                     .file_name()
                     .and_then(|n| n.to_str())
-                    .map(|n| n == "node_modules" || n == ".git")
+                    .map(|n| {
+                        discovery
+                            .plugin_skip_directories
+                            .iter()
+                            .any(|skipped| skipped == n)
+                    })
                     .unwrap_or(false);
                 if !skip {
                     stack.push((path, depth + 1));
                 }
-            } else if file_type.is_file() && is_plugin_mcp_config_name(&path) {
+            } else if file_type.is_file() && is_plugin_mcp_config_name(discovery, &path) {
                 files_parsed += 1;
                 let raw = match read_capped(&path, MAX_MCP_CONFIG_BYTES) {
                     Ok(text) => text,
@@ -2386,56 +2401,101 @@ fn scan_plugin_trees_for_mcp_endpoints(roots: &[PathBuf], agent_type: &str) -> V
     endpoints
 }
 
+/// An agent's own instruction / config root (`~/.cursor`, `~/.claude`,
+/// `~/.openclaw`, Claude Desktop's app-support directory, ...) from the
+/// supported-agents registry, which owns those layouts.
+fn agent_instruction_root(agent_type: &str, home: &Path) -> Option<PathBuf> {
+    supported_agents::find_supported_agent(agent_type)?.resolve_instruction_root_with_home(home)
+}
+
 /// Discover MCP endpoints declared by Cursor marketplace plugins.
 ///
-/// Cursor installs plugins under `~/.cursor/plugins/` (marketplace installs at
+/// Cursor installs plugins under `~/.cursor/plugins/` (the params'
+/// `cursor_plugin_directories` under its root; marketplace installs at
 /// `plugins/cache/<publisher>/<name>/<hash>/`, local installs elsewhere in the
 /// tree). A plugin that integrates a remote MCP service ships its own
 /// `mcp.json` there; that file is NOT referenced by the user-level
 /// `~/.cursor/mcp.json`, so without this scan a plugin-provided endpoint (e.g.
 /// Notion / Slack / Sentry) is invisible to the exposure surface.
 fn discover_cursor_plugin_mcp_endpoints(home: &Path) -> Vec<McpEndpoint> {
-    scan_plugin_trees_for_mcp_endpoints(&[home.join(".cursor").join("plugins")], "cursor")
+    let discovery = agent_visibility_params::mcp_discovery();
+    let Some(root) = agent_instruction_root("cursor", home) else {
+        return Vec::new();
+    };
+    let roots: Vec<PathBuf> = discovery
+        .cursor_plugin_directories
+        .iter()
+        .map(|directory| join_components(&root, directory))
+        .collect();
+    scan_plugin_trees_for_mcp_endpoints(&discovery, &roots, "cursor")
 }
 
 /// Discover Claude Code project-scoped `.mcp.json` files.
 ///
-/// `claude mcp add --scope project` writes `{project}/.mcp.json` and does
-/// not copy those servers into `~/.claude.json`. Global discovery only
-/// reads `resolve_global_mcp_configs` (`~/.claude.json` for Claude Code),
-/// so a project-scoped server is invisible to AI Governance unless we
-/// walk the projects Claude Code already knows about:
+/// `claude mcp add --scope project` writes `{project}/.mcp.json` (the params'
+/// `claude_code_project_config_files`) and does not copy those servers into
+/// `~/.claude.json`. Global discovery only reads `resolve_global_mcp_configs`
+/// (`~/.claude.json` for Claude Code), so a project-scoped server is invisible
+/// to AI Governance unless we walk the projects Claude Code already knows
+/// about:
 ///
-/// 1. Every key of `~/.claude.json` `projects` (authoritative unencoded paths)
-/// 2. `~/.claude/projects/<encoded>` decoded by replacing `-` with `/`, used
-///    only when that decoded path exists (hyphenated directory names are
-///    otherwise ambiguous)
+/// 1. Every key of the `projects` map of Claude Code's global config
+///    (`~/.claude.json`, from the registry; authoritative unencoded paths)
+/// 2. `~/.claude/projects/<encoded>` (the params'
+///    `claude_code_project_directories` under its root) decoded by replacing
+///    `-` with `/`, used only when that decoded path exists (hyphenated
+///    directory names are otherwise ambiguous)
 fn discover_claude_code_project_mcp_endpoints(home: &Path) -> Vec<McpEndpoint> {
+    let discovery = agent_visibility_params::mcp_discovery();
+    let claude_code = supported_agents::find_supported_agent("claude_code");
     let mut endpoints = Vec::new();
     let mut seen_files: BTreeSet<PathBuf> = BTreeSet::new();
 
-    let claude_json = home.join(".claude.json");
-    if let Ok(raw) = read_capped(&claude_json, MAX_MCP_CONFIG_BYTES) {
-        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) {
-            if let Some(projects) = value.get("projects").and_then(|v| v.as_object()) {
-                for proj_path in projects.keys() {
-                    collect_claude_code_project_mcp(
-                        Path::new(proj_path),
-                        &mut endpoints,
-                        &mut seen_files,
-                    );
-                }
+    let global_configs = claude_code
+        .iter()
+        .flat_map(|def| def.resolve_global_mcp_configs(home));
+    for claude_json in global_configs {
+        let Ok(raw) = read_capped(&claude_json, MAX_MCP_CONFIG_BYTES) else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            continue;
+        };
+        if let Some(projects) = value.get("projects").and_then(|v| v.as_object()) {
+            for proj_path in projects.keys() {
+                collect_claude_code_project_mcp(
+                    &discovery,
+                    Path::new(proj_path),
+                    &mut endpoints,
+                    &mut seen_files,
+                );
             }
         }
     }
 
-    if let Ok(read_dir) = std::fs::read_dir(home.join(".claude").join("projects")) {
+    let root = claude_code
+        .as_ref()
+        .and_then(|def| def.resolve_instruction_root_with_home(home));
+    for directory in root.iter().flat_map(|root| {
+        discovery
+            .claude_code_project_directories
+            .iter()
+            .map(|directory| join_components(root, directory))
+    }) {
+        let Ok(read_dir) = std::fs::read_dir(&directory) else {
+            continue;
+        };
         for entry in read_dir.flatten() {
             let Some(decoded) = decode_claude_code_project_dirname(&entry.file_name()) else {
                 continue;
             };
             if decoded.is_dir() {
-                collect_claude_code_project_mcp(&decoded, &mut endpoints, &mut seen_files);
+                collect_claude_code_project_mcp(
+                    &discovery,
+                    &decoded,
+                    &mut endpoints,
+                    &mut seen_files,
+                );
             }
         }
     }
@@ -2452,36 +2512,39 @@ fn decode_claude_code_project_dirname(name: &std::ffi::OsStr) -> Option<PathBuf>
 }
 
 fn collect_claude_code_project_mcp(
+    discovery: &McpDiscoveryJSON,
     project_root: &Path,
     endpoints: &mut Vec<McpEndpoint>,
     seen_files: &mut BTreeSet<PathBuf>,
 ) {
-    if endpoints.len() >= MAX_MCP_ENDPOINTS {
-        return;
-    }
-    let mcp_json = project_root.join(".mcp.json");
-    if !mcp_json.is_file() {
-        return;
-    }
-    let identity = std::fs::canonicalize(&mcp_json).unwrap_or_else(|_| mcp_json.clone());
-    if !seen_files.insert(identity) {
-        return;
-    }
-    let raw = match read_capped(&mcp_json, MAX_MCP_CONFIG_BYTES) {
-        Ok(text) => text,
-        Err(_) => return,
-    };
-    let path_str = mcp_json.to_string_lossy().to_string();
-    let server_key = agent_mcp_server_key("claude_code");
-    for server in parse_mcp_json(&raw) {
+    for config_file in &discovery.claude_code_project_config_files {
         if endpoints.len() >= MAX_MCP_ENDPOINTS {
             return;
         }
-        // A project-scoped config can name EDAMAME's own bridge just as a
-        // plugin can, so resolve this the same way the plugin scan does rather
-        // than assuming every project server is third-party.
-        let is_edamame = server_key.as_deref().is_some_and(|key| server.name == key);
-        endpoints.push(build_endpoint("claude_code", server, &path_str, is_edamame));
+        let mcp_json = project_root.join(config_file);
+        if !mcp_json.is_file() {
+            continue;
+        }
+        let identity = std::fs::canonicalize(&mcp_json).unwrap_or_else(|_| mcp_json.clone());
+        if !seen_files.insert(identity) {
+            continue;
+        }
+        let raw = match read_capped(&mcp_json, MAX_MCP_CONFIG_BYTES) {
+            Ok(text) => text,
+            Err(_) => continue,
+        };
+        let path_str = mcp_json.to_string_lossy().to_string();
+        let server_key = agent_mcp_server_key("claude_code");
+        for server in parse_mcp_json(&raw) {
+            if endpoints.len() >= MAX_MCP_ENDPOINTS {
+                return;
+            }
+            // A project-scoped config can name EDAMAME's own bridge just as a
+            // plugin can, so resolve this the same way the plugin scan does
+            // rather than assuming every project server is third-party.
+            let is_edamame = server_key.as_deref().is_some_and(|key| server.name == key);
+            endpoints.push(build_endpoint("claude_code", server, &path_str, is_edamame));
+        }
     }
 }
 
@@ -2512,52 +2575,56 @@ fn collect_claude_code_project_mcp(
 /// and belongs on the exposure surface, and enablement can also be set per
 /// project where a host-level scan cannot see it.
 fn discover_claude_plugin_mcp_endpoints(home: &Path) -> Vec<McpEndpoint> {
-    let roots = claude_installed_plugin_paths(home);
+    let discovery = agent_visibility_params::mcp_discovery();
+    let roots = claude_installed_plugin_paths(&discovery, home);
     if roots.is_empty() {
         return Vec::new();
     }
-    scan_plugin_trees_for_mcp_endpoints(&roots, "claude_code")
+    scan_plugin_trees_for_mcp_endpoints(&discovery, &roots, "claude_code")
 }
 
-/// Install directories of every plugin listed in
-/// `~/.claude/plugins/installed_plugins.json`.
+/// Install directories of every plugin listed in Claude Code's installed
+/// plugins manifests (`~/.claude/plugins/installed_plugins.json`, the params'
+/// `claude_code_plugin_manifests` under its root).
 ///
 /// Shape (`version: 2`): `plugins` maps `<plugin>@<marketplace>` to an array of
 /// install records, one per scope (`user`, `project`, ...), each carrying an
 /// absolute `installPath`. The array form matters -- the same plugin can be
 /// installed at more than one scope, from different paths.
-fn claude_installed_plugin_paths(home: &Path) -> Vec<PathBuf> {
-    let manifest = home
-        .join(".claude")
-        .join("plugins")
-        .join("installed_plugins.json");
-    let Ok(raw) = read_capped(&manifest, MAX_MCP_CONFIG_BYTES) else {
-        return Vec::new();
-    };
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) else {
-        return Vec::new();
-    };
-    let Some(plugins) = value.get("plugins").and_then(|v| v.as_object()) else {
+fn claude_installed_plugin_paths(discovery: &McpDiscoveryJSON, home: &Path) -> Vec<PathBuf> {
+    let Some(root) = agent_instruction_root("claude_code", home) else {
         return Vec::new();
     };
     let mut paths = Vec::new();
-    for records in plugins.values() {
-        // Tolerate both the `version: 2` array form and a bare object, so a
-        // manifest revision does not silently empty the scan.
-        let records = match records {
-            serde_json::Value::Array(items) => items.iter().collect::<Vec<_>>(),
-            other => vec![other],
+    for manifest in &discovery.claude_code_plugin_manifests {
+        let manifest = join_components(&root, manifest);
+        let Ok(raw) = read_capped(&manifest, MAX_MCP_CONFIG_BYTES) else {
+            continue;
         };
-        for record in records {
-            let Some(install_path) = record.get("installPath").and_then(|v| v.as_str()) else {
-                continue;
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            continue;
+        };
+        let Some(plugins) = value.get("plugins").and_then(|v| v.as_object()) else {
+            continue;
+        };
+        for records in plugins.values() {
+            // Tolerate both the `version: 2` array form and a bare object, so a
+            // manifest revision does not silently empty the scan.
+            let records = match records {
+                serde_json::Value::Array(items) => items.iter().collect::<Vec<_>>(),
+                other => vec![other],
             };
-            if install_path.is_empty() {
-                continue;
-            }
-            let path = PathBuf::from(install_path);
-            if !paths.contains(&path) {
-                paths.push(path);
+            for record in records {
+                let Some(install_path) = record.get("installPath").and_then(|v| v.as_str()) else {
+                    continue;
+                };
+                if install_path.is_empty() {
+                    continue;
+                }
+                let path = PathBuf::from(install_path);
+                if !paths.contains(&path) {
+                    paths.push(path);
+                }
             }
         }
     }
@@ -2572,81 +2639,85 @@ fn claude_installed_plugin_paths(home: &Path) -> Vec<PathBuf> {
 /// is declared in the extension's `manifest.json` under `server.mcp_config`,
 /// in the same shape as an `mcpServers` entry (command / args / env).
 ///
-/// The extensions root sits beside the Desktop app config, so it is derived
-/// from the registry's instruction root rather than re-deriving the
-/// per-platform app-support layout here.
+/// The extensions root sits beside the Desktop app config (the params'
+/// `claude_desktop_extension_directories` and `claude_desktop_extension_manifest`),
+/// so it is derived from the registry's instruction root rather than
+/// re-deriving the per-platform app-support layout here.
 fn discover_claude_desktop_extension_endpoints(home: &Path) -> Vec<McpEndpoint> {
-    let Some(extensions_root) = supported_agents::find_supported_agent("claude_desktop")
-        .and_then(|def| def.resolve_instruction_root_with_home(home))
-        .map(|root| root.join("Claude Extensions"))
-    else {
+    let discovery = agent_visibility_params::mcp_discovery();
+    let Some(root) = agent_instruction_root("claude_desktop", home) else {
         return Vec::new();
-    };
-    let read_dir = match std::fs::read_dir(&extensions_root) {
-        Ok(rd) => rd,
-        Err(_) => return Vec::new(),
     };
     let server_key = agent_mcp_server_key("claude_desktop");
     let mut endpoints: Vec<McpEndpoint> = Vec::new();
-    for entry in read_dir.flatten() {
-        if endpoints.len() >= MAX_MCP_ENDPOINTS {
-            break;
-        }
-        let manifest = entry.path().join("manifest.json");
-        if !manifest.is_file() {
-            continue;
-        }
-        let Ok(raw) = read_capped(&manifest, MAX_MCP_CONFIG_BYTES) else {
-            continue;
+    for directory in &discovery.claude_desktop_extension_directories {
+        let extensions_root = join_components(&root, directory);
+        let read_dir = match std::fs::read_dir(&extensions_root) {
+            Ok(rd) => rd,
+            Err(_) => continue,
         };
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) else {
-            continue;
-        };
-        // The manifest `name` is the extension's own identifier; fall back to
-        // the directory name so a name-less manifest still surfaces rather
-        // than disappearing.
-        let name = value
-            .get("name")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-            .or_else(|| {
-                entry
-                    .path()
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .map(|n| n.to_string())
-            });
-        let Some(name) = name.filter(|n| !n.is_empty()) else {
-            continue;
-        };
-        let Some(server) = value.get("server") else {
-            continue;
-        };
-        // `server.mcp_config` carries the real launch spec. Without it the
-        // extension still declares a server, so fall back to the bundle's
-        // runtime `type` (`node`, `python`, `binary`) as the command -- enough
-        // to place it on the inventory as a local stdio surface.
-        let raw_server = match server.get("mcp_config") {
-            Some(config) => parse_json_server(&name, config),
-            None => {
-                let mut fallback = parse_json_server(&name, server);
-                fallback.command = fallback.command.or_else(|| {
-                    server
-                        .get("type")
-                        .and_then(|v| v.as_str())
-                        .map(String::from)
-                });
-                fallback.explicit_type = Some("stdio".to_string());
-                fallback
+        for entry in read_dir.flatten() {
+            if endpoints.len() >= MAX_MCP_ENDPOINTS {
+                break;
             }
-        };
-        let is_edamame = server_key.as_deref().is_some_and(|key| name == key);
-        endpoints.push(build_endpoint(
-            "claude_desktop",
-            raw_server,
-            &manifest.to_string_lossy(),
-            is_edamame,
-        ));
+            let manifest = entry
+                .path()
+                .join(&discovery.claude_desktop_extension_manifest);
+            if !manifest.is_file() {
+                continue;
+            }
+            let Ok(raw) = read_capped(&manifest, MAX_MCP_CONFIG_BYTES) else {
+                continue;
+            };
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) else {
+                continue;
+            };
+            // The manifest `name` is the extension's own identifier; fall back to
+            // the directory name so a name-less manifest still surfaces rather
+            // than disappearing.
+            let name = value
+                .get("name")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .or_else(|| {
+                    entry
+                        .path()
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .map(|n| n.to_string())
+                });
+            let Some(name) = name.filter(|n| !n.is_empty()) else {
+                continue;
+            };
+            let Some(server) = value.get("server") else {
+                continue;
+            };
+            // `server.mcp_config` carries the real launch spec. Without it the
+            // extension still declares a server, so fall back to the bundle's
+            // runtime `type` (`node`, `python`, `binary`) as the command -- enough
+            // to place it on the inventory as a local stdio surface.
+            let raw_server = match server.get("mcp_config") {
+                Some(config) => parse_json_server(&name, config),
+                None => {
+                    let mut fallback = parse_json_server(&name, server);
+                    fallback.command = fallback.command.or_else(|| {
+                        server
+                            .get("type")
+                            .and_then(|v| v.as_str())
+                            .map(String::from)
+                    });
+                    fallback.explicit_type = Some("stdio".to_string());
+                    fallback
+                }
+            };
+            let is_edamame = server_key.as_deref().is_some_and(|key| name == key);
+            endpoints.push(build_endpoint(
+                "claude_desktop",
+                raw_server,
+                &manifest.to_string_lossy(),
+                is_edamame,
+            ));
+        }
     }
     endpoints
 }
@@ -2654,70 +2725,78 @@ fn discover_claude_desktop_extension_endpoints(home: &Path) -> Vec<McpEndpoint> 
 /// Discover tool surfaces contributed by OpenClaw extensions.
 ///
 /// OpenClaw has no `mcpServers` config map: an extension is installed as
-/// `~/.openclaw/extensions/<id>/openclaw.plugin.json` and its tools are loaded
-/// in-process by the agent. That is still a tool-exposure surface -- a
-/// third-party extension can register arbitrary tools into the agent -- so it
-/// belongs on the inventory rather than being invisible.
+/// `~/.openclaw/extensions/<id>/openclaw.plugin.json` (the params'
+/// `openclaw_extension_directories` under its root and
+/// `openclaw_extension_manifest`) and its tools are loaded in-process by the
+/// agent. That is still a tool-exposure surface -- a third-party extension can
+/// register arbitrary tools into the agent -- so it belongs on the inventory
+/// rather than being invisible.
 ///
 /// Extensions carry no transport: they are modelled as `stdio`, the same
 /// local/no-network trust profile a stdio MCP server has. EDAMAME's own
 /// extension is identified by `agent_plugin::OPENCLAW_EDAMAME_EXTENSION_ID`,
 /// since the OpenClaw registry entry carries no `server_key`.
 fn discover_openclaw_extension_endpoints(home: &Path) -> Vec<McpEndpoint> {
-    let extensions_root = home.join(".openclaw").join("extensions");
-    let read_dir = match std::fs::read_dir(&extensions_root) {
-        Ok(rd) => rd,
-        Err(_) => return Vec::new(),
+    let discovery = agent_visibility_params::mcp_discovery();
+    let Some(root) = agent_instruction_root("openclaw", home) else {
+        return Vec::new();
     };
     let mut endpoints: Vec<McpEndpoint> = Vec::new();
-    for entry in read_dir.flatten() {
-        if endpoints.len() >= MAX_MCP_ENDPOINTS {
-            break;
-        }
-        let manifest = entry.path().join("openclaw.plugin.json");
-        if !manifest.is_file() {
-            continue;
-        }
-        let raw = match read_capped(&manifest, MAX_MCP_CONFIG_BYTES) {
-            Ok(text) => text,
+    for directory in &discovery.openclaw_extension_directories {
+        let extensions_root = join_components(&root, directory);
+        let read_dir = match std::fs::read_dir(&extensions_root) {
+            Ok(rd) => rd,
             Err(_) => continue,
         };
-        // The manifest id is authoritative; fall back to the directory name so a
-        // malformed or id-less manifest still surfaces rather than disappearing.
-        let id = serde_json::from_str::<serde_json::Value>(&raw)
-            .ok()
-            .and_then(|v| {
-                v.get("id")
-                    .and_then(|id| id.as_str())
-                    .map(|id| id.to_string())
-            })
-            .or_else(|| {
-                entry
-                    .path()
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .map(|n| n.to_string())
-            });
-        let Some(id) = id.filter(|id| !id.is_empty()) else {
-            continue;
-        };
-        let is_edamame = id == crate::agent_plugin::OPENCLAW_EDAMAME_EXTENSION_ID;
-        endpoints.push(build_endpoint(
-            "openclaw",
-            RawMcpServer {
-                name: id,
-                command: None,
-                args: Vec::new(),
-                url: None,
-                env_keys: Vec::new(),
-                explicit_type: Some("stdio".to_string()),
-                has_auth_header: false,
-                has_oauth: false,
-                has_tls_client_cert: false,
-            },
-            &manifest.to_string_lossy(),
-            is_edamame,
-        ));
+        for entry in read_dir.flatten() {
+            if endpoints.len() >= MAX_MCP_ENDPOINTS {
+                break;
+            }
+            let manifest = entry.path().join(&discovery.openclaw_extension_manifest);
+            if !manifest.is_file() {
+                continue;
+            }
+            let raw = match read_capped(&manifest, MAX_MCP_CONFIG_BYTES) {
+                Ok(text) => text,
+                Err(_) => continue,
+            };
+            // The manifest id is authoritative; fall back to the directory name so a
+            // malformed or id-less manifest still surfaces rather than disappearing.
+            let id = serde_json::from_str::<serde_json::Value>(&raw)
+                .ok()
+                .and_then(|v| {
+                    v.get("id")
+                        .and_then(|id| id.as_str())
+                        .map(|id| id.to_string())
+                })
+                .or_else(|| {
+                    entry
+                        .path()
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .map(|n| n.to_string())
+                });
+            let Some(id) = id.filter(|id| !id.is_empty()) else {
+                continue;
+            };
+            let is_edamame = id == crate::agent_plugin::OPENCLAW_EDAMAME_EXTENSION_ID;
+            endpoints.push(build_endpoint(
+                "openclaw",
+                RawMcpServer {
+                    name: id,
+                    command: None,
+                    args: Vec::new(),
+                    url: None,
+                    env_keys: Vec::new(),
+                    explicit_type: Some("stdio".to_string()),
+                    has_auth_header: false,
+                    has_oauth: false,
+                    has_tls_client_cert: false,
+                },
+                &manifest.to_string_lossy(),
+                is_edamame,
+            ));
+        }
     }
     endpoints
 }
@@ -7213,7 +7292,13 @@ bob ALL=(ALL) NOPASSWD: ALL
         // `.mcp.json` / `.cursor-mcp.json` where Notion and Sentry ship
         // `mcp.json`. All of them must surface.
         for file in [".mcp.json", ".cursor-mcp.json"] {
-            assert!(is_plugin_mcp_config_name(Path::new(file)), "{file}");
+            assert!(
+                is_plugin_mcp_config_name(
+                    &agent_visibility_params::mcp_discovery(),
+                    Path::new(file)
+                ),
+                "{file}"
+            );
             let tmp = tempfile::TempDir::new().unwrap();
             let home = tmp.path();
             write_cursor_plugin_mcp_named(
@@ -7229,8 +7314,15 @@ bob ALL=(ALL) NOPASSWD: ALL
             );
         }
         // Unrelated plugin JSON is still ignored.
-        assert!(!is_plugin_mcp_config_name(Path::new("package.json")));
-        assert!(!is_plugin_mcp_config_name(Path::new("manifest.json")));
+        let discovery = agent_visibility_params::mcp_discovery();
+        assert!(!is_plugin_mcp_config_name(
+            &discovery,
+            Path::new("package.json")
+        ));
+        assert!(!is_plugin_mcp_config_name(
+            &discovery,
+            Path::new("manifest.json")
+        ));
     }
 
     // --- Claude Code plugin MCP discovery ------------------------------------
