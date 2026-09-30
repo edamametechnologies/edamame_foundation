@@ -958,6 +958,14 @@ pub struct CveDetectionParamsJSON {
     /// lists them: PowerShell modules and the launchd / systemd / XDG
     /// autostart / Task Scheduler definitions.
     pub code_module_suffixes: Vec<String>,
+    /// Labels of the sensitive-paths catalog (`sensitive-paths-db.json`)
+    /// that denote credential material. A label the catalog emits but that
+    /// is absent here counts as non-credential (`env` deliberately: `.env`
+    /// also ships committed in repositories).
+    pub sensitive_material_labels: Vec<String>,
+    /// Catalog labels that name agent instruction / configuration surfaces
+    /// (`instruction`, `claude`, `codex`, `openclaw`).
+    pub agent_instruction_labels: Vec<String>,
 }
 
 fn normalize_runtime_perfdata_entry(entry: &RuntimePerfdataEntryJSON) -> RuntimePerfdataEntryJSON {
@@ -1140,6 +1148,8 @@ pub struct CveDetectionParams {
     pub install_artifact_basenames: HashSet<String>,
     pub dev_tree_markers: DevTreeMarkersJSON,
     pub code_module_suffixes: Vec<String>,
+    pub sensitive_material_labels: HashSet<String>,
+    pub agent_instruction_labels: HashSet<String>,
 }
 
 impl CloudSignature for CveDetectionParams {
@@ -1972,6 +1982,8 @@ impl CveDetectionParams {
             install_artifact_basenames: lowercase_token_set(&json.install_artifact_basenames),
             dev_tree_markers: trimmed_dev_tree_markers(&json.dev_tree_markers),
             code_module_suffixes: lowercase_token_list(&json.code_module_suffixes),
+            sensitive_material_labels: lowercase_token_set(&json.sensitive_material_labels),
+            agent_instruction_labels: lowercase_token_set(&json.agent_instruction_labels),
         }
     }
 
@@ -3713,6 +3725,35 @@ pub fn code_module_suffixes() -> Vec<String> {
     PARAMS_SNAPSHOT.load().code_module_suffixes.clone()
 }
 
+/// True for a lowercase catalog label that denotes credential material.
+pub fn is_sensitive_material_label(label: &str) -> bool {
+    PARAMS_SNAPSHOT
+        .load()
+        .sensitive_material_labels
+        .contains(label)
+}
+
+/// The credential-material catalog labels, sorted.
+pub fn sensitive_material_labels() -> Vec<String> {
+    let mut labels: Vec<String> = PARAMS_SNAPSHOT
+        .load()
+        .sensitive_material_labels
+        .iter()
+        .cloned()
+        .collect();
+    labels.sort();
+    labels
+}
+
+/// True for a lowercase catalog label that names an agent instruction /
+/// configuration surface.
+pub fn is_agent_instruction_label(label: &str) -> bool {
+    PARAMS_SNAPSHOT
+        .load()
+        .agent_instruction_labels
+        .contains(label)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5239,6 +5280,28 @@ mod tests {
         assert_eq!(shipped.cmake_cache_file, "CMakeCache.txt");
         assert_eq!(shipped.venv_config_file, "pyvenv.cfg");
         assert!(code_module_suffixes().iter().any(|suffix| suffix == ".plist"));
+    }
+
+    /// Catalog label classes load lowercased and do not overlap.
+    #[test]
+    fn test_catalog_label_classes() {
+        let p = params_from_edited_snapshot(|value| {
+            value["sensitive_material_labels"] = serde_json::json!(["SSH", ""]);
+            value["agent_instruction_labels"] = serde_json::json!(["Instruction"]);
+        });
+        assert_eq!(p.sensitive_material_labels, HashSet::from(["ssh".to_string()]));
+        assert_eq!(
+            p.agent_instruction_labels,
+            HashSet::from(["instruction".to_string()])
+        );
+        assert!(is_sensitive_material_label("keychain"));
+        assert!(!is_sensitive_material_label("env"));
+        assert!(is_agent_instruction_label("claude"));
+        assert!(!is_agent_instruction_label("ssh"));
+        assert!(sensitive_material_labels()
+            .iter()
+            .all(|label| !is_agent_instruction_label(label)));
+        assert!(sensitive_material_labels().windows(2).all(|w| w[0] < w[1]));
     }
 
     /// The published params must parse with this code. A `FormatError` means
