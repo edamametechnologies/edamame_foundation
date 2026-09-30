@@ -57,6 +57,7 @@ pub const UTILITY_ORDER_NAMES: &[&str] = &[
     "scan_secret_content",
     "set_custom_blacklists",
     "set_custom_whitelists",
+    "set_error_reporting",
     "set_filter",
     "set_whitelist",
     "start_capture",

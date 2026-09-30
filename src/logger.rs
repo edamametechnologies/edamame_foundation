@@ -11,7 +11,7 @@ use std::{
     mem::forget,
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, Once, OnceLock,
     },
     time::{Duration, Instant, SystemTime},
@@ -424,6 +424,66 @@ fn create_panic_artifact(
 
 const SENTRY_DEDUP_WINDOW_SECS: u64 = 60;
 const SENTRY_DEDUP_MAX_ENTRIES: usize = 500;
+/// Share of transactions sampled while error reporting is on.
+const SENTRY_TRACES_SAMPLE_RATE: f32 = 0.2;
+
+/// Whether this process may send anything to Sentry: the user's crash-report
+/// setting ("Crash reports" on the app's Privacy page). Off until the process
+/// is told otherwise. The core sets it from the saved setting when it starts
+/// and again when the user changes it; the Helper, a separate root / SYSTEM
+/// process that cannot read the user's settings, learns it from the app's
+/// core over the helper channel (the `set_error_reporting` utility order) and
+/// reports nothing before that. While off, error events are dropped in
+/// `before_send` and no transaction is sampled, whatever logged them (Flutter
+/// logs forwarded to the core included).
+static ERROR_REPORTING_ENABLED: AtomicBool = AtomicBool::new(false);
+
+/// Turn this process's Sentry reports on or off (see
+/// [`ERROR_REPORTING_ENABLED`]). Takes effect for the next event.
+pub fn set_error_reporting_enabled(enabled: bool) {
+    let previous = ERROR_REPORTING_ENABLED.swap(enabled, Ordering::Relaxed);
+    if previous != enabled {
+        tracing::info!(
+            "Error reports to Sentry {}",
+            if enabled { "enabled" } else { "disabled" }
+        );
+    }
+}
+
+/// Whether this process sends its error reports to Sentry now.
+pub fn error_reporting_enabled() -> bool {
+    ERROR_REPORTING_ENABLED.load(Ordering::Relaxed)
+}
+
+/// The transaction sample rate the error-reporting setting allows.
+fn sentry_traces_sample_rate() -> f32 {
+    if error_reporting_enabled() {
+        SENTRY_TRACES_SAMPLE_RATE
+    } else {
+        0.0
+    }
+}
+
+/// What `before_send` does with an error event: nothing leaves while error
+/// reporting is off; otherwise the event is scrubbed, then dropped when it
+/// repeats one sent inside the dedup window.
+fn sentry_event_to_send(
+    event: sentry::protocol::Event<'static>,
+) -> Option<sentry::protocol::Event<'static>> {
+    if !error_reporting_enabled() {
+        return None;
+    }
+    // Scrub before anything else: an ERROR log can carry an LLM provider's
+    // error body or a credential-bearing argument, and the sentry_tracing
+    // layer sees the raw event, not the sanitized writer output. Always on,
+    // debug builds included.
+    let event = scrub_sentry_event(event);
+    let fp = sentry_event_fingerprint(&event);
+    if sentry_event_is_repeat(fp, Instant::now()) {
+        return None;
+    }
+    Some(event)
+}
 
 lazy_static! {
     /// Fingerprint -> last time an event with it was sent. Replaced whole on
@@ -567,19 +627,11 @@ fn init_sentry(url: &str, release: &str) {
             } else {
                 Some(release.into())
             },
-            traces_sample_rate: 0.2,
-            before_send: Some(Arc::new(|event| {
-                // Scrub before anything else: an ERROR log can carry an LLM
-                // provider's error body or a credential-bearing argument, and
-                // the sentry_tracing layer sees the raw event, not the
-                // sanitized writer output. Always on, debug builds included.
-                let event = scrub_sentry_event(event);
-                let fp = sentry_event_fingerprint(&event);
-                if sentry_event_is_repeat(fp, Instant::now()) {
-                    return None;
-                }
-                Some(event)
-            })),
+            traces_sample_rate: SENTRY_TRACES_SAMPLE_RATE,
+            // The sampler, when set, decides alone: none while error
+            // reporting is off.
+            traces_sampler: Some(Arc::new(|_| sentry_traces_sample_rate())),
+            before_send: Some(Arc::new(sentry_event_to_send)),
             ..Default::default()
         },
     ));
@@ -1278,6 +1330,48 @@ mod tests {
             );
         }
         assert!(serialized.contains("LLM error: 401"), "{serialized}");
+    }
+
+    /// Nothing reaches Sentry until the process is told the user allows it
+    /// (the Helper's case until the app's core tells it, through the
+    /// `set_error_reporting` utility order), and nothing once the user turns
+    /// reports off: no error event, no transaction. The only test that
+    /// touches the process-wide switch.
+    #[tokio::test]
+    async fn test_error_reports_follow_the_crash_report_setting() {
+        use crate::helper_rx_utility::utility_set_error_reporting;
+
+        let event = |message: &str| sentry::protocol::Event {
+            message: Some(message.to_string()),
+            level: sentry::Level::Error,
+            ..Default::default()
+        };
+
+        assert!(
+            !error_reporting_enabled(),
+            "a process reports nothing before it is told the setting"
+        );
+        assert!(sentry_event_to_send(event("gate: before the setting")).is_none());
+        assert_eq!(sentry_traces_sample_rate(), 0.0);
+
+        assert_eq!(utility_set_error_reporting("true").await.unwrap(), "true");
+        assert!(error_reporting_enabled());
+        assert!(sentry_event_to_send(event("gate: reports on")).is_some());
+        assert_eq!(sentry_traces_sample_rate(), SENTRY_TRACES_SAMPLE_RATE);
+
+        // Anything but true / false is refused and changes nothing.
+        assert!(utility_set_error_reporting("yes").await.is_err());
+        assert!(utility_set_error_reporting("").await.is_err());
+        assert!(error_reporting_enabled());
+
+        assert_eq!(utility_set_error_reporting("false").await.unwrap(), "false");
+        assert!(sentry_event_to_send(event("gate: reports off")).is_none());
+        assert_eq!(sentry_traces_sample_rate(), 0.0);
+
+        set_error_reporting_enabled(true);
+        assert!(sentry_event_to_send(event("gate: set directly")).is_some());
+        set_error_reporting_enabled(false);
+        assert!(!error_reporting_enabled());
     }
 
     #[test]

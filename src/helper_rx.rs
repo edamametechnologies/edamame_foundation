@@ -575,6 +575,7 @@ pub async fn rpc_run(
             "model_authenticity" => utility_model_authenticity().await,
             "get_logs" => utility_get_logs().await,
             "get_managed_secrets" => utility_get_managed_secrets().await,
+            "set_error_reporting" => utility_set_error_reporting(arg1).await,
 
             #[cfg(all(
                 any(target_os = "macos", target_os = "linux", target_os = "windows"),

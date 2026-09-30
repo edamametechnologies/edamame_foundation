@@ -198,6 +198,27 @@ pub async fn utility_get_logs() -> Result<String> {
     Ok(logs)
 }
 
+/// The user's crash-report setting, sent by the app's core: the helper runs
+/// as root / SYSTEM and cannot read the user's settings, so it sends nothing
+/// to Sentry until a core tells it the user allows it. `arg1` is "true" or
+/// "false"; anything else is refused and changes nothing. Thin delegate to
+/// the logger's switch, which a standalone core sets directly. Helpers
+/// before 2.0.3 do not know this order.
+pub async fn utility_set_error_reporting(enabled: &str) -> Result<String> {
+    let enabled = match enabled.trim() {
+        "true" => true,
+        "false" => false,
+        other => {
+            return Err(anyhow::anyhow!(
+                "set_error_reporting expects true or false, got '{}'",
+                other
+            ))
+        }
+    };
+    crate::logger::set_error_reporting_enabled(enabled);
+    Ok(enabled.to_string())
+}
+
 /// The organization's managed secrets file (Hub PIN, LLM / Portal key). The
 /// helper runs as root / SYSTEM and the file is root-only; the sandboxed app
 /// cannot read it itself. Thin delegate to the shared reader, which a
