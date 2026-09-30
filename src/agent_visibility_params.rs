@@ -31,6 +31,9 @@
 //! - agent confinement: the container, VM-bundle and confined-app directories
 //!   and name needles of OS confinement, the agents' own config files, and
 //!   the approval-mode ranking of the control-config weakening check
+//! - host privilege: the elevated users, administrator groups, group
+//!   database and sudoers policy locations the host blast-radius assessment
+//!   reads
 //!
 //! Unlike the CVE params struct, `AgentVisibilityParamsJSON` carries NO
 //! `#[serde(default)]` fields: this model was born complete, the published
@@ -580,6 +583,28 @@ pub struct AgentConfinementJSON {
     pub default_permission_mode_rank: u8,
 }
 
+/// What the macOS / Linux host-privilege assessment
+/// (`agent_visibility::assess_host_privilege`) reads and matches: who is
+/// already elevated, which groups make a user an administrator, and where the
+/// group database and the sudoers policy live. The sudoers grammar
+/// (`NOPASSWD`, `%group`, `ALL`, `Defaults`) and the Windows well-known SIDs
+/// stay in code. Kept as written.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct HostPrivilegeJSON {
+    /// Users whose session is already elevated (`root`).
+    pub elevated_users: Vec<String>,
+    /// macOS groups whose members are administrators (`admin`).
+    pub macos_admin_groups: Vec<String>,
+    /// Linux groups whose members may use sudo (`sudo`, `wheel`, `admin`).
+    pub linux_admin_groups: Vec<String>,
+    /// Group databases (`name:passwd:gid:members`) read for memberships.
+    pub group_files: Vec<String>,
+    /// sudoers policy files scanned for a `NOPASSWD` rule.
+    pub sudoers_files: Vec<String>,
+    /// Directories whose files are sudoers drop-ins scanned the same way.
+    pub sudoers_directories: Vec<String>,
+}
+
 /// Raw JSON shape of `agent-visibility-params-db.json`. No serde defaults:
 /// the published JSON always carries every field; a missing field fails the
 /// parse and the embedded snapshot (which has all fields) stays in effect.
@@ -630,6 +655,8 @@ pub struct AgentVisibilityParamsJSON {
     pub agent_harnesses: AgentHarnessesJSON,
     /// Agent confinement rules (see [`AgentConfinementJSON`]).
     pub agent_confinement: AgentConfinementJSON,
+    /// Host-privilege assessment rules (see [`HostPrivilegeJSON`]).
+    pub host_privilege: HostPrivilegeJSON,
 }
 
 /// Normalized runtime snapshot of the agent-visibility params.
@@ -665,6 +692,8 @@ pub struct AgentVisibilityParams {
     pub agent_harnesses: AgentHarnessesJSON,
     /// Agent confinement rules, needles lowercased.
     pub agent_confinement: AgentConfinementJSON,
+    /// Host-privilege assessment rules, as written.
+    pub host_privilege: HostPrivilegeJSON,
 }
 
 impl CloudSignature for AgentVisibilityParams {
@@ -916,6 +945,7 @@ impl AgentVisibilityParams {
             instruction_references: normalize_instruction_references(&json.instruction_references),
             agent_harnesses: json.agent_harnesses.clone(),
             agent_confinement: normalize_agent_confinement(&json.agent_confinement),
+            host_privilege: json.host_privilege.clone(),
         }
     }
 }
@@ -1105,6 +1135,12 @@ pub fn agent_confinement() -> AgentConfinementJSON {
     PARAMS_SNAPSHOT.load().agent_confinement.clone()
 }
 
+/// Host-privilege assessment rules: elevated users, administrator groups, and
+/// the group database and sudoers policy locations.
+pub fn host_privilege() -> HostPrivilegeJSON {
+    PARAMS_SNAPSHOT.load().host_privilege.clone()
+}
+
 /// The params signature of the current snapshot: a scan state computed under
 /// another vocabulary is recomputed.
 pub fn params_signature() -> String {
@@ -1229,6 +1265,13 @@ mod tests {
         assert!(!inv.workspace_toplevel_files.is_empty());
         assert!(!inv.workspace_config_directories.is_empty());
         assert!(!inv.workspace_subdirectories.is_empty());
+        let privilege = &params.host_privilege;
+        assert!(!privilege.elevated_users.is_empty());
+        assert!(!privilege.macos_admin_groups.is_empty());
+        assert!(!privilege.linux_admin_groups.is_empty());
+        assert!(!privilege.group_files.is_empty());
+        assert!(!privilege.sudoers_files.is_empty());
+        assert!(!privilege.sudoers_directories.is_empty());
         let confinement = &params.agent_confinement;
         assert!(!confinement.container_name_needles.is_empty());
         assert!(!confinement.macos_container_directories.is_empty());

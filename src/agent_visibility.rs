@@ -1715,10 +1715,13 @@ fn scan_sudoers_nopasswd(text: &str, user: &str, group_principals: &[String]) ->
 }
 
 /// macOS/Linux host-privilege assessment, file-based (no process spawn). Reads
-/// `/etc/group` for admin membership and `/etc/sudoers`(+`.d/*`) for a
-/// `NOPASSWD` rule that applies to the user, a group the user is in, or `ALL`.
+/// the group database (`/etc/group`) for admin membership and the sudoers
+/// policy (`/etc/sudoers` + `/etc/sudoers.d/*`) for a `NOPASSWD` rule that
+/// applies to the user, a group the user is in, or `ALL`. The elevated users,
+/// administrator groups and file locations are the params' `host_privilege`.
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 fn assess_host_privilege(home: &Path) -> HostPrivilege {
+    let privilege = agent_visibility_params::host_privilege();
     let user = user_from_home(home);
     let platform = if cfg!(target_os = "macos") {
         "macos"
@@ -1730,28 +1733,31 @@ fn assess_host_privilege(home: &Path) -> HostPrivilege {
 
     // The assessment is about the *user's* session, not the helper's: report an
     // elevated session only when the target user itself is root.
-    let elevated_session = user == "root";
+    let elevated_session = privilege.elevated_users.iter().any(|u| *u == user);
     if elevated_session {
-        evidence.push("session runs as root".to_string());
+        evidence.push(format!("session runs as {user}"));
     }
 
     // Admin membership + the groups the user belongs to (drives the sudoers
     // `%group` match below). On macOS admins live in the `admin` group; on
     // Linux the sudo-granting groups are `sudo`/`wheel`/`admin`.
-    let admin_groups: &[&str] = if cfg!(target_os = "macos") {
-        &["admin"]
+    let admin_groups = if cfg!(target_os = "macos") {
+        &privilege.macos_admin_groups
     } else {
-        &["sudo", "wheel", "admin"]
+        &privilege.linux_admin_groups
     };
     let mut admin_user = elevated_session;
     let mut user_groups: Vec<String> = Vec::new();
-    if let Ok(group_file) = std::fs::read_to_string("/etc/group") {
-        user_groups = groups_for_user(&group_file, &user);
-        for g in &user_groups {
-            if admin_groups.contains(&g.as_str()) {
+    for group_file in &privilege.group_files {
+        let Ok(text) = std::fs::read_to_string(group_file) else {
+            continue;
+        };
+        for g in groups_for_user(&text, &user) {
+            if admin_groups.iter().any(|admin| *admin == g) {
                 admin_user = true;
                 evidence.push(format!("member of '{}' group", g));
             }
+            user_groups.push(g);
         }
     }
 
@@ -1759,8 +1765,11 @@ fn assess_host_privilege(home: &Path) -> HostPrivilege {
     // principal is the user, a `%group` the user belongs to, or `ALL`.
     let mut passwordless_root = false;
     let mut sudoers_readable = false;
-    let mut sources: Vec<PathBuf> = vec![PathBuf::from("/etc/sudoers")];
-    if let Ok(entries) = std::fs::read_dir("/etc/sudoers.d") {
+    let mut sources: Vec<PathBuf> = privilege.sudoers_files.iter().map(PathBuf::from).collect();
+    for directory in &privilege.sudoers_directories {
+        let Ok(entries) = std::fs::read_dir(directory) else {
+            continue;
+        };
         for e in entries.flatten() {
             let p = e.path();
             if p.is_file() {
