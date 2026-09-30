@@ -125,7 +125,6 @@ tempfile = "3.13.0"
 
 # Async
 async-trait = "0.1.89"
-parking_lot = "0.12.4"
 futures = "0.3.31"
 futures-util = "0.3.31"
 tokio = { version = "1.47.1", features = ["full", "tracing"] }
