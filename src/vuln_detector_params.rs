@@ -1342,7 +1342,11 @@ fn normalized_sandbox_container_layouts(
                 .trim()
                 .to_ascii_lowercase()
                 .replace('\\', "/"),
-            data_dir: layout.data_dir.trim().to_ascii_lowercase().replace('\\', "/"),
+            data_dir: layout
+                .data_dir
+                .trim()
+                .to_ascii_lowercase()
+                .replace('\\', "/"),
             inner_roots: normalized_path_fragments(&layout.inner_roots),
         })
         .filter(|layout| !layout.container_root.is_empty())
@@ -2004,7 +2008,10 @@ impl CveDetectionParams {
                 .agent_control_config_path_suffixes
                 .iter()
                 .map(|(agent, suffixes)| {
-                    (agent.trim().to_string(), normalized_path_fragments(suffixes))
+                    (
+                        agent.trim().to_string(),
+                        normalized_path_fragments(suffixes),
+                    )
                 })
                 .filter(|(agent, _)| !agent.is_empty())
                 .collect(),
@@ -3662,7 +3669,10 @@ pub fn platform_owned_user_store() -> PlatformOwnedUserStoreJSON {
 
 /// Path prefixes of operating-system service images (lowercase, `/`).
 pub fn os_service_image_path_prefixes() -> Vec<String> {
-    PARAMS_SNAPSHOT.load().os_service_image_path_prefixes.clone()
+    PARAMS_SNAPSHOT
+        .load()
+        .os_service_image_path_prefixes
+        .clone()
 }
 
 /// Binary roots on the macOS sealed system volume (lowercase, `/`).
@@ -5132,9 +5142,11 @@ mod tests {
 
     /// The embedded snapshot with `edit` applied, loaded the way an update
     /// loads a published JSON.
-    fn params_from_edited_snapshot(edit: impl FnOnce(&mut serde_json::Value)) -> CveDetectionParams {
-        let mut value: serde_json::Value =
-            serde_json::from_str(&CVE_DETECTION_PARAMS_DB).expect("embedded snapshot is valid JSON");
+    fn params_from_edited_snapshot(
+        edit: impl FnOnce(&mut serde_json::Value),
+    ) -> CveDetectionParams {
+        let mut value: serde_json::Value = serde_json::from_str(&CVE_DETECTION_PARAMS_DB)
+            .expect("embedded snapshot is valid JSON");
         edit(&mut value);
         let json: CveDetectionParamsJSON =
             serde_json::from_value(value).expect("edited snapshot must parse");
@@ -5216,7 +5228,10 @@ mod tests {
             }
         );
         assert_eq!(p.os_service_image_path_prefixes, vec!["/system/library/"]);
-        assert_eq!(p.macos_sealed_system_binary_path_prefixes, vec!["/usr/sbin/"]);
+        assert_eq!(
+            p.macos_sealed_system_binary_path_prefixes,
+            vec!["/usr/sbin/"]
+        );
     }
 
     /// Process-lineage names load lowercased; the agent lookup answers by
@@ -5262,7 +5277,12 @@ mod tests {
     fn test_access_network_plumbing_ranges() {
         let p = params_from_edited_snapshot(|value| {
             value["access_network_plumbing_ipv4_cidrs"] = serde_json::json!([
-                "192.0.0.0/29", "10.0.0.0/8", "0.0.0.0/0", "bad", "192.0.0.6", "198.51.100.1/32"
+                "192.0.0.0/29",
+                "10.0.0.0/8",
+                "0.0.0.0/0",
+                "bad",
+                "192.0.0.6",
+                "198.51.100.1/32"
             ]);
         });
         assert_eq!(
@@ -5295,16 +5315,28 @@ mod tests {
             value["package_manager_runtimes"] = serde_json::json!(["NPM"]);
             value["install_artifact_basenames"] = serde_json::json!(["Cargo.lock"]);
         });
-        assert_eq!(p.script_runtime_basenames, HashSet::from(["python".to_string()]));
+        assert_eq!(
+            p.script_runtime_basenames,
+            HashSet::from(["python".to_string()])
+        );
         assert_eq!(
             p.dependency_tree_markers,
             vec!["/node_modules/".to_string(), "/site-packages/".to_string()]
         );
-        assert_eq!(p.package_manager_runtimes, HashSet::from(["npm".to_string()]));
-        assert_eq!(p.install_artifact_basenames, HashSet::from(["cargo.lock".to_string()]));
+        assert_eq!(
+            p.package_manager_runtimes,
+            HashSet::from(["npm".to_string()])
+        );
+        assert_eq!(
+            p.install_artifact_basenames,
+            HashSet::from(["cargo.lock".to_string()])
+        );
         assert!(is_script_runtime_basename("osascript"));
         assert!(!is_script_runtime_basename("slack"));
-        assert_eq!(dependency_tree_markers().first().map(String::as_str), Some("/node_modules/"));
+        assert_eq!(
+            dependency_tree_markers().first().map(String::as_str),
+            Some("/node_modules/")
+        );
         assert!(is_package_manager_runtime_name("cargo"));
         assert!(!is_package_manager_runtime_name("bash"));
         assert!(is_install_artifact_basename("go.sum"));
@@ -5316,18 +5348,24 @@ mod tests {
     #[test]
     fn test_dev_tree_markers_keep_their_case() {
         let p = params_from_edited_snapshot(|value| {
-            value["dev_tree_markers"]["swiftpm_manifest_file"] = serde_json::json!(" Package.swift ");
+            value["dev_tree_markers"]["swiftpm_manifest_file"] =
+                serde_json::json!(" Package.swift ");
             value["dev_tree_markers"]["bazel_workspace_files"] =
                 serde_json::json!(["MODULE.bazel", " "]);
             value["code_module_suffixes"] = serde_json::json!([".PSM1", ""]);
         });
         assert_eq!(p.dev_tree_markers.swiftpm_manifest_file, "Package.swift");
-        assert_eq!(p.dev_tree_markers.bazel_workspace_files, vec!["MODULE.bazel"]);
+        assert_eq!(
+            p.dev_tree_markers.bazel_workspace_files,
+            vec!["MODULE.bazel"]
+        );
         assert_eq!(p.code_module_suffixes, vec![".psm1"]);
         let shipped = dev_tree_markers();
         assert_eq!(shipped.cmake_cache_file, "CMakeCache.txt");
         assert_eq!(shipped.venv_config_file, "pyvenv.cfg");
-        assert!(code_module_suffixes().iter().any(|suffix| suffix == ".plist"));
+        assert!(code_module_suffixes()
+            .iter()
+            .any(|suffix| suffix == ".plist"));
     }
 
     /// Catalog label classes load lowercased and do not overlap.
@@ -5337,7 +5375,10 @@ mod tests {
             value["sensitive_material_labels"] = serde_json::json!(["SSH", ""]);
             value["agent_instruction_labels"] = serde_json::json!(["Instruction"]);
         });
-        assert_eq!(p.sensitive_material_labels, HashSet::from(["ssh".to_string()]));
+        assert_eq!(
+            p.sensitive_material_labels,
+            HashSet::from(["ssh".to_string()])
+        );
         assert_eq!(
             p.agent_instruction_labels,
             HashSet::from(["instruction".to_string()])
@@ -5362,14 +5403,14 @@ mod tests {
         });
         assert_eq!(
             p.agent_control_config_path_suffixes,
-            BTreeMap::from([(
-                "codex".to_string(),
-                vec!["/.codex/config.toml".to_string()]
-            )])
+            BTreeMap::from([("codex".to_string(), vec!["/.codex/config.toml".to_string()])])
         );
         let shipped = agent_control_config_path_suffixes();
         assert!(shipped["claude_code"].contains(&"/.claude/settings.json".to_string()));
-        assert!(shipped.values().flatten().all(|suffix| suffix.starts_with('/')));
+        assert!(shipped
+            .values()
+            .flatten()
+            .all(|suffix| suffix.starts_with('/')));
     }
 
     #[test]
@@ -5377,7 +5418,10 @@ mod tests {
         let p = params_from_edited_snapshot(|value| {
             value["publisher_org_stop_tokens"] = serde_json::json!(["LLC", " "]);
         });
-        assert_eq!(p.publisher_org_stop_tokens, HashSet::from(["llc".to_string()]));
+        assert_eq!(
+            p.publisher_org_stop_tokens,
+            HashSet::from(["llc".to_string()])
+        );
         assert!(is_publisher_org_stop_token("developer"));
         assert!(!is_publisher_org_stop_token("google"));
         assert!(publisher_org_min_token_len() > 0);

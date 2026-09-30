@@ -375,9 +375,7 @@ fn bazel_workspace(dir: &Path, names: &DevTreeMarkersJSON) -> bool {
             && dir
                 .file_name()
                 .and_then(|name| name.to_str())
-                .is_some_and(|name| {
-                    entry(&format!("{}{name}", names.bazel_workspace_link_prefix))
-                }))
+                .is_some_and(|name| entry(&format!("{}{name}", names.bazel_workspace_link_prefix))))
 }
 
 /// A package manager has installed into the project at `dir`: npm, pnpm and
@@ -405,7 +403,11 @@ fn js_install_state(dir: &Path, names: &DevTreeMarkersJSON) -> bool {
 /// `path` lies in one of its action directories (`b<NNN>/`) that holds the
 /// import configuration the go command writes before compiling or linking
 /// (`importcfg`, `importcfg.link`).
-fn go_build_work_marker(dir: &Path, path: &Path, names: &DevTreeMarkersJSON) -> Option<&'static str> {
+fn go_build_work_marker(
+    dir: &Path,
+    path: &Path,
+    names: &DevTreeMarkersJSON,
+) -> Option<&'static str> {
     if names.go_build_work_directory_prefix.is_empty() {
         return None;
     }
