@@ -19,6 +19,9 @@
 //! - workspace attribution: the agent-CLI launch vocabulary, programmatic
 //!   start markers, temporary roots, path conventions, time windows and label
 //!   wording `agent_workspaces` and `agent_transcripts::launch` read
+//! - instruction inventory: the instruction directories, file names,
+//!   extensions and skill package markers `agent_visibility` walks and
+//!   recognizes
 //!
 //! Unlike the CVE params struct, `AgentVisibilityParamsJSON` carries NO
 //! `#[serde(default)]` fields: this model was born complete, the published
@@ -335,6 +338,72 @@ pub struct WorkspaceAttributionJSON {
     pub agent_labels: std::collections::BTreeMap<String, String>,
 }
 
+/// An instruction directory and the component kind its artifacts project to.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct InstructionDirectoryJSON {
+    /// One lowercase path component (`skills`), joined as written and
+    /// compared with lowercased path components.
+    pub directory: String,
+    /// Component kind: `rule`, `skill`, `command`, `subagent`, `memory`,
+    /// `prompt`, `instruction` or `hook`.
+    pub kind: String,
+}
+
+/// A workspace-relative instruction file and its component kind.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct InstructionFileJSON {
+    /// Path relative to the workspace root (`.github/copilot-instructions.md`).
+    pub path: String,
+    pub kind: String,
+}
+
+/// What the instruction inventory (`agent_visibility`) walks and recognizes:
+/// the directories under an agent's own instruction root and under a
+/// workspace root, the file names and extensions of instruction artifacts,
+/// and the skill package markers. The walk itself (depth, count and size
+/// bounds, hidden-entry skipping, symlink handling) stays in code. Extensions
+/// and compared file names are lowercased by
+/// [`AgentVisibilityParams::new_from_json`]; directories and paths joined
+/// onto a root are kept as written.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct InstructionInventoryJSON {
+    /// Subdirectories of an agent's instruction root (`~/.cursor`,
+    /// `~/.claude`, ...) that hold instruction artifacts. An allowlist: only
+    /// these are walked, so transcript and session stores never are.
+    pub agent_subdirectories: Vec<InstructionDirectoryJSON>,
+    /// Extensions (without the dot) of files the content drill-down may read
+    /// under an instruction subdirectory: documents plus the config files a
+    /// skill ships.
+    pub artifact_extensions: Vec<String>,
+    /// Extensions of the instruction documents enumerated into the inventory
+    /// (a skill's bundled data, license and state files are not artifacts).
+    pub document_extensions: Vec<String>,
+    /// File names of top-level instruction files (`claude.md`,
+    /// `.cursorrules`), compared lowercased; always loaded.
+    pub toplevel_instruction_files: Vec<String>,
+    /// Extensions of top-level rule files (`mdc`).
+    pub toplevel_rule_extensions: Vec<String>,
+    /// Skill entry file names (`skill.md`), instruction-shaped wherever they
+    /// resolve.
+    pub skill_entry_files: Vec<String>,
+    /// Directories whose whole tree is a skill package: any file under them
+    /// is readable (a skill bundles scripts and fixtures the agent reads).
+    pub skill_tree_directories: Vec<String>,
+    /// Instruction roots nested under an agent's instruction root, per agent
+    /// type, `/`-separated with `*` for one directory level
+    /// (`local-agent-mode-sessions/skills-plugin/*/*`).
+    pub nested_roots: std::collections::BTreeMap<String, Vec<String>>,
+    /// Instruction files at a workspace root.
+    pub workspace_toplevel_files: Vec<InstructionFileJSON>,
+    /// Config directories at a workspace root walked like an agent's
+    /// instruction root (`.cursor`, `.claude`).
+    pub workspace_config_directories: Vec<String>,
+    /// Instruction subdirectories directly under a workspace root (narrower
+    /// than [`Self::agent_subdirectories`], so ordinary project docs stay
+    /// out).
+    pub workspace_subdirectories: Vec<InstructionDirectoryJSON>,
+}
+
 /// Raw JSON shape of `agent-visibility-params-db.json`. No serde defaults:
 /// the published JSON always carries every field; a missing field fails the
 /// parse and the embedded snapshot (which has all fields) stays in effect.
@@ -377,6 +446,8 @@ pub struct AgentVisibilityParamsJSON {
     /// Workspace attribution of agent sessions (see
     /// [`WorkspaceAttributionJSON`]).
     pub workspace_attribution: WorkspaceAttributionJSON,
+    /// Instruction inventory rules (see [`InstructionInventoryJSON`]).
+    pub instruction_inventory: InstructionInventoryJSON,
 }
 
 /// Normalized runtime snapshot of the agent-visibility params.
@@ -404,6 +475,8 @@ pub struct AgentVisibilityParams {
     /// Workspace attribution, program names / extensions / markers
     /// lowercased.
     pub workspace_attribution: WorkspaceAttributionJSON,
+    /// Instruction inventory rules, extensions and compared names lowercased.
+    pub instruction_inventory: InstructionInventoryJSON,
 }
 
 impl CloudSignature for AgentVisibilityParams {
@@ -535,6 +608,27 @@ fn normalize_workspace_attribution(w: &WorkspaceAttributionJSON) -> WorkspaceAtt
     }
 }
 
+/// Lowercases the extensions and the file and directory names the inventory
+/// compares with lowercased names. Directories and paths joined onto a root
+/// are kept as written.
+fn normalize_instruction_inventory(i: &InstructionInventoryJSON) -> InstructionInventoryJSON {
+    let lower =
+        |xs: &[String]| -> Vec<String> { xs.iter().map(|x| x.to_ascii_lowercase()).collect() };
+    InstructionInventoryJSON {
+        agent_subdirectories: i.agent_subdirectories.clone(),
+        artifact_extensions: lower(&i.artifact_extensions),
+        document_extensions: lower(&i.document_extensions),
+        toplevel_instruction_files: lower(&i.toplevel_instruction_files),
+        toplevel_rule_extensions: lower(&i.toplevel_rule_extensions),
+        skill_entry_files: lower(&i.skill_entry_files),
+        skill_tree_directories: lower(&i.skill_tree_directories),
+        nested_roots: i.nested_roots.clone(),
+        workspace_toplevel_files: i.workspace_toplevel_files.clone(),
+        workspace_config_directories: i.workspace_config_directories.clone(),
+        workspace_subdirectories: i.workspace_subdirectories.clone(),
+    }
+}
+
 impl AgentVisibilityParams {
     pub fn new_from_json(json: &AgentVisibilityParamsJSON) -> Self {
         Self {
@@ -579,6 +673,7 @@ impl AgentVisibilityParams {
             augmentation_coach_templates: json.augmentation_coach_templates.clone(),
             history_retention: json.history_retention,
             workspace_attribution: normalize_workspace_attribution(&json.workspace_attribution),
+            instruction_inventory: normalize_instruction_inventory(&json.instruction_inventory),
         }
     }
 }
@@ -743,6 +838,13 @@ pub fn workspace_attribution() -> Arc<AgentVisibilityParams> {
     PARAMS_SNAPSHOT.load().clone()
 }
 
+/// Instruction inventory rules: the instruction directories, file names,
+/// extensions and skill package markers the Agents view's inventory walks
+/// and recognizes (extensions and compared names lowercased).
+pub fn instruction_inventory() -> InstructionInventoryJSON {
+    PARAMS_SNAPSHOT.load().instruction_inventory.clone()
+}
+
 /// The params signature of the current snapshot: a scan state computed under
 /// another vocabulary is recomputed.
 pub fn params_signature() -> String {
@@ -853,6 +955,18 @@ mod tests {
             .agent_cli_programs
             .iter()
             .all(|p| p == &p.to_ascii_lowercase()));
+        let inv = &params.instruction_inventory;
+        assert!(!inv.agent_subdirectories.is_empty());
+        assert!(!inv.artifact_extensions.is_empty());
+        assert!(!inv.document_extensions.is_empty());
+        assert!(!inv.toplevel_instruction_files.is_empty());
+        assert!(!inv.toplevel_rule_extensions.is_empty());
+        assert!(!inv.skill_entry_files.is_empty());
+        assert!(!inv.skill_tree_directories.is_empty());
+        assert!(!inv.nested_roots.is_empty());
+        assert!(!inv.workspace_toplevel_files.is_empty());
+        assert!(!inv.workspace_config_directories.is_empty());
+        assert!(!inv.workspace_subdirectories.is_empty());
     }
 
     /// Catalog names and criticality are lowercased by `new_from_json` so

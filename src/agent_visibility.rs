@@ -18,7 +18,7 @@
 //! compiling for iOS/Android (where the agent plugins never install and the
 //! collectors simply find nothing on disk).
 
-use crate::agent_visibility_params;
+use crate::agent_visibility_params::{self, InstructionInventoryJSON};
 // The URL and excerpt maskers moved to the shared redaction module (2.0.2);
 // re-exported so `agent_visibility::redact_secret_like_text` keeps working.
 pub use crate::redaction::redact_secret_like_text;
@@ -3837,51 +3837,19 @@ fn needle_matches_env_key(key: &str, needle: &str) -> bool {
     false
 }
 
-/// Subdirectories within an agent's config dir that carry agent instructions /
-/// skills / commands / subagents, paired with the component `edamame:kind` each
-/// projects to. This is an allowlist on purpose: only these well-known dirs are
-/// walked, so transcript / session / log stores (`projects/`, `sessions/`,
-/// `history/`, ...) are never scanned.
-const INSTRUCTION_SUBDIRS: &[(&str, &str)] = &[
-    ("rules", "rule"),
-    ("skills", "skill"),
-    // Cursor keeps its built-in / product skills under `skills-cursor`
-    // (`~/.cursor/skills-cursor`), separate from the user `skills` dir; other
-    // agents have no such dir so this is a no-op for them.
-    ("skills-cursor", "skill"),
-    ("commands", "command"),
-    ("agents", "subagent"),
-    ("subagents", "subagent"),
-    ("memories", "memory"),
-    ("prompts", "prompt"),
-    ("instructions", "instruction"),
-    ("hooks", "hook"),
-];
-
-/// File extensions considered instruction/skill artifacts inside the
-/// allowlisted subdirectories. This is the *permissive* set used only by the
-/// on-demand content-drill-down guard ([`path_is_instruction_artifact`]): if the
-/// agent was observed reading a bundled supporting file (a builder script's
-/// sibling `.txt` fixture, a `.json` config) under a skill, the UI must still be
-/// able to show what was read.
-const INSTRUCTION_EXTS: &[&str] = &["md", "mdc", "txt", "json", "toml", "yaml", "yml"];
-
-/// File extensions enumerated as first-class instruction artifacts into the
-/// component inventory (the "what skills / rules / commands / subagents does
-/// this agent HAVE" list).
-///
-/// Deliberately narrower than [`INSTRUCTION_EXTS`]: an authored instruction
-/// artifact -- a skill (`SKILL.md` / `DESCRIPTION.md`), rule (`*.mdc`), command,
-/// subagent, prompt, memory, or instruction -- is a Markdown document. The
-/// bundled non-Markdown files a skill ships alongside its doc (a `LICENSE.txt`, a
-/// `.cursor-managed-skills-manifest.json`, an agent runtime `models.json` /
-/// `sessions.json` / `runs.json` state file, a `*.trajectory-path.json`) are
-/// data/config/state, NOT instruction artifacts, and MUST NOT each become their
-/// own "skill" row (they surface as phantom, perpetually-"dead" skills and as
-/// spurious duplicate clusters). Enumerating only Markdown docs is generic --
-/// no per-filename allowlist/blocklist -- and matches how every supported agent
-/// authors its instruction set.
-const INSTRUCTION_DOC_EXTS: &[&str] = &["md", "mdc"];
+// What the inventory walks and recognizes -- the instruction subdirectories
+// (an allowlist, so transcript / session / log stores such as `projects/`,
+// `sessions/`, `history/` are never scanned), the file names and extensions,
+// the skill package markers -- is data in the agent-visibility params
+// (`agent_visibility_params::instruction_inventory()`). Two extension sets on
+// purpose: `artifact_extensions` is the permissive set the content drill-down
+// may read under an instruction subdirectory (a skill's bundled `.txt`
+// fixture or `.json` config the agent was seen reading), while
+// `document_extensions` (Markdown) is what becomes an inventory row: the
+// non-Markdown files a skill ships (a `LICENSE.txt`, a
+// `.cursor-managed-skills-manifest.json`, runtime `models.json` state) are
+// data, not instruction artifacts, and would otherwise surface as phantom,
+// perpetually "dead" skills and spurious duplicate clusters.
 
 /// Max instruction artifacts discovered per agent- or workspace-scope root.
 /// Sized to cover a large first-party skills library (Hermes, for example,
@@ -3899,14 +3867,23 @@ const INSTRUCTION_MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
 
 /// Classify a top-level file (directly under the config dir) as an instruction
 /// artifact. Returns its `edamame:kind`, or `None` if it is not one.
-fn classify_toplevel_instruction(name: &str) -> Option<&'static str> {
+fn classify_toplevel_instruction(
+    inventory: &InstructionInventoryJSON,
+    name: &str,
+) -> Option<&'static str> {
     let lower = name.to_ascii_lowercase();
-    match lower.as_str() {
-        "claude.md" | "agents.md" | "gemini.md" | "codex.md" | "rules.md" | "instructions.md"
-        | "memory.md" | ".cursorrules" => Some("instruction"),
-        _ if lower.ends_with(".mdc") => Some("rule"),
-        _ => None,
+    if inventory
+        .toplevel_instruction_files
+        .iter()
+        .any(|file| *file == lower)
+    {
+        return Some("instruction");
     }
+    let is_rule = inventory
+        .toplevel_rule_extensions
+        .iter()
+        .any(|ext| lower.ends_with(&format!(".{ext}")));
+    is_rule.then_some("rule")
 }
 
 // ---------------------------------------------------------------------------
@@ -3985,9 +3962,9 @@ fn normalize_content_tier(tier: &str) -> &'static str {
 
 /// True when `path` has the shape of a readable instruction artifact: a
 /// top-level instruction file (`CLAUDE.md`, `.cursorrules`, ...), ANY regular
-/// file under a `skills/` (or `skills-cursor/`) tree, or a file with an
-/// instruction extension living under one of the other `INSTRUCTION_SUBDIRS`
-/// segments (`rules/`, `commands/`, ...).
+/// file under a skill package tree (`skills/`, `skills-cursor/`, ...), or a
+/// file with an artifact extension living under one of the other instruction
+/// subdirectories (`rules/`, `commands/`, ...), all from `inventory`.
 ///
 /// Skill folders are special-cased to allow any extension because a skill
 /// legitimately bundles supporting files -- builder scripts, fixtures, assets --
@@ -4002,18 +3979,22 @@ fn normalize_content_tier(tier: &str) -> &'static str {
 /// a symlink under `skills/` pointing at `/etc/shadow` or `~/.ssh/id_rsa`
 /// resolves to a path with no `skills` ancestor (and outside any instruction
 /// subdir) and is rejected.
-fn path_is_instruction_artifact(path: &Path) -> bool {
+fn path_is_instruction_artifact(inventory: &InstructionInventoryJSON, path: &Path) -> bool {
     let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
         return false;
     };
-    if classify_toplevel_instruction(name).is_some() {
+    if classify_toplevel_instruction(inventory, name).is_some() {
         return true;
     }
-    // Canonical Claude / agentfield skill entry files: always instruction-
-    // shaped even when a symlink resolve lands outside a `skills/` ancestor
-    // (defense in depth alongside the segment checks below).
+    // Skill entry files (Claude / agentfield `SKILL.md`): always instruction-
+    // shaped even when a symlink resolve lands outside a skill package
+    // ancestor (defense in depth alongside the segment checks below).
     let name_lower = name.to_ascii_lowercase();
-    if name_lower == "skill.md" || name_lower == "description.md" {
+    if inventory
+        .skill_entry_files
+        .iter()
+        .any(|file| *file == name_lower)
+    {
         return true;
     }
     // Lower-cased ancestor directory segments, computed once.
@@ -4023,14 +4004,12 @@ fn path_is_instruction_artifact(path: &Path) -> bool {
         .collect();
     // A skill folder bundles supporting files (scripts / assets / fixtures) the
     // agent reads as part of running the skill; allow any extension under it.
-    // `.agentfield` is the shared physical store behind Claude/Cursor skill
+    // The package directories include the shared physical store behind skill
     // manager symlinks (`~/.claude/skills/<name>` -> `~/.agentfield/...`).
-    if segments.iter().any(|s| {
-        matches!(
-            s.as_str(),
-            "skills" | "skills-cursor" | ".agentfield" | "agentfield"
-        )
-    }) {
+    if segments
+        .iter()
+        .any(|s| inventory.skill_tree_directories.iter().any(|dir| dir == s))
+    {
         return true;
     }
     // Other instruction subdirs (rules / commands / prompts / ...) are doc-only:
@@ -4038,15 +4017,19 @@ fn path_is_instruction_artifact(path: &Path) -> bool {
     let ext_ok = path
         .extension()
         .and_then(|e| e.to_str())
-        .map(|e| INSTRUCTION_EXTS.contains(&e.to_ascii_lowercase().as_str()))
+        .map(|e| {
+            let e = e.to_ascii_lowercase();
+            inventory.artifact_extensions.iter().any(|x| *x == e)
+        })
         .unwrap_or(false);
     if !ext_ok {
         return false;
     }
     segments.iter().any(|seg| {
-        INSTRUCTION_SUBDIRS
+        inventory
+            .agent_subdirectories
             .iter()
-            .any(|(dir, _)| *dir == seg.as_str())
+            .any(|dir| dir.directory == *seg)
     })
 }
 
@@ -4080,10 +4063,11 @@ fn head_str_lossy(bytes: &[u8], max: usize) -> (String, bool) {
 pub fn read_instruction_content(path: &Path, home: &Path, tier: &str) -> InstructionContentResult {
     let tier = normalize_content_tier(tier);
     let path_str = path.to_string_lossy().to_string();
+    let inventory = agent_visibility_params::instruction_inventory();
 
     // Guard 1: instruction-artifact shape (uses the raw path so a symlink whose
     // name is not instruction-shaped is rejected before any canonicalization).
-    if !path_is_instruction_artifact(path) {
+    if !path_is_instruction_artifact(&inventory, path) {
         return InstructionContentResult::refused(
             &path_str,
             tier,
@@ -4112,7 +4096,7 @@ pub fn read_instruction_content(path: &Path, home: &Path, tier: &str) -> Instruc
     }
     // Re-check the shape post-canonicalization (defends against a symlink under
     // an instruction dir pointing at a non-instruction file).
-    if !path_is_instruction_artifact(&canonical) {
+    if !path_is_instruction_artifact(&inventory, &canonical) {
         return InstructionContentResult::refused(
             &path_str,
             tier,
@@ -4192,15 +4176,16 @@ pub fn read_instruction_content(path: &Path, home: &Path, tier: &str) -> Instruc
 
 /// Discover an agent's instruction / skill / rule / command / subagent files
 /// from its config dir and project them as content-hashed `file` inventory
-/// components. Bounded (depth + count + size) and limited to the
-/// `INSTRUCTION_SUBDIRS` allowlist plus top-level instruction files, so
-/// transcript / session stores are never walked. Bodies are hashed, never
-/// stored (invariant I5).
+/// components. Bounded (depth + count + size) and limited to the instruction
+/// subdirectory allowlist plus top-level instruction files, so transcript /
+/// session stores are never walked. Bodies are hashed, never stored
+/// (invariant I5).
 fn discover_agent_instruction_components(home: &Path, agent_type: &str) -> Vec<AgentComponent> {
     const MAX_FILES: usize = INSTRUCTION_MAX_FILES;
     const MAX_DEPTH: usize = INSTRUCTION_MAX_DEPTH;
     const MAX_FILE_BYTES: u64 = INSTRUCTION_MAX_FILE_BYTES;
 
+    let inventory = agent_visibility_params::instruction_inventory();
     let def = match supported_agents::find_supported_agent(agent_type) {
         Some(d) => d,
         None => return Vec::new(),
@@ -4218,7 +4203,7 @@ fn discover_agent_instruction_components(home: &Path, agent_type: &str) -> Vec<A
     }
 
     // Collect (path, kind) pairs, then sort by path for deterministic output.
-    let mut found: Vec<(PathBuf, &'static str)> = Vec::new();
+    let mut found: Vec<(PathBuf, &str)> = Vec::new();
 
     // Top-level instruction files directly under the config dir. Capped at
     // MAX_FILES so a config dir stuffed with `*.mdc` files cannot grow `found`
@@ -4234,7 +4219,7 @@ fn discover_agent_instruction_components(home: &Path, agent_type: &str) -> Vec<A
                 continue;
             }
             if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                if let Some(kind) = classify_toplevel_instruction(name) {
+                if let Some(kind) = classify_toplevel_instruction(&inventory, name) {
                     found.push((path, kind));
                 }
             }
@@ -4243,15 +4228,24 @@ fn discover_agent_instruction_components(home: &Path, agent_type: &str) -> Vec<A
 
     // Allowlisted instruction-bearing subdirectories (bounded walk), under the
     // config dir itself and under any agent-specific nested plugin roots.
-    for base in
-        std::iter::once(config_dir.clone()).chain(nested_instruction_roots(&config_dir, agent_type))
-    {
-        for (subdir, kind) in INSTRUCTION_SUBDIRS {
-            let root = base.join(subdir);
+    for base in std::iter::once(config_dir.clone()).chain(nested_instruction_roots(
+        &inventory,
+        &config_dir,
+        agent_type,
+    )) {
+        for subdir in &inventory.agent_subdirectories {
+            let root = base.join(&subdir.directory);
             if !root.is_dir() {
                 continue;
             }
-            collect_instruction_files(&root, kind, MAX_DEPTH, &mut found, MAX_FILES);
+            collect_instruction_files(
+                &inventory.document_extensions,
+                &root,
+                &subdir.kind,
+                MAX_DEPTH,
+                &mut found,
+                MAX_FILES,
+            );
         }
     }
 
@@ -4271,7 +4265,8 @@ fn discover_agent_instruction_components(home: &Path, agent_type: &str) -> Vec<A
 
 /// Extra roots under an agent's config dir that hold instruction subdirectories
 /// one or more levels down, and so are missed by the flat
-/// `config_dir/<INSTRUCTION_SUBDIRS>` walk.
+/// `config_dir/<instruction subdirectory>` walk: the agent's `nested_roots`
+/// patterns from `inventory`.
 ///
 /// Claude Desktop is the case that motivated this: it does not keep skills in
 /// `~/Library/Application Support/Claude/skills`. It installs them per
@@ -4281,54 +4276,57 @@ fn discover_agent_instruction_components(home: &Path, agent_type: &str) -> Vec<A
 /// exactly one entry (the agent runtime itself) while a live host had 18
 /// `SKILL.md` files on disk.
 ///
-/// Note this deliberately reaches INTO a `…-sessions` directory, which the
-/// `INSTRUCTION_SUBDIRS` allowlist otherwise keeps out. That is safe because
-/// the path below `skills-plugin` is fully pinned (two fixed directory levels,
-/// then the same instruction-subdir allowlist as anywhere else) -- transcripts
-/// and session state live in sibling directories that are never walked.
+/// A pattern may deliberately reach INTO a `…-sessions` directory, which the
+/// instruction-subdirectory allowlist otherwise keeps out. That is safe because
+/// the pattern pins every level (fixed names, or `*` for exactly one directory
+/// level), and below it the same allowlist applies as anywhere else --
+/// transcripts and session state live in sibling directories that are never
+/// walked.
 ///
-/// Bounded: at most `MAX_NESTED_ROOTS` roots, discovered with two `read_dir`
-/// levels and no recursion.
-fn nested_instruction_roots(config_dir: &Path, agent_type: &str) -> Vec<PathBuf> {
+/// Bounded: at most `MAX_NESTED_ROOTS` roots, one `read_dir` per `*` level.
+fn nested_instruction_roots(
+    inventory: &InstructionInventoryJSON,
+    config_dir: &Path,
+    agent_type: &str,
+) -> Vec<PathBuf> {
     const MAX_NESTED_ROOTS: usize = 32;
-    if agent_type != "claude_desktop" {
+    let Some(patterns) = inventory.nested_roots.get(agent_type) else {
         return Vec::new();
-    }
-    let plugin_base = config_dir
-        .join("local-agent-mode-sessions")
-        .join("skills-plugin");
-    if !plugin_base.is_dir() {
-        return Vec::new();
-    }
-    let mut out: Vec<PathBuf> = Vec::new();
-    let Ok(profiles) = std::fs::read_dir(&plugin_base) else {
-        return out;
     };
-    for profile in profiles.flatten() {
-        if out.len() >= MAX_NESTED_ROOTS {
-            break;
-        }
-        let profile_path = profile.path();
-        let (is_dir, _) = entry_kind_following_symlinks(&profile, &profile_path);
-        if !is_dir {
-            continue;
-        }
-        let Ok(accounts) = std::fs::read_dir(&profile_path) else {
-            continue;
-        };
-        for account in accounts.flatten() {
-            if out.len() >= MAX_NESTED_ROOTS {
-                break;
-            }
-            let account_path = account.path();
-            let (is_dir, _) = entry_kind_following_symlinks(&account, &account_path);
-            if is_dir {
-                out.push(account_path);
-            }
-        }
+    let mut out: Vec<PathBuf> = Vec::new();
+    for pattern in patterns {
+        let components: Vec<&str> = pattern.split('/').filter(|c| !c.is_empty()).collect();
+        expand_directory_pattern(config_dir, &components, &mut out, MAX_NESTED_ROOTS);
     }
     out.sort();
     out
+}
+
+/// Expand a root pattern under `base`: a fixed component is joined, a `*`
+/// component is every directory entry at that level (symlinks followed).
+/// Stops once `out` holds `cap` roots.
+fn expand_directory_pattern(base: &Path, components: &[&str], out: &mut Vec<PathBuf>, cap: usize) {
+    let Some((first, rest)) = components.split_first() else {
+        out.push(base.to_path_buf());
+        return;
+    };
+    if *first != "*" {
+        expand_directory_pattern(&base.join(first), rest, out, cap);
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(base) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if out.len() >= cap {
+            break;
+        }
+        let path = entry.path();
+        let (is_dir, _) = entry_kind_following_symlinks(&entry, &path);
+        if is_dir {
+            expand_directory_pattern(&path, rest, out, cap);
+        }
+    }
 }
 
 /// Classify a directory entry as `(is_dir, is_file)`, FOLLOWING symlinks.
@@ -4357,8 +4355,9 @@ fn entry_kind_following_symlinks(entry: &std::fs::DirEntry, path: &Path) -> (boo
     }
 }
 
-/// Bounded DFS over an instruction subdirectory, collecting Markdown
-/// instruction documents (extension in [`INSTRUCTION_DOC_EXTS`]).
+/// Bounded DFS over an instruction subdirectory, collecting instruction
+/// documents (extension in `document_extensions`, the inventory's Markdown
+/// set).
 ///
 /// Hidden entries (name starting with `.`) are skipped for BOTH files and
 /// directories. Inside an instruction tree, hidden entries are tool-managed /
@@ -4372,11 +4371,12 @@ fn entry_kind_following_symlinks(entry: &std::fs::DirEntry, path: &Path) -> (boo
 /// them, so this only filters dot-entries *within* an instruction subtree; the
 /// top-level `.cursorrules` file is handled separately by
 /// [`classify_toplevel_instruction`] and is unaffected.)
-fn collect_instruction_files(
+fn collect_instruction_files<'k>(
+    document_extensions: &[String],
     root: &Path,
-    kind: &'static str,
+    kind: &'k str,
     max_depth: usize,
-    acc: &mut Vec<(PathBuf, &'static str)>,
+    acc: &mut Vec<(PathBuf, &'k str)>,
     cap: usize,
 ) {
     let mut stack: Vec<(PathBuf, usize)> = vec![(root.to_path_buf(), 0)];
@@ -4413,7 +4413,7 @@ fn collect_instruction_files(
                     .extension()
                     .and_then(|e| e.to_str())
                     .map(|e| {
-                        INSTRUCTION_DOC_EXTS
+                        document_extensions
                             .iter()
                             .any(|x| x.eq_ignore_ascii_case(e))
                     })
@@ -4563,10 +4563,11 @@ const INSTRUCTION_REF_FOLDER_DIR_SEGMENTS: &[&str] = &["skills/", "agents/", "su
 const INSTRUCTION_REF_FILE_DIR_SEGMENTS: &[&str] = &["commands/", "rules/", "prompts/"];
 
 /// Document extensions an instruction artifact body can carry. This is the doc
-/// subset of [`INSTRUCTION_EXTS`]; the config/data extensions (`json`, `toml`,
-/// `yaml`, `yml`) are deliberately excluded so a prose mention of a config file
-/// (`hooks.json`, `settings.json`, `cli-config.json`) never becomes a reference
-/// edge -- those are data the skill reads, not other instruction artifacts.
+/// subset of the inventory's artifact extensions; the config/data extensions
+/// (`json`, `toml`, `yaml`, `yml`) are deliberately excluded so a prose mention
+/// of a config file (`hooks.json`, `settings.json`, `cli-config.json`) never
+/// becomes a reference edge -- those are data the skill reads, not other
+/// instruction artifacts.
 const INSTRUCTION_REF_DOC_EXTS: &[&str] = &["md", "mdc", "txt"];
 
 /// Extract path-like references to *other* instruction artifacts from an
@@ -4599,6 +4600,7 @@ const INSTRUCTION_REF_DOC_EXTS: &[&str] = &["md", "mdc", "txt"];
 /// - a bare top-level basename dropped into prose ("...or AGENTS.md") is only
 ///   kept when written as an explicit `@AGENTS.md` mention or with a path.
 pub fn extract_instruction_refs(body: &[u8]) -> Vec<String> {
+    let inventory = agent_visibility_params::instruction_inventory();
     let text = String::from_utf8_lossy(body);
     let mut refs: BTreeSet<String> = BTreeSet::new();
     let mut in_fence = false;
@@ -4661,7 +4663,7 @@ pub fn extract_instruction_refs(body: &[u8]) -> Vec<String> {
                 continue;
             }
             if let Some(tok) = normalize_ref_token(raw_trim) {
-                if looks_like_instruction_ref(&tok, explicit) {
+                if looks_like_instruction_ref(&tok, explicit, &inventory.artifact_extensions) {
                     refs.insert(tok);
                     if refs.len() >= MAX_INSTRUCTION_REFS * 4 {
                         // Hard stop scanning a pathological file once we have far
@@ -4708,7 +4710,8 @@ fn normalize_ref_token(raw: &str) -> Option<String> {
 /// Decide whether a normalized token names an instruction artifact. `explicit`
 /// is true when the raw token was written as an `@file` mention (which promotes
 /// an otherwise-ambiguous bare top-level basename to a real reference).
-fn looks_like_instruction_ref(tok: &str, explicit: bool) -> bool {
+/// `artifact_extensions` is the inventory's readable-artifact extension set.
+fn looks_like_instruction_ref(tok: &str, explicit: bool, artifact_extensions: &[String]) -> bool {
     if tok.contains("://") || tok.starts_with("mailto:") {
         return false; // web link / email, not an instruction file
     }
@@ -4728,7 +4731,9 @@ fn looks_like_instruction_ref(tok: &str, explicit: bool) -> bool {
     // instruction artifacts, so a mention of one never becomes an edge.
     let is_config_ext = ext
         .as_deref()
-        .map(|e| INSTRUCTION_EXTS.contains(&e) && !INSTRUCTION_REF_DOC_EXTS.contains(&e))
+        .map(|e| {
+            artifact_extensions.iter().any(|x| x == e) && !INSTRUCTION_REF_DOC_EXTS.contains(&e)
+        })
         .unwrap_or(false);
 
     // (a) Well-known top-level instruction filename (AGENTS.md, CLAUDE.md,
@@ -4933,38 +4938,16 @@ fn classify_rule_load(body: &[u8]) -> &'static str {
     "conditional"
 }
 
-/// Workspace-root top-level instruction files (project-scoped, always loaded).
-const WORKSPACE_TOPLEVEL_INSTRUCTION_FILES: &[(&str, &str)] = &[
-    ("AGENTS.md", "instruction"),
-    ("CLAUDE.md", "instruction"),
-    ("GEMINI.md", "instruction"),
-    ("CODEX.md", "instruction"),
-    (".cursorrules", "instruction"),
-    (".github/copilot-instructions.md", "instruction"),
-];
-
-/// Workspace-root config directories walked for project-scoped instruction /
-/// skill / rule artifacts. Each is treated like a per-agent config dir: its
-/// top-level instruction files plus the [`INSTRUCTION_SUBDIRS`] allowlist.
-const WORKSPACE_CONFIG_DIRS: &[&str] = &[".cursor", ".claude"];
-
-/// Instruction subdirectories that live directly under the workspace root
-/// (not under `.cursor` / `.claude`). Many first-party skill libraries use a
-/// top-level `skills/<name>/SKILL.md` layout (SIFU, custom agent packs); if we
-/// only walk `.cursor`/`.claude`, those packages stay out of the inventory and
-/// every rule that references them surfaces as a false "broken reference".
-///
-/// Narrower than [`INSTRUCTION_SUBDIRS`]: omit `rules` / `hooks` / `prompts`
-/// at the repo root so ordinary project docs (`docs/`, prose `rules.md`) are
-/// not sucked into the instruction inventory. Keep the folder-artifact kinds
-/// that match the reference-graph resolver (`skills/`, `agents/`, …).
-const WORKSPACE_ROOT_INSTRUCTION_SUBDIRS: &[(&str, &str)] = &[
-    ("skills", "skill"),
-    ("skills-cursor", "skill"),
-    ("commands", "command"),
-    ("agents", "subagent"),
-    ("subagents", "subagent"),
-];
+// A workspace root is walked from the inventory params too: its top-level
+// instruction files (project-scoped, always loaded), its config directories
+// (`.cursor` / `.claude`, each walked like an agent's instruction root), and
+// the instruction subdirectories directly under it. Many first-party skill
+// libraries use a top-level `skills/<name>/SKILL.md` layout (SIFU, custom
+// agent packs); without them every rule that references such a package
+// surfaces as a false "broken reference". That list is narrower than the
+// agent one (no `rules` / `hooks` / `prompts` at a repository root) so
+// ordinary project docs (`docs/`, a prose `rules.md`) stay out of the
+// inventory.
 
 /// Discover a *workspace repository's* instruction / skill / rule / command /
 /// subagent files and project them as content-hashed `file` inventory components,
@@ -4988,17 +4971,18 @@ pub fn discover_workspace_instruction_components(workspace_root: &Path) -> Vec<A
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "workspace".to_string());
     let agent_scope = format!("workspace:{ws_label}");
+    let inventory = agent_visibility_params::instruction_inventory();
 
-    let mut found: Vec<(PathBuf, &'static str)> = Vec::new();
+    let mut found: Vec<(PathBuf, &str)> = Vec::new();
 
     // Top-level workspace instruction files.
-    for (rel, kind) in WORKSPACE_TOPLEVEL_INSTRUCTION_FILES {
+    for file in &inventory.workspace_toplevel_files {
         if found.len() >= MAX_FILES {
             break;
         }
-        let p = workspace_root.join(rel);
+        let p = workspace_root.join(&file.path);
         if p.is_file() {
-            found.push((p, kind));
+            found.push((p, &file.kind));
         }
     }
 
@@ -5006,19 +4990,27 @@ pub fn discover_workspace_instruction_components(workspace_root: &Path) -> Vec<A
     // SKILL.md`). Same collector + caps as the per-agent walk; these are the
     // packages rules under `.cursor/rules/` typically reference by relative
     // path, so omitting them produces false broken-reference edges.
-    for (subdir, kind) in WORKSPACE_ROOT_INSTRUCTION_SUBDIRS {
+    for subdir in &inventory.workspace_subdirectories {
         if found.len() >= MAX_FILES {
             break;
         }
-        let root = workspace_root.join(subdir);
+        let root = workspace_root.join(&subdir.directory);
         if root.is_dir() {
-            collect_instruction_files(&root, kind, MAX_DEPTH, &mut found, MAX_FILES);
+            collect_instruction_files(
+                &inventory.document_extensions,
+                &root,
+                &subdir.kind,
+                MAX_DEPTH,
+                &mut found,
+                MAX_FILES,
+            );
         }
     }
 
     // `.cursor` / `.claude` config dirs at the workspace root: reuse the same
-    // top-level classification + INSTRUCTION_SUBDIRS allowlist as per-agent.
-    for cfg in WORKSPACE_CONFIG_DIRS {
+    // top-level classification + instruction-subdirectory allowlist as
+    // per-agent.
+    for cfg in &inventory.workspace_config_directories {
         if found.len() >= MAX_FILES {
             break;
         }
@@ -5037,19 +5029,26 @@ pub fn discover_workspace_instruction_components(workspace_root: &Path) -> Vec<A
                     continue;
                 }
                 if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    if let Some(kind) = classify_toplevel_instruction(name) {
+                    if let Some(kind) = classify_toplevel_instruction(&inventory, name) {
                         found.push((path, kind));
                     }
                 }
             }
         }
-        for (subdir, kind) in INSTRUCTION_SUBDIRS {
+        for subdir in &inventory.agent_subdirectories {
             if found.len() >= MAX_FILES {
                 break;
             }
-            let root = cfg_dir.join(subdir);
+            let root = cfg_dir.join(&subdir.directory);
             if root.is_dir() {
-                collect_instruction_files(&root, kind, MAX_DEPTH, &mut found, MAX_FILES);
+                collect_instruction_files(
+                    &inventory.document_extensions,
+                    &root,
+                    &subdir.kind,
+                    MAX_DEPTH,
+                    &mut found,
+                    MAX_FILES,
+                );
             }
         }
     }
@@ -9391,7 +9390,7 @@ skills/gtm-report and @rules/invariants.mdc.
     // the agent reads while running the skill. Those must be previewable in the
     // drill-down, not reported as "not found on disk". This is the deck_suite
     // regression: `.../skills/deck_suite/builders/*.py` was refused because `.py`
-    // is not an INSTRUCTION_EXTS doc extension.
+    // is not an artifact extension of the instruction inventory.
     #[test]
     fn read_instruction_content_allows_skill_support_script() {
         let tmp = tempfile::TempDir::new().unwrap();
@@ -9760,8 +9759,9 @@ skills/gtm-report and @rules/invariants.mdc.
     ///     on disk right now (`fs::metadata`, which follows symlinks). A
     ///     discovered artifact that is not on disk is a phantom.
     ///   * MISS: an independent symlink-following walk of the same config root
-    ///     (top-level instruction files + the `INSTRUCTION_SUBDIRS` allowlist,
-    ///     `INSTRUCTION_EXTS`, depth <= 4) must not surface any readable,
+    ///     (top-level instruction files + the instruction-subdirectory
+    ///     allowlist and document extensions of the inventory params,
+    ///     depth <= 4) must not surface any readable,
     ///     <=2 MB artifact that discovery failed to return. Files above the
     ///     2 MB body cap or an agent whose candidate set exceeds the
     ///     `INSTRUCTION_MAX_FILES` cap are excluded from the miss assertion
@@ -9791,6 +9791,7 @@ skills/gtm-report and @rules/invariants.mdc.
         // Reuses the module's own consts/helpers so it tracks the real rules,
         // but walks the tree independently of `discover_agent_instruction_components`.
         fn independent_walk(config_dir: &Path) -> Vec<PathBuf> {
+            let inventory = agent_visibility_params::instruction_inventory();
             let mut found: Vec<PathBuf> = Vec::new();
             if let Ok(entries) = std::fs::read_dir(config_dir) {
                 for entry in entries.flatten() {
@@ -9803,14 +9804,14 @@ skills/gtm-report and @rules/invariants.mdc.
                         continue;
                     }
                     if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                        if classify_toplevel_instruction(name).is_some() {
+                        if classify_toplevel_instruction(&inventory, name).is_some() {
                             found.push(path);
                         }
                     }
                 }
             }
-            for (subdir, _kind) in INSTRUCTION_SUBDIRS {
-                let root = config_dir.join(subdir);
+            for subdir in &inventory.agent_subdirectories {
+                let root = config_dir.join(&subdir.directory);
                 if !root.is_dir() {
                     continue;
                 }
@@ -9848,7 +9849,8 @@ skills/gtm-report and @rules/invariants.mdc.
                                 .extension()
                                 .and_then(|e| e.to_str())
                                 .map(|e| {
-                                    INSTRUCTION_DOC_EXTS
+                                    inventory
+                                        .document_extensions
                                         .iter()
                                         .any(|x| x.eq_ignore_ascii_case(e))
                                 })
@@ -10336,8 +10338,9 @@ skills/gtm-report and @rules/invariants.mdc.
         std::fs::create_dir_all(account.join("skills").join("xlsx")).expect("mkdir");
 
         // Only Claude Desktop nests this way; every other agent gets none.
-        assert!(nested_instruction_roots(&config_dir, "claude_code").is_empty());
-        let roots = nested_instruction_roots(&config_dir, "claude_desktop");
+        let inventory = agent_visibility_params::instruction_inventory();
+        assert!(nested_instruction_roots(&inventory, &config_dir, "claude_code").is_empty());
+        let roots = nested_instruction_roots(&inventory, &config_dir, "claude_desktop");
         assert_eq!(roots, vec![account]);
     }
 
