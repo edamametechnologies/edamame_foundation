@@ -19,7 +19,7 @@
 //! collectors simply find nothing on disk).
 
 use crate::agent_visibility_params::{
-    self, AgentHarnessJSON, AgentHarnessesJSON, FleetWorkspaceReferenceJSON,
+    self, AgentConfinementJSON, AgentHarnessJSON, AgentHarnessesJSON, FleetWorkspaceReferenceJSON,
     InstructionInventoryJSON, InstructionReferencesJSON,
 };
 // The URL and excerpt maskers moved to the shared redaction module (2.0.2);
@@ -560,24 +560,36 @@ pub struct HostPrivilege {
     pub assessed: bool,
 }
 
-/// Container-name needles used to detect OS confinement for one agent.
+/// Container-name needles used to detect OS confinement for one agent (the
+/// params' `container_name_needles`).
 ///
 /// Explicit per agent rather than `agent_type.split('_').next()`: that derived
 /// `"claude"` for BOTH `claude_code` and `claude_desktop`, so a single
 /// `~/Library/Containers/*claude*` entry (Desktop's) would have marked the
-/// Claude Code CLI confined too. CLI agents get an empty list -- a terminal
-/// process is never in an app-sandbox container, and matching on a GUI sibling's
-/// container is always wrong.
+/// Claude Code CLI confined too. CLI agents have none -- a terminal process is
+/// never in an app-sandbox container, and matching on a GUI sibling's
+/// container is always wrong. An agent the params do not list has none.
 #[cfg(any(target_os = "macos", target_os = "linux", test))]
-fn sandbox_container_needles(agent_type: &str) -> &'static [&'static str] {
-    match agent_type {
-        "cursor" => &["cursor"],
-        "claude_desktop" => &["claudefordesktop", "claudedesktop", "claude-desktop"],
-        "codex" => &["codex"],
-        // CLI / headless agents: no app-sandbox container of their own.
-        "claude_code" | "hermes" | "openclaw" => &[],
-        _ => &[],
-    }
+fn sandbox_container_needles<'c>(
+    confinement: &'c AgentConfinementJSON,
+    agent_type: &str,
+) -> &'c [String] {
+    confinement
+        .container_name_needles
+        .get(agent_type)
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
+}
+
+/// The agent's own config file (the params' `config_files`, relative to the
+/// agent's instruction root, which honours `CODEX_HOME` / `HERMES_HOME`), or
+/// `None` when the agent declares none.
+fn agent_config_file(agent_type: &str, home: &Path) -> Option<PathBuf> {
+    let confinement = agent_visibility_params::agent_confinement();
+    let file = confinement.config_files.get(agent_type)?;
+    let root = supported_agents::find_supported_agent(agent_type)?
+        .resolve_instruction_root_with_home(home)?;
+    Some(join_components(&root, file))
 }
 
 /// Read an agent's OWN declared confinement + approval policy from its config.
@@ -591,10 +603,12 @@ fn sandbox_container_needles(agent_type: &str) -> &'static [&'static str] {
 /// Best-effort and non-fatal: an unreadable or malformed config yields an empty
 /// `DeclaredConfinement`.
 pub fn declared_confinement_for_agent(agent_type: &str, home: &Path) -> DeclaredConfinement {
+    let Some(path) = agent_config_file(agent_type, home) else {
+        return DeclaredConfinement::default();
+    };
     match agent_type {
         // `~/.cursor/cli-config.json`: {"sandbox":{"mode":"disabled"},"approvalMode":"unrestricted"}
         "cursor" => {
-            let path = home.join(".cursor").join("cli-config.json");
             let Some(json) = read_json_config(&path) else {
                 return DeclaredConfinement::default();
             };
@@ -611,7 +625,6 @@ pub fn declared_confinement_for_agent(agent_type: &str, home: &Path) -> Declared
         }
         // `~/.claude/settings.json`: {"permissions":{"defaultMode":"..."}}
         "claude_code" => {
-            let path = home.join(".claude").join("settings.json");
             let Some(json) = read_json_config(&path) else {
                 return DeclaredConfinement::default();
             };
@@ -631,9 +644,6 @@ pub fn declared_confinement_for_agent(agent_type: &str, home: &Path) -> Declared
         }
         // `~/.codex/config.toml`: top-level `sandbox_mode` / `approval_policy`.
         "codex" => {
-            let path = crate::supported_agents::agent_home_env("CODEX_HOME")
-                .unwrap_or_else(|| home.join(".codex"))
-                .join("config.toml");
             let Ok(text) = std::fs::read_to_string(&path) else {
                 return DeclaredConfinement::default();
             };
@@ -764,16 +774,15 @@ pub struct ControlWeakening {
 }
 
 /// Rank a Claude Code `permissions.defaultMode` by how much it asks the
-/// operator. Higher is stricter. Unknown modes rank with `default` so an
-/// upstream addition never registers as a weakening on its own.
-fn permission_mode_strictness(mode: &str) -> u8 {
-    match mode.trim() {
-        "bypassPermissions" => 0,
-        "dontAsk" | "auto" => 1,
-        "acceptEdits" => 2,
-        "plan" => 4,
-        _ => 3,
-    }
+/// operator (the params' `permission_mode_ranks`). Higher is stricter.
+/// Unknown modes rank with `default` so an upstream addition never registers
+/// as a weakening on its own.
+fn permission_mode_strictness(confinement: &AgentConfinementJSON, mode: &str) -> u8 {
+    confinement
+        .permission_mode_ranks
+        .get(mode.trim())
+        .copied()
+        .unwrap_or(confinement.default_permission_mode_rank)
 }
 
 /// Transitions from `previous` to `current` that WEAKEN enforcement.
@@ -889,7 +898,10 @@ pub fn control_config_weakenings(
         previous.default_mode.as_deref(),
         current.default_mode.as_deref(),
     ) {
-        if permission_mode_strictness(now) < permission_mode_strictness(was) {
+        let confinement = agent_visibility_params::agent_confinement();
+        if permission_mode_strictness(&confinement, now)
+            < permission_mode_strictness(&confinement, was)
+        {
             out.push(ControlWeakening {
                 agent_type: agent_type.clone(),
                 knob: "permissions.defaultMode".to_string(),
@@ -924,7 +936,9 @@ pub fn agent_control_config(agent_type: &str, home: &Path) -> AgentControlConfig
     if agent_type != "claude_code" {
         return config;
     }
-    let path = home.join(".claude").join("settings.json");
+    let Some(path) = agent_config_file(agent_type, home) else {
+        return config;
+    };
     let Some(json) = read_json_config(&path) else {
         return config;
     };
@@ -1884,14 +1898,18 @@ fn assess_one_agent_sandbox(
 ) -> AgentSandbox {
     let declared = declared_confinement_for_agent(&def.agent_type, home);
     let control = agent_control_config(&def.agent_type, home);
-    let needles = sandbox_container_needles(&def.agent_type);
+    let confinement = agent_visibility_params::agent_confinement();
+    let needles = sandbox_container_needles(&confinement, &def.agent_type);
     if !needles.is_empty() {
-        let containers = home.join("Library/Containers");
-        if let Ok(entries) = std::fs::read_dir(&containers) {
+        for containers_dir in &confinement.macos_container_directories {
+            let containers = home.join(containers_dir);
+            let Ok(entries) = std::fs::read_dir(&containers) else {
+                continue;
+            };
             for e in entries.flatten() {
                 let raw = e.file_name();
                 let name = raw.to_string_lossy().to_ascii_lowercase();
-                if needles.iter().any(|n| name.contains(n)) {
+                if needles.iter().any(|n| name.contains(n.as_str())) {
                     return build_agent_sandbox_with_declared(
                         def.agent_type.clone(),
                         Some(true),
@@ -1907,7 +1925,7 @@ fn assess_one_agent_sandbox(
     // Claude Desktop runs its local agent inside a bundled VM rather than an
     // app-sandbox container, so the Containers scan above never sees it. The VM
     // image is the confinement boundary for that agent's work.
-    if let Some(bundle) = desktop_vm_bundle(&def.agent_type, home) {
+    if let Some(bundle) = desktop_vm_bundle(&confinement, &def.agent_type, home) {
         return build_agent_sandbox_with_declared(
             def.agent_type.clone(),
             Some(true),
@@ -1927,21 +1945,23 @@ fn assess_one_agent_sandbox(
     )
 }
 
-/// Path of Claude Desktop's local-agent VM bundle, when present. `None` for
-/// every other agent. Desktop ships the agent runtime inside
-/// `vm_bundles/claudevm.bundle` under its app-support dir.
+/// Path of the agent's local-agent VM bundle (the params'
+/// `macos_vm_bundles`: Claude Desktop ships its agent runtime inside
+/// `vm_bundles/claudevm.bundle` under its app-support dir), when present.
+/// `None` for an agent without one.
 #[cfg(target_os = "macos")]
-fn desktop_vm_bundle(agent_type: &str, home: &Path) -> Option<String> {
-    if agent_type != "claude_desktop" {
-        return None;
-    }
-    let bundle = home
-        .join("Library/Application Support/Claude")
-        .join("vm_bundles")
-        .join("claudevm.bundle");
-    bundle
-        .is_dir()
-        .then(|| bundle.to_string_lossy().to_string())
+fn desktop_vm_bundle(
+    confinement: &AgentConfinementJSON,
+    agent_type: &str,
+    home: &Path,
+) -> Option<String> {
+    confinement
+        .macos_vm_bundles
+        .get(agent_type)?
+        .iter()
+        .map(|bundle| home.join(bundle))
+        .find(|bundle| bundle.is_dir())
+        .map(|bundle| bundle.to_string_lossy().to_string())
 }
 
 /// Linux confinement: flatpak apps store per-app data under
@@ -1954,14 +1974,16 @@ fn assess_one_agent_sandbox(
 ) -> AgentSandbox {
     let declared = declared_confinement_for_agent(&def.agent_type, home);
     let control = agent_control_config(&def.agent_type, home);
-    let needles = sandbox_container_needles(&def.agent_type);
+    let confinement = agent_visibility_params::agent_confinement();
+    let needles = sandbox_container_needles(&confinement, &def.agent_type);
     if !needles.is_empty() {
-        for (subdir, mechanism) in [(".var/app", "flatpak"), ("snap", "snap")] {
-            if let Ok(entries) = std::fs::read_dir(home.join(subdir)) {
+        for confined in &confinement.linux_confinement_directories {
+            let mechanism = confined.mechanism.as_str();
+            if let Ok(entries) = std::fs::read_dir(home.join(&confined.directory)) {
                 for e in entries.flatten() {
                     let raw = e.file_name();
                     let name = raw.to_string_lossy().to_ascii_lowercase();
-                    if needles.iter().any(|n| name.contains(n)) {
+                    if needles.iter().any(|n| name.contains(n.as_str())) {
                         return build_agent_sandbox_with_declared(
                             def.agent_type.clone(),
                             Some(true),
@@ -10289,12 +10311,18 @@ skills/gtm-report and @rules/invariants.mdc.
     fn sandbox_container_needles_do_not_collide_across_claude_agents() {
         // `agent_type.split('_').next()` yielded "claude" for BOTH, so Desktop's
         // container would have marked the Claude Code CLI confined too.
-        assert!(sandbox_container_needles("claude_code").is_empty());
-        assert!(!sandbox_container_needles("claude_desktop").is_empty());
-        assert!(!sandbox_container_needles("claude_desktop")
+        let confinement = agent_visibility_params::agent_confinement();
+        assert!(sandbox_container_needles(&confinement, "claude_code").is_empty());
+        assert!(!sandbox_container_needles(&confinement, "claude_desktop").is_empty());
+        assert!(!sandbox_container_needles(&confinement, "claude_desktop")
             .iter()
-            .any(|n| *n == "claude"));
-        assert_eq!(sandbox_container_needles("cursor"), &["cursor"]);
+            .any(|n| n == "claude"));
+        assert_eq!(
+            sandbox_container_needles(&confinement, "cursor"),
+            &["cursor".to_string()]
+        );
+        // An agent the params do not list has no container of its own.
+        assert!(sandbox_container_needles(&confinement, "unknown_agent").is_empty());
     }
 
     #[test]
@@ -10406,6 +10434,26 @@ skills/gtm-report and @rules/invariants.mdc.
         // An agent that declares nothing yields an empty packet (no source).
         let none = declared_confinement_for_agent("hermes", home);
         assert!(none.confinement.is_none() && none.source.is_none());
+
+        // Claude Code's approval mode comes from its own settings file.
+        std::fs::create_dir_all(home.join(".claude")).expect("mkdir");
+        std::fs::write(
+            home.join(".claude").join("settings.json"),
+            r#"{"permissions":{"defaultMode":"acceptEdits","allow":["Bash(ls)"]}}"#,
+        )
+        .expect("write");
+        let claude = declared_confinement_for_agent("claude_code", home);
+        assert_eq!(claude.approval.as_deref(), Some("acceptEdits"));
+        assert_eq!(claude.confinement.as_deref(), Some("allow:1"));
+        assert_eq!(
+            claude.source.as_deref(),
+            Some(
+                home.join(".claude")
+                    .join("settings.json")
+                    .to_string_lossy()
+                    .as_ref()
+            )
+        );
     }
 
     #[test]

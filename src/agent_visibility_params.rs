@@ -28,6 +28,9 @@
 //!   reference to another instruction artifact (the skill reference graph)
 //! - agent-governance harness catalog: the products, their footprint markers,
 //!   CLI names, identity files, and the bin and config directories searched
+//! - agent confinement: the container, VM-bundle and confined-app directories
+//!   and name needles of OS confinement, the agents' own config files, and
+//!   the approval-mode ranking of the control-config weakening check
 //!
 //! Unlike the CVE params struct, `AgentVisibilityParamsJSON` carries NO
 //! `#[serde(default)]` fields: this model was born complete, the published
@@ -532,6 +535,51 @@ pub struct AgentHarnessesJSON {
     pub identity_keys: Vec<String>,
 }
 
+/// A `$HOME`-relative directory whose children are confined apps' data, and
+/// the confinement mechanism it implies (`flatpak`, `snap`).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct ConfinementDirectoryJSON {
+    pub directory: String,
+    pub mechanism: String,
+}
+
+/// Where the OS confinement of an agent shows on disk
+/// (`agent_visibility::assess_agent_sandboxes`), where each agent declares
+/// its own confinement and enforcement plane, and how Claude Code's approval
+/// modes rank. Needles are lowercased by
+/// [`AgentVisibilityParams::new_from_json`]; paths, modes and file names are
+/// kept as written.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct AgentConfinementJSON {
+    /// Needles matched against lowercased container / confined-app directory
+    /// names, per agent type. Explicit per agent, never derived from the
+    /// agent type (`claude` would match Claude Desktop's container for the
+    /// Claude Code CLI); a CLI agent has none, a terminal process is never in
+    /// an app-sandbox container.
+    pub container_name_needles: std::collections::BTreeMap<String, Vec<String>>,
+    /// macOS: `$HOME`-relative directories of app-sandbox containers (a
+    /// container exists only for an app declaring
+    /// `com.apple.security.app-sandbox`).
+    pub macos_container_directories: Vec<String>,
+    /// macOS: `$HOME`-relative VM bundles that confine an agent's runtime,
+    /// per agent type.
+    pub macos_vm_bundles: std::collections::BTreeMap<String, Vec<String>>,
+    /// Linux: `$HOME`-relative directories of confined apps' data.
+    pub linux_confinement_directories: Vec<ConfinementDirectoryJSON>,
+    /// The agent's own config file declaring its confinement, approval policy
+    /// and enforcement plane, relative to its instruction root
+    /// (`SupportedAgentDefinition::resolve_instruction_root_with_home`), per
+    /// agent type. The format of each is code.
+    pub config_files: std::collections::BTreeMap<String, String>,
+    /// Claude Code `permissions.defaultMode` values ranked by how much they
+    /// ask the operator (higher is stricter).
+    pub permission_mode_ranks: std::collections::BTreeMap<String, u8>,
+    /// Rank of a mode missing from `permission_mode_ranks` (an upstream
+    /// addition ranks with the default mode, so it never reads as a
+    /// weakening on its own).
+    pub default_permission_mode_rank: u8,
+}
+
 /// Raw JSON shape of `agent-visibility-params-db.json`. No serde defaults:
 /// the published JSON always carries every field; a missing field fails the
 /// parse and the embedded snapshot (which has all fields) stays in effect.
@@ -580,6 +628,8 @@ pub struct AgentVisibilityParamsJSON {
     pub instruction_references: InstructionReferencesJSON,
     /// Agent-governance harness catalog (see [`AgentHarnessesJSON`]).
     pub agent_harnesses: AgentHarnessesJSON,
+    /// Agent confinement rules (see [`AgentConfinementJSON`]).
+    pub agent_confinement: AgentConfinementJSON,
 }
 
 /// Normalized runtime snapshot of the agent-visibility params.
@@ -613,6 +663,8 @@ pub struct AgentVisibilityParams {
     pub instruction_references: InstructionReferencesJSON,
     /// Agent-governance harness catalog, as written.
     pub agent_harnesses: AgentHarnessesJSON,
+    /// Agent confinement rules, needles lowercased.
+    pub agent_confinement: AgentConfinementJSON,
 }
 
 impl CloudSignature for AgentVisibilityParams {
@@ -786,6 +838,24 @@ fn normalize_instruction_inventory(i: &InstructionInventoryJSON) -> InstructionI
     }
 }
 
+/// Lowercases the container name needles (compared with lowercased directory
+/// names); everything else is kept as written.
+fn normalize_agent_confinement(c: &AgentConfinementJSON) -> AgentConfinementJSON {
+    AgentConfinementJSON {
+        container_name_needles: c
+            .container_name_needles
+            .iter()
+            .map(|(agent, needles)| {
+                (
+                    agent.clone(),
+                    needles.iter().map(|n| n.to_ascii_lowercase()).collect(),
+                )
+            })
+            .collect(),
+        ..c.clone()
+    }
+}
+
 /// Lowercases every reference rule: tokens are compared lowercased.
 fn normalize_instruction_references(r: &InstructionReferencesJSON) -> InstructionReferencesJSON {
     let lower =
@@ -845,6 +915,7 @@ impl AgentVisibilityParams {
             instruction_inventory: normalize_instruction_inventory(&json.instruction_inventory),
             instruction_references: normalize_instruction_references(&json.instruction_references),
             agent_harnesses: json.agent_harnesses.clone(),
+            agent_confinement: normalize_agent_confinement(&json.agent_confinement),
         }
     }
 }
@@ -1028,6 +1099,12 @@ pub fn agent_harnesses() -> AgentHarnessesJSON {
     PARAMS_SNAPSHOT.load().agent_harnesses.clone()
 }
 
+/// Agent confinement rules: OS confinement markers, the agents' own config
+/// files, and Claude Code's approval-mode ranking (needles lowercased).
+pub fn agent_confinement() -> AgentConfinementJSON {
+    PARAMS_SNAPSHOT.load().agent_confinement.clone()
+}
+
 /// The params signature of the current snapshot: a scan state computed under
 /// another vocabulary is recomputed.
 pub fn params_signature() -> String {
@@ -1152,6 +1229,13 @@ mod tests {
         assert!(!inv.workspace_toplevel_files.is_empty());
         assert!(!inv.workspace_config_directories.is_empty());
         assert!(!inv.workspace_subdirectories.is_empty());
+        let confinement = &params.agent_confinement;
+        assert!(!confinement.container_name_needles.is_empty());
+        assert!(!confinement.macos_container_directories.is_empty());
+        assert!(!confinement.macos_vm_bundles.is_empty());
+        assert!(!confinement.linux_confinement_directories.is_empty());
+        assert!(!confinement.config_files.is_empty());
+        assert!(!confinement.permission_mode_ranks.is_empty());
         let harnesses = &params.agent_harnesses;
         assert!(!harnesses.catalog.is_empty());
         assert!(harnesses.catalog.iter().all(|h| !h.slug.is_empty()));
