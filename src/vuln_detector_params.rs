@@ -898,6 +898,22 @@ pub struct CveDetectionParamsJSON {
     /// endpoint, never at a remote peer, so it is not external egress. A
     /// range wider than a /16 is ignored.
     pub access_network_plumbing_ipv4_cidrs: Vec<String>,
+    /// Script / language runtimes: processes that execute code handed to
+    /// them rather than act on their own behalf. Compared with a basename
+    /// lowercased, without a Windows `.exe` / `.cmd` / `.bat` suffix and any
+    /// trailing version (`python3.12`, `perl5.34`).
+    pub script_runtime_basenames: Vec<String>,
+    /// Path fragments (lowercase, `/`) that identify a dependency tree
+    /// (`/node_modules/`, `/site-packages/`, `/.cargo/registry/`, ...),
+    /// tried in order: the first one a path contains is reported.
+    pub dependency_tree_markers: Vec<String>,
+    /// Basenames (version suffix stripped) of the runtimes that drive an
+    /// install: the package managers and the interpreters they hand
+    /// lifecycle scripts to.
+    pub package_manager_runtimes: Vec<String>,
+    /// Lockfiles and manifests an install legitimately rewrites (lowercase
+    /// basenames).
+    pub install_artifact_basenames: Vec<String>,
 }
 
 fn normalize_runtime_perfdata_entry(entry: &RuntimePerfdataEntryJSON) -> RuntimePerfdataEntryJSON {
@@ -1074,6 +1090,10 @@ pub struct CveDetectionParams {
     pub desktop_session_root_roles: HashSet<String>,
     /// `access_network_plumbing_ipv4_cidrs` parsed as (network, mask).
     pub access_network_plumbing_ipv4_ranges: Vec<(u32, u32)>,
+    pub script_runtime_basenames: HashSet<String>,
+    pub dependency_tree_markers: Vec<String>,
+    pub package_manager_runtimes: HashSet<String>,
+    pub install_artifact_basenames: HashSet<String>,
 }
 
 impl CloudSignature for CveDetectionParams {
@@ -1871,6 +1891,10 @@ impl CveDetectionParams {
                 .iter()
                 .filter_map(|cidr| parse_access_network_plumbing_cidr(cidr))
                 .collect(),
+            script_runtime_basenames: lowercase_token_set(&json.script_runtime_basenames),
+            dependency_tree_markers: normalized_path_fragments(&json.dependency_tree_markers),
+            package_manager_runtimes: lowercase_token_set(&json.package_manager_runtimes),
+            install_artifact_basenames: lowercase_token_set(&json.install_artifact_basenames),
         }
     }
 
@@ -3571,6 +3595,37 @@ pub fn is_access_network_plumbing_ipv4(address: std::net::Ipv4Addr) -> bool {
         .any(|(network, mask)| address & mask == *network)
 }
 
+/// True for the stem of a script / language runtime (`script_runtime_basenames`).
+pub fn is_script_runtime_basename(stem: &str) -> bool {
+    PARAMS_SNAPSHOT
+        .load()
+        .script_runtime_basenames
+        .contains(stem)
+}
+
+/// Dependency-tree path fragments, in order (lowercase, `/`).
+pub fn dependency_tree_markers() -> Vec<String> {
+    PARAMS_SNAPSHOT.load().dependency_tree_markers.clone()
+}
+
+/// True for the basename of a package-manager runtime
+/// (`package_manager_runtimes`).
+pub fn is_package_manager_runtime_name(name: &str) -> bool {
+    PARAMS_SNAPSHOT
+        .load()
+        .package_manager_runtimes
+        .contains(name)
+}
+
+/// True for the lowercase basename of a lockfile / manifest an install
+/// rewrites (`install_artifact_basenames`).
+pub fn is_install_artifact_basename(basename: &str) -> bool {
+    PARAMS_SNAPSHOT
+        .load()
+        .install_artifact_basenames
+        .contains(basename)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5051,6 +5106,33 @@ mod tests {
                 "{address:?}"
             );
         }
+    }
+
+    /// Runtime and dependency-tree lists load lowercased; the marker order
+    /// is kept (the first match is reported).
+    #[test]
+    fn test_runtime_and_dependency_tree_lists() {
+        let p = params_from_edited_snapshot(|value| {
+            value["script_runtime_basenames"] = serde_json::json!(["Python", ""]);
+            value["dependency_tree_markers"] =
+                serde_json::json!(["\\Node_Modules\\", "/site-packages/", ""]);
+            value["package_manager_runtimes"] = serde_json::json!(["NPM"]);
+            value["install_artifact_basenames"] = serde_json::json!(["Cargo.lock"]);
+        });
+        assert_eq!(p.script_runtime_basenames, HashSet::from(["python".to_string()]));
+        assert_eq!(
+            p.dependency_tree_markers,
+            vec!["/node_modules/".to_string(), "/site-packages/".to_string()]
+        );
+        assert_eq!(p.package_manager_runtimes, HashSet::from(["npm".to_string()]));
+        assert_eq!(p.install_artifact_basenames, HashSet::from(["cargo.lock".to_string()]));
+        assert!(is_script_runtime_basename("osascript"));
+        assert!(!is_script_runtime_basename("slack"));
+        assert_eq!(dependency_tree_markers().first().map(String::as_str), Some("/node_modules/"));
+        assert!(is_package_manager_runtime_name("cargo"));
+        assert!(!is_package_manager_runtime_name("bash"));
+        assert!(is_install_artifact_basename("go.sum"));
+        assert!(!is_install_artifact_basename(".bashrc"));
     }
 
     /// The published params must parse with this code. A `FormatError` means
