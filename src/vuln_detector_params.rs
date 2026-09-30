@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use arc_swap::ArcSwap;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use threatmodels_rs::*;
 use tracing::{info, warn};
@@ -877,6 +877,21 @@ pub struct CveDetectionParamsJSON {
     /// platform daemons and helpers (`/system/library/`, `/usr/libexec/`,
     /// `/usr/sbin/`; not `/usr/bin`, which holds general-purpose tools).
     pub macos_sealed_system_binary_path_prefixes: Vec<String>,
+    /// Process lineage agent-subtree binding: agent slug (the plugin slugs
+    /// of `agent_plugin`) -> the tool names of its images (lowercase, `.exe`
+    /// stripped). A name belongs to one agent. Monitoring-only evidence: the
+    /// kernel-vouched signing identity is the intended replacement.
+    pub agent_process_names: BTreeMap<String, Vec<String>>,
+    /// Directory names that hold a tool's versioned releases rather than
+    /// name it (`<tool>/versions/<ver>`, `<tool>/current/<ver>`): skipped
+    /// when a version-named image takes its tool name from a directory.
+    pub version_layout_directories: Vec<String>,
+    /// Tool names of the desktop shell and the session / service managers
+    /// that launch every application the user starts (`explorer`,
+    /// `svchost`, `launchd`, `loginwindow`, `systemd`, desktop sessions and
+    /// shells). Being their child says nothing about a relationship between
+    /// two applications. Command shells are deliberately not roles.
+    pub desktop_session_root_roles: Vec<String>,
 }
 
 fn normalize_runtime_perfdata_entry(entry: &RuntimePerfdataEntryJSON) -> RuntimePerfdataEntryJSON {
@@ -1048,6 +1063,9 @@ pub struct CveDetectionParams {
     pub platform_owned_user_store: PlatformOwnedUserStoreJSON,
     pub os_service_image_path_prefixes: Vec<String>,
     pub macos_sealed_system_binary_path_prefixes: Vec<String>,
+    pub agent_process_names: BTreeMap<String, Vec<String>>,
+    pub version_layout_directories: HashSet<String>,
+    pub desktop_session_root_roles: HashSet<String>,
 }
 
 impl CloudSignature for CveDetectionParams {
@@ -1814,6 +1832,14 @@ impl CveDetectionParams {
             macos_sealed_system_binary_path_prefixes: normalized_path_fragments(
                 &json.macos_sealed_system_binary_path_prefixes,
             ),
+            agent_process_names: json
+                .agent_process_names
+                .iter()
+                .map(|(slug, names)| (slug.trim().to_string(), lowercase_token_list(names)))
+                .filter(|(slug, _)| !slug.is_empty())
+                .collect(),
+            version_layout_directories: lowercase_token_set(&json.version_layout_directories),
+            desktop_session_root_roles: lowercase_token_set(&json.desktop_session_root_roles),
         }
     }
 
@@ -3477,6 +3503,32 @@ pub fn macos_sealed_system_binary_path_prefixes() -> Vec<String> {
         .clone()
 }
 
+/// The agent slug whose `agent_process_names` list a lowercase tool name.
+pub fn agent_slug_for_process_name(tool_name: &str) -> Option<String> {
+    PARAMS_SNAPSHOT
+        .load()
+        .agent_process_names
+        .iter()
+        .find(|(_, names)| names.iter().any(|name| name == tool_name))
+        .map(|(slug, _)| slug.clone())
+}
+
+/// True for a lowercase directory name that holds versioned releases.
+pub fn is_version_layout_directory(name: &str) -> bool {
+    PARAMS_SNAPSHOT
+        .load()
+        .version_layout_directories
+        .contains(name)
+}
+
+/// True for the lowercase tool name of a desktop-session root role.
+pub fn is_desktop_session_root_role(tool_name: &str) -> bool {
+    PARAMS_SNAPSHOT
+        .load()
+        .desktop_session_root_roles
+        .contains(tool_name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4892,6 +4944,43 @@ mod tests {
         );
         assert_eq!(p.os_service_image_path_prefixes, vec!["/system/library/"]);
         assert_eq!(p.macos_sealed_system_binary_path_prefixes, vec!["/usr/sbin/"]);
+    }
+
+    /// Process-lineage names load lowercased; the agent lookup answers by
+    /// tool name.
+    #[test]
+    fn test_process_lineage_names() {
+        let p = params_from_edited_snapshot(|value| {
+            value["agent_process_names"] =
+                serde_json::json!({"claude_code": ["Claude", ""], " ": ["orphan"]});
+            value["version_layout_directories"] = serde_json::json!(["Versions"]);
+            value["desktop_session_root_roles"] = serde_json::json!(["Explorer", ""]);
+        });
+        assert_eq!(
+            p.agent_process_names,
+            BTreeMap::from([("claude_code".to_string(), vec!["claude".to_string()])])
+        );
+        assert_eq!(
+            p.version_layout_directories,
+            HashSet::from(["versions".to_string()])
+        );
+        assert_eq!(
+            p.desktop_session_root_roles,
+            HashSet::from(["explorer".to_string()])
+        );
+        assert_eq!(
+            agent_slug_for_process_name("claude").as_deref(),
+            Some("claude_code")
+        );
+        assert_eq!(
+            agent_slug_for_process_name("cursor helper (plugin)").as_deref(),
+            Some("cursor")
+        );
+        assert_eq!(agent_slug_for_process_name("python3"), None);
+        assert!(is_version_layout_directory("versions"));
+        assert!(!is_version_layout_directory("claude"));
+        assert!(is_desktop_session_root_role("explorer"));
+        assert!(!is_desktop_session_root_role("bash"));
     }
 
     /// The published params must parse with this code. A `FormatError` means
