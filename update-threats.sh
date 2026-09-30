@@ -120,6 +120,12 @@ update_agent_visibility_params_db() {
 
 # Consent markdown is not obfuscated: it is operator-facing policy text, not
 # a credential-stealer corpus. Source of truth is threatmodels/consent/.
+# CONSENT_BRANCH names the threatmodels branch the snapshot is fetched from
+# (default: the branch of the other models). Shipped clients read the consent
+# pages of threatmodels main live, so a release's texts can wait on a branch
+# until the stores carry it while its binaries already embed them:
+# CONSENT_BRANCH=consent-2.0.3 ../edamame_app/commit_all.sh. --local copies
+# ../threatmodels/consent/ as checked out and ignores CONSENT_BRANCH.
 update_consent_documents() {
     local is_local=${1:-false}
     local dest="./consent"
@@ -139,7 +145,7 @@ update_consent_documents() {
         cp "../threatmodels/consent/index.txt" "$index"
     else
         local branch
-        branch=$(current_branch)
+        branch=${CONSENT_BRANCH:-$(current_branch)}
         echo "  Fetching consent/index.txt from threatmodels@${branch}"
         wget --no-cache -qO "$index" \
             "https://raw.githubusercontent.com/edamametechnologies/threatmodels/${branch}/consent/index.txt"
