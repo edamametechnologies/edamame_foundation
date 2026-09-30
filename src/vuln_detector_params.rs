@@ -966,6 +966,12 @@ pub struct CveDetectionParamsJSON {
     /// Catalog labels that name agent instruction / configuration surfaces
     /// (`instruction`, `claude`, `codex`, `openclaw`).
     pub agent_instruction_labels: Vec<String>,
+    /// Agent slug -> path suffixes (lowercase, `/`) of that agent's
+    /// ENFORCEMENT configuration (`agent_control_tampering`): the documented
+    /// location of each agent's control config. Session transcripts,
+    /// caches, history and project state under the same roots deliberately
+    /// do not match. A suffix belongs to one agent.
+    pub agent_control_config_path_suffixes: BTreeMap<String, Vec<String>>,
 }
 
 fn normalize_runtime_perfdata_entry(entry: &RuntimePerfdataEntryJSON) -> RuntimePerfdataEntryJSON {
@@ -1150,6 +1156,7 @@ pub struct CveDetectionParams {
     pub code_module_suffixes: Vec<String>,
     pub sensitive_material_labels: HashSet<String>,
     pub agent_instruction_labels: HashSet<String>,
+    pub agent_control_config_path_suffixes: BTreeMap<String, Vec<String>>,
 }
 
 impl CloudSignature for CveDetectionParams {
@@ -1984,6 +1991,14 @@ impl CveDetectionParams {
             code_module_suffixes: lowercase_token_list(&json.code_module_suffixes),
             sensitive_material_labels: lowercase_token_set(&json.sensitive_material_labels),
             agent_instruction_labels: lowercase_token_set(&json.agent_instruction_labels),
+            agent_control_config_path_suffixes: json
+                .agent_control_config_path_suffixes
+                .iter()
+                .map(|(agent, suffixes)| {
+                    (agent.trim().to_string(), normalized_path_fragments(suffixes))
+                })
+                .filter(|(agent, _)| !agent.is_empty())
+                .collect(),
         }
     }
 
@@ -3754,6 +3769,15 @@ pub fn is_agent_instruction_label(label: &str) -> bool {
         .contains(label)
 }
 
+/// Agent slug -> enforcement-configuration path suffixes (lowercase, `/`),
+/// in slug order.
+pub fn agent_control_config_path_suffixes() -> BTreeMap<String, Vec<String>> {
+    PARAMS_SNAPSHOT
+        .load()
+        .agent_control_config_path_suffixes
+        .clone()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5302,6 +5326,26 @@ mod tests {
             .iter()
             .all(|label| !is_agent_instruction_label(label)));
         assert!(sensitive_material_labels().windows(2).all(|w| w[0] < w[1]));
+    }
+
+    /// Control-config suffixes load lowercased with `/` separators; an
+    /// empty suffix (it would match every path) is dropped.
+    #[test]
+    fn test_agent_control_config_path_suffixes() {
+        let p = params_from_edited_snapshot(|value| {
+            value["agent_control_config_path_suffixes"] =
+                serde_json::json!({"codex": ["\\.Codex\\config.toml", ""]});
+        });
+        assert_eq!(
+            p.agent_control_config_path_suffixes,
+            BTreeMap::from([(
+                "codex".to_string(),
+                vec!["/.codex/config.toml".to_string()]
+            )])
+        );
+        let shipped = agent_control_config_path_suffixes();
+        assert!(shipped["claude_code"].contains(&"/.claude/settings.json".to_string()));
+        assert!(shipped.values().flatten().all(|suffix| suffix.starts_with('/')));
     }
 
     /// The published params must parse with this code. A `FormatError` means
