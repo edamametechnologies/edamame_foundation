@@ -256,9 +256,14 @@ pub fn parse_jsonl_transcript(raw_text: &str) -> ParsedTranscript {
         // records it as a `queued_command` attachment, not a user turn.
         if let Some(attachment) = value.get("attachment") {
             if attachment.get("type").and_then(|v| v.as_str()) == Some("queued_command") {
-                if let Some(prompt) = attachment.get("prompt") {
+                // The harness queues its background-task notifications the
+                // same way (`commandMode: "task-notification"`): not the
+                // human's words either.
+                let notification = attachment.get("commandMode").and_then(|v| v.as_str())
+                    == Some("task-notification");
+                if let Some(prompt) = attachment.get("prompt").filter(|_| !notification) {
                     let text = content_text(prompt);
-                    if !text.trim().is_empty() {
+                    if !text.trim().is_empty() && !text.trim().starts_with("<task-notification>") {
                         user_sections.push(text.trim().to_string());
                     }
                 }
@@ -285,7 +290,16 @@ pub fn parse_jsonl_transcript(raw_text: &str) -> ParsedTranscript {
         if trimmed.is_empty() {
             continue;
         }
+        // Not the human's words, though the harness writes them as user
+        // turns: a compaction summary (the model's own account of the
+        // conversation so far) and a background-task notification. As human
+        // text, the agent's narrative would authorize itself, and one
+        // summary (~24k characters) crowds the human's requests out of the
+        // behavioral-model prompt.
+        let harness_turn = value.get("isCompactSummary").and_then(|v| v.as_bool()) == Some(true)
+            || trimmed.starts_with("<task-notification>");
         match role {
+            "user" if harness_turn => {}
             "user" => user_sections.push(trimmed.to_string()),
             "assistant" => assistant_sections.push(trimmed.to_string()),
             _ => {}
@@ -3708,16 +3722,19 @@ pub struct ToolCallEvent {
     pub at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-/// Decode up to `cap` typed tool-call events from a transcript's raw
-/// text. Mirrors the block-candidate logic of the economics walk
-/// (Anthropic `message.content` arrays, Codex per-line `payload`
-/// blocks, top-level blocks) so it works across transcript shapes.
+/// Decode the most recent `cap` typed tool-call events from a
+/// transcript's raw text, oldest first. Mirrors the block-candidate logic
+/// of the economics walk (Anthropic `message.content` arrays, Codex
+/// per-line `payload` blocks, top-level blocks) so it works across
+/// transcript shapes. The most recent, not the first: the behavioral model
+/// describes what the session is doing now, and a long session's first
+/// `cap` calls are days old.
 pub fn extract_tool_call_events(raw_text: &str, cap: usize) -> Vec<ToolCallEvent> {
-    let mut events = Vec::new();
+    let mut events = std::collections::VecDeque::new();
+    if cap == 0 {
+        return Vec::new();
+    }
     for line in raw_text.split('\n') {
-        if events.len() >= cap {
-            break;
-        }
         let line = line.trim();
         if line.is_empty() {
             continue;
@@ -3753,9 +3770,6 @@ pub fn extract_tool_call_events(raw_text: &str, cap: usize) -> Vec<ToolCallEvent
             candidates.push(&value);
         }
         for item in candidates {
-            if events.len() >= cap {
-                break;
-            }
             let kind = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
             if !matches!(kind, "tool_use" | "function_call") {
                 continue;
@@ -3772,14 +3786,17 @@ pub fn extract_tool_call_events(raw_text: &str, cap: usize) -> Vec<ToolCallEvent
             let input = tool_call_input(item);
             let signature = tool_target_signature(&name, input.as_ref());
             let target = signature.split('\u{1}').nth(1).unwrap_or("").to_string();
-            events.push(ToolCallEvent {
+            if events.len() == cap {
+                events.pop_front();
+            }
+            events.push_back(ToolCallEvent {
                 name,
                 target,
                 at: line_ts,
             });
         }
     }
-    events
+    events.into_iter().collect()
 }
 
 #[cfg(test)]
@@ -3801,6 +3818,24 @@ not json
         assert_eq!(events[1].target, "/tmp/x.rs");
         assert_eq!(events[2].name, "shell");
         assert!(events[2].at.is_some());
+    }
+
+    #[test]
+    fn keeps_the_most_recent_events_oldest_first() {
+        let raw = (0..10)
+            .map(|i| {
+                format!(
+                    r#"{{"message":{{"content":[{{"type":"tool_use","name":"Bash","input":{{"command":"step{i}"}}}}]}}}}"#
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let events = extract_tool_call_events(&raw, 3);
+        let targets: Vec<&str> = events.iter().map(|e| e.target.as_str()).collect();
+        assert_eq!(targets.len(), 3, "{targets:?}");
+        assert!(targets[0].contains("step7"), "{targets:?}");
+        assert!(targets[2].contains("step9"), "{targets:?}");
+        assert!(extract_tool_call_events(&raw, 0).is_empty());
     }
 
     #[test]

@@ -137,11 +137,11 @@ pub struct CollectedRawSession {
     /// `raw_text`. Two cases populate it (see [`economics_override_text`]):
     ///   * Cursor's preferred divergence source is the usage-free `.txt`
     ///     export while a usage-bearing `.jsonl` sibling exists (G4).
-    ///   * A transcript exceeds [`MAX_TRANSCRIPT_BYTES`], so `raw_text` is the
-    ///     head-only capped read and the cumulative end-of-file usage snapshot
-    ///     (Codex `total_token_usage`) was truncated away (G5). The override
-    ///     carries a head+tail read so both early per-turn usage and the final
-    ///     cumulative snapshot survive.
+    ///   * A transcript exceeds [`MAX_TRANSCRIPT_BYTES`], so `raw_text` is a
+    ///     capped read missing the middle of the file (G5). The override
+    ///     carries the economics' own head+tail read so both early per-turn
+    ///     usage and the final cumulative snapshot (Codex
+    ///     `total_token_usage`) survive.
     /// Empty means "raw_text already carries complete usage"; the economics
     /// parser then reads `raw_text` directly. `#[serde(default)]` keeps an
     /// older helper's JSON (which omits this field) deserializable in a newer
@@ -932,6 +932,56 @@ pub(crate) fn read_transcript_capped(path: &Path) -> std::io::Result<String> {
     let mut buf = Vec::new();
     file.take(MAX_TRANSCRIPT_BYTES).read_to_end(&mut buf)?;
     Ok(String::from_utf8_lossy(&buf).into_owned())
+}
+
+/// Bytes the session build keeps from the START of an oversized transcript:
+/// the session header and the opening request (the title).
+const SESSION_HEAD_BYTES: u64 = 1024 * 1024;
+
+/// Read a transcript for the session build: the whole file within
+/// [`MAX_TRANSCRIPT_BYTES`]; beyond it, the head ([`SESSION_HEAD_BYTES`]) and
+/// the most recent `MAX_TRANSCRIPT_BYTES - SESSION_HEAD_BYTES` bytes, each cut
+/// on a line boundary so no half record reaches the parser.
+///
+/// A head-only read froze a long session at its first hours: a 221 MB Claude
+/// Code transcript on the development Mac (2026-10-01) was modeled from its
+/// first day, so none of the human's requests since then reached the human
+/// plane, and the divergence policy graded the agent's current work, done at
+/// the human's request, as scope the agent granted itself. Same memory bound
+/// as [`read_transcript_capped`].
+pub(crate) fn read_transcript_for_session(path: &Path) -> std::io::Result<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(path)?;
+    let len = file.metadata().map(|m| m.len()).unwrap_or(0);
+    if len <= MAX_TRANSCRIPT_BYTES {
+        let mut buf = Vec::new();
+        (&mut file)
+            .take(MAX_TRANSCRIPT_BYTES)
+            .read_to_end(&mut buf)?;
+        return Ok(String::from_utf8_lossy(&buf).into_owned());
+    }
+
+    let mut head = Vec::new();
+    (&mut file).take(SESSION_HEAD_BYTES).read_to_end(&mut head)?;
+    // The head's last line is cut mid-record: keep up to its last newline.
+    match head.iter().rposition(|byte| *byte == b'\n') {
+        Some(end) => head.truncate(end + 1),
+        None => head.clear(),
+    }
+
+    let tail_len = MAX_TRANSCRIPT_BYTES - SESSION_HEAD_BYTES;
+    file.seek(SeekFrom::Start(len - tail_len))?;
+    let mut tail = Vec::new();
+    (&mut file).take(tail_len).read_to_end(&mut tail)?;
+    // So is the tail's first line: start after its first newline.
+    let tail: &[u8] = match tail.iter().position(|byte| *byte == b'\n') {
+        Some(start) => &tail[start + 1..],
+        None => &[],
+    };
+
+    let mut text = String::from_utf8_lossy(&head).into_owned();
+    text.push_str(&String::from_utf8_lossy(tail));
+    Ok(text)
 }
 
 /// Bytes read from the START of an oversized transcript for the economics

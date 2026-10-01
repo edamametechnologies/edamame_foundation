@@ -97,7 +97,7 @@ struct Entry {
     built_at: Instant,
 }
 
-/// How long the session of a transcript larger than the head-only read cap
+/// How long the session of a transcript larger than the read cap
 /// ([`super::MAX_TRANSCRIPT_BYTES`]) is served from the cache while the file
 /// keeps growing.
 ///
@@ -108,9 +108,10 @@ struct Entry {
 /// same 16 MiB head -- about 2 s of CPU per tick in a release build, several
 /// cores for 10-15 s in the helper on the development Mac -- and handed core a
 /// session whose only change was `modified_at`, which then re-hashed and
-/// re-ingested it. The head never changes while the file grows at its end, so
-/// the rebuilds bought nothing but the tail-derived economics and
-/// `modified_at`; those now refresh at this interval instead.
+/// re-ingested it. The build reads the head and the most recent part of such
+/// a file (`read_transcript_for_session`), so its session, economics and
+/// `modified_at` follow the conversation at this interval instead of on
+/// every tick.
 const OVERSIZED_REBUILD_INTERVAL: Duration = Duration::from_secs(600);
 
 struct LruCache {
@@ -255,8 +256,10 @@ fn cache_key(path: &Path, mtime_nanos: u128, len: u64, is_jsonl: bool) -> String
     )
 }
 
-/// The key of a transcript over the head-only read cap: the path alone, since
-/// what the build reads (the head) does not change while the file grows.
+/// The key of a transcript over the read cap: the path alone, so the entry
+/// survives the appends that change its size and mtime on every turn, and is
+/// rebuilt from the file's newest part once it is older than
+/// [`OVERSIZED_REBUILD_INTERVAL`].
 fn oversized_cache_key(path: &Path, is_jsonl: bool) -> String {
     format!(
         "{}\u{1f}oversized\u{1f}{}\u{1f}{}",
@@ -278,7 +281,7 @@ fn estimate_bytes(session: &CollectedRawSession) -> usize {
 
 /// Build the [`CollectedRawSession`] for a transcript file, served from the
 /// per-file cache when the file's `(mtime, size)` are unchanged since the last
-/// build -- or, for a file larger than the head-only read cap, when the last
+/// build -- or, for a file larger than the read cap, when the last
 /// build is younger than [`OVERSIZED_REBUILD_INTERVAL`].
 ///
 /// `build` receives the freshly [`ParsedTranscript`] and returns the fully
@@ -332,7 +335,7 @@ where
         }
     }
 
-    let raw_text = super::read_transcript_capped(path).ok()?;
+    let raw_text = super::read_transcript_for_session(path).ok()?;
     let parsed = if is_jsonl {
         parse_jsonl_transcript(&raw_text)
     } else {
@@ -487,9 +490,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A transcript over the head-only read cap that keeps growing (the
-    /// operator's current long session) is served from the cache until the
-    /// rebuild interval has passed: the head the build reads is unchanged.
+    /// A transcript over the read cap that keeps growing (the operator's
+    /// current long session) is served from the cache until the rebuild
+    /// interval has passed, not rebuilt on every append.
     #[test]
     fn a_growing_transcript_over_the_read_cap_is_rebuilt_only_after_the_interval() {
         use std::io::Write;

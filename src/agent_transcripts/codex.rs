@@ -722,7 +722,7 @@ fn thread_row_to_session(
         .as_deref()
         .and_then(|rp| resolve_rollout_path(codex_home, rp))
         .and_then(|path| {
-            super::read_transcript_capped(&path)
+            super::read_transcript_for_session(&path)
                 .ok()
                 .map(|raw| (path, super::parsing::parse_jsonl_transcript(&raw)))
         })

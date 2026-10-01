@@ -1160,3 +1160,67 @@ fn live_probe_reports_session_counts_per_installed_agent() {
         home.display()
     );
 }
+
+#[test]
+fn session_read_of_an_oversized_transcript_keeps_its_opening_and_its_latest_turns() {
+    // A long session must be modeled from what it is doing now, not frozen at
+    // its first hours: the session read keeps the opening request and the most
+    // recent turns of a transcript past the cap, both cut on line boundaries.
+    use std::io::Write;
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = temp.path().join("claude-oversized.jsonl");
+    let first = r#"{"message":{"role":"user","content":"make a deep performance analysis"}}"#;
+    let latest = r#"{"message":{"role":"user","content":"now check test-mint"}}"#;
+    let filler = format!(
+        r#"{{"message":{{"role":"assistant","content":"{}"}}}}"#,
+        "y".repeat(64 * 1024)
+    );
+    {
+        let file = File::create(&path).expect("create oversized transcript");
+        let mut writer = std::io::BufWriter::new(file);
+        writeln!(writer, "{first}").expect("write first");
+        for _ in 0..(18 * 16) {
+            writeln!(writer, "{filler}").expect("write filler");
+        }
+        writeln!(writer, "{latest}").expect("write latest");
+        writer.flush().expect("flush");
+    }
+    assert!(
+        std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0) > super::MAX_TRANSCRIPT_BYTES,
+        "fixture must exceed the transcript cap"
+    );
+
+    let text = super::read_transcript_for_session(&path).expect("session read");
+    assert!(text.len() as u64 <= super::MAX_TRANSCRIPT_BYTES);
+    // Every line is a whole record: no half line at either seam.
+    for line in text.lines().filter(|l| !l.trim().is_empty()) {
+        assert!(
+            serde_json::from_str::<serde_json::Value>(line).is_ok(),
+            "partial record at a seam: {}",
+            &line[..line.len().min(80)]
+        );
+    }
+    let parsed = super::parsing::parse_jsonl_transcript(&text);
+    assert!(parsed.user_text.starts_with("make a deep performance analysis"));
+    assert!(parsed.user_text.ends_with("now check test-mint"));
+}
+
+#[test]
+fn harness_turns_are_not_the_humans_words() {
+    // Claude Code writes the compaction summary and background-task
+    // notifications as user turns; the human plane is what the human typed.
+    let raw = [
+        r#"{"message":{"role":"user","content":"fix the divergence false positives"}}"#,
+        r#"{"isCompactSummary":true,"message":{"role":"user","content":"This session is being continued from a previous conversation. The agent planned to ssh fmba-3."}}"#,
+        r#"{"message":{"role":"user","content":[{"type":"text","text":"<task-notification> <task-id>b1</task-id> <summary>Monitor event</summary></task-notification>"}]}}"#,
+        r#"{"attachment":{"type":"queued_command","commandMode":"task-notification","prompt":"<task-notification> <task-id>b2</task-id></task-notification>"}}"#,
+        r#"{"attachment":{"type":"queued_command","commandMode":"prompt","prompt":"and check test-mint"}}"#,
+    ]
+    .join("\n");
+    let parsed = super::parsing::parse_jsonl_transcript(&raw);
+    assert_eq!(
+        parsed.user_text,
+        "fix the divergence false positives\n\nand check test-mint"
+    );
+}
