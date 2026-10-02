@@ -826,6 +826,11 @@ pub struct CveDetectionParamsJSON {
     /// tool (IDE / SDK / package-manager helper) for FP suppression.
     pub packaged_developer_tool_identity_tokens: Vec<String>,
     pub fim_hash_size_threshold: u64,
+    /// Names a FIM writer carries when the kernel performed the write on
+    /// another process's behalf and no image path exists: Windows' `System`
+    /// (PID 4), the cache manager's lazy writer flushing dirty pages. Such a
+    /// write is unattributed, not attributed to a process of that name.
+    pub fim_kernel_pseudo_writer_names: Vec<String>,
     pub fim_temp_executable_patterns: Vec<String>,
     /// Basenames (lowercase, `.exe` stripped by the consumer) of processes
     /// whose memory holds credentials or tokens (CI runner workers, key
@@ -933,6 +938,12 @@ pub struct CveDetectionParamsJSON {
     /// on Windows and Linux (`/program files/`, `/appdata/local/programs/`),
     /// found anywhere in a lowercased, `/`-separated process path.
     pub application_install_roots: Vec<String>,
+    /// Install roots only an administrator can write to (Windows
+    /// `/program files/`, `/program files (x86)/`, `/program files (arm64)/`),
+    /// matched at the start of a path after its drive letter. A directory
+    /// named `Temp` under one (EdgeUpdate's `Program Files (x86)/Microsoft/
+    /// Temp/`) is a product's own staging area, not user-writable staging.
+    pub admin_only_install_roots: Vec<String>,
     /// Install prefixes whose next component names the installed product
     /// (`/opt/`, `/usr/lib/`, ...), matched at the start of the path.
     pub application_install_prefixes: Vec<String>,
@@ -1146,6 +1157,11 @@ pub struct CveDetectionParams {
     pub temp_installer_shell_names: Vec<String>,
     pub packaged_developer_tool_identity_tokens: Vec<String>,
     pub fim_hash_size_threshold: u64,
+    /// Names a FIM writer carries when the kernel performed the write on
+    /// another process's behalf and no image path exists: Windows' `System`
+    /// (PID 4), the cache manager's lazy writer flushing dirty pages. Such a
+    /// write is unattributed, not attributed to a process of that name.
+    pub fim_kernel_pseudo_writer_names: Vec<String>,
     pub fim_temp_executable_patterns: Vec<String>,
     /// Basenames (lowercase, `.exe` stripped by the consumer) of processes
     /// whose memory holds credentials or tokens (CI runner workers, key
@@ -1208,6 +1224,7 @@ pub struct CveDetectionParams {
     pub per_user_app_data_roots: Vec<String>,
     pub sandbox_container_layouts: Vec<SandboxContainerLayoutJSON>,
     pub application_install_roots: Vec<String>,
+    pub admin_only_install_roots: Vec<String>,
     pub application_install_prefixes: Vec<String>,
     pub owned_store_generic_tokens: HashSet<String>,
     pub owned_store_min_token_len: usize,
@@ -2010,6 +2027,12 @@ impl CveDetectionParams {
                 .map(|t| t.to_ascii_lowercase())
                 .collect(),
             fim_hash_size_threshold: json.fim_hash_size_threshold,
+            fim_kernel_pseudo_writer_names: json
+                .fim_kernel_pseudo_writer_names
+                .iter()
+                .map(|name| name.trim().to_ascii_lowercase())
+                .filter(|name| !name.is_empty())
+                .collect(),
             publisher_attestation_enabled: json.publisher_attestation_enabled,
             treat_high_volume_dns_ntp_as_non_routine: json.treat_high_volume_dns_ntp_as_non_routine,
             dns_ntp_non_routine_min_outbound_bytes: json.dns_ntp_non_routine_min_outbound_bytes,
@@ -2055,6 +2078,7 @@ impl CveDetectionParams {
                 &json.sandbox_container_layouts,
             ),
             application_install_roots: normalized_path_fragments(&json.application_install_roots),
+            admin_only_install_roots: normalized_path_fragments(&json.admin_only_install_roots),
             application_install_prefixes: normalized_path_fragments(
                 &json.application_install_prefixes,
             ),
@@ -3495,6 +3519,17 @@ pub fn fim_hash_size_threshold() -> u64 {
     PARAMS_SNAPSHOT.load().fim_hash_size_threshold
 }
 
+/// Whether a FIM writer named `name` with no image path is the kernel
+/// writing on another process's behalf (`fim_kernel_pseudo_writer_names`).
+pub fn is_fim_kernel_pseudo_writer_name(name: &str) -> bool {
+    let name = name.trim().to_ascii_lowercase();
+    !name.is_empty()
+        && PARAMS_SNAPSHOT
+            .load()
+            .fim_kernel_pseudo_writer_names
+            .contains(&name)
+}
+
 pub fn fim_temp_executable_patterns() -> Vec<String> {
     PARAMS_SNAPSHOT.load().fim_temp_executable_patterns.clone()
 }
@@ -3750,6 +3785,12 @@ pub fn sandbox_container_layouts() -> Vec<SandboxContainerLayoutJSON> {
 /// Install roots whose next component names the product (lowercase, `/`).
 pub fn application_install_roots() -> Vec<String> {
     PARAMS_SNAPSHOT.load().application_install_roots.clone()
+}
+
+/// Install roots only an administrator can write to (lowercase, `/`, no
+/// drive letter).
+pub fn admin_only_install_roots() -> Vec<String> {
+    PARAMS_SNAPSHOT.load().admin_only_install_roots.clone()
 }
 
 /// Install prefixes whose next component names the product (lowercase, `/`).
@@ -4718,6 +4759,8 @@ mod tests {
 
     #[test]
     fn test_fim_hash_size_threshold_defaults() {
+        assert!(is_fim_kernel_pseudo_writer_name("System"));
+        assert!(!is_fim_kernel_pseudo_writer_name("svchost.exe"));
         assert_eq!(fim_hash_size_threshold(), 10_485_760);
     }
 
@@ -5311,6 +5354,7 @@ mod tests {
         let p = params_from_edited_snapshot(|value| {
             value["per_user_app_data_roots"] = serde_json::json!(["Library\\Caches\\", " "]);
             value["application_install_roots"] = serde_json::json!(["\\Program Files\\", ""]);
+            value["admin_only_install_roots"] = serde_json::json!(["\\Program Files (x86)\\", " "]);
             value["application_install_prefixes"] = serde_json::json!(["/OPT/"]);
             value["owned_store_generic_tokens"] = serde_json::json!(["Helper", ""]);
             value["sandbox_container_layouts"] = serde_json::json!([
@@ -5321,6 +5365,7 @@ mod tests {
         });
         assert_eq!(p.per_user_app_data_roots, vec!["library/caches/"]);
         assert_eq!(p.application_install_roots, vec!["/program files/"]);
+        assert_eq!(p.admin_only_install_roots, vec!["/program files (x86)/"]);
         assert_eq!(p.application_install_prefixes, vec!["/opt/"]);
         assert_eq!(
             p.owned_store_generic_tokens,
@@ -5344,9 +5389,11 @@ mod tests {
             .all(|root| !root.starts_with('/') && root.ends_with('/')));
         assert!(!per_user_app_data_roots().is_empty());
         assert!(!sandbox_container_layouts().is_empty());
+        assert!(!admin_only_install_roots().is_empty());
         assert!(application_install_roots()
             .iter()
             .chain(application_install_prefixes().iter())
+            .chain(admin_only_install_roots().iter())
             .all(|root| root.starts_with('/') && root.ends_with('/')));
         assert!(is_owned_store_generic_token("helper"));
         assert!(!is_owned_store_generic_token("zoom"));
