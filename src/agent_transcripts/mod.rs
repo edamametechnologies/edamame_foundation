@@ -962,7 +962,9 @@ pub(crate) fn read_transcript_for_session(path: &Path) -> std::io::Result<String
     }
 
     let mut head = Vec::new();
-    (&mut file).take(SESSION_HEAD_BYTES).read_to_end(&mut head)?;
+    (&mut file)
+        .take(SESSION_HEAD_BYTES)
+        .read_to_end(&mut head)?;
     // The head's last line is cut mid-record: keep up to its last newline.
     match head.iter().rposition(|byte| *byte == b'\n') {
         Some(end) => head.truncate(end + 1),

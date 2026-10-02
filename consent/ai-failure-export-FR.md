@@ -29,10 +29,8 @@ En l'activant, vous acceptez de partager les informations suivantes avec EDAMAME
 
 Les transcriptions d'agents, les invites, les réponses des modèles, le contenu des fichiers, les chemins complets des fichiers, les arguments des commandes, les valeurs des variables d'environnement et les valeurs des secrets ne sont jamais rapportés.
 
-Les administrateurs du domaine auquel vous êtes connecté voient ces détails à côté de votre score dans EDAMAME Hub, et le personnel d'EDAMAME peut les consulter depuis la console d'administration d'EDAMAME. EDAMAME Hub les utilise aussi pour évaluer les politiques IA et les règles d'accès du domaine. Ils ne font pas partie de ce qu'EDAMAME Hub envoie aux autres services auxquels les administrateurs du domaine le connectent.
+Les administrateurs du domaine auquel vous êtes connecté voient ces détails à côté de votre score dans EDAMAME Hub. Ces informations sont utilisées uniquement par EDAMAME et ne sont pas partagées avec des tiers.
 
-EDAMAME Hub conserve ces détails avec le dernier rapport de cet appareil, sans date d'expiration. Le rapport suivant qui contient des détails IA les remplace, et ils sont supprimés avec ce rapport : lorsqu'un administrateur retire l'appareil, lorsque le domaine est supprimé, ou 7 jours après le dernier rapport d'un appareil que le domaine a désactivé.
-
-Vous pouvez désactiver ce réglage à tout moment dans Config > Confidentialité ou dans Confiance > Connecter : le rapport de score suivant ne contient plus ces détails, et EDAMAME Hub supprime les détails qu'il conservait. Une organisation qui gère cet appareil peut aussi activer ou désactiver ce partage pour lui.
+Vous pouvez désactiver ce réglage à tout moment dans Config > Confidentialité ou dans Confiance > Connecter : le rapport de score suivant ne contient plus ces détails. Une organisation qui gère cet appareil peut aussi activer ce partage pour lui.
 
 Si vous n'êtes pas d'accord avec cette politique, laissez ce réglage désactivé.

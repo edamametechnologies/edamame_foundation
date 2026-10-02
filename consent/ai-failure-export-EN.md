@@ -29,10 +29,8 @@ By turning it on, you agree to share the following information with EDAMAME in e
 
 Agent transcripts, prompts, model responses, file contents, full file paths, command arguments, environment variable values and secret values are never reported.
 
-The administrators of the domain you are connected to see these details next to your score in EDAMAME Hub, and EDAMAME staff can view them through EDAMAME's administration console. EDAMAME Hub also uses them to evaluate the domain's AI policies and access rules. They are not part of what EDAMAME Hub sends to other services the domain's administrators connect it to.
+The administrators of the domain you are connected to see these details next to your score in EDAMAME Hub. This information is used solely by EDAMAME and is not shared with any third party.
 
-EDAMAME Hub keeps these details with the latest report of this device, with no expiry date. The next report that carries AI details replaces them, and they are deleted with that report: when an administrator removes the device, when the domain is deleted, or 7 days after the last report of a device the domain has disabled.
-
-You can turn this setting off at any time in Config > Privacy or in Trust > Connect: the next score report no longer carries these details, and EDAMAME Hub discards the details it kept. An organization that manages this device can also turn this sharing on or off for it.
+You can turn this setting off at any time in Config > Privacy or in Trust > Connect: the next score report no longer carries these details. An organization that manages this device can also turn this sharing on for it.
 
 If you do not agree with this policy, leave this setting off.

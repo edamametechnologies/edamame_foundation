@@ -1202,7 +1202,9 @@ fn session_read_of_an_oversized_transcript_keeps_its_opening_and_its_latest_turn
         );
     }
     let parsed = super::parsing::parse_jsonl_transcript(&text);
-    assert!(parsed.user_text.starts_with("make a deep performance analysis"));
+    assert!(parsed
+        .user_text
+        .starts_with("make a deep performance analysis"));
     assert!(parsed.user_text.ends_with("now check test-mint"));
 }
 

@@ -13,10 +13,6 @@ Demandez toujours un consentement explicite avant de scanner des réseaux qui ne
 Familiarisez-vous avec les règles juridiques qui encadrent l'utilisation des outils de scan de sécurité dans votre zone géographique et votre secteur.
 Envisagez de consulter un professionnel du droit spécialisé en cybersécurité pour confirmer que votre usage est conforme.
 
-## Partage avec les autres appareils EDAMAME
-Une fois que vous avez accepté, EDAMAME partage les appareils qu'il trouve sur ce réseau avec les autres applications EDAMAME du même réseau, et affiche les appareils qu'elles partagent. Pour chaque appareil, il envoie ses adresses IP et MAC, son nom d'hôte, son fabricant, son type et son système d'exploitation, les services qu'il annonce, ses ports ouverts et leurs bannières de service, et le nom que vous lui avez éventuellement donné.
-Les autres applications EDAMAME du réseau reçoivent aussi le nom d'hôte de cet appareil, son identifiant d'appareil EDAMAME, son système d'exploitation et sa version, la version d'EDAMAME, son score de sécurité, si l'EDAMAME Helper est installé, et ses adresses IP locales. Jusqu'à EDAMAME 2.0.2, elles les reçoivent que vous acceptiez ou non. À partir d'EDAMAME 2.0.3, EDAMAME n'annonce rien aux autres applications EDAMAME d'un réseau tant que vous n'avez pas accepté pour ce réseau, et cesse lorsque vous oubliez le réseau ou rejoignez un réseau pour lequel vous n'avez pas accepté.
-
 ## Conclusion
 Le scanner EDAMAME Security est un outil puissant pour renforcer la sécurité du réseau, mais il doit être utilisé de manière responsable et conformément à toutes les normes légales applicables. Un manquement à cette conformité peut entraîner des sanctions graves.
 
