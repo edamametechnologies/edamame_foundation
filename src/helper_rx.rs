@@ -13,7 +13,7 @@ use std::net::SocketAddr;
 use std::str;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tokio::sync::{broadcast, oneshot};
+use tokio::sync::{broadcast, Notify};
 use tonic::transport::{Certificate, Identity, Server, ServerTlsConfig};
 use tonic::{Code, Request, Response, Status};
 use tracing::{debug, error, info, trace, warn};
@@ -239,17 +239,34 @@ pub async fn rpc_run_safe(
         })
 }
 
+/// Runs the helper's gRPC server until [`ServerControl::stop_server`].
+///
+/// Both calls take `&self` and the stop signal is a [`Notify`], so a caller
+/// keeps no lock while the server runs. The helper used to keep the control
+/// in a mutex whose guard `start_server` held for as long as it served, so
+/// the Windows service's Stop control waited for that guard forever: the
+/// service never reached STOPPED and every SCM stop (and installer upgrade)
+/// timed out. `notify_one` keeps a permit when nothing waits yet, so a stop
+/// sent before the server starts is not lost.
 pub struct ServerControl {
-    pub stop: Option<oneshot::Sender<()>>,
+    stop: Notify,
+}
+
+impl Default for ServerControl {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ServerControl {
     pub fn new() -> Self {
-        ServerControl { stop: None }
+        ServerControl {
+            stop: Notify::new(),
+        }
     }
 
     pub async fn start_server(
-        &mut self,
+        &self,
         server_pem: &str,
         server_key: &str,
         client_ca_cert: &str,
@@ -261,9 +278,6 @@ impl ServerControl {
             let mut branch_lock = BRANCH.lock().await;
             *branch_lock = branch.to_string();
         }
-
-        let (tx, rx) = oneshot::channel::<()>();
-        self.stop = Some(tx);
 
         let cert_base64 = server_pem.to_string();
         let key_base64 = server_key.to_string();
@@ -331,31 +345,38 @@ impl ServerControl {
             }
         };
 
-        tokio::select! {
-            result = server_future => {
-                match result {
-                    Ok(_) => {
-                        info!("EDAMAME Helper stopped");
-                        Ok(())
-                    }
-                    Err(e) => {
-                        error!("EDAMAME Helper server error: {}", e);
-                        Err(anyhow!(e))
-                    }
-                }
-            }
-            _ = rx => {
-                info!("EDAMAME Helper gracefully shutting down");
-                Ok(())
-            }
-        }
+        serve_until_stopped(server_future, &self.stop).await
     }
 
-    pub async fn stop_server(&mut self) -> Result<()> {
-        if let Some(stop) = self.stop.take() {
-            let _ = stop.send(());
-        }
+    pub async fn stop_server(&self) -> Result<()> {
+        self.stop.notify_one();
         Ok(())
+    }
+}
+
+/// Drive the server future until it ends or `stop` is notified.
+async fn serve_until_stopped<F, E>(server_future: F, stop: &Notify) -> Result<()>
+where
+    F: std::future::Future<Output = std::result::Result<(), E>>,
+    E: std::fmt::Display,
+{
+    tokio::select! {
+        result = server_future => {
+            match result {
+                Ok(_) => {
+                    info!("EDAMAME Helper stopped");
+                    Ok(())
+                }
+                Err(e) => {
+                    error!("EDAMAME Helper server error: {}", e);
+                    Err(anyhow!("{}", e))
+                }
+            }
+        }
+        _ = stop.notified() => {
+            info!("EDAMAME Helper gracefully shutting down");
+            Ok(())
+        }
     }
 }
 
@@ -769,9 +790,51 @@ mod tests {
     use edamame_proto::edamame_helper_client::EdamameHelperClient;
     use edamame_proto::edamame_helper_server::{EdamameHelper, EdamameHelperServer};
     use std::str;
+    use tokio::sync::oneshot;
     use tokio::time::{sleep, timeout, Duration};
     use tonic::transport::Channel;
     use tonic::transport::{Certificate, ClientTlsConfig, Identity};
+
+    // The Windows service's Stop control must reach a server that is serving:
+    // the serving call keeps `&self`, the stop takes no lock.
+    #[tokio::test]
+    async fn a_stop_reaches_a_running_server() {
+        let stop = Arc::new(Notify::new());
+        let serving = stop.clone();
+        let server = tokio::spawn(async move {
+            serve_until_stopped(
+                std::future::pending::<std::result::Result<(), String>>(),
+                &serving,
+            )
+            .await
+        });
+        sleep(Duration::from_millis(50)).await;
+        stop.notify_one();
+        let result = timeout(Duration::from_secs(5), server).await;
+        assert!(matches!(result, Ok(Ok(Ok(())))), "{result:?}");
+    }
+
+    #[tokio::test]
+    async fn a_stop_sent_before_the_server_runs_is_not_lost() {
+        let stop = Notify::new();
+        stop.notify_one();
+        let result = timeout(
+            Duration::from_secs(5),
+            serve_until_stopped(
+                std::future::pending::<std::result::Result<(), String>>(),
+                &stop,
+            ),
+        )
+        .await;
+        assert!(matches!(result, Ok(Ok(()))), "{result:?}");
+    }
+
+    #[tokio::test]
+    async fn the_server_ending_on_its_own_reports_its_error() {
+        let stop = Notify::new();
+        let result = serve_until_stopped(async { Err::<(), _>("bind failed") }, &stop).await;
+        assert_eq!(result.unwrap_err().to_string(), "bind failed");
+    }
 
     #[test]
     fn test_certificate_decoding_and_creation() {
