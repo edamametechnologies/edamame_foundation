@@ -1045,6 +1045,12 @@ pub struct CveDetectionParamsJSON {
     /// Distinct local processes reaching one blacklisted prefix before it
     /// reads as shared infrastructure (VPN / proxy / CDN egress) rather than
     /// a C2 endpoint.
+    /// Domains under which every subdomain belongs to whoever registered it
+    /// (the shared-hosting part of the Public Suffix List, curated: cloud
+    /// storage and app hosting, static-site platforms, tunnels, SaaS tenant
+    /// hosts). A human grant of a domain covers its subdomains only when no
+    /// such suffix lies between them (`divergence_policy`).
+    pub shared_hosting_public_suffixes: Vec<String>,
     pub shared_infrastructure_min_local_processes: usize,
     /// OS temp roots by role (see [`OsTempRootsJSON`]).
     pub os_temp_roots: OsTempRootsJSON,
@@ -1250,6 +1256,12 @@ pub struct CveDetectionParams {
     pub memory_scrape_read_enumeration_min_distinct_targets: usize,
     pub memory_scrape_per_invocation_min_hex_run: usize,
     pub relay_min_credential_classes: usize,
+    /// Domains under which every subdomain belongs to whoever registered it
+    /// (the shared-hosting part of the Public Suffix List, curated: cloud
+    /// storage and app hosting, static-site platforms, tunnels, SaaS tenant
+    /// hosts). A human grant of a domain covers its subdomains only when no
+    /// such suffix lies between them (`divergence_policy`).
+    pub shared_hosting_public_suffixes: Vec<String>,
     pub shared_infrastructure_min_local_processes: usize,
     pub os_temp_roots: OsTempRootsJSON,
     pub temp_scratch_name: TempScratchNameJSON,
@@ -2131,6 +2143,12 @@ impl CveDetectionParams {
                 .memory_scrape_read_enumeration_min_distinct_targets,
             memory_scrape_per_invocation_min_hex_run: json.memory_scrape_per_invocation_min_hex_run,
             relay_min_credential_classes: json.relay_min_credential_classes,
+            shared_hosting_public_suffixes: json
+                .shared_hosting_public_suffixes
+                .iter()
+                .map(|suffix| suffix.trim().trim_matches('.').to_ascii_lowercase())
+                .filter(|suffix| !suffix.is_empty())
+                .collect(),
             shared_infrastructure_min_local_processes: json
                 .shared_infrastructure_min_local_processes,
             os_temp_roots: normalized_os_temp_roots(&json.os_temp_roots),
@@ -3982,6 +4000,23 @@ pub fn relay_min_credential_classes() -> usize {
 }
 
 /// Local processes that make a blacklisted prefix shared infrastructure.
+/// Whether `domain` (lowercase, no port) is, or sits under, a shared-hosting
+/// public suffix: returns the suffix it sits at or under, if any.
+pub fn shared_hosting_suffix_of(domain: &str) -> Option<String> {
+    let domain = domain.trim().trim_end_matches('.').to_ascii_lowercase();
+    PARAMS_SNAPSHOT
+        .load()
+        .shared_hosting_public_suffixes
+        .iter()
+        .find(|suffix| domain == **suffix || domain.ends_with(&format!(".{suffix}")))
+        .cloned()
+}
+
+/// The shared-hosting public suffixes (lowercase, no dots at the ends).
+pub fn shared_hosting_public_suffixes() -> Vec<String> {
+    PARAMS_SNAPSHOT.load().shared_hosting_public_suffixes.clone()
+}
+
 pub fn shared_infrastructure_min_local_processes() -> usize {
     PARAMS_SNAPSHOT
         .load()
@@ -4759,6 +4794,12 @@ mod tests {
 
     #[test]
     fn test_fim_hash_size_threshold_defaults() {
+        assert_eq!(
+            shared_hosting_suffix_of("evil.s3.amazonaws.com").as_deref(),
+            Some("amazonaws.com")
+        );
+        assert_eq!(shared_hosting_suffix_of("api.github.com"), None);
+        assert!(!shared_hosting_public_suffixes().is_empty());
         assert!(is_fim_kernel_pseudo_writer_name("System"));
         assert!(!is_fim_kernel_pseudo_writer_name("svchost.exe"));
         assert_eq!(fim_hash_size_threshold(), 10_485_760);
