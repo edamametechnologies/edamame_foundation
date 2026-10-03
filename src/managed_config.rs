@@ -63,6 +63,8 @@ pub const KEY_NETWORK_MONITORING_CONSENT: &str = "NetworkMonitoringConsent";
 pub const KEY_SHARE_AI_FAILURE_DETAILS: &str = "ShareAIFailureDetails";
 pub const KEY_CAPTURE_ENABLED: &str = "CaptureEnabled";
 pub const KEY_FILE_MONITOR_ENABLED: &str = "FileMonitorEnabled";
+/// LAN auto-scan (2.0.5): also a Hub-managed element (`lan_auto_scan`).
+pub const KEY_LAN_AUTO_SCAN: &str = "LanAutoScan";
 pub const KEY_LOCK_MONITORING: &str = "LockMonitoring";
 pub const KEY_HIDE_AI_SETTINGS: &str = "HideAISettings";
 
@@ -83,6 +85,7 @@ pub const MANAGED_POLICY_KEYS: &[&str] = &[
     KEY_SHARE_AI_FAILURE_DETAILS,
     KEY_CAPTURE_ENABLED,
     KEY_FILE_MONITOR_ENABLED,
+    KEY_LAN_AUTO_SCAN,
     KEY_LOCK_MONITORING,
     KEY_HIDE_AI_SETTINGS,
 ];
@@ -176,6 +179,7 @@ pub struct ManagedPolicy {
     pub share_ai_failure_details: Option<bool>,
     pub capture_enabled: Option<bool>,
     pub file_monitor_enabled: Option<bool>,
+    pub lan_auto_scan: Option<bool>,
     pub lock_monitoring: bool,
     pub hide_ai_settings: bool,
     /// Keys the store held (valid or not), in [`MANAGED_POLICY_KEYS`] order.
@@ -200,9 +204,11 @@ impl ManagedPolicy {
         self.protection_enabled.is_some() || self.assistant_level.is_some()
     }
 
-    /// Capture or the file monitor is set by policy.
+    /// Capture, the file monitor or LAN auto-scan is set by policy.
     pub fn manages_monitoring(&self) -> bool {
-        self.capture_enabled.is_some() || self.file_monitor_enabled.is_some()
+        self.capture_enabled.is_some()
+            || self.file_monitor_enabled.is_some()
+            || self.lan_auto_scan.is_some()
     }
 
     /// Validate raw values into a policy. The single parser for every OS
@@ -348,12 +354,16 @@ impl ManagedPolicy {
 
         policy.capture_enabled = bool_value(values, KEY_CAPTURE_ENABLED, &mut errors);
         policy.file_monitor_enabled = bool_value(values, KEY_FILE_MONITOR_ENABLED, &mut errors);
+        policy.lan_auto_scan = bool_value(values, KEY_LAN_AUTO_SCAN, &mut errors);
         policy.lock_monitoring =
             bool_value(values, KEY_LOCK_MONITORING, &mut errors).unwrap_or(false);
         if policy.lock_monitoring && !policy.manages_monitoring() {
             errors.push(format!(
-                "{}: ignored, the policy sets neither {} nor {}",
-                KEY_LOCK_MONITORING, KEY_CAPTURE_ENABLED, KEY_FILE_MONITOR_ENABLED
+                "{}: ignored, the policy sets none of {}, {} or {}",
+                KEY_LOCK_MONITORING,
+                KEY_CAPTURE_ENABLED,
+                KEY_FILE_MONITOR_ENABLED,
+                KEY_LAN_AUTO_SCAN
             ));
             policy.lock_monitoring = false;
         }
