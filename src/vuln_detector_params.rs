@@ -636,6 +636,16 @@ pub struct SandboxContainerLayoutJSON {
 /// - `go_build_work_directory_prefix` + digits, with an action directory
 ///   holding one of `go_build_action_config_files`: a Go build work dir;
 /// - `venv_config_file`: a PEP 405 virtual environment root.
+///
+/// The PEP 405 layout around a venv root, read by the detector from a FIM
+/// event itself rather than from a marker file (FP-WIN-28, compared
+/// case-insensitively): the interpreter lies in one of
+/// `venv_interpreter_directories` (`Scripts` on Windows, `bin` on POSIX)
+/// directly below the root, and the packages in one of
+/// `venv_package_directories` (`site-packages`) below one of
+/// `venv_library_directories` (`Lib`, `lib`), directly
+/// (`Lib/site-packages`, Windows) or one version directory down
+/// (`lib/python3.12/site-packages`, POSIX).
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 pub struct DevTreeMarkersJSON {
     pub cachedir_tag_file: String,
@@ -653,6 +663,9 @@ pub struct DevTreeMarkersJSON {
     pub go_build_work_directory_prefix: String,
     pub go_build_action_config_files: Vec<String>,
     pub venv_config_file: String,
+    pub venv_interpreter_directories: Vec<String>,
+    pub venv_library_directories: Vec<String>,
+    pub venv_package_directories: Vec<String>,
 }
 
 /// OS temp roots by role, matched on a lowercased, `/`-separated path:
@@ -1493,6 +1506,9 @@ fn trimmed_dev_tree_markers(markers: &DevTreeMarkersJSON) -> DevTreeMarkersJSON 
         go_build_work_directory_prefix: markers.go_build_work_directory_prefix.trim().to_string(),
         go_build_action_config_files: names(&markers.go_build_action_config_files),
         venv_config_file: markers.venv_config_file.trim().to_string(),
+        venv_interpreter_directories: names(&markers.venv_interpreter_directories),
+        venv_library_directories: names(&markers.venv_library_directories),
+        venv_package_directories: names(&markers.venv_package_directories),
     }
 }
 
@@ -4723,6 +4739,44 @@ mod tests {
         assert!(browser_volatile_profile_state_group("/tmp/Session Storage/000003.log").is_none());
     }
 
+    /// FP-WIN-30: the data components Chrome's component updater installs
+    /// below `User Data\<component>\<version>\` (Crowd Deny, file-type
+    /// policies, origin trials, ...) are re-downloadable data, the class of
+    /// `CertificateRevocation` and `PKIMetadata`; the component directory
+    /// itself (its mtime change) matches too. Components that ship native
+    /// code Chrome loads (`WidevineCdm`) and the credential stores are not
+    /// listed.
+    #[test]
+    fn test_is_non_sensitive_browser_data_chromium_component_updater() {
+        let root = "C:\\Users\\frank\\AppData/Local\\Google\\Chrome\\User Data";
+        for component in [
+            "Crowd Deny\\2026.10.5.75",
+            "Crowd Deny",
+            "FileTypePolicies\\72\\download_file_types.pb",
+            "OriginTrials\\1.0.0.18\\manifest.json",
+            "Subresource Filter\\Unindexed Rules\\9.62.0\\Filtering Rules",
+            "ZxcvbnData\\3\\passwords.txt",
+        ] {
+            let path = format!("{root}\\{component}");
+            assert!(is_non_sensitive_browser_data(&path), "{path}");
+        }
+        for kept in [
+            "WidevineCdm\\4.10.2891.0\\_platform_specific\\win_x64\\widevinecdm.dll",
+            "Default\\Login Data",
+            "Default\\Network\\Cookies",
+            "Local Extension Settings\\nngceckbapebfimnlniiiahkandclblb\\000003.log",
+        ] {
+            let path = format!("{root}\\{kept}");
+            assert!(!is_non_sensitive_browser_data(&path), "{path}");
+        }
+        // Outside a browser root the component name vouches for nothing.
+        assert!(!is_non_sensitive_browser_data(
+            "C:\\Users\\frank\\AppData\\Local\\Temp\\Crowd Deny\\stage.bin"
+        ));
+        // The variations seed is browser state, graded like its safe twin.
+        assert!(browser_volatile_profile_state_group(&format!("{root}\\VariationsSeedV2")).is_some());
+    }
+
     #[test]
     fn test_is_non_sensitive_browser_data_does_not_suppress_credentials() {
         // Login Data / Cookies / Web Data / History MUST stay sensitive.
@@ -5772,6 +5826,19 @@ mod tests {
         let shipped = dev_tree_markers();
         assert_eq!(shipped.cmake_cache_file, "CMakeCache.txt");
         assert_eq!(shipped.venv_config_file, "pyvenv.cfg");
+        assert!(shipped
+            .venv_interpreter_directories
+            .iter()
+            .any(|name| name == "Scripts"));
+        assert!(shipped
+            .venv_interpreter_directories
+            .iter()
+            .any(|name| name == "bin"));
+        assert!(shipped
+            .venv_library_directories
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case("lib")));
+        assert_eq!(shipped.venv_package_directories, vec!["site-packages"]);
         assert!(code_module_suffixes()
             .iter()
             .any(|suffix| suffix == ".plist"));
