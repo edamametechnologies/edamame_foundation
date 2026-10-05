@@ -4774,7 +4774,9 @@ mod tests {
             "C:\\Users\\frank\\AppData\\Local\\Temp\\Crowd Deny\\stage.bin"
         ));
         // The variations seed is browser state, graded like its safe twin.
-        assert!(browser_volatile_profile_state_group(&format!("{root}\\VariationsSeedV2")).is_some());
+        assert!(
+            browser_volatile_profile_state_group(&format!("{root}\\VariationsSeedV2")).is_some()
+        );
     }
 
     #[test]
