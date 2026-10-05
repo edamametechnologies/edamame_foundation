@@ -1002,6 +1002,15 @@ pub struct CveDetectionParamsJSON {
     /// Lockfiles and manifests an install legitimately rewrites (lowercase
     /// basenames).
     pub install_artifact_basenames: Vec<String>,
+    /// The bare language runtimes among `package_manager_runtimes` (`node`,
+    /// `python`): they run any program, not only installs. A lineage whose
+    /// only package-manager names are these, anchored only under a global
+    /// CLI install root, is an installed CLI running, not an install.
+    pub package_bare_runtimes: Vec<String>,
+    /// Path fragments (lowercase, `/`) of global CLI install roots: npm's
+    /// global prefix (`/lib/node_modules/`, Windows `/npm/node_modules/`),
+    /// bun's and pnpm's global stores, pipx and uv tool environments.
+    pub global_package_roots: Vec<String>,
     /// Developer toolchain tree markers (see [`DevTreeMarkersJSON`]).
     pub dev_tree_markers: DevTreeMarkersJSON,
     /// Suffixes (lowercase) of code and persistence definitions that are
@@ -1051,6 +1060,38 @@ pub struct CveDetectionParamsJSON {
     /// hosts). A human grant of a domain covers its subdomains only when no
     /// such suffix lies between them (`divergence_policy`).
     pub shared_hosting_public_suffixes: Vec<String>,
+    /// Evaluator integrity (`divergence_policy`): directory names that hold
+    /// test cases (`tests`, `__tests__`, `fixtures`, ...).
+    pub measurement_test_directory_segments: Vec<String>,
+    /// File-name prefixes of a test case (`test_`).
+    pub measurement_test_filename_prefixes: Vec<String>,
+    /// File-name suffixes of a test case (`_test.go`, `.spec.ts`, ...).
+    pub measurement_test_filename_suffixes: Vec<String>,
+    /// Runner and CI configuration files that decide what runs for every
+    /// case (`conftest.py`, `vitest.config.ts`, `.gitlab-ci.yml`, ...).
+    pub measurement_harness_filenames: Vec<String>,
+    /// Directories (relative, `/`-separated) whose files are harness
+    /// configuration (`.github/workflows`).
+    pub measurement_harness_directory_paths: Vec<String>,
+    /// Directory names whose content is derived or third-party, never the
+    /// project's measurement surface: bytecode and tool caches
+    /// (`__pycache__`, `.pytest_cache`) and installed packages
+    /// (`site-packages`, `node_modules`), tests they ship included.
+    pub measurement_derived_directory_segments: Vec<String>,
+    /// Words of a declared task that make it measurement work (`test`,
+    /// `coverage`, `fixture`, ...): such a task may touch the surface.
+    pub measurement_intent_tokens: Vec<String>,
+    /// Distinct paths one writer must lay down within the burst before its
+    /// writes read as a materialisation batch (a clone, an extract).
+    pub evaluator_materialisation_min_paths: usize,
+    /// The measurement surface may be at most `1 / N` of such a batch.
+    pub evaluator_materialisation_measurement_divisor: usize,
+    /// How far either side of a graded write the writer's other writes
+    /// count towards its batch.
+    pub evaluator_materialisation_burst_secs: i64,
+    /// How far outside a session's transcript span (file birth to last
+    /// write) a write is still graded against that session.
+    pub evaluator_session_attribution_slack_secs: i64,
     pub shared_infrastructure_min_local_processes: usize,
     /// OS temp roots by role (see [`OsTempRootsJSON`]).
     pub os_temp_roots: OsTempRootsJSON,
@@ -1246,6 +1287,9 @@ pub struct CveDetectionParams {
     pub dependency_tree_markers: Vec<String>,
     pub package_manager_runtimes: HashSet<String>,
     pub install_artifact_basenames: HashSet<String>,
+    pub package_bare_runtimes: HashSet<String>,
+    /// `global_package_roots` as lowercase `/` fragments.
+    pub global_package_roots: Vec<String>,
     pub dev_tree_markers: DevTreeMarkersJSON,
     pub code_module_suffixes: Vec<String>,
     pub sensitive_material_labels: HashSet<String>,
@@ -1262,6 +1306,18 @@ pub struct CveDetectionParams {
     /// hosts). A human grant of a domain covers its subdomains only when no
     /// such suffix lies between them (`divergence_policy`).
     pub shared_hosting_public_suffixes: Vec<String>,
+    /// The `measurement_*` lists, lowercase (see the JSON struct).
+    pub measurement_test_directory_segments: HashSet<String>,
+    pub measurement_test_filename_prefixes: Vec<String>,
+    pub measurement_test_filename_suffixes: Vec<String>,
+    pub measurement_harness_filenames: HashSet<String>,
+    pub measurement_harness_directory_paths: Vec<String>,
+    pub measurement_derived_directory_segments: HashSet<String>,
+    pub measurement_intent_tokens: Vec<String>,
+    pub evaluator_materialisation_min_paths: usize,
+    pub evaluator_materialisation_measurement_divisor: usize,
+    pub evaluator_materialisation_burst_secs: i64,
+    pub evaluator_session_attribution_slack_secs: i64,
     pub shared_infrastructure_min_local_processes: usize,
     pub os_temp_roots: OsTempRootsJSON,
     pub temp_scratch_name: TempScratchNameJSON,
@@ -1347,6 +1403,15 @@ fn normalized_path_fragments(list: &[String]) -> Vec<String> {
     list.iter()
         .map(|fragment| fragment.trim().to_ascii_lowercase().replace('\\', "/"))
         .filter(|fragment| !fragment.is_empty())
+        .collect()
+}
+
+/// Substrings matched, in order, against a lowercased value. Kept as
+/// written apart from case: the intent token `"ci "` carries its space.
+fn lowercase_tokens(list: &[String]) -> Vec<String> {
+    list.iter()
+        .map(|token| token.to_ascii_lowercase())
+        .filter(|token| !token.trim().is_empty())
         .collect()
 }
 
@@ -2121,6 +2186,8 @@ impl CveDetectionParams {
             script_runtime_basenames: lowercase_token_set(&json.script_runtime_basenames),
             dependency_tree_markers: normalized_path_fragments(&json.dependency_tree_markers),
             package_manager_runtimes: lowercase_token_set(&json.package_manager_runtimes),
+            package_bare_runtimes: lowercase_token_set(&json.package_bare_runtimes),
+            global_package_roots: normalized_path_fragments(&json.global_package_roots),
             install_artifact_basenames: lowercase_token_set(&json.install_artifact_basenames),
             dev_tree_markers: trimmed_dev_tree_markers(&json.dev_tree_markers),
             code_module_suffixes: lowercase_token_list(&json.code_module_suffixes),
@@ -2143,6 +2210,39 @@ impl CveDetectionParams {
                 .memory_scrape_read_enumeration_min_distinct_targets,
             memory_scrape_per_invocation_min_hex_run: json.memory_scrape_per_invocation_min_hex_run,
             relay_min_credential_classes: json.relay_min_credential_classes,
+            measurement_test_directory_segments: lowercase_token_set(
+                &json.measurement_test_directory_segments,
+            ),
+            measurement_test_filename_prefixes: lowercase_tokens(
+                &json.measurement_test_filename_prefixes,
+            ),
+            measurement_test_filename_suffixes: lowercase_tokens(
+                &json.measurement_test_filename_suffixes,
+            ),
+            measurement_harness_filenames: lowercase_token_set(&json.measurement_harness_filenames),
+            measurement_harness_directory_paths: json
+                .measurement_harness_directory_paths
+                .iter()
+                .map(|dir| {
+                    dir.trim()
+                        .to_ascii_lowercase()
+                        .replace('\\', "/")
+                        .trim_matches('/')
+                        .to_string()
+                })
+                .filter(|dir| !dir.is_empty())
+                .collect(),
+            measurement_derived_directory_segments: lowercase_token_set(
+                &json.measurement_derived_directory_segments,
+            ),
+            measurement_intent_tokens: lowercase_tokens(&json.measurement_intent_tokens),
+            evaluator_materialisation_min_paths: json.evaluator_materialisation_min_paths,
+            evaluator_materialisation_measurement_divisor: json
+                .evaluator_materialisation_measurement_divisor
+                .max(1),
+            evaluator_materialisation_burst_secs: json.evaluator_materialisation_burst_secs,
+            evaluator_session_attribution_slack_secs: json
+                .evaluator_session_attribution_slack_secs,
             shared_hosting_public_suffixes: json
                 .shared_hosting_public_suffixes
                 .iter()
@@ -3910,6 +4010,23 @@ pub fn is_package_manager_runtime_name(name: &str) -> bool {
         .contains(name)
 }
 
+/// True for the basename of a bare language runtime among the
+/// package-manager runtimes (`package_bare_runtimes`).
+pub fn is_package_bare_runtime_name(name: &str) -> bool {
+    PARAMS_SNAPSHOT.load().package_bare_runtimes.contains(name)
+}
+
+/// True when `path` (any separator, any case) sits under a global CLI
+/// install root (`global_package_roots`).
+pub fn is_under_global_package_root(path: &str) -> bool {
+    let normalized = path.to_ascii_lowercase().replace('\\', "/");
+    PARAMS_SNAPSHOT
+        .load()
+        .global_package_roots
+        .iter()
+        .any(|root| normalized.contains(root.as_str()))
+}
+
 /// True for the lowercase basename of a lockfile / manifest an install
 /// rewrites (`install_artifact_basenames`).
 pub fn is_install_artifact_basename(basename: &str) -> bool {
@@ -5543,6 +5660,38 @@ mod tests {
                 "{address:?}"
             );
         }
+    }
+
+    /// The shipped install roots, bare runtimes and measurement-surface
+    /// lists load and match on both separators.
+    #[test]
+    fn test_global_install_roots_and_measurement_surface_lists() {
+        assert!(is_package_bare_runtime_name("node"));
+        assert!(is_package_bare_runtime_name("python3"));
+        assert!(!is_package_bare_runtime_name("npm"));
+        assert!(is_under_global_package_root(
+            "/Users/runner/hostedtoolcache/node/24.20.0/arm64/lib/node_modules/@openai/codex/bin/codex.js"
+        ));
+        assert!(is_under_global_package_root(
+            r"C:\Users\me\AppData\Roaming\npm\node_modules\@openai\codex\bin\codex.js"
+        ));
+        assert!(!is_under_global_package_root(
+            "/Users/me/proj/node_modules/.bin/esbuild"
+        ));
+        let p = params();
+        assert!(p.measurement_test_directory_segments.contains("tests"));
+        assert!(p.measurement_derived_directory_segments.contains("__pycache__"));
+        assert!(p.measurement_derived_directory_segments.contains("site-packages"));
+        assert!(p.measurement_harness_filenames.contains("conftest.py"));
+        assert!(p.measurement_intent_tokens.iter().any(|t| t == "ci "));
+        assert_eq!(
+            p.measurement_harness_directory_paths,
+            vec![".github/workflows".to_string()]
+        );
+        assert_eq!(p.evaluator_materialisation_min_paths, 8);
+        assert_eq!(p.evaluator_materialisation_measurement_divisor, 4);
+        assert_eq!(p.evaluator_materialisation_burst_secs, 120);
+        assert_eq!(p.evaluator_session_attribution_slack_secs, 300);
     }
 
     /// Runtime and dependency-tree lists load lowercased; the marker order
