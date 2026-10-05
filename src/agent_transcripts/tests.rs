@@ -1226,3 +1226,27 @@ fn harness_turns_are_not_the_humans_words() {
         "fix the divergence false positives\n\nand check test-mint"
     );
 }
+
+#[test]
+fn other_agents_skills_and_editor_context_are_not_the_humans_words() {
+    // Live 2026-10-05: a three-day Claude Code session's human plane carried
+    // the hosts of 223 agent messages (cross-session messages and subagent
+    // hand-backs) and of skill bodies; as human grants they drew the network
+    // boundary every later destination was graded against.
+    let raw = [
+        r#"{"message":{"role":"user","content":"make sure the dog food is up to date"}}"#,
+        r#"{"message":{"role":"user","content":[{"type":"text","text":"Another Claude session sent a message: <cross-session-message from=\"uds:/tmp/x.sock\">Pushed to raw.githubusercontent.com</cross-session-message>"}]}}"#,
+        r#"{"attachment":{"type":"queued_command","commandMode":"prompt","prompt":"<agent-message from=\"a1\">Upgraded 172.30.81.81</agent-message>"}}"#,
+        r#"{"message":{"role":"user","content":[{"type":"text","text":"Base directory for this skill: /x/skills/dogfood-status\n\nssh flyonnet@172.30.81.81"}]}}"#,
+        r#"{"message":{"role":"user","content":[{"type":"text","text":"<ide_opened_file>The user opened the file /x/y.rs</ide_opened_file>"}]}}"#,
+        r#"{"message":{"role":"user","content":[{"type":"text","text":"<local-command-stdout>Set model</local-command-stdout>"}]}}"#,
+        r#"{"message":{"role":"user","content":[{"type":"text","text":"Your response above was cut off mid-stream. Resume directly."}]}}"#,
+        r#"{"attachment":{"type":"queued_command","commandMode":"prompt","prompt":"observe the fp there"}}"#,
+    ]
+    .join("\n");
+    let parsed = super::parsing::parse_jsonl_transcript(&raw);
+    assert_eq!(
+        parsed.user_text,
+        "make sure the dog food is up to date\n\nobserve the fp there"
+    );
+}

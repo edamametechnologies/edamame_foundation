@@ -238,6 +238,35 @@ fn content_text(content: &serde_json::Value) -> String {
         .unwrap_or_default()
 }
 
+/// Text the agent harness writes as a user turn that is not the human's
+/// request: another agent's message (a cross-session message, a subagent's
+/// hand-back), a skill's body, the editor's context (opened file,
+/// selection), a local command's output, a continuation prompt, a system
+/// notice. As human text it would authorize what the agents themselves
+/// wrote. Markers of the transcript format (harness mechanics, not detection
+/// data); the compaction summary and task notifications are handled by
+/// their own markers below.
+fn is_harness_user_text(text: &str) -> bool {
+    const HARNESS_PREFIXES: [&str; 12] = [
+        "Another Claude session sent a message",
+        "<agent-message",
+        "<cross-session-message",
+        "Base directory for this skill:",
+        "<ide_opened_file>",
+        "<ide_selection>",
+        "<local-command-stdout>",
+        "<local-command-stderr>",
+        "<local-command-caveat>",
+        "Your response above was cut off",
+        "[SYSTEM NOTIFICATION",
+        "<system-reminder>",
+    ];
+    let text = text.trim_start();
+    HARNESS_PREFIXES
+        .iter()
+        .any(|prefix| text.starts_with(prefix))
+}
+
 pub fn parse_jsonl_transcript(raw_text: &str) -> ParsedTranscript {
     let mut user_sections = Vec::new();
     let mut assistant_sections = Vec::new();
@@ -263,7 +292,10 @@ pub fn parse_jsonl_transcript(raw_text: &str) -> ParsedTranscript {
                     == Some("task-notification");
                 if let Some(prompt) = attachment.get("prompt").filter(|_| !notification) {
                     let text = content_text(prompt);
-                    if !text.trim().is_empty() && !text.trim().starts_with("<task-notification>") {
+                    if !text.trim().is_empty()
+                        && !text.trim().starts_with("<task-notification>")
+                        && !is_harness_user_text(&text)
+                    {
                         user_sections.push(text.trim().to_string());
                     }
                 }
@@ -297,7 +329,8 @@ pub fn parse_jsonl_transcript(raw_text: &str) -> ParsedTranscript {
         // summary (~24k characters) crowds the human's requests out of the
         // behavioral-model prompt.
         let harness_turn = value.get("isCompactSummary").and_then(|v| v.as_bool()) == Some(true)
-            || trimmed.starts_with("<task-notification>");
+            || trimmed.starts_with("<task-notification>")
+            || is_harness_user_text(trimmed);
         match role {
             "user" if harness_turn => {}
             "user" => user_sections.push(trimmed.to_string()),
