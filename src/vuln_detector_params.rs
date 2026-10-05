@@ -1092,6 +1092,10 @@ pub struct CveDetectionParamsJSON {
     /// How far outside a session's transcript span (file birth to last
     /// write) a write is still graded against that session.
     pub evaluator_session_attribution_slack_secs: i64,
+    /// The SSH client's own host-key state (`~/.ssh/known_hosts`): a human
+    /// who authorizes an SSH connection authorizes the client reading and
+    /// updating these. Never private keys.
+    pub ssh_client_state_files: Vec<String>,
     pub shared_infrastructure_min_local_processes: usize,
     /// OS temp roots by role (see [`OsTempRootsJSON`]).
     pub os_temp_roots: OsTempRootsJSON,
@@ -1318,6 +1322,7 @@ pub struct CveDetectionParams {
     pub evaluator_materialisation_measurement_divisor: usize,
     pub evaluator_materialisation_burst_secs: i64,
     pub evaluator_session_attribution_slack_secs: i64,
+    pub ssh_client_state_files: Vec<String>,
     pub shared_infrastructure_min_local_processes: usize,
     pub os_temp_roots: OsTempRootsJSON,
     pub temp_scratch_name: TempScratchNameJSON,
@@ -2243,6 +2248,12 @@ impl CveDetectionParams {
             evaluator_materialisation_burst_secs: json.evaluator_materialisation_burst_secs,
             evaluator_session_attribution_slack_secs: json
                 .evaluator_session_attribution_slack_secs,
+            ssh_client_state_files: json
+                .ssh_client_state_files
+                .iter()
+                .map(|path| path.trim().to_string())
+                .filter(|path| !path.is_empty())
+                .collect(),
             shared_hosting_public_suffixes: json
                 .shared_hosting_public_suffixes
                 .iter()
@@ -5692,6 +5703,14 @@ mod tests {
         assert_eq!(p.evaluator_materialisation_measurement_divisor, 4);
         assert_eq!(p.evaluator_materialisation_burst_secs, 120);
         assert_eq!(p.evaluator_session_attribution_slack_secs, 300);
+        assert!(p
+            .ssh_client_state_files
+            .iter()
+            .any(|path| path == "~/.ssh/known_hosts"));
+        assert!(p
+            .ssh_client_state_files
+            .iter()
+            .all(|path| !path.rsplit('/').next().unwrap_or("").starts_with("id_")));
     }
 
     /// Runtime and dependency-tree lists load lowercased; the marker order
