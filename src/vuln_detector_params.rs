@@ -4014,7 +4014,10 @@ pub fn shared_hosting_suffix_of(domain: &str) -> Option<String> {
 
 /// The shared-hosting public suffixes (lowercase, no dots at the ends).
 pub fn shared_hosting_public_suffixes() -> Vec<String> {
-    PARAMS_SNAPSHOT.load().shared_hosting_public_suffixes.clone()
+    PARAMS_SNAPSHOT
+        .load()
+        .shared_hosting_public_suffixes
+        .clone()
 }
 
 pub fn shared_infrastructure_min_local_processes() -> usize {
