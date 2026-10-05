@@ -38,18 +38,6 @@ use super::{
     CollectDiagnostics, CollectOptions, CollectResult, CollectedPayload, CollectedRawSession,
 };
 
-const HERMES_LLM_HOSTS: &[&str] = &[
-    "api.anthropic.com:443",
-    "asn:ANTHROPIC",
-    "api.openai.com:443",
-    "openrouter.ai:443",
-    "api.nousresearch.com:443",
-    "inference.nousresearch.com:443",
-    "amazonaws.com:443",
-    "asn:CLOUDFLARENET",
-    "asn:AMAZON",
-];
-
 const HERMES_SCOPE_PARENT_PATHS: &[&str] = &[
     "*/hermes",
     "*/bin/hermes",
@@ -299,7 +287,8 @@ fn build_session(
     // Tool-result bodies (in raw_text) are excluded from traffic derivation;
     // only what the agent said contributes host declarations here.
     let traffic_text = format!("{}\n\n{}", inputs.user_text, inputs.assistant_text);
-    let traffic = extract_traffic(&traffic_text, &commands, HERMES_LLM_HOSTS);
+    let llm_hosts = crate::agent_visibility_params::agent_llm_hosts("hermes");
+    let traffic = extract_traffic(&traffic_text, &commands, &llm_hosts);
     let ports = extract_ports(&combined, &commands);
     let inferred = infer_process_paths(&commands, workspace_root);
     let expected_open = classify_open_files_excluding_sensitive(&extracted_paths, home_str);

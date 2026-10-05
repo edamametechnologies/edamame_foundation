@@ -14,27 +14,6 @@ use super::{
     CollectedRawSession,
 };
 
-const CLAUDE_CODE_LLM_HOSTS: &[&str] = &[
-    "api.anthropic.com:443",
-    "asn:ANTHROPIC",
-    "api.openai.com:443",
-    // AWS entries cover the default Anthropic-on-AWS routing and the
-    // Bedrock backend (CLAUDE_CODE_USE_BEDROCK=1 ->
-    // bedrock-runtime.<region>.amazonaws.com). Many sessions resolve only
-    // to raw IPs without reverse DNS, so the ASN entry catches what
-    // amazonaws.com suffix matching misses.
-    "amazonaws.com:443",
-    "asn:CLOUDFLARENET",
-    "asn:NOTION",
-    "asn:MICROSOFT-CORP",
-    "asn:AMAZON",
-    // Vertex AI backend (CLAUDE_CODE_USE_VERTEX=1) routes to
-    // <region>-aiplatform.googleapis.com on Google (AS15169 GOOGLE,
-    // AS396982 GOOGLE-CLOUD-PLATFORM). asn:GOOGLE substring-matches both.
-    "googleapis.com:443",
-    "asn:GOOGLE",
-];
-
 const CLAUDE_CODE_SCOPE_PARENT_PATHS: &[&str] = &[
     "*/claude",
     "*/claude-code",
@@ -82,7 +61,9 @@ pub fn collect(home: &Path, options: &CollectOptions) -> anyhow::Result<CollectR
         &projects_root,
         diagnostics,
         options,
-        CLAUDE_CODE_LLM_HOSTS,
+        // The agent's own model traffic, declared on every session: CloudModel
+        // data (`agent_visibility_params::agent_llm_hosts`).
+        &crate::agent_visibility_params::agent_llm_hosts("claude_code"),
         CLAUDE_CODE_SCOPE_PARENT_PATHS,
     )
 }
@@ -93,7 +74,7 @@ pub(crate) fn build_payload(
     primary_root: &Path,
     diagnostics: CollectDiagnostics,
     options: &CollectOptions,
-    llm_hosts: &[&str],
+    llm_hosts: &[String],
     scope_parent_paths: &[&str],
 ) -> anyhow::Result<CollectResult> {
     let agent_instance_id = observer_agent_instance_id(agent_type, home);

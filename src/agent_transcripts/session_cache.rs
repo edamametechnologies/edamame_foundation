@@ -21,7 +21,10 @@
 //!
 //! The built session is a pure function of the file bytes plus per-host-constant
 //! context (the collector's `home`/`workspace_root` and per-agent path
-//! constants). The transcript path is always under the collecting `home`, so a
+//! constants) and the agent-visibility params (the agent's declared model
+//! traffic, the price table): the key carries the params signature, so a
+//! CloudModel refresh rebuilds what it changes. The transcript path is always
+//! under the collecting `home`, so a
 //! different target home yields a different path and therefore a different key --
 //! no cross-home contamination. An actively-growing transcript (the current
 //! session) changes size/mtime and is correctly treated as a miss and rebuilt in
@@ -247,12 +250,13 @@ const SESSION_CACHE_SCHEMA: u8 = 2;
 fn cache_key(path: &Path, mtime_nanos: u128, len: u64, is_jsonl: bool) -> String {
     // Unit-separator joins so no field value can collide across boundaries.
     format!(
-        "{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
+        "{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
         path.to_string_lossy(),
         mtime_nanos,
         len,
         is_jsonl as u8,
-        SESSION_CACHE_SCHEMA
+        SESSION_CACHE_SCHEMA,
+        crate::agent_visibility_params::params_signature()
     )
 }
 
@@ -262,10 +266,11 @@ fn cache_key(path: &Path, mtime_nanos: u128, len: u64, is_jsonl: bool) -> String
 /// [`OVERSIZED_REBUILD_INTERVAL`].
 fn oversized_cache_key(path: &Path, is_jsonl: bool) -> String {
     format!(
-        "{}\u{1f}oversized\u{1f}{}\u{1f}{}",
+        "{}\u{1f}oversized\u{1f}{}\u{1f}{}\u{1f}{}",
         path.to_string_lossy(),
         is_jsonl as u8,
-        SESSION_CACHE_SCHEMA
+        SESSION_CACHE_SCHEMA,
+        crate::agent_visibility_params::params_signature()
     )
 }
 

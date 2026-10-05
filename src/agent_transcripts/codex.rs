@@ -14,17 +14,6 @@ use super::{
     CollectedRawSession,
 };
 
-const CODEX_LLM_HOSTS: &[&str] = &[
-    "api.anthropic.com:443",
-    "asn:ANTHROPIC",
-    "api.openai.com:443",
-    "amazonaws.com:443",
-    "asn:CLOUDFLARENET",
-    "asn:NOTION",
-    "asn:MICROSOFT-CORP",
-    "asn:AMAZON",
-];
-
 const CODEX_SCOPE_PARENT_PATHS: &[&str] = &[
     "*/codex",
     "*/bin/codex",
@@ -91,7 +80,9 @@ pub fn collect(home: &Path, options: &CollectOptions) -> anyhow::Result<CollectR
         &sessions_root,
         diagnostics,
         options,
-        CODEX_LLM_HOSTS,
+        // The agent's own model traffic, declared on every session: CloudModel
+        // data (`agent_visibility_params::agent_llm_hosts`).
+        &crate::agent_visibility_params::agent_llm_hosts("codex"),
         CODEX_SCOPE_PARENT_PATHS,
     )?;
 
@@ -212,7 +203,7 @@ pub(crate) fn build_payload(
     primary_root: &Path,
     diagnostics: CollectDiagnostics,
     options: &CollectOptions,
-    llm_hosts: &[&str],
+    llm_hosts: &[String],
     scope_parent_paths: &[&str],
 ) -> anyhow::Result<CollectResult> {
     let agent_instance_id = observer_agent_instance_id(agent_type, home);
@@ -784,7 +775,8 @@ fn thread_row_to_session(
     // Tool-result bodies (in raw_text) are excluded from traffic derivation;
     // only what the agent said contributes host declarations here.
     let traffic_text = format!("{}\n\n{}", user_text, assistant_text);
-    let traffic = extract_traffic(&traffic_text, &commands, CODEX_LLM_HOSTS);
+    let llm_hosts = crate::agent_visibility_params::agent_llm_hosts("codex");
+    let traffic = extract_traffic(&traffic_text, &commands, &llm_hosts);
     let ports = extract_ports(&combined, &commands);
     let inferred = super::parsing::infer_process_paths(&commands, workspace_root);
     let expected_open = classify_open_files_excluding_sensitive(&extracted_paths, workspace_root);

@@ -23,15 +23,6 @@ use super::{
     CollectOptions, CollectResult, CollectedPayload, CollectedRawSession,
 };
 
-const OPENCLAW_LLM_HOSTS: &[&str] = &[
-    "api.anthropic.com:443",
-    "asn:ANTHROPIC",
-    "api.openai.com:443",
-    "amazonaws.com:443",
-    "asn:CLOUDFLARENET",
-    "asn:AMAZON",
-];
-
 const OPENCLAW_SCOPE_PARENT_PATHS: &[&str] = &[
     "*/openclaw",
     "*/openclaw/cli",
@@ -107,6 +98,9 @@ pub fn collect(home: &Path, options: &CollectOptions) -> anyhow::Result<CollectR
     let workspace_root = home.to_string_lossy().to_string();
     let home_str = home.to_string_lossy().to_string();
     let mut sessions: Vec<CollectedRawSession> = Vec::new();
+    // The agent's own model traffic, declared on every session: CloudModel
+    // data (`agent_visibility_params::agent_llm_hosts`).
+    let llm_hosts = crate::agent_visibility_params::agent_llm_hosts("openclaw");
 
     for candidate in candidates.into_iter().take(options.limit.max(1)) {
         // Cached by (path, mtime, size): unchanged transcripts skip the whole
@@ -131,7 +125,7 @@ pub fn collect(home: &Path, options: &CollectOptions) -> anyhow::Result<CollectR
                     "{}\n\n{}\n\n{}",
                     parsed.user_text, parsed.assistant_text, parsed.tool_input_text
                 );
-                let traffic = extract_traffic(&traffic_text, &commands, OPENCLAW_LLM_HOSTS);
+                let traffic = extract_traffic(&traffic_text, &commands, &llm_hosts);
                 let ports = extract_ports(&combined, &commands);
                 let inferred = super::parsing::infer_process_paths(&commands, &workspace_root);
                 let expected_open =

@@ -82,6 +82,7 @@ fn cursor_collects_txt_and_jsonl() {
         .derived_expected_traffic
         .iter()
         .any(|h| h == "crates.io:443"));
+    assert_declares_model_traffic(session, "cursor");
 }
 
 #[test]
@@ -283,6 +284,29 @@ fn claude_code_collects_jsonl() {
         .commands
         .iter()
         .any(|c| c.starts_with("kubectl apply")));
+    assert_declares_model_traffic(session, "claude_code");
+}
+
+/// The agent's own model traffic is declared on every session, verbatim and
+/// in order, from the agent-visibility params (`agent_llm_traffic`): hosts,
+/// shared cloud suffixes and `asn:` owners alike.
+fn assert_declares_model_traffic(session: &super::CollectedRawSession, agent_type: &str) {
+    let hosts = crate::agent_visibility_params::agent_llm_hosts(agent_type);
+    assert!(
+        !hosts.is_empty(),
+        "{agent_type}: no llm_hosts in the params"
+    );
+    let declared: Vec<&String> = session
+        .derived_expected_traffic
+        .iter()
+        .filter(|h| hosts.contains(h))
+        .collect();
+    assert_eq!(
+        declared,
+        hosts.iter().collect::<Vec<_>>(),
+        "{agent_type}: {:?}",
+        session.derived_expected_traffic
+    );
 }
 
 #[test]
@@ -390,6 +414,7 @@ fn codex_collects_rollout_jsonl() {
     let session = &result.payload.sessions[0];
     assert!(session.user_text.contains("inspect repo"));
     assert!(session.commands.iter().any(|c| c.starts_with("cargo test")));
+    assert_declares_model_traffic(session, "codex");
 }
 
 #[test]

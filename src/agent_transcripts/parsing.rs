@@ -931,7 +931,7 @@ pub fn extract_hostnames(text: &str) -> Vec<String> {
 
 /// Compute `derived_expected_traffic` from a transcript's text and the
 /// agent's known LLM hosts. Returns deduplicated `host:port` strings.
-pub fn extract_traffic(text: &str, commands: &[String], llm_hosts: &[&str]) -> Vec<String> {
+pub fn extract_traffic(text: &str, commands: &[String], llm_hosts: &[String]) -> Vec<String> {
     let mut hosts: Vec<String> = Vec::new();
 
     for url in extract_urls(text) {
@@ -948,7 +948,7 @@ pub fn extract_traffic(text: &str, commands: &[String], llm_hosts: &[&str]) -> V
 
     for host in llm_hosts {
         if host.contains(':') {
-            hosts.push((*host).to_string());
+            hosts.push(host.clone());
         } else {
             hosts.push(format!("{host}:443"));
         }

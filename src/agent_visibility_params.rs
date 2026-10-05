@@ -41,6 +41,10 @@
 //!   make a server's authentication a shared secret
 //! - delegation markers: the tool names and keys that mark a sub-agent spawn
 //!   in a transcript (recursion / delegation finding)
+//! - agent model traffic: per agent type, the model traffic the transcript
+//!   parser declares (`agent_transcripts`) and the agent's own provider
+//!   endpoints, to which a declared not-expected traffic pattern never
+//!   applies (the divergence engine's correlation plane)
 //!
 //! Unlike the CVE params struct, `AgentVisibilityParamsJSON` carries NO
 //! `#[serde(default)]` fields: this model was born complete, the published
@@ -723,6 +727,32 @@ pub struct DelegationMarkersJSON {
     pub text_reason_keys: Vec<String>,
 }
 
+/// One agent type's own model traffic.
+///
+/// `llm_hosts` is what the transcript parser declares as the agent's model
+/// traffic on every session it collects (`agent_transcripts::parsing::
+/// extract_traffic`): `host:port` (a bare host means `:443`), shared cloud
+/// suffixes the provider is reached through, and `asn:OWNER` entries, kept
+/// as written. `provider_endpoints` are the dedicated model-API endpoints
+/// among them (`host:port`, lowercased by
+/// [`AgentVisibilityParams::new_from_json`]): the divergence engine never
+/// applies a declared not-expected traffic pattern to the agent's session
+/// to one of them or to a subdomain of one, because a human's "do not access
+/// the network" governs the agent's task, not the harness talking to its own
+/// model provider. Shared cloud suffixes and ASN owners stay out of
+/// `provider_endpoints`, so a prohibition still covers the agent's tool
+/// traffic to them.
+///
+/// Claude Code's `llm_hosts` cover Bedrock (`amazonaws.com`, and
+/// `asn:AMAZON` for sessions that resolve only to an address without
+/// reverse DNS) and Vertex AI (`googleapis.com`, `asn:GOOGLE`); Cursor's
+/// mirror `cursorLlmHosts` in `edamame_cursor/service/config.mjs`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct AgentLlmTrafficJSON {
+    pub llm_hosts: Vec<String>,
+    pub provider_endpoints: Vec<String>,
+}
+
 /// Raw JSON shape of `agent-visibility-params-db.json`. No serde defaults:
 /// the published JSON always carries every field; a missing field fails the
 /// parse and the embedded snapshot (which has all fields) stays in effect.
@@ -781,6 +811,9 @@ pub struct AgentVisibilityParamsJSON {
     pub mcp_credential_markers: McpCredentialMarkersJSON,
     /// Sub-agent spawn markers (see [`DelegationMarkersJSON`]).
     pub delegation_markers: DelegationMarkersJSON,
+    /// Per agent type, the agent's own model traffic (see
+    /// [`AgentLlmTrafficJSON`]).
+    pub agent_llm_traffic: std::collections::BTreeMap<String, AgentLlmTrafficJSON>,
 }
 
 /// Normalized runtime snapshot of the agent-visibility params.
@@ -826,6 +859,9 @@ pub struct AgentVisibilityParams {
     pub mcp_credential_markers: McpCredentialMarkersJSON,
     /// Sub-agent spawn markers, tool names and text markers lowercased.
     pub delegation_markers: DelegationMarkersJSON,
+    /// Per agent type, its own model traffic: `llm_hosts` as written (the
+    /// parser declares them verbatim), `provider_endpoints` lowercased.
+    pub agent_llm_traffic: std::collections::BTreeMap<String, AgentLlmTrafficJSON>,
 }
 
 impl CloudSignature for AgentVisibilityParams {
@@ -1124,6 +1160,19 @@ impl AgentVisibilityParams {
                 text_markers: lower(&json.delegation_markers.text_markers),
                 text_reason_keys: lower(&json.delegation_markers.text_reason_keys),
             },
+            agent_llm_traffic: json
+                .agent_llm_traffic
+                .iter()
+                .map(|(agent, traffic)| {
+                    (
+                        agent.clone(),
+                        AgentLlmTrafficJSON {
+                            llm_hosts: traffic.llm_hosts.clone(),
+                            provider_endpoints: lower(&traffic.provider_endpoints),
+                        },
+                    )
+                })
+                .collect(),
         }
     }
 }
@@ -1338,6 +1387,31 @@ pub fn delegation_markers() -> DelegationMarkersJSON {
     PARAMS_SNAPSHOT.load().delegation_markers.clone()
 }
 
+/// The model traffic the transcript parser declares for `agent_type` (the
+/// collector's agent type, `claude_code`, `codex`, ...), as written: hosts,
+/// shared cloud suffixes and `asn:OWNER` entries. Empty for an agent type the
+/// params do not list.
+pub fn agent_llm_hosts(agent_type: &str) -> Vec<String> {
+    PARAMS_SNAPSHOT
+        .load()
+        .agent_llm_traffic
+        .get(agent_type)
+        .map(|traffic| traffic.llm_hosts.clone())
+        .unwrap_or_default()
+}
+
+/// `agent_type`'s own model-provider endpoints (lowercased `host:port`): a
+/// declared not-expected traffic pattern never applies to the agent's
+/// session to one of them. Empty for an agent type the params do not list.
+pub fn agent_provider_endpoints(agent_type: &str) -> Vec<String> {
+    PARAMS_SNAPSHOT
+        .load()
+        .agent_llm_traffic
+        .get(agent_type)
+        .map(|traffic| traffic.provider_endpoints.clone())
+        .unwrap_or_default()
+}
+
 /// The params signature of the current snapshot: a scan state computed under
 /// another vocabulary is recomputed.
 pub fn params_signature() -> String {
@@ -1525,6 +1599,63 @@ mod tests {
         assert!(!refs.folder_segments.is_empty());
         assert!(!refs.file_segments.is_empty());
         assert!(!refs.document_extensions.is_empty());
+        // Every collector agent declares its model traffic, and its provider
+        // endpoints are exact host:port entries the parser also declares.
+        for agent in [
+            "claude_code",
+            "claude_desktop",
+            "codex",
+            "cursor",
+            "hermes",
+            "openclaw",
+        ] {
+            let traffic = params
+                .agent_llm_traffic
+                .get(agent)
+                .unwrap_or_else(|| panic!("agent_llm_traffic lacks {agent}"));
+            assert!(!traffic.llm_hosts.is_empty(), "{agent}: llm_hosts");
+            assert!(
+                !traffic.provider_endpoints.is_empty(),
+                "{agent}: provider_endpoints"
+            );
+            for endpoint in &traffic.provider_endpoints {
+                assert!(
+                    !endpoint.starts_with("asn:")
+                        && !endpoint.contains('*')
+                        && endpoint.contains(':')
+                        && endpoint == &endpoint.to_ascii_lowercase(),
+                    "{agent}: provider endpoint {endpoint} must be an exact host:port"
+                );
+                assert!(
+                    traffic
+                        .llm_hosts
+                        .iter()
+                        .any(|h| h.eq_ignore_ascii_case(endpoint)),
+                    "{agent}: provider endpoint {endpoint} is not in llm_hosts"
+                );
+            }
+        }
+    }
+
+    /// The accessors serve the snapshot by agent type, and an agent type the
+    /// params do not list has no declared traffic and no exempt endpoint.
+    #[test]
+    #[serial]
+    fn test_agent_llm_traffic_accessors() {
+        let hosts = agent_llm_hosts("claude_code");
+        assert!(hosts.iter().any(|h| h == "api.anthropic.com:443"));
+        // ASN owners are declared as written (the parser hints keep them).
+        assert!(hosts.iter().any(|h| h == "asn:ANTHROPIC"));
+        let endpoints = agent_provider_endpoints("claude_code");
+        assert!(endpoints.iter().any(|e| e == "api.anthropic.com:443"));
+        // A shared cloud suffix is declared traffic, never an exempt endpoint.
+        assert!(hosts.iter().any(|h| h == "amazonaws.com:443"));
+        assert!(!endpoints.iter().any(|e| e.contains("amazonaws.com")));
+        assert!(agent_provider_endpoints("cursor")
+            .iter()
+            .any(|e| e == "cursor.sh:443"));
+        assert!(agent_llm_hosts("no_such_agent").is_empty());
+        assert!(agent_provider_endpoints("no_such_agent").is_empty());
     }
 
     /// Catalog names and criticality are lowercased by `new_from_json` so
