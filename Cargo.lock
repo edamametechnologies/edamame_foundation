@@ -972,6 +972,7 @@ dependencies = [
  "sorted-vec",
  "strum",
  "strum_macros",
+ "sysinfo",
  "tempfile",
  "thiserror 2.0.21",
  "threatmodels_rs",
