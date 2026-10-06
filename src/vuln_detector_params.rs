@@ -716,6 +716,30 @@ pub struct PlatformOwnedUserStoreJSON {
     pub direct_owner_prefixes: Vec<String>,
 }
 
+/// One class of hosts the divergence correlation plane does not count as
+/// unexplained egress: DNS resolvers, time sync, certificate revocation
+/// responders, connectivity probes, OS update, toolchain telemetry. A host
+/// (lowercase, no port, no trailing dot) belongs to the class on one of its
+/// `ports` when it:
+/// - is one of `hosts`;
+/// - ends with one of `suffixes`, each starting with a dot (the bare domain
+///   is not covered by its own suffix);
+/// - has one of `first_labels` as its first DNS label;
+/// - has a first label that is one of `numbered_first_labels` followed only
+///   by digits (`crl` covers `crl` and `crl3`, never `crlx` or `crl-sync`).
+///
+/// No substring or prefix matching beyond these (G-39: a `time.` / `ntp.`
+/// prefix or a `crl` substring is not an exemption).
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct DivergenceInfrastructureEndpointClassJSON {
+    pub class: String,
+    pub hosts: Vec<String>,
+    pub suffixes: Vec<String>,
+    pub first_labels: Vec<String>,
+    pub numbered_first_labels: Vec<String>,
+    pub ports: Vec<u16>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct CveDetectionParamsJSON {
     pub date: String,
@@ -1109,6 +1133,10 @@ pub struct CveDetectionParamsJSON {
     /// who authorizes an SSH connection authorizes the client reading and
     /// updating these. Never private keys.
     pub ssh_client_state_files: Vec<String>,
+    /// Hosts the divergence correlation plane never counts as unexplained
+    /// egress, by class with the ports each covers (see
+    /// [`DivergenceInfrastructureEndpointClassJSON`]).
+    pub divergence_infrastructure_endpoints: Vec<DivergenceInfrastructureEndpointClassJSON>,
     pub shared_infrastructure_min_local_processes: usize,
     /// OS temp roots by role (see [`OsTempRootsJSON`]).
     pub os_temp_roots: OsTempRootsJSON,
@@ -1336,6 +1364,9 @@ pub struct CveDetectionParams {
     pub evaluator_materialisation_burst_secs: i64,
     pub evaluator_session_attribution_slack_secs: i64,
     pub ssh_client_state_files: Vec<String>,
+    /// `divergence_infrastructure_endpoints`, lowercase and trimmed, each
+    /// suffix with its leading dot, empty entries dropped.
+    pub divergence_infrastructure_endpoints: Vec<DivergenceInfrastructureEndpointClassJSON>,
     pub shared_infrastructure_min_local_processes: usize,
     pub os_temp_roots: OsTempRootsJSON,
     pub temp_scratch_name: TempScratchNameJSON,
@@ -1468,6 +1499,37 @@ fn normalized_platform_owned_user_store(
 /// Temp roots lowercased with `/` separators; empty list entries dropped.
 /// An empty single root stays empty and never matches (the detector
 /// checks).
+fn normalized_divergence_infrastructure_endpoints(
+    classes: &[DivergenceInfrastructureEndpointClassJSON],
+) -> Vec<DivergenceInfrastructureEndpointClassJSON> {
+    classes
+        .iter()
+        .map(|class| DivergenceInfrastructureEndpointClassJSON {
+            class: class.class.trim().to_ascii_lowercase(),
+            hosts: class
+                .hosts
+                .iter()
+                .map(|host| host.trim().trim_end_matches('.').to_ascii_lowercase())
+                .filter(|host| !host.is_empty())
+                .collect(),
+            // A suffix always keeps its leading dot: `windowsupdate.com`
+            // published without one must not cover `evilwindowsupdate.com`.
+            suffixes: class
+                .suffixes
+                .iter()
+                .map(|suffix| suffix.trim().trim_matches('.').to_ascii_lowercase())
+                .filter(|suffix| !suffix.is_empty())
+                .map(|suffix| format!(".{suffix}"))
+                .collect(),
+            first_labels: lowercase_token_list(&class.first_labels),
+            // An empty prefix would cover every all-digit first label (an
+            // IPv4 address's first octet).
+            numbered_first_labels: lowercase_token_list(&class.numbered_first_labels),
+            ports: class.ports.clone(),
+        })
+        .collect()
+}
+
 fn normalized_os_temp_roots(roots: &OsTempRootsJSON) -> OsTempRootsJSON {
     let fragment = |value: &str| value.trim().to_ascii_lowercase().replace('\\', "/");
     OsTempRootsJSON {
@@ -2262,14 +2324,16 @@ impl CveDetectionParams {
                 .evaluator_materialisation_measurement_divisor
                 .max(1),
             evaluator_materialisation_burst_secs: json.evaluator_materialisation_burst_secs,
-            evaluator_session_attribution_slack_secs: json
-                .evaluator_session_attribution_slack_secs,
+            evaluator_session_attribution_slack_secs: json.evaluator_session_attribution_slack_secs,
             ssh_client_state_files: json
                 .ssh_client_state_files
                 .iter()
                 .map(|path| path.trim().to_string())
                 .filter(|path| !path.is_empty())
                 .collect(),
+            divergence_infrastructure_endpoints: normalized_divergence_infrastructure_endpoints(
+                &json.divergence_infrastructure_endpoints,
+            ),
             shared_hosting_public_suffixes: json
                 .shared_hosting_public_suffixes
                 .iter()
@@ -4170,6 +4234,44 @@ pub fn shared_infrastructure_min_local_processes() -> usize {
         .shared_infrastructure_min_local_processes
 }
 
+/// Whether `host` on `port` is infrastructure the divergence correlation
+/// plane does not count as unexplained egress (see
+/// [`DivergenceInfrastructureEndpointClassJSON`] for the matching). `host` is
+/// a DNS name or an address without the port; it is compared lowercase,
+/// without a trailing dot.
+pub fn is_divergence_infrastructure_endpoint(host: &str, port: u16) -> bool {
+    let host = host.trim().trim_end_matches('.').to_ascii_lowercase();
+    if host.is_empty() {
+        return false;
+    }
+    let first_label = host.split('.').next().unwrap_or("");
+    PARAMS_SNAPSHOT
+        .load()
+        .divergence_infrastructure_endpoints
+        .iter()
+        .any(|class| {
+            class.ports.contains(&port)
+                && (class.hosts.iter().any(|known| *known == host)
+                    || class
+                        .suffixes
+                        .iter()
+                        .any(|suffix| host.ends_with(suffix.as_str()))
+                    || class.first_labels.iter().any(|label| label == first_label)
+                    || class
+                        .numbered_first_labels
+                        .iter()
+                        .any(|prefix| is_numbered_label(first_label, prefix)))
+        })
+}
+
+/// `label` is `prefix` followed only by ASCII digits (none counts).
+fn is_numbered_label(label: &str, prefix: &str) -> bool {
+    !prefix.is_empty()
+        && label
+            .strip_prefix(prefix)
+            .is_some_and(|digits| digits.bytes().all(|b| b.is_ascii_digit()))
+}
+
 /// OS temp roots by role (lowercase, `/`).
 pub fn os_temp_roots() -> OsTempRootsJSON {
     PARAMS_SNAPSHOT.load().os_temp_roots.clone()
@@ -5747,8 +5849,12 @@ mod tests {
         ));
         let p = params();
         assert!(p.measurement_test_directory_segments.contains("tests"));
-        assert!(p.measurement_derived_directory_segments.contains("__pycache__"));
-        assert!(p.measurement_derived_directory_segments.contains("site-packages"));
+        assert!(p
+            .measurement_derived_directory_segments
+            .contains("__pycache__"));
+        assert!(p
+            .measurement_derived_directory_segments
+            .contains("site-packages"));
         assert!(p.measurement_harness_filenames.contains("conftest.py"));
         assert!(p.measurement_intent_tokens.iter().any(|t| t == "ci "));
         assert_eq!(
@@ -5763,10 +5869,11 @@ mod tests {
             .ssh_client_state_files
             .iter()
             .any(|path| path == "~/.ssh/known_hosts"));
-        assert!(p
-            .ssh_client_state_files
-            .iter()
-            .all(|path| !path.rsplit('/').next().unwrap_or("").starts_with("id_")));
+        assert!(p.ssh_client_state_files.iter().all(|path| !path
+            .rsplit('/')
+            .next()
+            .unwrap_or("")
+            .starts_with("id_")));
     }
 
     /// Runtime and dependency-tree lists load lowercased; the marker order
@@ -5939,6 +6046,111 @@ mod tests {
         assert!(memory_scrape_per_invocation_min_hex_run() > 0);
         assert!(relay_min_credential_classes() > 0);
         assert!(shared_infrastructure_min_local_processes() > 0);
+    }
+
+    /// The divergence infrastructure classes, read through the accessor the
+    /// divergence engine reads: exact hosts, dotted suffixes, exact and
+    /// numbered first labels, each on its own ports only (G-39 negatives
+    /// kept).
+    #[test]
+    fn test_divergence_infrastructure_endpoints() {
+        let infra = is_divergence_infrastructure_endpoint;
+        // DNS resolvers: 53, 853, 443 only.
+        assert!(infra("1.1.1.1", 53));
+        assert!(infra("dns.google", 853));
+        assert!(infra("one.one.one.one", 443));
+        assert!(!infra("8.8.8.8", 80));
+        assert!(!infra("dns.google", 80));
+        assert!(!infra("1.1.1.3", 53));
+        // Time sync: 123 only; exact names and the NTP pool suffix.
+        assert!(infra("time.apple.com", 123));
+        assert!(infra("pool.ntp.org", 123));
+        assert!(infra("2.pool.ntp.org", 123));
+        assert!(!infra("time.apple.com", 443));
+        assert!(!infra("time.attacker.example", 123));
+        assert!(!infra("ntp.attacker.example", 123));
+        assert!(!infra("evilpool.ntp.org", 123));
+        // Certificate revocation: 80, 443; `ocsp`, `crl` + digits, lencr.
+        assert!(infra("ocsp.digicert.com", 80));
+        assert!(infra("crl3.digicert.com", 80));
+        assert!(infra("crl.globalsign.com", 443));
+        assert!(infra("r3.o.lencr.org", 80));
+        assert!(infra("x1.c.lencr.org", 443));
+        assert!(!infra("ocsp.digicert.com", 123));
+        assert!(!infra("myocsp.attacker.example", 443));
+        assert!(!infra("crlx.attacker.example", 443));
+        assert!(!infra("crl-sync.attacker.example", 443));
+        assert!(!infra("crl3x.attacker.example", 443));
+        assert!(!infra("o.lencr.org.attacker.example", 80));
+        // Connectivity probes: 80, 443.
+        assert!(infra("captive.apple.com", 80));
+        assert!(infra("www.msftconnecttest.com", 443));
+        assert!(!infra("captive.apple.com", 53));
+        assert!(!infra("captive.apple.com.attacker.example", 80));
+        // OS update: 80, 443; exact names and the Windows Update suffix.
+        assert!(infra("download.windowsupdate.com", 443));
+        assert!(infra("ctldl.windowsupdate.com", 80));
+        assert!(infra("swcdn.apple.com", 443));
+        assert!(!infra("evilwindowsupdate.com", 443));
+        assert!(!infra("windowsupdate.com.attacker.example", 443));
+        assert!(!infra("swcdn.apple.com", 8443));
+        // Toolchain telemetry: MSVC vctip.exe on 443 only.
+        assert!(infra("telemetry.visualstudio.microsoft.com", 443));
+        assert!(infra("TELEMETRY.VisualStudio.Microsoft.com.", 443));
+        assert!(!infra("telemetry.visualstudio.microsoft.com", 80));
+        assert!(!infra("telemetry.visualstudio.microsoft.com", 8443));
+        assert!(!infra(
+            "telemetry.visualstudio.microsoft.com.attacker.example",
+            443
+        ));
+        assert!(!infra("x.telemetry.visualstudio.microsoft.com", 443));
+        assert!(!infra("visualstudio.microsoft.com", 443));
+        // Nothing else.
+        assert!(!infra("", 443));
+        assert!(!infra("registry.npmjs.org", 443));
+        assert!(!infra("203.0.113.44", 443));
+    }
+
+    /// Classes load lowercase and trimmed; a suffix keeps its leading dot even
+    /// when published without one, and an empty entry (an empty numbered
+    /// prefix would cover every IPv4 first octet) is dropped. A class missing
+    /// a field fails the parse (born complete).
+    #[test]
+    fn test_divergence_infrastructure_endpoints_are_normalized() {
+        let p = params_from_edited_snapshot(|value| {
+            value["divergence_infrastructure_endpoints"] = serde_json::json!([{
+                "class": " Toolchain_Telemetry ",
+                "hosts": [" Telemetry.Example.COM. ", ""],
+                "suffixes": ["Example.org", ".cdn.example.net.", " "],
+                "first_labels": ["OCSP", ""],
+                "numbered_first_labels": ["", " CRL "],
+                "ports": [443],
+            }]);
+        });
+        assert_eq!(
+            p.divergence_infrastructure_endpoints,
+            vec![DivergenceInfrastructureEndpointClassJSON {
+                class: "toolchain_telemetry".to_string(),
+                hosts: vec!["telemetry.example.com".to_string()],
+                suffixes: vec![".example.org".to_string(), ".cdn.example.net".to_string()],
+                first_labels: vec!["ocsp".to_string()],
+                numbered_first_labels: vec!["crl".to_string()],
+                ports: vec![443],
+            }]
+        );
+        assert!(p
+            .divergence_infrastructure_endpoints
+            .iter()
+            .all(|class| !class.ports.is_empty()));
+
+        let mut value: serde_json::Value = serde_json::from_str(&CVE_DETECTION_PARAMS_DB)
+            .expect("embedded snapshot is valid JSON");
+        value["divergence_infrastructure_endpoints"][0]
+            .as_object_mut()
+            .expect("a class is an object")
+            .remove("first_labels")
+            .expect("the embedded classes carry every field");
+        assert!(serde_json::from_value::<CveDetectionParamsJSON>(value).is_err());
     }
 
     /// The published params must parse with this code. A `FormatError` means
