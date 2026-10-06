@@ -844,6 +844,43 @@ mod tests {
         let _ = std::fs::remove_file(path);
     }
 
+    /// FP-MAC-27 reproducer (kralizec, 2026-10-06): RocksDB's info `LOG` (here
+    /// Lightroom Classic's `<catalog>.lrcat-data/LOG`) prints the column
+    /// family name, `[default]`, on its option lines. The `aws` signature
+    /// used to count a bare `[default]` section as AWS credentials, and the
+    /// catalog Lightroom holds open while syncing with Adobe read as secret
+    /// material on its way out (three HIGH `sensitive_material_egress`).
+    #[test]
+    fn rocksdb_info_log_default_column_family_is_not_aws_credentials() {
+        let path = unique_path("rocksdb", "");
+        let body = "2026/10/06-10:43:01.123456 1702 RocksDB version: 9.4.0\n\
+                    2026/10/06-10:43:01.123480 1702 [db/column_family.cc:620] --------------- Options for column family [default]:\n\
+                    2026/10/06-10:43:01.123490 1702 [default]  Options.comparator: leveldb.BytewiseComparator\n\
+                    2026/10/06-10:43:01.123500 1702 [default]  Options.merge_operator: None\n\
+                    2026/10/06-10:43:01.123510 1702 [db/version_set.cc:5800] Column family [default] (ID 0), log number is 287\n";
+        write_temp(&path, body);
+        let scan = inspect_secret_like_file(&path);
+        let labels = scan
+            .as_ref()
+            .map(|s| s.secret_labels.clone())
+            .unwrap_or_default();
+        assert!(!labels.iter().any(|l| l == "aws"), "{scan:?}");
+        cleanup(&path);
+    }
+
+    /// The other half: an AWS credentials file still labels `aws`, by its
+    /// key names.
+    #[test]
+    fn aws_credentials_file_still_labels_aws() {
+        let path = unique_path("aws_credentials", "");
+        let body = "[default]\naws_access_key_id = AKIAIOSFODNN7EXAMPLE\n\
+                    aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n";
+        write_temp(&path, body);
+        let scan = inspect_secret_like_file(&path).expect("scan");
+        assert!(scan.secret_labels.iter().any(|l| l == "aws"), "{scan:?}");
+        cleanup(&path);
+    }
+
     /// FP-MAC-6 reproducer: a benign `.log` file containing a git error
     /// with a bare `https://github.com/...` URL must NOT trip the
     /// `network_command_like` heuristic. Before the CloudModel-tunable

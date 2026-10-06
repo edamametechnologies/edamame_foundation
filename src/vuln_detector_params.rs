@@ -700,6 +700,19 @@ pub struct TempScratchNameJSON {
     pub min_token_len: usize,
 }
 
+/// The names Python's `tempfile` module gives its scratch entries
+/// (`tempfile.template`, then `_RandomNameSequence`): `<prefix><random>`
+/// with an optional suffix (`TemporaryDirectory()`, `mkstemp(suffix=...)`),
+/// and the bare `<random>` file `_get_default_tempdir` writes and deletes at
+/// once when `tempfile` is first used. `alphabet` is the random part's
+/// characters.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct PythonTempfileNameJSON {
+    pub prefix: String,
+    pub random_len: usize,
+    pub alphabet: String,
+}
+
 /// The name of an ephemeral PowerShell stub in the Windows per-user temp
 /// root: `<name_prefix><random><name_suffix>` (`.tmp*.ps1`).
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
@@ -1160,6 +1173,8 @@ pub struct CveDetectionParamsJSON {
     /// Agent harness output-capture files (see
     /// [`AgentHarnessOutputCaptureJSON`]).
     pub agent_harness_output_capture: Vec<AgentHarnessOutputCaptureJSON>,
+    /// Python's `tempfile` scratch names (see [`PythonTempfileNameJSON`]).
+    pub python_tempfile_name: PythonTempfileNameJSON,
     pub shared_infrastructure_min_local_processes: usize,
     /// OS temp roots by role (see [`OsTempRootsJSON`]).
     pub os_temp_roots: OsTempRootsJSON,
@@ -1392,6 +1407,8 @@ pub struct CveDetectionParams {
     pub divergence_infrastructure_endpoints: Vec<DivergenceInfrastructureEndpointClassJSON>,
     /// `agent_harness_output_capture`, lowercase and trimmed.
     pub agent_harness_output_capture: Vec<AgentHarnessOutputCaptureJSON>,
+    /// Python's `tempfile` scratch names (see [`PythonTempfileNameJSON`]).
+    pub python_tempfile_name: PythonTempfileNameJSON,
     pub shared_infrastructure_min_local_processes: usize,
     pub os_temp_roots: OsTempRootsJSON,
     pub temp_scratch_name: TempScratchNameJSON,
@@ -2387,6 +2404,15 @@ impl CveDetectionParams {
                 .collect(),
             shared_infrastructure_min_local_processes: json
                 .shared_infrastructure_min_local_processes,
+            python_tempfile_name: PythonTempfileNameJSON {
+                prefix: json.python_tempfile_name.prefix.trim().to_ascii_lowercase(),
+                random_len: json.python_tempfile_name.random_len,
+                alphabet: json
+                    .python_tempfile_name
+                    .alphabet
+                    .trim()
+                    .to_ascii_lowercase(),
+            },
             os_temp_roots: normalized_os_temp_roots(&json.os_temp_roots),
             temp_scratch_name: TempScratchNameJSON {
                 prefix: json.temp_scratch_name.prefix.trim().to_ascii_lowercase(),
@@ -4357,6 +4383,11 @@ pub fn temp_scratch_name() -> TempScratchNameJSON {
     PARAMS_SNAPSHOT.load().temp_scratch_name.clone()
 }
 
+/// Python's `tempfile` scratch names (see [`PythonTempfileNameJSON`]).
+pub fn python_tempfile_name() -> PythonTempfileNameJSON {
+    PARAMS_SNAPSHOT.load().python_tempfile_name.clone()
+}
+
 /// Ephemeral PowerShell stub name shape (lowercase).
 pub fn windows_temp_powershell_stub() -> WindowsTempPowershellStubJSON {
     PARAMS_SNAPSHOT.load().windows_temp_powershell_stub.clone()
@@ -6190,6 +6221,15 @@ mod tests {
     /// when published without one, and an empty entry (an empty numbered
     /// prefix would cover every IPv4 first octet) is dropped. A class missing
     /// a field fails the parse (born complete).
+    #[test]
+    fn test_python_tempfile_name_is_pythons() {
+        let shape = python_tempfile_name();
+        assert_eq!(shape.prefix, "tmp");
+        assert_eq!(shape.random_len, 8);
+        assert!(shape.alphabet.contains('_') && shape.alphabet.contains('0'));
+        assert!(!shape.alphabet.chars().any(|c| c.is_ascii_uppercase()));
+    }
+
     #[test]
     fn test_agent_harness_output_capture_layout() {
         // FP lab 2026-10-06, shiawase and the macOS shape of the same file.
