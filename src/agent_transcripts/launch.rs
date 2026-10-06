@@ -402,6 +402,12 @@ const RESULT_LINE_MARKERS: &[&str] = &[
     "\"function_call_output\"",
     "\"custom_tool_call_output\"",
 ];
+/// Marker of a Codex code-mode line recording what the model's script ran
+/// (`event_msg` / `item_completed`, see [`super::parsing::codex_completed_item`]).
+const CODE_MODE_LINE_MARKER: &str = "\"item_completed\"";
+/// The code-mode items that can start an agent: a command, and a patch that
+/// writes a script.
+const CODE_MODE_ITEM_MARKERS: &[&str] = &["\"CommandExecution\"", "\"FileChange\""];
 
 fn process_line(line: &[u8], scan: &mut FileScan, vocab: &WorkspaceAttributionJSON) {
     // JSONL is UTF-8; a line that is not cannot be parsed either.
@@ -414,7 +420,9 @@ fn process_line(line: &[u8], scan: &mut FileScan, vocab: &WorkspaceAttributionJS
     // foreground launch waits for one.
     let has_result =
         !scan.pending.is_empty() && RESULT_LINE_MARKERS.iter().any(|m| text.contains(m));
-    if !wants_context && !has_call && !has_result {
+    let has_code_mode_item = text.contains(CODE_MODE_LINE_MARKER)
+        && CODE_MODE_ITEM_MARKERS.iter().any(|m| text.contains(m));
+    if !wants_context && !has_call && !has_result && !has_code_mode_item {
         return;
     }
     let Ok(value) = serde_json::from_str::<Value>(text) else {
@@ -423,6 +431,11 @@ fn process_line(line: &[u8], scan: &mut FileScan, vocab: &WorkspaceAttributionJS
     let line_ts = line_timestamp(&value);
     if wants_context {
         absorb_context(&value, line_ts, scan, vocab);
+    }
+    if has_code_mode_item {
+        if let Some(item) = super::parsing::codex_completed_item(&value) {
+            absorb_code_mode_item(item, &value, line_ts, scan, vocab);
+        }
     }
     for block in structured_blocks(&value) {
         match block_kind(block) {
@@ -658,7 +671,44 @@ fn absorb_tool_call(
         .or_else(|| line.get("cwd").and_then(|v| v.as_str()).map(str::trim))
         .unwrap_or("")
         .to_string();
-    let lexed = lex_shell(&command);
+    absorb_shell_command(
+        ShellCommand {
+            command: &command,
+            shell_cwd: &shell_cwd,
+            args: &args,
+            id: block_id(block),
+            at: line_ts,
+            finished_at: None,
+        },
+        scan,
+        vocab,
+    );
+}
+
+/// One shell command a tool call ran, with what is known about its run.
+struct ShellCommand<'a> {
+    command: &'a str,
+    /// The shell's working directory at the time of the call.
+    shell_cwd: &'a str,
+    /// The call's arguments (background flags are read from them).
+    args: &'a Value,
+    /// The call's id, to match the result of a foreground call.
+    id: Option<String>,
+    at: Option<DateTime<Utc>>,
+    /// When the command's result is already known: a Codex code-mode item
+    /// is recorded once the command has finished.
+    finished_at: Option<DateTime<Utc>>,
+}
+
+/// Record `cmd` as a launch call when it starts an agent CLI, directly or
+/// through a script this transcript wrote.
+fn absorb_shell_command(
+    cmd: ShellCommand<'_>,
+    scan: &mut FileScan,
+    vocab: &WorkspaceAttributionJSON,
+) {
+    let args = cmd.args;
+    let lexed = lex_shell(cmd.command);
     let mut direct = lexed
         .commands
         .iter()
@@ -710,16 +760,19 @@ fn absorb_tool_call(
             .background_wait_keys
             .iter()
             .any(|k| args.get(k.as_str()).and_then(|v| v.as_u64()) == Some(0));
+    // A background call's result says nothing about when the agent it
+    // started finished.
+    let finished_at = if background { None } else { cmd.finished_at };
     let call = AgentLaunchCall {
-        at: line_ts,
-        finished_at: None,
+        at: cmd.at,
+        finished_at,
         background,
-        dirs: named_directories(&lexed, &shell_cwd, vocab),
+        dirs: named_directories(&lexed, cmd.shell_cwd, vocab),
     };
     let seq = scan.next_seq;
     scan.next_seq += 1;
-    if !background {
-        if let Some(id) = block_id(block) {
+    if !background && finished_at.is_none() {
+        if let Some(id) = cmd.id {
             if scan.pending.len() < MAX_PENDING_PER_FILE {
                 scan.pending.insert(id, seq);
             }
@@ -771,6 +824,161 @@ fn remember_patched_scripts(patch: &str, scan: &mut FileScan, vocab: &WorkspaceA
         }
     }
     flush(current, &mut added, scan);
+}
+
+/// A Codex code-mode item (CLI 0.160). The model's `exec` script is not what
+/// ran; the `CommandExecution` and `FileChange` items its run recorded are
+/// (see [`super::parsing::codex_completed_item`]), so a `codex exec` or a
+/// `claude -p` Codex starts through a command, or through a script a patch
+/// wrote, is seen here. A command is recorded once it has finished: its
+/// start and end come on the line (`started_at_ms` / `completed_at_ms`),
+/// and no result follows to wait for.
+fn absorb_code_mode_item(
+    item: &Value,
+    line: &Value,
+    line_ts: Option<DateTime<Utc>>,
+    scan: &mut FileScan,
+    vocab: &WorkspaceAttributionJSON,
+) {
+    match item.get("type").and_then(|v| v.as_str()).unwrap_or("") {
+        "CommandExecution" => {
+            let argv: Vec<&str> = item
+                .get("command")
+                .and_then(|v| v.as_array())
+                .map(|words| words.iter().filter_map(|w| w.as_str()).collect())
+                .unwrap_or_default();
+            let Some(command) =
+                unwrap_shell_argv(&argv, vocab).or_else(|| command_text(item, vocab))
+            else {
+                return;
+            };
+            let payload = line.get("payload");
+            let started = payload
+                .and_then(|p| p.get("started_at_ms"))
+                .and_then(ts_from_value);
+            let completed = payload
+                .and_then(|p| p.get("completed_at_ms"))
+                .and_then(ts_from_value);
+            let shell_cwd = item
+                .get("cwd")
+                .and_then(|v| v.as_str())
+                .map(file_url_path)
+                .unwrap_or_default();
+            absorb_shell_command(
+                ShellCommand {
+                    command: &command,
+                    shell_cwd: &shell_cwd,
+                    args: item,
+                    id: None,
+                    at: started.or(line_ts),
+                    finished_at: completed.or(line_ts),
+                },
+                scan,
+                vocab,
+            );
+        }
+        // `changes: {<path>: {"type": "add", "content": ...}}`; an update
+        // carries a `unified_diff` whose added lines are what the file now
+        // says. A deleted file runs nothing.
+        "FileChange" => {
+            let Some(changes) = item.get("changes").and_then(|v| v.as_object()) else {
+                return;
+            };
+            for (path, change) in changes {
+                if change.get("type").and_then(|v| v.as_str()) == Some("delete") {
+                    continue;
+                }
+                let mut body = String::new();
+                for key in &vocab.write_content_keys {
+                    if let Some(text) = change.get(key.as_str()).and_then(|v| v.as_str()) {
+                        body.push_str(text);
+                        body.push('\n');
+                    }
+                }
+                if let Some(diff) = change.get("unified_diff").and_then(|v| v.as_str()) {
+                    for text in diff.lines().filter_map(|l| l.strip_prefix('+')) {
+                        if !text.starts_with("++") {
+                            body.push_str(text);
+                            body.push('\n');
+                        }
+                    }
+                }
+                if !body.is_empty() && script_starts_agent(&body, vocab) {
+                    remember_script(path, scan, vocab);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The path a `file://` URL names, percent-decoded (Codex code mode records
+/// a command's `cwd` as one: `file:///Users/me/p`, `file:///C:/Users/me/p`
+/// for `C:/Users/me/p`). Any other value is returned trimmed.
+fn file_url_path(value: &str) -> String {
+    let value = value.trim();
+    let Some(rest) = value.strip_prefix("file://") else {
+        return value.to_string();
+    };
+    let bytes = rest.as_bytes();
+    let path = if bytes.len() >= 3
+        && bytes[0] == b'/'
+        && bytes[1].is_ascii_alphabetic()
+        && bytes[2] == b':'
+    {
+        &rest[1..]
+    } else {
+        rest
+    };
+    let bytes = path.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hex = |b: u8| (b as char).to_digit(16);
+            if let (Some(hi), Some(lo)) = (hex(bytes[i + 1]), hex(bytes[i + 2])) {
+                out.push((hi * 16 + lo) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// The script a shell wrapper argv runs: `[sh|bash|zsh|dash, -c|-lc, X]`,
+/// `[pwsh|powershell(.exe), -Command|-c, X]`, `[cmd(.exe), /c, X]`. Which
+/// programs are shells, PowerShells and `/`-option wrappers, the PowerShell
+/// script options and the launcher extensions are the params'; the option
+/// grammar is the shells' own: a POSIX short-option cluster that includes
+/// `c`, cmd's `/c`. Program names compare by basename, case-insensitively.
+/// `None` when `argv` is not such a wrapper.
+pub(super) fn unwrap_shell_argv(argv: &[&str], vocab: &WorkspaceAttributionJSON) -> Option<String> {
+    let [program, option, script] = argv else {
+        return None;
+    };
+    let script = script.trim();
+    if script.is_empty() {
+        return None;
+    }
+    let name = exe_basename(program, vocab);
+    let runs_script = if vocab.powershell_programs.contains(&name) {
+        vocab
+            .powershell_script_options
+            .iter()
+            .any(|o| o.eq_ignore_ascii_case(option))
+    } else if is_shell(&name, vocab) {
+        option.strip_prefix('-').is_some_and(|cluster| {
+            cluster.contains('c') && cluster.chars().all(|c| c.is_ascii_alphabetic())
+        })
+    } else if vocab.wrapper_slash_option_programs.contains(&name) {
+        option.eq_ignore_ascii_case("/c")
+    } else {
+        false
+    };
+    runs_script.then(|| script.to_string())
 }
 
 /// The shell command of a call: a command key as a string, or as an argv
@@ -1826,6 +2034,97 @@ mod tests {
             call.dirs,
             vec!["C:/Users/me/AppData/Local/Temp/run1".to_string()]
         );
+    }
+
+    #[test]
+    fn shell_wrapper_argv_unwraps_to_its_script() {
+        let p = vocab();
+        let v = &p.workspace_attribution;
+        let unwrap = |argv: &[&str]| unwrap_shell_argv(argv, v);
+        assert_eq!(unwrap(&["/bin/bash", "-lc", "ls"]).as_deref(), Some("ls"));
+        assert_eq!(unwrap(&["dash", "-c", "ls"]).as_deref(), Some("ls"));
+        assert_eq!(
+            unwrap(&[
+                "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
+                "-Command",
+                "ls"
+            ])
+            .as_deref(),
+            Some("ls")
+        );
+        assert_eq!(
+            unwrap(&["POWERSHELL.EXE", "-c", "ls"]).as_deref(),
+            Some("ls")
+        );
+        assert_eq!(unwrap(&["cmd.exe", "/C", "dir"]).as_deref(), Some("dir"));
+        assert_eq!(unwrap(&["bash", "--norc", "x.sh"]), None);
+        assert_eq!(unwrap(&["pwsh", "-File", "x.ps1"]), None);
+        assert_eq!(unwrap(&["python3", "-c", "print(1)"]), None);
+        assert_eq!(unwrap(&["bash", "-lc", "  "]), None);
+        assert_eq!(unwrap(&["bash", "-lc", "ls", "extra"]), None);
+
+        assert_eq!(
+            file_url_path("file:///Users/me/My%20Work/ws"),
+            "/Users/me/My Work/ws"
+        );
+        assert_eq!(file_url_path("file:///C:/Users/me/ws"), "C:/Users/me/ws");
+        assert_eq!(file_url_path("file:///tmp/100%"), "/tmp/100%");
+        assert_eq!(file_url_path(" /plain/path "), "/plain/path");
+    }
+
+    #[test]
+    fn codex_code_mode_launches_are_read_from_its_items() {
+        // Codex 0.160 code mode (FP lab 2026-10-06 shapes): the model's
+        // `exec` script names the command; the `CommandExecution` item is
+        // what ran, with its start and end.
+        let mut mac = FileScan::default();
+        feed(
+            &mut mac,
+            &[
+                serde_json::json!({"timestamp":"2026-10-06T00:01:26Z","type":"session_meta","payload":{"cwd":"/Users/runner/ws","originator":"codex_exec","source":"exec"}}),
+                serde_json::json!({"timestamp":"2026-10-06T00:01:30Z","type":"response_item","payload":{"type":"custom_tool_call","call_id":"call_1","name":"exec","input":"text(await tools.exec_command({cmd:\"codex exec 'review the diff'\"}));\n"}}),
+                serde_json::json!({"timestamp":"2026-10-06T00:01:40Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"CommandExecution","id":"exec-1","command":["/bin/bash","-lc","codex exec 'review the diff'"],"cwd":"file:///Users/runner/My%20Work/ws","status":"completed","exit_code":0},"started_at_ms":1_791_244_890_000_i64,"completed_at_ms":1_791_244_900_000_i64}}),
+                serde_json::json!({"timestamp":"2026-10-06T00:01:41Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call_1","output":[{"type":"input_text","text":"Script completed"}]}}),
+            ],
+        );
+        assert_eq!(mac.launches.len(), 1, "{:?}", mac.launches);
+        let (_, call) = &mac.launches[0];
+        assert!(!call.background);
+        assert_eq!(
+            call.at.map(|t| t.timestamp_millis()),
+            Some(1_791_244_890_000)
+        );
+        assert_eq!(
+            call.finished_at.map(|t| t.timestamp_millis()),
+            Some(1_791_244_900_000)
+        );
+        assert_eq!(call.dirs, vec!["/Users/runner/My Work/ws".to_string()]);
+        assert!(mac.pending.is_empty());
+
+        // Windows: a patch writes a script that starts an agent and a command
+        // runs it; `cmd /c` starts one directly; reading a file that names an
+        // agent starts none.
+        let mut win = FileScan::default();
+        feed(
+            &mut win,
+            &[
+                serde_json::json!({"timestamp":"2026-10-06T00:20:00Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"FileChange","id":"exec-2","changes":{"C:\\Users\\me\\ws\\spawn.ps1":{"type":"add","content":"claude -p 'summarize' | Out-File r.txt\n"},"C:\\Users\\me\\ws\\README.md":{"type":"add","content":"run claude -p\n"}},"status":"completed"}}}),
+                serde_json::json!({"timestamp":"2026-10-06T00:20:05Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"CommandExecution","id":"exec-3","command":["C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","-Command","& .\\spawn.ps1"],"cwd":"file:///C:/Users/me/ws","status":"completed","exit_code":0}}}),
+                serde_json::json!({"timestamp":"2026-10-06T00:21:00Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"CommandExecution","id":"exec-4","command":["C:\\Windows\\System32\\cmd.exe","/c","codex exec hi"],"cwd":"file:///C:/Users/me/ws","status":"completed","exit_code":0}}}),
+                serde_json::json!({"timestamp":"2026-10-06T00:22:00Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"CommandExecution","id":"exec-5","command":["C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","-Command","Get-Content claude_notes.md"],"cwd":"file:///C:/Users/me/ws","status":"completed","exit_code":0}}}),
+            ],
+        );
+        assert!(win.agent_scripts.contains("spawn.ps1"));
+        assert!(!win.agent_scripts.contains("readme.md"));
+        assert_eq!(win.launches.len(), 2, "{:?}", win.launches);
+        for (_, call) in &win.launches {
+            assert!(!call.background);
+            assert_eq!(call.dirs, vec!["C:/Users/me/ws".to_string()]);
+            // No start / end on the line: its timestamp stands for both.
+            assert_eq!(call.at, call.finished_at);
+            assert!(call.at.is_some());
+        }
+        assert!(win.pending.is_empty());
     }
 
     #[test]

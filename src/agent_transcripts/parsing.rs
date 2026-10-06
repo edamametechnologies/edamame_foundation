@@ -115,7 +115,9 @@ pub struct ParsedTranscript {
     pub assistant_text: String,
     pub raw_text: String,
     /// Concatenated `tool_use` INPUT arguments (WebFetch url, WebSearch query,
-    /// Bash command, ...) -- NOT tool RESULTS. Traffic derivation reads this
+    /// Bash command, ...) and the commands a Codex code-mode session ran
+    /// (`curl.exe ... https://github.com/...`) -- NOT tool RESULTS. Traffic
+    /// derivation reads this
     /// plus `user_text`/`assistant_text` so an egress the agent actually
     /// requested is declared, while a hostname that merely appeared inside a
     /// tool result body (e.g. every URL in a WebSearch result page) is not.
@@ -301,6 +303,11 @@ pub fn parse_jsonl_transcript(raw_text: &str) -> ParsedTranscript {
                 }
             }
             continue;
+        }
+        // A Codex code-mode command is the input of the call that ran it: the
+        // model's `exec` script only asks for it (see `codex_completed_item`).
+        if let Some(command) = codex_completed_item(&value).and_then(codex_exec_command) {
+            tool_input_sections.push(command);
         }
         let role = jsonl_line_role(&value);
         let content = jsonl_line_content(&value);
@@ -1116,6 +1123,11 @@ pub fn extract_commands(raw_text: &str, assistant_text: &str) -> Vec<String> {
             add(value.as_str());
         }
     }
+    // Codex code mode records each command it ran as a structured item, not
+    // a `command:` line (see `codex_completed_item`).
+    for command in codex_code_mode_commands(raw_text) {
+        add(&command);
+    }
 
     if !assistant_text.is_empty() {
         let cleaned = assistant_text.replace('`', "");
@@ -1715,6 +1727,222 @@ fn tool_target_signature(name: &str, input: Option<&serde_json::Value>) -> Strin
     format!("{name}\u{1}{target}")
 }
 
+// ---------------------------------------------------------------------------
+// Codex code mode (CLI 0.160). The model calls one `exec` tool whose input is
+// a JavaScript program (`response_item` / `custom_tool_call`, `name: "exec"`,
+// `input: "text(await tools.exec_command({cmd: ...}))"`); what the program
+// actually ran is recorded on `event_msg` lines with `payload.type ==
+// "item_completed"`, one per action:
+//
+// - `{"type": "CommandExecution", "command": ["/bin/bash", "-lc", "cat
+//   AGENTS.md"], "cwd": "file:///...", "status": "completed", "exit_code": 0,
+//   "stdout": ..., "stderr": ..., "aggregated_output": ...}` on macOS and
+//   Linux, `["C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+//   "-Command", "Invoke-RestMethod ..."]` on Windows;
+// - `{"type": "FileChange", "changes": {"/abs/notes/x.md": {"type": "add",
+//   "content": ...}}}` for an `apply_patch`.
+//
+// None of it was decoded (FP lab 2026-10-06, 0.160.0 / 0.160.1 rollouts on
+// macOS, Windows and Linux): every code-mode session reached the divergence
+// plane with no commands and no tool events. The observer could not see what
+// Codex did, and core's growth exemption for a sensitive claim no tool call
+// names (it needs tool events) never applied, so a re-ingest that declared
+// `~/.aws` / `~/.ssh` quoted from an instruction file Codex had `cat`-ed
+// became a CRITICAL divergence incident.
+//
+// The items are rendered as the `function_call` / `function_call_output`
+// blocks of the older rollouts, so every per-call consumer reads code mode
+// through the block logic it already has. The script itself is not a call:
+// one script runs several commands or none, and its text is what the model
+// wrote, not what ran.
+// ---------------------------------------------------------------------------
+
+/// Name a code-mode `CommandExecution` is recorded under: the tool its
+/// script called (`tools.exec_command`), the name the older rollouts gave
+/// the same call.
+const CODEX_EXEC_TOOL_NAME: &str = "exec_command";
+/// Name a code-mode `FileChange` is recorded under (`tools.apply_patch`).
+const CODEX_PATCH_TOOL_NAME: &str = "apply_patch";
+/// Command output kept on a rendered result: the failure inference reads 600
+/// characters ([`tool_result_content_text`]), an error detail 200.
+const CODEX_OUTPUT_CHARS: usize = 600;
+
+/// The item of a Codex code-mode line (`{"type": "event_msg", "payload":
+/// {"type": "item_completed", "item": {...}}}`), `None` for every other line.
+/// Claude Code, Cursor and Hermes lines never carry this shape.
+pub(super) fn codex_completed_item(value: &serde_json::Value) -> Option<&serde_json::Value> {
+    if value.get("type").and_then(|v| v.as_str()) != Some("event_msg") {
+        return None;
+    }
+    let payload = value.get("payload")?;
+    if payload.get("type").and_then(|v| v.as_str()) != Some("item_completed") {
+        return None;
+    }
+    payload.get("item").filter(|item| item.is_object())
+}
+
+fn codex_item_kind(item: &serde_json::Value) -> &str {
+    item.get("type").and_then(|v| v.as_str()).unwrap_or("")
+}
+
+/// The command a code-mode `CommandExecution` ran: the script of a shell
+/// wrapper (`["/bin/bash", "-lc", "cat AGENTS.md"]` -> `cat AGENTS.md`, see
+/// [`super::launch::unwrap_shell_argv`]), else the argv joined with spaces.
+/// `None` for any other item.
+fn codex_exec_command(item: &serde_json::Value) -> Option<String> {
+    if codex_item_kind(item) != "CommandExecution" {
+        return None;
+    }
+    let command = match item.get("command")? {
+        serde_json::Value::String(s) => s.trim().to_string(),
+        serde_json::Value::Array(words) => {
+            let argv: Vec<&str> = words.iter().filter_map(|w| w.as_str()).collect();
+            let params = crate::agent_visibility_params::workspace_attribution();
+            super::launch::unwrap_shell_argv(&argv, &params.workspace_attribution)
+                .unwrap_or_else(|| argv.join(" ").trim().to_string())
+        }
+        _ => return None,
+    };
+    (!command.is_empty()).then_some(command)
+}
+
+/// The paths a code-mode `FileChange` wrote: each key of `changes`, and the
+/// destination of a move (`move_path`).
+fn codex_changed_paths(item: &serde_json::Value) -> Vec<String> {
+    let Some(changes) = item.get("changes").and_then(|v| v.as_object()) else {
+        return Vec::new();
+    };
+    let mut paths: Vec<String> = Vec::new();
+    for (path, change) in changes {
+        for p in [
+            Some(path.as_str()),
+            change.get("move_path").and_then(|v| v.as_str()),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let p = p.trim();
+            if !p.is_empty() && !paths.iter().any(|seen| seen.as_str() == p) {
+                paths.push(p.to_string());
+            }
+        }
+    }
+    paths
+}
+
+/// First non-empty text field of a `CommandExecution`, char-capped.
+fn codex_item_text(item: &serde_json::Value, keys: &[&str]) -> String {
+    keys.iter()
+        .filter_map(|k| item.get(*k).and_then(|v| v.as_str()))
+        .map(str::trim)
+        .find(|s| !s.is_empty())
+        .map(|s| s.chars().take(CODEX_OUTPUT_CHARS).collect::<String>())
+        .unwrap_or_default()
+}
+
+/// The error of a `CommandExecution` that failed (`status: "failed"`, or a
+/// non-zero `exit_code`): the exit code and the head of what it printed
+/// (`exit code 127: /bin/bash: line 1: python: command not found`). `None`
+/// for a command that succeeded.
+fn codex_command_error(item: &serde_json::Value) -> Option<String> {
+    let failed = item
+        .get("status")
+        .and_then(|v| v.as_str())
+        .is_some_and(|s| s.eq_ignore_ascii_case("failed"));
+    let exit_code = item.get("exit_code").and_then(|v| {
+        v.as_i64()
+            .or_else(|| v.as_str().and_then(|s| s.trim().parse::<i64>().ok()))
+    });
+    if !failed && exit_code.unwrap_or(0) == 0 {
+        return None;
+    }
+    let detail = codex_item_text(
+        item,
+        &["stderr", "aggregated_output", "formatted_output", "stdout"],
+    );
+    Some(match (exit_code, detail.is_empty()) {
+        (Some(code), false) => format!("exit code {code}: {detail}"),
+        (Some(code), true) => format!("exit code {code}"),
+        (None, false) => detail,
+        (None, true) => "failed".to_string(),
+    })
+}
+
+/// The calls one code-mode line records, as the blocks of the older rollouts:
+/// a `CommandExecution` is a `function_call` named `exec_command` (arguments
+/// `{"command": <inner command>}`) followed by its `function_call_output`
+/// (the command's output, and an `error` when it failed); a `FileChange` is
+/// one `apply_patch` `function_call` per path written (arguments `{"path":
+/// <path>}`), with no result: the item reports the patch, not a command.
+/// Empty for every other line.
+fn codex_code_mode_blocks(value: &serde_json::Value) -> Vec<serde_json::Value> {
+    let Some(item) = codex_completed_item(value) else {
+        return Vec::new();
+    };
+    match codex_item_kind(item) {
+        "CommandExecution" => {
+            let Some(command) = codex_exec_command(item) else {
+                return Vec::new();
+            };
+            let mut call = serde_json::json!({
+                "type": "function_call",
+                "name": CODEX_EXEC_TOOL_NAME,
+                "arguments": {"command": command},
+            });
+            let mut result = serde_json::json!({
+                "type": "function_call_output",
+                "output": codex_item_text(
+                    item,
+                    &["aggregated_output", "formatted_output", "stdout", "stderr"],
+                ),
+            });
+            if let Some(id) = item.get("id").and_then(|v| v.as_str()) {
+                if !id.is_empty() {
+                    call["call_id"] = id.into();
+                    result["call_id"] = id.into();
+                }
+            }
+            if let Some(error) = codex_command_error(item) {
+                result["error"] = error.into();
+            }
+            vec![call, result]
+        }
+        "FileChange" => codex_changed_paths(item)
+            .into_iter()
+            .map(|path| {
+                serde_json::json!({
+                    "type": "function_call",
+                    "name": CODEX_PATCH_TOOL_NAME,
+                    "arguments": {"path": path},
+                })
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// The commands a Codex code-mode transcript ran, oldest first. A line is
+/// parsed only when it can carry a `CommandExecution`, so the transcript of
+/// any other agent costs one substring scan.
+fn codex_code_mode_commands(raw_text: &str) -> Vec<String> {
+    if !raw_text.contains("\"CommandExecution\"") {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for line in raw_text.split('\n') {
+        if !(line.contains("\"item_completed\"") && line.contains("\"CommandExecution\"")) {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line.trim()) else {
+            continue;
+        };
+        if let Some(command) = codex_completed_item(&value).and_then(codex_exec_command) {
+            out.push(command);
+        }
+    }
+    out
+}
+
 /// Parse deterministic run economics from a single session's transcript text.
 /// See module-level economics comment for the supported on-disk shapes.
 pub fn parse_session_economics(
@@ -1952,13 +2180,17 @@ pub fn parse_session_economics(
         // Candidate blocks for this line. Anthropic / Claude Code carry a
         // `content` array of typed blocks; Codex rollouts carry one
         // `response_item` per line whose `payload` IS the block; a few shapes
-        // put the block at top level. Mirror `parse_tool_error_details` so tool
-        // counting + friction signatures work regardless of transcript shape.
+        // put the block at top level; a Codex code-mode item is rendered as
+        // the call (and result) blocks it records (`codex_code_mode_blocks`),
+        // while its `exec` script (`custom_tool_call`) is not counted. Mirror
+        // `parse_tool_error_details` so tool counting + friction signatures
+        // work regardless of transcript shape.
         let content = value
             .get("message")
             .and_then(|m| m.get("content"))
             .and_then(|c| c.as_array())
             .or_else(|| value.get("content").and_then(|c| c.as_array()));
+        let code_mode_blocks = codex_code_mode_blocks(&value);
         let mut candidates: Vec<&serde_json::Value> = Vec::new();
         if let Some(items) = content {
             candidates.extend(items.iter());
@@ -1967,6 +2199,7 @@ pub fn parse_session_economics(
         } else {
             candidates.push(&value);
         }
+        candidates.extend(code_mode_blocks.iter());
         // Compaction boundary: Claude Code system `compact_boundary` /
         // `isCompactSummary` summary lines, or a Codex `compacted` event.
         // The canonical continuation text marker is checked per prose block
@@ -2667,8 +2900,11 @@ fn user_turn_slash_command(value: &serde_json::Value) -> Option<String> {
 /// Code) and `function_call` blocks carry `call_id` + `name` (Codex). An
 /// erroring `tool_result` references its invocation via `tool_use_id`, and a
 /// `function_call_output` via `call_id`; the tool name is resolved through that
-/// id when present, else left empty. Metadata only -- the message is truncated
-/// to a single line and carries no file/transcript body.
+/// id when present, else left empty. A Codex code-mode `CommandExecution` that
+/// failed (`status: "failed"` or a non-zero `exit_code`) is an `exec_command`
+/// error whose message is its exit code and the head of its output. Metadata
+/// only -- the message is truncated to a single line and carries no
+/// file/transcript body.
 pub fn parse_tool_error_details(raw_text: &str) -> Vec<super::ToolErrorDetail> {
     const MAX_TOOL_ERROR_DETAILS: usize = 50;
     const MAX_MESSAGE_LEN: usize = 200;
@@ -2702,13 +2938,16 @@ pub fn parse_tool_error_details(raw_text: &str) -> Vec<super::ToolErrorDetail> {
         // Candidate items for this line. Anthropic / Claude Code carry a
         // `content` array of typed blocks; Codex rollouts carry one
         // `response_item` per line whose `payload` IS the block (or a bare
-        // top-level block). Cover all three so correlation works regardless of
-        // the agent's transcript shape.
+        // top-level block); a Codex code-mode `CommandExecution` is rendered
+        // as its call and result (`codex_code_mode_blocks`), the result
+        // carrying an `error` when the command failed. Cover all of them so
+        // correlation works regardless of the agent's transcript shape.
         let content = value
             .get("message")
             .and_then(|m| m.get("content"))
             .and_then(|c| c.as_array())
             .or_else(|| value.get("content").and_then(|c| c.as_array()));
+        let code_mode_blocks = codex_code_mode_blocks(&value);
         let mut candidates: Vec<&serde_json::Value> = Vec::new();
         if let Some(items) = content {
             candidates.extend(items.iter());
@@ -2717,6 +2956,7 @@ pub fn parse_tool_error_details(raw_text: &str) -> Vec<super::ToolErrorDetail> {
         } else {
             candidates.push(&value);
         }
+        candidates.extend(code_mode_blocks.iter());
 
         for item in candidates {
             let kind = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
@@ -3741,9 +3981,10 @@ mod host_plausibility_tests {
 // ---------------------------------------------------------------------------
 
 /// One typed tool-call event decoded from a structured transcript block
-/// (Anthropic `tool_use`, Codex `function_call`), with the enclosing
-/// line's in-transcript timestamp when the format carries one (Cursor
-/// `.txt` exports carry neither blocks nor timestamps and yield none).
+/// (Anthropic `tool_use`, Codex `function_call`, a Codex code-mode
+/// `CommandExecution` / `FileChange` item), with the enclosing line's
+/// in-transcript timestamp when the format carries one (Cursor `.txt`
+/// exports carry neither blocks nor timestamps and yield none).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct ToolCallEvent {
     pub name: String,
@@ -3758,10 +3999,12 @@ pub struct ToolCallEvent {
 /// Decode the most recent `cap` typed tool-call events from a
 /// transcript's raw text, oldest first. Mirrors the block-candidate logic
 /// of the economics walk (Anthropic `message.content` arrays, Codex
-/// per-line `payload` blocks, top-level blocks) so it works across
-/// transcript shapes. The most recent, not the first: the behavioral model
-/// describes what the session is doing now, and a long session's first
-/// `cap` calls are days old.
+/// per-line `payload` blocks, Codex code-mode items rendered by
+/// [`codex_code_mode_blocks`], top-level blocks) so it works across
+/// transcript shapes. A code-mode `exec` script (`custom_tool_call`) is not
+/// an event: the commands it ran are. The most recent, not the first: the
+/// behavioral model describes what the session is doing now, and a long
+/// session's first `cap` calls are days old.
 pub fn extract_tool_call_events(raw_text: &str, cap: usize) -> Vec<ToolCallEvent> {
     let mut events = std::collections::VecDeque::new();
     if cap == 0 {
@@ -3794,6 +4037,7 @@ pub fn extract_tool_call_events(raw_text: &str, cap: usize) -> Vec<ToolCallEvent
             .and_then(|m| m.get("content"))
             .and_then(|c| c.as_array())
             .or_else(|| value.get("content").and_then(|c| c.as_array()));
+        let code_mode_blocks = codex_code_mode_blocks(&value);
         let mut candidates: Vec<&serde_json::Value> = Vec::new();
         if let Some(items) = content {
             candidates.extend(items.iter());
@@ -3802,6 +4046,7 @@ pub fn extract_tool_call_events(raw_text: &str, cap: usize) -> Vec<ToolCallEvent
         } else {
             candidates.push(&value);
         }
+        candidates.extend(code_mode_blocks.iter());
         for item in candidates {
             let kind = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
             if !matches!(kind, "tool_use" | "function_call") {
@@ -3879,6 +4124,266 @@ not json
         assert_eq!(events.len(), 8);
         assert!(events.iter().all(|e| e.name == "Bash"));
         assert!(events.iter().all(|e| e.at.is_none()));
+    }
+}
+
+/// Codex code mode (CLI 0.160): fixtures minimized from the FP-lab rollouts
+/// of 2026-10-06 (macOS CI 0.160.1, shiawase Windows 0.160.0, test-mint
+/// Linux 0.160.1); the pwsh 7, `cmd /c` and update / move / delete shapes
+/// are synthetic.
+#[cfg(test)]
+mod codex_code_mode_tests {
+    use super::*;
+
+    /// macOS: one `exec` script asks for two commands; the two
+    /// `CommandExecution` items are what ran.
+    const MACOS_ROLLOUT: &str = concat!(
+        r#"{"timestamp":"2026-10-06T00:01:26.700Z","type":"session_meta","payload":{"id":"01a10e83","cwd":"/Users/runner/fp-lab/ws/dev_scratch_codex","originator":"codex_exec","cli_version":"0.160.1"}}"#,
+        "\n",
+        r#"{"timestamp":"2026-10-06T00:01:34.420Z","type":"response_item","payload":{"type":"custom_tool_call","status":"completed","call_id":"call_8cZG","name":"exec","input":"const results = await Promise.allSettled([tools.exec_command({cmd:\"cat AGENTS.md CLAUDE.md .cursor/rules/safety/no-secrets.mdc\",\"max_output_tokens\":7000}), tools.exec_command({cmd:\"python3 -m unittest discover -s tests\",\"max_output_tokens\":3000})]);\nfor(let i=0;i<results.length;i++)text({i,...results[i]});\n"}}"#,
+        "\n",
+        r#"{"timestamp":"2026-10-06T00:01:34.479Z","type":"event_msg","payload":{"type":"item_completed","thread_id":"01a10e83","item":{"type":"CommandExecution","id":"exec-2e7a917a","process_id":"73627","command":["/bin/bash","-lc","cat AGENTS.md CLAUDE.md .cursor/rules/safety/no-secrets.mdc"],"cwd":"file:///Users/runner/fp-lab/ws/dev_scratch_codex","source":"unified_exec_startup","status":"completed","stdout":"Agent guide\n- Do not read files under ~/.ssh or ~/.aws.\n","stderr":"","aggregated_output":"Agent guide\n- Do not read files under ~/.ssh or ~/.aws.\n","exit_code":0},"started_at_ms":1791244894479,"completed_at_ms":1791244894479}}"#,
+        "\n",
+        r#"{"timestamp":"2026-10-06T00:01:34.672Z","type":"event_msg","payload":{"type":"item_completed","thread_id":"01a10e83","item":{"type":"CommandExecution","id":"exec-8a98f9cf","process_id":"26973","command":["/bin/bash","-lc","python3 -m unittest discover -s tests"],"cwd":"file:///Users/runner/fp-lab/ws/dev_scratch_codex","source":"unified_exec_startup","status":"completed","stdout":"OK\n","stderr":"","aggregated_output":"OK\n","exit_code":0},"started_at_ms":1791244894594,"completed_at_ms":1791244894672}}"#,
+        "\n",
+        r#"{"timestamp":"2026-10-06T00:01:34.677Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call_8cZG","output":[{"type":"input_text","text":"Script completed\nWall time 0.3 seconds\nOutput:\n"}]}}"#,
+        "\n",
+        r#"{"timestamp":"2026-10-06T00:01:40.621Z","type":"event_msg","payload":{"type":"item_completed","thread_id":"01a10e83","item":{"type":"AgentMessage","id":"msg_0310","content":[{"type":"Text","text":"Read all six instruction files."}],"phase":"final_answer"}}}"#,
+    );
+
+    /// Windows: Windows PowerShell 5.1 runs the command (shiawase).
+    const WINDOWS_POWERSHELL_LINE: &str = r#"{"timestamp":"2026-10-06T00:41:52.118Z","type":"event_msg","payload":{"type":"item_completed","thread_id":"01a10ea8","item":{"type":"CommandExecution","id":"exec-3b1c","process_id":"6546","command":["C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","-Command","$r = Invoke-RestMethod -Uri 'https://api.github.com/repos/BurntSushi/ripgrep/releases/latest'; Set-Content -LiteralPath notes\\versions.md -Value $r.tag_name"],"cwd":"file:///C:/Users/frank/fp-lab/ws/dev_scratch_codex_nwx8ncg_","source":"unified_exec_startup","status":"completed","stdout":"","stderr":"","aggregated_output":"","exit_code":0},"started_at_ms":1791247311000,"completed_at_ms":1791247312118}}"#;
+
+    /// Linux: a command that failed (test-mint: `python` is not installed).
+    const LINUX_FAILED_LINE: &str = r#"{"timestamp":"2026-10-06T01:07:20.512Z","type":"event_msg","payload":{"type":"item_completed","thread_id":"01a10ebf","item":{"type":"CommandExecution","id":"exec-8123995b","process_id":"77704","command":["/bin/bash","-lc","python - <<'PY'\nprint(1)\nPY"],"cwd":"file:///home/azureuser/fp-lab/ws/dev_scratch_codex_wsiefwff","source":"unified_exec_startup","status":"failed","stdout":"/bin/bash: line 1: python: command not found\n","stderr":"","aggregated_output":"/bin/bash: line 1: python: command not found\n","exit_code":127},"started_at_ms":1791248840500,"completed_at_ms":1791248840512}}"#;
+
+    /// One `CommandExecution` line around `argv` (a JSON array).
+    fn exec_line(argv: &str) -> String {
+        format!(
+            r#"{{"timestamp":"2026-10-06T00:02:00Z","type":"event_msg","payload":{{"type":"item_completed","item":{{"type":"CommandExecution","id":"exec-1","command":{argv},"cwd":"file:///tmp/w","status":"completed","exit_code":0}}}}}}"#
+        )
+    }
+
+    fn targets(events: &[ToolCallEvent]) -> Vec<(&str, &str)> {
+        events
+            .iter()
+            .map(|e| (e.name.as_str(), e.target.as_str()))
+            .collect()
+    }
+
+    #[test]
+    fn macos_bash_lc_items_are_the_tool_events() {
+        let events = extract_tool_call_events(MACOS_ROLLOUT, 64);
+        assert_eq!(
+            targets(&events),
+            vec![
+                (
+                    "exec_command",
+                    "cat AGENTS.md CLAUDE.md .cursor/rules/safety/no-secrets.mdc"
+                ),
+                ("exec_command", "python3 -m unittest discover -s tests"),
+            ]
+        );
+        assert_eq!(
+            events[1].at.map(|t| t.to_rfc3339()),
+            Some("2026-10-06T00:01:34.672+00:00".to_string())
+        );
+    }
+
+    #[test]
+    fn windows_powershell_command_is_unwrapped_and_slash_normalized() {
+        let events = extract_tool_call_events(WINDOWS_POWERSHELL_LINE, 64);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].name, "exec_command");
+        assert!(
+            events[0]
+                .target
+                .starts_with("$r = Invoke-RestMethod -Uri 'https://api.github.com/repos/"),
+            "{}",
+            events[0].target
+        );
+        // Same normalization and cap as the friction signatures.
+        assert!(events[0].target.contains("notes/versions.md"));
+        assert!(events[0].target.chars().count() <= 160);
+
+        // PowerShell 7 spells its option either way.
+        let pwsh = exec_line(
+            r#"["C:\\Program Files\\PowerShell\\7\\pwsh.exe","-command","Get-Content -LiteralPath C:\\Users\\me\\a.md"]"#,
+        );
+        assert_eq!(
+            targets(&extract_tool_call_events(&pwsh, 8)),
+            vec![("exec_command", "Get-Content -LiteralPath C:/Users/me/a.md")]
+        );
+    }
+
+    #[test]
+    fn file_change_is_one_apply_patch_event_per_path() {
+        let raw = r#"{"timestamp":"2026-10-06T00:01:38.461Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"FileChange","id":"exec-6da0","changes":{"/Users/runner/ws/notes/rules_summary.md":{"type":"add","content":"- Follow AGENTS.md.\n"},"/Users/runner/ws/src/app.py":{"type":"update","unified_diff":"@@ -1 +1 @@\n-a = 1\n+a = 2\n","move_path":"/Users/runner/ws/src/main.py"},"/Users/runner/ws/old.txt":{"type":"delete","content":"x\n"}},"status":"completed"}}}
+{"timestamp":"2026-10-06T00:20:51.000Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"FileChange","id":"exec-7f2e","changes":{"C:\\Users\\frank\\fp-lab\\ws\\dev_scratch_codex_fr98b2kt\\notes\\rules_summary.md":{"type":"add","content":"- Run tests.\n"}},"status":"completed"}}}"#;
+        let events = extract_tool_call_events(raw, 64);
+        assert!(events.iter().all(|e| e.name == "apply_patch"));
+        assert!(events.iter().all(|e| e.at.is_some()));
+        let mut got: Vec<&str> = events.iter().map(|e| e.target.as_str()).collect();
+        got.sort_unstable();
+        assert_eq!(
+            got,
+            vec![
+                "/Users/runner/ws/notes/rules_summary.md",
+                "/Users/runner/ws/old.txt",
+                "/Users/runner/ws/src/app.py",
+                "/Users/runner/ws/src/main.py",
+                "C:/Users/frank/fp-lab/ws/dev_scratch_codex_fr98b2kt/notes/rules_summary.md",
+            ]
+        );
+        // Each path is an edit for the churn signal; a patch runs no command.
+        let econ = parse_session_economics("fc", "/tmp/fc.jsonl", raw);
+        assert_eq!(econ.tool_calls, 5);
+        assert_eq!(econ.edited_file_count, 5);
+        assert_eq!(econ.tool_calls_by_name.get("apply_patch"), Some(&5));
+        assert!(extract_commands(raw, "").is_empty());
+    }
+
+    #[test]
+    fn command_that_is_not_shell_wrapped_is_its_argv() {
+        let cases = [
+            (
+                r#"["rg","--files","-g","AGENTS.md"]"#,
+                "rg --files -g AGENTS.md",
+            ),
+            // cmd's `/c` (either case) is a wrapper too.
+            (
+                r#"["C:\\Windows\\System32\\cmd.exe","/C","type notes\\a.md"]"#,
+                "type notes/a.md",
+            ),
+            // A long option is not `-c`; a fourth word is not a wrapper shape.
+            (r#"["/bin/bash","--norc","x.sh"]"#, "/bin/bash --norc x.sh"),
+            (
+                r#"["/bin/zsh","-lc","echo hi","extra"]"#,
+                "/bin/zsh -lc echo hi extra",
+            ),
+            (r#"["/usr/bin/env","-c","x"]"#, "/usr/bin/env -c x"),
+        ];
+        for (argv, want) in cases {
+            let events = extract_tool_call_events(&exec_line(argv), 8);
+            assert_eq!(targets(&events), vec![("exec_command", want)], "{argv}");
+        }
+    }
+
+    #[test]
+    fn each_command_counts_once_beside_its_exec_script() {
+        // The script names both commands; only the two items count.
+        let events = extract_tool_call_events(MACOS_ROLLOUT, 64);
+        assert_eq!(events.len(), 2);
+        assert!(events.iter().all(|e| e.name != "exec"));
+
+        let econ = parse_session_economics("mac", "/tmp/mac.jsonl", MACOS_ROLLOUT);
+        assert_eq!(econ.tool_calls, 2);
+        assert_eq!(econ.tool_calls_by_name.get("exec_command"), Some(&2));
+        assert_eq!(econ.tool_calls_by_name.get("exec"), None);
+        assert_eq!(econ.tool_errors, 0);
+        assert_eq!(econ.repeated_tool_calls, 0);
+        assert!(!econ.ended_with_tool_error);
+
+        assert_eq!(
+            extract_commands(MACOS_ROLLOUT, ""),
+            vec![
+                "cat AGENTS.md CLAUDE.md .cursor/rules/safety/no-secrets.mdc".to_string(),
+                "python3 -m unittest discover -s tests".to_string(),
+            ]
+        );
+        assert!(parse_tool_error_details(MACOS_ROLLOUT).is_empty());
+    }
+
+    #[test]
+    fn code_mode_commands_feed_process_paths_and_traffic() {
+        let commands = extract_commands(MACOS_ROLLOUT, "");
+        let inferred = infer_process_paths(&commands, "/Users/runner");
+        assert!(inferred.process_paths.contains(&"*/cat".to_string()));
+        assert!(inferred.process_paths.contains(&"*/python*".to_string()));
+
+        // The command is the call's input: the host it names is declared.
+        let parsed = parse_jsonl_transcript(WINDOWS_POWERSHELL_LINE);
+        assert!(parsed.tool_input_text.contains("Invoke-RestMethod"));
+        let commands = extract_commands(WINDOWS_POWERSHELL_LINE, "");
+        assert_eq!(commands.len(), 1);
+        assert!(commands[0].starts_with("$r = Invoke-RestMethod -Uri https://api.github.com/"));
+        let traffic = extract_traffic(&parsed.tool_input_text, &commands, &[]);
+        assert!(
+            traffic.contains(&"api.github.com:443".to_string()),
+            "{traffic:?}"
+        );
+    }
+
+    #[test]
+    fn failed_command_is_a_tool_error() {
+        let details = parse_tool_error_details(LINUX_FAILED_LINE);
+        assert_eq!(details.len(), 1);
+        assert_eq!(details[0].tool_name, "exec_command");
+        assert_eq!(
+            details[0].message,
+            "exit code 127: /bin/bash: line 1: python: command not found"
+        );
+        assert!(details[0].at.is_some());
+
+        let econ = parse_session_economics("lx", "/tmp/lx.jsonl", LINUX_FAILED_LINE);
+        assert_eq!(econ.tool_calls, 1);
+        assert_eq!(econ.tool_errors, 1);
+        assert!(econ.ended_with_tool_error);
+        assert_eq!(econ.run_outcome, "errored");
+
+        // A non-zero exit fails the command whatever the status says, and a
+        // silent failure still names its exit code.
+        let silent = exec_line(r#"["/bin/bash","-lc","false"]"#).replace(
+            r#""status":"completed","exit_code":0"#,
+            r#""status":"completed","exit_code":1"#,
+        );
+        let details = parse_tool_error_details(&silent);
+        assert_eq!(details.len(), 1);
+        assert_eq!(details[0].message, "exit code 1");
+        // A successful command is no error.
+        assert!(parse_tool_error_details(&exec_line(r#"["/bin/bash","-lc","true"]"#)).is_empty());
+    }
+
+    #[test]
+    fn old_format_codex_function_call_is_unchanged() {
+        // Codex 0.137 (2026-09-28): a `function_call` per command, its
+        // result a `function_call_output`.
+        let raw = r#"{"timestamp":"2026-09-28T20:35:45.556Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"pwd && rg --files -uu\",\"workdir\":\"/private/tmp/edsim-agents2/edsim-agent6\",\"yield_time_ms\":10000,\"max_output_tokens\":12000}","call_id":"call_xyKj"}}
+{"timestamp":"2026-09-28T20:35:45.688Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_xyKj","output":"Chunk ID: ad63dc\nWall time: 0.0000 seconds\nProcess exited with code 1\nOriginal token count: 10\nOutput:\n/private/tmp/edsim-agents2/edsim-agent6\n"}}"#;
+        let events = extract_tool_call_events(raw, 64);
+        assert_eq!(
+            targets(&events),
+            vec![("exec_command", "pwd && rg --files -uu")]
+        );
+        assert_eq!(
+            events[0].at.map(|t| t.to_rfc3339()),
+            Some("2026-09-28T20:35:45.556+00:00".to_string())
+        );
+        let econ = parse_session_economics("old", "/tmp/old.jsonl", raw);
+        assert_eq!(econ.tool_calls, 1);
+        assert_eq!(econ.tool_errors, 0);
+        assert_eq!(econ.inferred_tool_failures, 1);
+        assert!(parse_tool_error_details(raw).is_empty());
+        assert!(extract_commands(raw, "").is_empty());
+        assert!(parse_jsonl_transcript(raw).tool_input_text.is_empty());
+    }
+
+    #[test]
+    fn other_agents_lines_are_not_code_mode_items() {
+        // A Claude Code session that read a Codex rollout carries its lines as
+        // text inside a tool result: not items of its own.
+        let claude = r#"{"type":"user","timestamp":"2026-10-06T00:03:00Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"{\"type\":\"event_msg\",\"payload\":{\"type\":\"item_completed\",\"item\":{\"type\":\"CommandExecution\",\"command\":[\"/bin/bash\",\"-lc\",\"cat ~/.ssh/id_rsa\"]}}}"}]}}
+{"type":"assistant","timestamp":"2026-10-06T00:03:05Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t2","name":"Bash","input":{"command":"ls"}}]}}"#;
+        assert!(extract_commands(claude, "").is_empty());
+        assert_eq!(
+            targets(&extract_tool_call_events(claude, 8)),
+            vec![("Bash", "ls")]
+        );
+        // An item outside an `event_msg` line is not one either.
+        let bare = exec_line(r#"["/bin/bash","-lc","cat x"]"#)
+            .replace("\"event_msg\"", "\"response_item\"");
+        assert!(extract_tool_call_events(&bare, 8).is_empty());
+        assert!(extract_commands(&bare, "").is_empty());
     }
 }
 
