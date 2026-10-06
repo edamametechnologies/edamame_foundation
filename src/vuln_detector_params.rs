@@ -740,6 +740,26 @@ pub struct DivergenceInfrastructureEndpointClassJSON {
     pub ports: Vec<u16>,
 }
 
+/// The files an agent harness captures the output of the commands it runs
+/// into: Claude Code writes a background command's stdout and stderr to
+/// `<temp>/claude[-<uid>]/<project>/<session>/tasks/<id>.output` on every
+/// platform. The command's process holds the file, so FIM names whatever
+/// the agent ran as its writer (FP lab 2026-10-06, shiawase: a temp venv's
+/// `python.exe` that had fetched from PyPI read as a dropper staging a
+/// payload). A path matches an entry when one of its segments is a
+/// `root_names` entry or starts with a `root_prefixes` entry, exactly
+/// `levels_below_root` segments follow it, then `capture_dir`, then the
+/// file, which ends with `file_suffix`.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct AgentHarnessOutputCaptureJSON {
+    pub agent: String,
+    pub root_names: Vec<String>,
+    pub root_prefixes: Vec<String>,
+    pub levels_below_root: usize,
+    pub capture_dir: String,
+    pub file_suffix: String,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct CveDetectionParamsJSON {
     pub date: String,
@@ -1137,6 +1157,9 @@ pub struct CveDetectionParamsJSON {
     /// egress, by class with the ports each covers (see
     /// [`DivergenceInfrastructureEndpointClassJSON`]).
     pub divergence_infrastructure_endpoints: Vec<DivergenceInfrastructureEndpointClassJSON>,
+    /// Agent harness output-capture files (see
+    /// [`AgentHarnessOutputCaptureJSON`]).
+    pub agent_harness_output_capture: Vec<AgentHarnessOutputCaptureJSON>,
     pub shared_infrastructure_min_local_processes: usize,
     /// OS temp roots by role (see [`OsTempRootsJSON`]).
     pub os_temp_roots: OsTempRootsJSON,
@@ -1367,6 +1390,8 @@ pub struct CveDetectionParams {
     /// `divergence_infrastructure_endpoints`, lowercase and trimmed, each
     /// suffix with its leading dot, empty entries dropped.
     pub divergence_infrastructure_endpoints: Vec<DivergenceInfrastructureEndpointClassJSON>,
+    /// `agent_harness_output_capture`, lowercase and trimmed.
+    pub agent_harness_output_capture: Vec<AgentHarnessOutputCaptureJSON>,
     pub shared_infrastructure_min_local_processes: usize,
     pub os_temp_roots: OsTempRootsJSON,
     pub temp_scratch_name: TempScratchNameJSON,
@@ -2334,6 +2359,26 @@ impl CveDetectionParams {
             divergence_infrastructure_endpoints: normalized_divergence_infrastructure_endpoints(
                 &json.divergence_infrastructure_endpoints,
             ),
+            agent_harness_output_capture: json
+                .agent_harness_output_capture
+                .iter()
+                .map(|entry| {
+                    let lower = |list: &[String]| -> Vec<String> {
+                        list.iter()
+                            .map(|v| v.trim().to_ascii_lowercase())
+                            .filter(|v| !v.is_empty())
+                            .collect()
+                    };
+                    AgentHarnessOutputCaptureJSON {
+                        agent: entry.agent.trim().to_string(),
+                        root_names: lower(&entry.root_names),
+                        root_prefixes: lower(&entry.root_prefixes),
+                        levels_below_root: entry.levels_below_root,
+                        capture_dir: entry.capture_dir.trim().to_ascii_lowercase(),
+                        file_suffix: entry.file_suffix.trim().to_ascii_lowercase(),
+                    }
+                })
+                .collect(),
             shared_hosting_public_suffixes: json
                 .shared_hosting_public_suffixes
                 .iter()
@@ -4264,6 +4309,36 @@ pub fn is_divergence_infrastructure_endpoint(host: &str, port: u16) -> bool {
         })
 }
 
+/// Whether `path` is a file an agent harness captures a command's output
+/// into ([`AgentHarnessOutputCaptureJSON`]): the layout, segment for segment,
+/// case-insensitive, either separator. The agent's identity (`agent`) is
+/// informational: the layout is what is matched.
+pub fn is_agent_harness_output_capture(path: &str) -> bool {
+    let lowered = path.trim().replace('\\', "/").to_ascii_lowercase();
+    let segments: Vec<&str> = lowered.split('/').filter(|s| !s.is_empty()).collect();
+    let snapshot = PARAMS_SNAPSHOT.load();
+    snapshot.agent_harness_output_capture.iter().any(|entry| {
+        if entry.capture_dir.is_empty() || entry.file_suffix.is_empty() {
+            return false;
+        }
+        let depth = entry.levels_below_root + 2;
+        if segments.len() < depth + 1 {
+            return false;
+        }
+        let root = segments.len() - 1 - depth;
+        let root_segment = segments[root];
+        let root_matches = entry.root_names.iter().any(|name| root_segment == name)
+            || entry.root_prefixes.iter().any(|prefix| {
+                root_segment.len() > prefix.len() && root_segment.starts_with(prefix.as_str())
+            });
+        let file = segments[segments.len() - 1];
+        root_matches
+            && segments[segments.len() - 2] == entry.capture_dir
+            && file.len() > entry.file_suffix.len()
+            && file.ends_with(entry.file_suffix.as_str())
+    })
+}
+
 /// `label` is `prefix` followed only by ASCII digits (none counts).
 fn is_numbered_label(label: &str, prefix: &str) -> bool {
     !prefix.is_empty()
@@ -6115,6 +6190,33 @@ mod tests {
     /// when published without one, and an empty entry (an empty numbered
     /// prefix would cover every IPv4 first octet) is dropped. A class missing
     /// a field fails the parse (born complete).
+    #[test]
+    fn test_agent_harness_output_capture_layout() {
+        // FP lab 2026-10-06, shiawase and the macOS shape of the same file.
+        assert!(is_agent_harness_output_capture(
+            r"C:\Users\frank\AppData\Local\Temp\claude\C--Users-frank-ws\4d0a361b-8166\tasks\bw6l06abk.output"
+        ));
+        assert!(is_agent_harness_output_capture(
+            "/private/tmp/claude-501/-Users-flyonnet-Programming-edamame-core/60ebf757/tasks/b0wp6imft.output"
+        ));
+        assert!(is_agent_harness_output_capture(
+            "/tmp/claude-1000/-home-u-repo/0e2f/tasks/a1.output"
+        ));
+        // The layout, not a substring: other depths, names and suffixes miss.
+        for path in [
+            "/private/tmp/claude-501/p/tasks/b0.output",
+            "/private/tmp/claude-501/p/s/x/tasks/b0.output",
+            "/private/tmp/claude-501/p/s/tasks/b0.sh",
+            "/private/tmp/claude-501/p/s/scratchpad/b0.output",
+            "/private/tmp/claudette/p/s/tasks/b0.output",
+            "/private/tmp/claude-/p/s/tasks/b0.output",
+            "/private/tmp/claude-501/p/s/tasks/.output",
+            "/home/u/tasks/b0.output",
+        ] {
+            assert!(!is_agent_harness_output_capture(path), "{path}");
+        }
+    }
+
     #[test]
     fn test_divergence_infrastructure_endpoints_are_normalized() {
         let p = params_from_edited_snapshot(|value| {
