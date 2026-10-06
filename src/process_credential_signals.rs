@@ -273,18 +273,17 @@ mod tests {
         }]);
         let _ = child.kill();
         let _ = child.wait();
-        // macOS withholds another process's environment from a non-root
-        // caller, even of the same user; the root daemon and helper read it.
+        // macOS 26 withholds another process's environment from a non-root
+        // caller, even of the same user; earlier releases expose it. The root
+        // daemon and helper read it on every release.
         let is_root = std::process::Command::new("id")
             .arg("-u")
             .output()
             .map(|out| String::from_utf8_lossy(&out.stdout).trim() == "0")
             .unwrap_or(false);
-        if cfg!(target_os = "linux") || is_root {
+        if cfg!(target_os = "linux") || is_root || !batch.signals.is_empty() {
             assert_eq!(batch.signals.len(), 1, "{batch:?}");
             assert_eq!(batch.signals[0].wallet_key_env, vec!["SOLANA_PRIVATE_KEY"]);
-        } else {
-            assert!(batch.signals.is_empty(), "{batch:?}");
         }
         assert!(!serde_json::to_string(&batch).unwrap().contains(fake));
     }
