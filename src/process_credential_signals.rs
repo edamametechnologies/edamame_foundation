@@ -40,31 +40,9 @@ pub struct ProcessCredentialSignalBatch {
     pub truncated: bool,
 }
 
-/// Wallet-key environment variable prefixes and suffixes (joined with `_`).
-/// Chain- or wallet-qualified names only: generic names such as
-/// `PRIVATE_KEY`, `SECRET` or `API_KEY` are deliberately absent.
-const WALLET_KEY_ENV_PREFIXES: &[&str] = &[
-    "SOLANA", "SOL", "ETH", "ETHEREUM", "EVM", "BTC", "BITCOIN", "WALLET",
-];
-const WALLET_KEY_ENV_SUFFIXES: &[&str] = &[
-    "PRIVATE_KEY",
-    "SECRET_KEY",
-    "KEYPAIR",
-    "MNEMONIC",
-    "SEED_PHRASE",
-];
-const WALLET_KEY_ENV_EXACT: &[&str] = &["ANCHOR_WALLET"];
-
-pub fn is_wallet_key_env_name(name: &str) -> bool {
-    if WALLET_KEY_ENV_EXACT.contains(&name) {
-        return true;
-    }
-    WALLET_KEY_ENV_PREFIXES.iter().any(|prefix| {
-        name.strip_prefix(prefix)
-            .and_then(|rest| rest.strip_prefix('_'))
-            .is_some_and(|suffix| WALLET_KEY_ENV_SUFFIXES.contains(&suffix))
-    })
-}
+/// Whether an environment variable NAME holds a wallet key or seed: the
+/// published list (`vuln_detector_params::is_wallet_key_env_name`).
+pub use crate::vuln_detector_params::is_wallet_key_env_name;
 
 /// Measure each query. This process's own pid is skipped: its reads and
 /// environment are the observer's, not material its sessions carry.
