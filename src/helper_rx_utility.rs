@@ -667,6 +667,25 @@ pub async fn utility_scan_secret_content(paths_json: &str, reply: &str) -> Resul
     .map_err(|e| anyhow::anyhow!("Failed to serialize secret-content matches: {}", e))
 }
 
+/// BS-10 credential signals for the queried processes
+/// (`process_credential_signals::collect_process_credential_signals`): the
+/// helper runs the kernel open sensor and can read other processes'
+/// environments. Thin delegate; the standalone core calls the same function
+/// in-process.
+pub async fn utility_process_credential_signals(queries_json: &str) -> Result<String> {
+    let queries: Vec<crate::process_credential_signals::ProcessQuery> =
+        serde_json::from_str(queries_json)
+            .map_err(|e| anyhow::anyhow!("Failed to parse credential signal queries: {}", e))?;
+    // Process table reads: off the async workers.
+    let batch = tokio::task::spawn_blocking(move || {
+        crate::process_credential_signals::collect_process_credential_signals(&queries)
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("Credential signal task failed: {}", e))?;
+    serde_json::to_string(&batch)
+        .map_err(|e| anyhow::anyhow!("Failed to serialize credential signals: {}", e))
+}
+
 /// Dev-tree attestation (`dev_tree_attestation::attest_dev_trees`): which
 /// toolchain markers and git index facts hold for each path. `reply` selects
 /// the reply shape as for [`utility_scan_secret_content`]. Thin delegate; the
