@@ -763,6 +763,23 @@ pub struct DivergenceInfrastructureEndpointClassJSON {
 /// `root_names` entry or starts with a `root_prefixes` entry, exactly
 /// `levels_below_root` segments follow it, then `capture_dir`, then the
 /// file, which ends with `file_suffix`.
+/// A file an agent harness keeps directly under the OS temp root for its own
+/// bookkeeping: Claude Code's Bash tool records the working directory after
+/// each command in `<temp>/claude-<4 hex>-cwd`, which the shell it runs
+/// writes and the harness reads and deletes within milliseconds (FP lab
+/// 2026-10-06, CI Windows: Git's `bash.exe` writing `claude-891e-cwd` read as
+/// temp staging). A file NAME matches an entry when it is `name_prefix`, then
+/// exactly `token_len` characters of `token_alphabet`, then `name_suffix`;
+/// the caller checks that its directory is an OS temp root.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct AgentHarnessTempFileJSON {
+    pub agent: String,
+    pub name_prefix: String,
+    pub token_len: usize,
+    pub token_alphabet: String,
+    pub name_suffix: String,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 pub struct AgentHarnessOutputCaptureJSON {
     pub agent: String,
@@ -1173,6 +1190,9 @@ pub struct CveDetectionParamsJSON {
     /// Agent harness output-capture files (see
     /// [`AgentHarnessOutputCaptureJSON`]).
     pub agent_harness_output_capture: Vec<AgentHarnessOutputCaptureJSON>,
+    /// Agent harness bookkeeping files under the temp root (see
+    /// [`AgentHarnessTempFileJSON`]).
+    pub agent_harness_temp_files: Vec<AgentHarnessTempFileJSON>,
     /// Python's `tempfile` scratch names (see [`PythonTempfileNameJSON`]).
     pub python_tempfile_name: PythonTempfileNameJSON,
     pub shared_infrastructure_min_local_processes: usize,
@@ -1407,6 +1427,8 @@ pub struct CveDetectionParams {
     pub divergence_infrastructure_endpoints: Vec<DivergenceInfrastructureEndpointClassJSON>,
     /// `agent_harness_output_capture`, lowercase and trimmed.
     pub agent_harness_output_capture: Vec<AgentHarnessOutputCaptureJSON>,
+    /// `agent_harness_temp_files`, lowercase and trimmed.
+    pub agent_harness_temp_files: Vec<AgentHarnessTempFileJSON>,
     /// Python's `tempfile` scratch names (see [`PythonTempfileNameJSON`]).
     pub python_tempfile_name: PythonTempfileNameJSON,
     pub shared_infrastructure_min_local_processes: usize,
@@ -2394,6 +2416,17 @@ impl CveDetectionParams {
                         capture_dir: entry.capture_dir.trim().to_ascii_lowercase(),
                         file_suffix: entry.file_suffix.trim().to_ascii_lowercase(),
                     }
+                })
+                .collect(),
+            agent_harness_temp_files: json
+                .agent_harness_temp_files
+                .iter()
+                .map(|entry| AgentHarnessTempFileJSON {
+                    agent: entry.agent.trim().to_string(),
+                    name_prefix: entry.name_prefix.trim().to_ascii_lowercase(),
+                    token_len: entry.token_len,
+                    token_alphabet: entry.token_alphabet.trim().to_ascii_lowercase(),
+                    name_suffix: entry.name_suffix.trim().to_ascii_lowercase(),
                 })
                 .collect(),
             shared_hosting_public_suffixes: json
@@ -4335,6 +4368,29 @@ pub fn is_divergence_infrastructure_endpoint(host: &str, port: u16) -> bool {
         })
 }
 
+/// Whether a file NAME is an agent harness bookkeeping file
+/// ([`AgentHarnessTempFileJSON`]), case-insensitive. Entries with an empty
+/// prefix, suffix or alphabet, or no token length, match nothing.
+pub fn is_agent_harness_temp_file_name(name: &str) -> bool {
+    let name = name.trim().to_ascii_lowercase();
+    let snapshot = PARAMS_SNAPSHOT.load();
+    snapshot.agent_harness_temp_files.iter().any(|entry| {
+        if entry.name_prefix.is_empty()
+            || entry.name_suffix.is_empty()
+            || entry.token_alphabet.is_empty()
+            || entry.token_len == 0
+        {
+            return false;
+        }
+        name.strip_prefix(entry.name_prefix.as_str())
+            .and_then(|rest| rest.strip_suffix(entry.name_suffix.as_str()))
+            .is_some_and(|token| {
+                token.chars().count() == entry.token_len
+                    && token.chars().all(|c| entry.token_alphabet.contains(c))
+            })
+    })
+}
+
 /// Whether `path` is a file an agent harness captures a command's output
 /// into ([`AgentHarnessOutputCaptureJSON`]): the layout, segment for segment,
 /// case-insensitive, either separator. The agent's identity (`agent`) is
@@ -6228,6 +6284,22 @@ mod tests {
         assert_eq!(shape.random_len, 8);
         assert!(shape.alphabet.contains('_') && shape.alphabet.contains('0'));
         assert!(!shape.alphabet.chars().any(|c| c.is_ascii_uppercase()));
+    }
+
+    #[test]
+    fn test_agent_harness_temp_file_name() {
+        assert!(is_agent_harness_temp_file_name("claude-891e-cwd"));
+        assert!(is_agent_harness_temp_file_name("CLAUDE-A0F3-CWD"));
+        for name in [
+            "claude-891-cwd",
+            "claude-891ef-cwd",
+            "claude-89xz-cwd",
+            "claude-891e-cwd.sh",
+            "claude-891e",
+            "evil-891e-cwd",
+        ] {
+            assert!(!is_agent_harness_temp_file_name(name), "{name}");
+        }
     }
 
     #[test]
