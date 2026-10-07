@@ -780,6 +780,19 @@ pub struct AgentHarnessTempFileJSON {
     pub name_suffix: String,
 }
 
+/// Environment variable names that hold a wallet key or seed (BS-10): a
+/// `prefixes` entry joined to a `suffixes` entry with `_`
+/// (`SOLANA_PRIVATE_KEY`), or an `exact` name (`ANCHOR_WALLET`). Chain- or
+/// wallet-qualified only: a suffix never matches alone, so a generic
+/// `PRIVATE_KEY`, `SECRET` or `TOKEN` is never a wallet key. Only names are
+/// read, never values.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct WalletKeyEnvNamesJSON {
+    pub exact: Vec<String>,
+    pub prefixes: Vec<String>,
+    pub suffixes: Vec<String>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 pub struct AgentHarnessOutputCaptureJSON {
     pub agent: String,
@@ -1193,6 +1206,8 @@ pub struct CveDetectionParamsJSON {
     /// Agent harness bookkeeping files under the temp root (see
     /// [`AgentHarnessTempFileJSON`]).
     pub agent_harness_temp_files: Vec<AgentHarnessTempFileJSON>,
+    /// Wallet-key environment variable names (see [`WalletKeyEnvNamesJSON`]).
+    pub wallet_key_env_names: WalletKeyEnvNamesJSON,
     /// Python's `tempfile` scratch names (see [`PythonTempfileNameJSON`]).
     pub python_tempfile_name: PythonTempfileNameJSON,
     pub shared_infrastructure_min_local_processes: usize,
@@ -1429,6 +1444,8 @@ pub struct CveDetectionParams {
     pub agent_harness_output_capture: Vec<AgentHarnessOutputCaptureJSON>,
     /// `agent_harness_temp_files`, lowercase and trimmed.
     pub agent_harness_temp_files: Vec<AgentHarnessTempFileJSON>,
+    /// `wallet_key_env_names`, uppercase and trimmed.
+    pub wallet_key_env_names: WalletKeyEnvNamesJSON,
     /// Python's `tempfile` scratch names (see [`PythonTempfileNameJSON`]).
     pub python_tempfile_name: PythonTempfileNameJSON,
     pub shared_infrastructure_min_local_processes: usize,
@@ -2418,6 +2435,20 @@ impl CveDetectionParams {
                     }
                 })
                 .collect(),
+            wallet_key_env_names: {
+                let upper = |names: &[String]| -> Vec<String> {
+                    names
+                        .iter()
+                        .map(|name| name.trim().to_ascii_uppercase())
+                        .filter(|name| !name.is_empty())
+                        .collect()
+                };
+                WalletKeyEnvNamesJSON {
+                    exact: upper(&json.wallet_key_env_names.exact),
+                    prefixes: upper(&json.wallet_key_env_names.prefixes),
+                    suffixes: upper(&json.wallet_key_env_names.suffixes),
+                }
+            },
             agent_harness_temp_files: json
                 .agent_harness_temp_files
                 .iter()
@@ -4391,6 +4422,26 @@ pub fn is_agent_harness_temp_file_name(name: &str) -> bool {
     })
 }
 
+/// Whether an environment variable NAME holds a wallet key or seed
+/// ([`WalletKeyEnvNamesJSON`]): an exact name, or a prefix joined to a
+/// suffix with `_`. Case-insensitive (Windows environment names are).
+pub fn is_wallet_key_env_name(name: &str) -> bool {
+    let name = name.trim().to_ascii_uppercase();
+    if name.is_empty() {
+        return false;
+    }
+    let snapshot = PARAMS_SNAPSHOT.load();
+    let names = &snapshot.wallet_key_env_names;
+    if names.exact.iter().any(|exact| *exact == name) {
+        return true;
+    }
+    names.prefixes.iter().any(|prefix| {
+        name.strip_prefix(prefix.as_str())
+            .and_then(|rest| rest.strip_prefix('_'))
+            .is_some_and(|suffix| names.suffixes.iter().any(|s| s == suffix))
+    })
+}
+
 /// Whether `path` is a file an agent harness captures a command's output
 /// into ([`AgentHarnessOutputCaptureJSON`]): the layout, segment for segment,
 /// case-insensitive, either separator. The agent's identity (`agent`) is
@@ -6284,6 +6335,32 @@ mod tests {
         assert_eq!(shape.random_len, 8);
         assert!(shape.alphabet.contains('_') && shape.alphabet.contains('0'));
         assert!(!shape.alphabet.chars().any(|c| c.is_ascii_uppercase()));
+    }
+
+    #[test]
+    fn test_wallet_key_env_name() {
+        for name in [
+            "SOLANA_PRIVATE_KEY",
+            "SOLANA_KEYPAIR",
+            "ETH_PRIVATE_KEY",
+            "WALLET_MNEMONIC",
+            "ANCHOR_WALLET",
+            "solana_private_key",
+        ] {
+            assert!(is_wallet_key_env_name(name), "{name}");
+        }
+        for name in [
+            "PRIVATE_KEY",
+            "SECRET",
+            "API_KEY",
+            "TOKEN",
+            "SOLANA_RPC_URL",
+            "MY_SOLANA_PRIVATE_KEY",
+            "SOLANA_PRIVATE_KEY_PATH",
+            "",
+        ] {
+            assert!(!is_wallet_key_env_name(name), "{name}");
+        }
     }
 
     #[test]
