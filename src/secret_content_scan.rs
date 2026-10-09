@@ -881,6 +881,52 @@ mod tests {
         cleanup(&path);
     }
 
+    /// FP-CI-21 reproducer (edamame_app Test Android, self-hosted-linux-2,
+    /// 2026-10-09, released 2.0.5): the Gradle daemon's own log,
+    /// `~/.gradle/daemon/<version>/daemon-<pid>.out.log`, lists the NAMES of
+    /// the environment variables it hands each build. The `aws` signature
+    /// counted the bare key names, so Gradle's JVM downloading from Maven
+    /// Central and GCS read as AWS credentials on their way out (HIGH
+    /// `sensitive_material_egress`, and the Kotlin daemon's temp files raised
+    /// to HIGH through it). A key name counts only with its value assigned.
+    #[test]
+    fn gradle_daemon_log_env_names_are_not_aws_credentials() {
+        let path = unique_path("gradle_daemon", ".out.log");
+        let body = "2026-10-09T15:21:07.712+0000 [INFO] [org.gradle.launcher.daemon.server.exec.LogToClient] Daemon is about to start building Build{id=0, currentDir=/home/runner/work/app/android}.\n\
+                    2026-10-09T15:21:07.713+0000 [DEBUG] [org.gradle.launcher.daemon.server.exec.EstablishBuildEnvironment] Configuring env variables: [PATH, HOME, GITHUB_REPOSITORY_OWNER, ANDROID_HOME, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_DEFAULT_REGION, JAVA_HOME]\n";
+        write_temp(&path, body);
+        let scan = inspect_secret_like_file(&path);
+        let labels = scan
+            .as_ref()
+            .map(|s| s.secret_labels.clone())
+            .unwrap_or_default();
+        assert!(!labels.iter().any(|l| l == "aws"), "{scan:?}");
+        cleanup(&path);
+    }
+
+    /// The other half of FP-CI-21: every assignment shape a credential takes
+    /// (INI, shell and dotenv, JSON, YAML) still labels `aws`.
+    #[test]
+    fn aws_key_assignments_label_aws_in_every_shape() {
+        for (name, body) in [
+            ("env", "export AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE\n"),
+            (
+                "json",
+                "{\"aws_access_key_id\": \"AKIAIOSFODNN7EXAMPLE\", \"aws_secret_access_key\" : \"wJalrXUtnFEMI\"}\n",
+            ),
+            ("yaml", "aws_secret_access_key: wJalrXUtnFEMI/K7MDENG\n"),
+        ] {
+            let path = unique_path(name, "");
+            write_temp(&path, body);
+            let scan = inspect_secret_like_file(&path).expect("scan");
+            assert!(
+                scan.secret_labels.iter().any(|l| l == "aws"),
+                "{name}: {scan:?}"
+            );
+            cleanup(&path);
+        }
+    }
+
     /// FP-MAC-6 reproducer: a benign `.log` file containing a git error
     /// with a bare `https://github.com/...` URL must NOT trip the
     /// `network_command_like` heuristic. Before the CloudModel-tunable
