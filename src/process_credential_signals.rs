@@ -234,16 +234,38 @@ mod tests {
         assert!(!batch.truncated);
     }
 
+    const PROBE_CHILD_ENV: &str = "EDAMAME_WALLET_ENV_PROBE_CHILD";
+
+    /// The child process of `wallet_key_env_reports_names_never_values`.
+    /// Idles only when that test spawns it; a no-op in a normal run.
+    #[test]
+    fn wallet_key_env_probe_child() {
+        if std::env::var_os(PROBE_CHILD_ENV).is_some() {
+            std::thread::sleep(std::time::Duration::from_secs(10));
+        }
+    }
+
+    // macOS (`sysctl_procargsx`) omits another process's environment when the
+    // target is CS_RESTRICT -- platform binaries such as /bin/sleep -- for
+    // every caller, root included. Ad-hoc, linker-signed and hardened-runtime
+    // images (a Homebrew node, this test binary) are readable by root and by
+    // their own user, so the child is this test binary.
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
     fn wallet_key_env_reports_names_never_values() {
         let fake = "FAKE-NOT-A-KEY-4c1d";
-        let mut child = std::process::Command::new("sleep")
-            .arg("10")
+        let mut child = std::process::Command::new(std::env::current_exe().expect("test binary"))
+            .args([
+                "--exact",
+                "process_credential_signals::tests::wallet_key_env_probe_child",
+            ])
+            .env(PROBE_CHILD_ENV, "1")
             .env("SOLANA_PRIVATE_KEY", fake)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .spawn()
-            .expect("spawn sleep");
-        std::thread::sleep(std::time::Duration::from_millis(200));
+            .expect("spawn probe child");
+        std::thread::sleep(std::time::Duration::from_millis(300));
         let batch = collect_process_credential_signals(&[ProcessQuery {
             pid: child.id(),
             start_time: 1,
@@ -251,18 +273,8 @@ mod tests {
         }]);
         let _ = child.kill();
         let _ = child.wait();
-        // macOS 26 withholds another process's environment from a non-root
-        // caller, even of the same user; earlier releases expose it. The root
-        // daemon and helper read it on every release.
-        let is_root = std::process::Command::new("id")
-            .arg("-u")
-            .output()
-            .map(|out| String::from_utf8_lossy(&out.stdout).trim() == "0")
-            .unwrap_or(false);
-        if cfg!(target_os = "linux") || is_root || !batch.signals.is_empty() {
-            assert_eq!(batch.signals.len(), 1, "{batch:?}");
-            assert_eq!(batch.signals[0].wallet_key_env, vec!["SOLANA_PRIVATE_KEY"]);
-        }
+        assert_eq!(batch.signals.len(), 1, "{batch:?}");
+        assert_eq!(batch.signals[0].wallet_key_env, vec!["SOLANA_PRIVATE_KEY"]);
         assert!(!serde_json::to_string(&batch).unwrap().contains(fake));
     }
 }
