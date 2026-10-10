@@ -649,6 +649,14 @@ pub struct SandboxContainerLayoutJSON {
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 pub struct DevTreeMarkersJSON {
     pub cachedir_tag_file: String,
+    /// FP-CI-22: cargo's build-script directory under a target profile
+    /// (`<profile>/build/<pkg>-<hash>/`). `cargo install` builds in a
+    /// `cargo-install*` temp target that carries no `CACHEDIR.TAG` and is
+    /// gone by the next tick, so the layout is the only fact left.
+    pub cargo_build_directory: String,
+    /// FP-CI-22: the image name cargo gives a compiled build script
+    /// (`build-script-build`, `.exe` on Windows).
+    pub cargo_build_script_basenames: Vec<String>,
     pub cmake_cache_file: String,
     pub node_manifest_file: String,
     pub node_modules_directory: String,
@@ -1635,6 +1643,8 @@ fn trimmed_dev_tree_markers(markers: &DevTreeMarkersJSON) -> DevTreeMarkersJSON 
     };
     DevTreeMarkersJSON {
         cachedir_tag_file: markers.cachedir_tag_file.trim().to_string(),
+        cargo_build_directory: markers.cargo_build_directory.trim().to_string(),
+        cargo_build_script_basenames: names(&markers.cargo_build_script_basenames),
         cmake_cache_file: markers.cmake_cache_file.trim().to_string(),
         node_manifest_file: markers.node_manifest_file.trim().to_string(),
         node_modules_directory: markers.node_modules_directory.trim().to_string(),
@@ -6147,6 +6157,14 @@ mod tests {
         assert_eq!(p.code_module_suffixes, vec![".psm1"]);
         let shipped = dev_tree_markers();
         assert_eq!(shipped.cmake_cache_file, "CMakeCache.txt");
+        // FP-CI-22: cargo's build-script layout.
+        assert_eq!(shipped.cargo_build_directory, "build");
+        for name in ["build-script-build", "build-script-build.exe"] {
+            assert!(
+                shipped.cargo_build_script_basenames.iter().any(|n| n == name),
+                "{name}"
+            );
+        }
         assert_eq!(shipped.venv_config_file, "pyvenv.cfg");
         assert!(shipped
             .venv_interpreter_directories
