@@ -724,7 +724,10 @@ async fn resolve_home_unix(username: &str) -> Result<String> {
         "echo \"$HOME\""
     );
 
-    let output = Command::new("/bin/bash")
+    // The script is POSIX: run it with /bin/sh, which every unix host has,
+    // rather than /bin/bash, which minimal Linux images (Alpine, distroless,
+    // busybox containers) do not ship.
+    let output = Command::new("/bin/sh")
         .arg("-c")
         .arg(SCRIPT)
         .arg("resolve_home")
