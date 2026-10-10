@@ -2748,10 +2748,22 @@ pub fn build_mcp_inventory(home: &Path) -> McpInventory {
 /// Recursion / delegation (INC-4) is NOT part of the bundle: it derives from
 /// transcript bodies that core already collects via `collect_agent_transcripts`,
 /// so core computes it from that existing payload rather than re-reading disk.
+///
+/// Persisted: core saves the bundle as its `visibility_snapshot`
+/// (`PersistedVisibilitySnapshot`, first released in 1.6.0). Every field added
+/// since then carries `#[serde(default)]` (the app-upgrade exception in
+/// `invariants.mdc`): without it an upgrade fails the whole snapshot over one
+/// missing field ("missing field `host_installed_agents`", 2.0.5) and the
+/// operator sees nothing until the next structural collection. A defaulted
+/// field reads as empty and is refreshed by that collection.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VisibilityBundle {
     pub generated_at: chrono::DateTime<chrono::Utc>,
     pub inventory: McpInventory,
+    /// `#[serde(default)]`: added in 1.7.0 (renamed from `sboms`, which a
+    /// 1.6 snapshot carries instead and which is ignored); persisted, see
+    /// the struct doc.
+    #[serde(default)]
     pub component_inventories: Vec<AgentComponentInventory>,
     pub graph_edges: Vec<GraphEdge>,
     /// Host-level privilege (INC-7): the blast radius every agent inherits from
@@ -2767,11 +2779,15 @@ pub struct VisibilityBundle {
     /// (see `SupportedAgentDefinition::detect_host_install_with_home`). Carried
     /// on the bundle because the sandboxed app cannot read `~/.claude` itself --
     /// this rides the one helper round-trip the bundle already pays for.
+    /// `#[serde(default)]`: added in 1.8.0; persisted, see the struct doc.
+    #[serde(default)]
     pub host_installed_agents: Vec<String>,
     /// INC-18: tool definitions the agents keep on disk, hashed per server
     /// (`mcp_tool_integrity::collect_mcp_tool_digests`). The persisted
     /// approval baseline and the rug-pull / poisoning findings derived from
     /// these live in `edamame_core` (`CoreManager::refresh_structural_visibility`).
+    /// `#[serde(default)]`: added in 1.9.0; persisted, see the struct doc.
+    #[serde(default)]
     pub mcp_tool_digests: Vec<crate::mcp_tool_integrity::McpToolDigest>,
 }
 
@@ -7661,6 +7677,32 @@ malformed
         let restored: VisibilityBundle =
             serde_json::from_value(bundle).expect("a 1.9 bundle must still deserialize");
         assert!(restored.harnesses.iter().all(|h| h.homepage.is_empty()));
+    }
+
+    /// A snapshot saved before `component_inventories` (1.7, a 1.6 snapshot
+    /// carries `sboms`), `host_installed_agents` (1.8) and
+    /// `mcp_tool_digests` (1.9) existed must still load: 2.0.5 discarded it
+    /// with "missing field `host_installed_agents`".
+    #[test]
+    fn bundle_saved_before_the_later_fields_still_deserializes() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut bundle = serde_json::to_value(build_visibility_bundle(tmp.path())).unwrap();
+        let object = bundle.as_object_mut().expect("the bundle is an object");
+        for field in [
+            "component_inventories",
+            "host_installed_agents",
+            "mcp_tool_digests",
+        ] {
+            object
+                .remove(field)
+                .unwrap_or_else(|| panic!("{field} is serialized, so this test still covers it"));
+        }
+        object.insert("sboms".to_string(), serde_json::json!([]));
+        let restored: VisibilityBundle =
+            serde_json::from_value(bundle).expect("a 1.6 bundle must still deserialize");
+        assert!(restored.component_inventories.is_empty());
+        assert!(restored.host_installed_agents.is_empty());
+        assert!(restored.mcp_tool_digests.is_empty());
     }
 
     #[test]
