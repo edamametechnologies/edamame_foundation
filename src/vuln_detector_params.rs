@@ -657,6 +657,11 @@ pub struct DevTreeMarkersJSON {
     /// FP-CI-22: the image name cargo gives a compiled build script
     /// (`build-script-build`, `.exe` on Windows).
     pub cargo_build_script_basenames: Vec<String>,
+    /// FP-CI-22: the start of the name `cargo install` gives the temporary
+    /// target directory it creates (`cargo-install<random>`). The build-script
+    /// layout attests a tree only inside such a directory: under any other
+    /// target an unattested build script keeps its grade.
+    pub cargo_install_directory_prefix: String,
     pub cmake_cache_file: String,
     pub node_manifest_file: String,
     pub node_modules_directory: String,
@@ -1657,6 +1662,7 @@ fn trimmed_dev_tree_markers(markers: &DevTreeMarkersJSON) -> DevTreeMarkersJSON 
         bazel_output_link: markers.bazel_output_link.trim().to_string(),
         bazel_workspace_link_prefix: markers.bazel_workspace_link_prefix.trim().to_string(),
         go_build_work_directory_prefix: markers.go_build_work_directory_prefix.trim().to_string(),
+        cargo_install_directory_prefix: markers.cargo_install_directory_prefix.trim().to_string(),
         go_build_action_config_files: names(&markers.go_build_action_config_files),
         venv_config_file: markers.venv_config_file.trim().to_string(),
         venv_interpreter_directories: names(&markers.venv_interpreter_directories),
@@ -6157,11 +6163,15 @@ mod tests {
         assert_eq!(p.code_module_suffixes, vec![".psm1"]);
         let shipped = dev_tree_markers();
         assert_eq!(shipped.cmake_cache_file, "CMakeCache.txt");
-        // FP-CI-22: cargo's build-script layout.
+        // FP-CI-22: cargo's build-script layout, inside cargo install's target.
         assert_eq!(shipped.cargo_build_directory, "build");
+        assert_eq!(shipped.cargo_install_directory_prefix, "cargo-install");
         for name in ["build-script-build", "build-script-build.exe"] {
             assert!(
-                shipped.cargo_build_script_basenames.iter().any(|n| n == name),
+                shipped
+                    .cargo_build_script_basenames
+                    .iter()
+                    .any(|n| n == name),
                 "{name}"
             );
         }
