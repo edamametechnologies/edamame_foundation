@@ -909,7 +909,7 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 [[package]]
 name = "edamame_backend"
 version = "0.3.5"
-source = "git+https://github.com/edamametechnologies/edamame_backend?branch=main#683c256f7e8a0f212d1b914418b07ec56959bc9d"
+source = "git+https://github.com/edamametechnologies/edamame_backend?branch=main#a9554697f26aa7b270cd259ebfc75b90a6a58a24"
 dependencies = [
  "anyhow",
  "blake3",
@@ -923,7 +923,7 @@ dependencies = [
 
 [[package]]
 name = "edamame_foundation"
-version = "2.0.6"
+version = "2.0.7"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -1144,8 +1144,8 @@ dependencies = [
 
 [[package]]
 name = "flodbadd"
-version = "2.0.6"
-source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#603b215f0af2653adbeeace149801cc114df4d0c"
+version = "2.0.7"
+source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#f1251b7269bb413e5304125482a47b63c802d6bb"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -4009,7 +4009,7 @@ dependencies = [
 [[package]]
 name = "threatmodels_rs"
 version = "0.1.1"
-source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#e880c97d676fd0be7dcb5e9abce5dc02c82d642d"
+source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#02d77324e087b5b7a45259ae4184e3cdb0c8b1e3"
 dependencies = [
  "anyhow",
  "chrono",
