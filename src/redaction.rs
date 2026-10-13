@@ -116,9 +116,51 @@ pub fn is_secret_field_name(name: &str) -> bool {
     })
 }
 
-/// Regex over `<name><sep><value>` for the given name alternation. The value
-/// is masked with one `*` per character, keeping its own quoting (plain,
-/// JSON-escaped or none).
+/// Capture groups of one way a named field is written (see
+/// [`build_named_field_regex`]).
+struct FieldShape {
+    key: &'static str,
+    name: &'static str,
+    escaped: &'static str,
+    quoted: &'static str,
+    raw: &'static str,
+    bare: &'static str,
+}
+
+/// The ways a named field is written: a CLI flag (`--pin 123456`,
+/// `--llm-api-key=...`), a pair (`pin: 123456`, `"api_key":"..."`,
+/// `password=...`), and a name and value apart by spaces only
+/// (`PIN 654321 accepted`).
+const FIELD_SHAPES: [FieldShape; 3] = [
+    FieldShape {
+        key: "flag_key",
+        name: "flag_name",
+        escaped: "flag_escaped",
+        quoted: "flag_quoted",
+        raw: "flag_raw",
+        bare: "flag_bare",
+    },
+    FieldShape {
+        key: "pair_key",
+        name: "pair_name",
+        escaped: "pair_escaped",
+        quoted: "pair_quoted",
+        raw: "pair_raw",
+        bare: "pair_bare",
+    },
+    FieldShape {
+        key: "spaced_key",
+        name: "spaced_name",
+        escaped: "spaced_escaped",
+        quoted: "spaced_quoted",
+        raw: "spaced_raw",
+        bare: "spaced_bare",
+    },
+];
+
+/// Regex over `<name><sep><value>` for the given name alternation, in the
+/// three [`FIELD_SHAPES`]. The value is masked with one `*` per character,
+/// keeping its own quoting (plain, JSON-escaped or none).
 fn build_named_field_regex(names: &str) -> Regex {
     // Keys and values may be JSON-escaped (`\"pin\":\"123456\"`) when a
     // JSON string is logged through Debug. A quoted value steps over its
@@ -129,15 +171,94 @@ fn build_named_field_regex(names: &str) -> Regex {
     // as the fallback for a quoted value ending in a lone backslash. A
     // bare value may hold a backslash but not start with one, so the
     // backslash of an escaped key is never masked in place of a value.
-    // A separator (`:`, `=` or whitespace) is required between name and
-    // value, so `--pin-file` or `pin_llm_adjudication` are not read as a
-    // `pin` followed by a value.
     let quoted = r#"(?:[^"\\]|\\.)+"#;
     let escaped = r#"(?:[^"\\]|\\[^"\\]|\\\\(?:\\.|[^"\\]))+"#;
-    let pattern = format!(
-        r#"(?P<key>\\?"?\b(?:{names})\b\\?"?(?:\s*[:=]\s*|\s+))(?:\\"(?P<escaped>{escaped})\\"|"(?P<quoted>{quoted})"|"(?P<raw>[^"]+)"|(?P<bare>\b[^\s",}}\\][^\s",}}]*))"#
-    );
+    let bare = r#"\b[^\s",}\\][^\s",}]*"#;
+    // After spaces alone, a bare word is a value only when it is not a
+    // plain word: it holds a digit or a symbol (`654321`, `hunter2`,
+    // `p@ss`, `a.b`). Letters, `_`, `'`, `-` and trailing punctuation are
+    // prose (`token required`, `Secret store: file`, `Cached logon
+    // credentials enabled`). In the pattern rather than in the replacement,
+    // so a word that is no value is not consumed and can still name the
+    // field that follows it (`Secret connection_pin: 123456`).
+    let spaced_bare =
+        r#"\b[\p{L}_'-]*(?:[^\p{L}_'\-.,:;!?)\]\s",}\\]|[.,:;!?)\]][^\s",}])[^\s",}]*"#;
+    let value = |shape: &FieldShape, bare: &str| {
+        format!(
+            r#"(?:\\"(?P<{}>{escaped})\\"|"(?P<{}>{quoted})"|"(?P<{}>[^"]+)"|(?P<{}>{bare}))"#,
+            shape.escaped, shape.quoted, shape.raw, shape.bare
+        )
+    };
+    let [flag, pair, spaced] = &FIELD_SHAPES;
+    // A separator is required between name and value, so `--pin-file` or
+    // `pin_llm_adjudication` are not read as a `pin` followed by a value.
+    // A flag's dashes start the text or follow a space, quote, bracket or
+    // comma (`well-known-token` is no flag). A flag or a pair steps over the
+    // `Some(` of an `Option` around its value.
+    let pattern = [
+        format!(
+            r#"(?P<{}>(?:^|[\s"'(\[,])--?\b(?P<{}>{names})\b(?:\s*=\s*|\s+)(?:Some\()?){}"#,
+            flag.key,
+            flag.name,
+            value(flag, bare)
+        ),
+        format!(
+            r#"(?P<{}>\\?"?\b(?P<{}>{names})\b\\?"?\s*[:=]\s*(?:Some\()?){}"#,
+            pair.key,
+            pair.name,
+            value(pair, bare)
+        ),
+        format!(
+            r#"(?P<{}>\b(?P<{}>{names})\b\s+){}"#,
+            spaced.key,
+            spaced.name,
+            value(spaced, spaced_bare)
+        ),
+    ]
+    .join("|");
     Regex::new(&pattern).expect("Failed to compile named-field redaction regex")
+}
+
+/// Bare values that hide nothing whichever name they follow, so they stay
+/// readable: booleans and unset markers (`false`, `None`, `null`); numbers
+/// of at most three integer digits (`48`, `3.65`, `-1`: sub-scores, counts,
+/// event ids; under ten bits, nothing a PIN, a key or an identifier is made
+/// of); and after `code`, a status or error code (an integer, a hex code, or
+/// a name such as `Unavailable` or `ERROR_ACCESS_DENIED`). A quoted value
+/// is never exempt, nor is anything else: an ambiguous field stays masked.
+fn bare_value_hides_nothing(name: &str, value: &str) -> bool {
+    let value = value.trim_end_matches([')', ']', ';', ',', '.', ':']);
+    ["true", "false", "none", "null"]
+        .iter()
+        .any(|word| value.eq_ignore_ascii_case(word))
+        || is_small_number(value)
+        || (name == "code" && is_status_code(value))
+}
+
+/// At most three integer digits, an optional sign and fraction.
+fn is_small_number(value: &str) -> bool {
+    let unsigned = value.strip_prefix('-').unwrap_or(value);
+    let (integer, fraction) = match unsigned.split_once('.') {
+        Some((integer, fraction)) => (integer, Some(fraction)),
+        None => (unsigned, None),
+    };
+    let digits = |part: &str| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit());
+    integer.len() <= 3 && digits(integer) && fraction.is_none_or(digits)
+}
+
+/// A status or error code: an integer (`10061`, `-2147024891`), a hex code
+/// (`0x80070005`) or a name made of letters and `_` (`Unavailable`,
+/// `ConnectionRefused`, `ERROR_ACCESS_DENIED`).
+fn is_status_code(value: &str) -> bool {
+    let unsigned = value.strip_prefix('-').unwrap_or(value);
+    let decimal = !unsigned.is_empty() && unsigned.bytes().all(|b| b.is_ascii_digit());
+    let hex = value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+        .is_some_and(|hex| !hex.is_empty() && hex.bytes().all(|b| b.is_ascii_hexdigit()));
+    let name = value.starts_with(|c: char| c.is_ascii_alphabetic())
+        && value.bytes().all(|b| b.is_ascii_alphabetic() || b == b'_');
+    decimal || hex || name
 }
 
 fn secret_names_alternation() -> String {
@@ -227,19 +348,25 @@ fn is_auth_scheme(value: &str) -> bool {
 fn mask_field_values(regex: &Regex, input: &str) -> String {
     regex
         .replace_all(input, |caps: &Captures| {
-            let key = &caps["key"];
-            if let Some(bare) = caps.name("bare") {
-                if is_auth_scheme(bare.as_str()) {
-                    return caps[0].to_string();
-                }
-            }
+            let Some(shape) = FIELD_SHAPES
+                .iter()
+                .find(|shape| caps.name(shape.key).is_some())
+            else {
+                return caps[0].to_string();
+            };
+            let key = &caps[shape.key];
             // Keep the value's own quoting (JSON-escaped, plain or none).
-            let (quote, value) = if let Some(m) = caps.name("escaped") {
+            let (quote, value) = if let Some(m) = caps.name(shape.escaped) {
                 ("\\\"", m.as_str())
-            } else if let Some(m) = caps.name("quoted").or_else(|| caps.name("raw")) {
+            } else if let Some(m) = caps.name(shape.quoted).or_else(|| caps.name(shape.raw)) {
                 ("\"", m.as_str())
             } else {
-                ("", caps.name("bare").map_or("", |m| m.as_str()))
+                let bare = caps.name(shape.bare).map_or("", |m| m.as_str());
+                let name = caps.name(shape.name).map_or("", |m| m.as_str());
+                if is_auth_scheme(bare) || bare_value_hides_nothing(name, bare) {
+                    return caps[0].to_string();
+                }
+                ("", bare)
             };
             format!(
                 "{}{}{}{}",
@@ -253,8 +380,11 @@ fn mask_field_values(regex: &Regex, input: &str) -> String {
 }
 
 /// Mask the values of secret-named fields (`pin: 123456`, `"api_key":"..."`,
-/// `password=...`, `--pin 123456`, `Authorization: ...`), one `*` per
-/// character. Shapes are not consulted.
+/// `password=...`, `--pin 123456`, `PIN 654321`, `Authorization: ...`), one
+/// `*` per character. After spaces alone only a value-like word counts
+/// (`token required` is prose), and booleans, unset markers and small
+/// numbers are never masked (`is_success_pin: false`, `credentials: 48`).
+/// Shapes are not consulted.
 pub fn redact_named_fields(text: &str) -> String {
     mask_field_values(&SECRET_FIELD_REGEX, text)
 }
@@ -268,7 +398,9 @@ pub fn redact_text(text: &str) -> String {
 
 /// [`redact_text`] plus the privacy keys the log writers have always masked
 /// (`id`, `uuid`, `device`, `device_id`, `code`). For log lines and the Sentry
-/// scrubber; not for text shown to the operator, where ids are useful.
+/// scrubber; not for text shown to the operator, where ids are useful. A
+/// status or error code after `code` (`code: Unavailable`, `code 1168`) is
+/// not an identifier and stays readable.
 pub fn redact_log_line(text: &str) -> String {
     mask_field_values(&LOG_FIELD_REGEX, &redact_secret_tokens(text))
 }
@@ -725,6 +857,24 @@ mod tests {
             "basic validation failed; the bearer of bad news",
             "http://localhost:11434/api/generate",
             "uuid 3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+            // A secret-like name with a label, a boolean, a small number,
+            // nothing, or prose after it (logs of 2026-10-13).
+            "Computed score: 3.65 (application: 51, network: 29, system services: 66, system integrity: 93, credentials: 100, ai: 48)",
+            "ConnectionStatus { connected_user: \"bob\", is_success: true, is_success_pin: false, is_outdated: false }",
+            "LLMConfig { api_key: None, oauth_refresh_token: null }",
+            "Preserved status for threat: Cached logon credentials enabled = Inactive",
+            "Preserved status for threat: password is too weak = Active",
+            "Preserved status for threat: no password manager = Active",
+            "Preserved status for threat: passwd permissions = Inactive",
+            "   Authentication: Bearer token required (per-client credential or PSK)",
+            "   Security: PSK authentication required, localhost only",
+            "Starting MCP server on 127.0.0.1:3000 with PSK auth",
+            "Secret store: file (/root/.edamame/secrets)",
+            "  Token URL: https://portal.example/oauth2/token",
+            "Setting credentials for user: bob, domain: example.com",
+            "Credentials set to user: bob, domain: example.com",
+            "ES credential-open client subscribed to NOTIFY_OPEN on 30 cold credential prefixes",
+            "the key isn't loaded; secret's owner unknown",
         ] {
             assert_eq!(redact_text(text), text, "over-redacted");
         }
@@ -737,6 +887,103 @@ mod tests {
         // Operator-facing text keeps ids.
         let text = r#"{"id": "12345"}"#;
         assert_eq!(redact_text(text), text);
+    }
+
+    /// Log lines the privacy keys masked by mistake (dogfood hosts,
+    /// 2026-10-13): prose after `device`, status and error codes after
+    /// `code`, small numbers after `id`.
+    #[test]
+    fn log_lines_keep_status_codes_small_ids_and_prose() {
+        for line in [
+            "Error sending request to helper: Status { code: Unavailable, message: \"tcp connect error\", source: None }",
+            "Os { code: 10061, kind: ConnectionRefused, message: \"No connection could be made\" }",
+            "Os { code: -2147024891, kind: PermissionDenied }; HRESULT code=0x80070005",
+            "GetIpNetTable2 failed with code 1168",
+            "Call to backend failed with error code: InvalidSignature - report_score failed",
+            "failed with code 400, response body: \"x\", error code is InputValidationFailed",
+            "Conflicting device characteristics - aborting merge of DeviceInfo",
+            "Unknown device type for ports [22], mdns []",
+            "Loading device profiles from JSON",
+            "Attempting to find device with interface: Wi-Fi",
+            "Cleared 3 device todos and 2 session todos due to network change",
+            "ETW audit-api-calls event id=5 version=0 opcode=0 level=4 keyword=0x0 pid=420",
+            "especially if the device connects to untrusted networks",
+            "Computed score: 3.65 (application: 51, network: 29, system services: 66, system integrity: 93, credentials: 100, ai: 48)",
+            "ConnectionStatus { is_success: true, is_success_pin: false }",
+            "Preserved status for threat: Cached logon credentials enabled = Inactive",
+            "   Authentication: Bearer token required (per-client credential or PSK)",
+            "Secret store: file (/var/root/.edamame/secrets), this binary has no keychain access group",
+        ] {
+            assert_eq!(redact_log_line(line), line, "over-redacted");
+        }
+    }
+
+    /// What the names are there for stays masked in log lines: identifiers
+    /// after `device`, a `code` that is no status code, PINs and passwords
+    /// however written, the value inside an `Option`.
+    #[test]
+    fn log_lines_still_mask_identifiers_and_secrets() {
+        for (line, hidden) in [
+            (
+                "Reporting score for device 4f3c2a1b9d8e7f6a5b4c3d2e1f0a9b8c (Linux Mint 22.1) with IPv4",
+                "4f3c2a1b9d8e7f6a5b4c3d2e1f0a9b8c",
+            ),
+            (
+                "Connecting device 3f2504e0-4f89-11d3-9a0c-0305e82c3301 (Windows 10) for user bob",
+                "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+            ),
+            (
+                "Request to https://backend.example/api/plan?device_id=8a7b6c5d4e3f failed",
+                "8a7b6c5d4e3f",
+            ),
+            ("GET /callback?code=4/0AfJohXnZ3pq&state=xyz", "4/0AfJohXnZ3pq"),
+            ("authorization code: a1b2c3d4-e5f6", "a1b2c3d4-e5f6"),
+            (
+                "ConnectionStatus { pin: \"1234567890\", is_success_pin: false }",
+                "1234567890",
+            ),
+            ("PIN 654321 accepted", "654321"),
+            ("pin: 1234", "1234"),
+            ("password hunter2 rejected", "hunter2"),
+            ("secret p@ssw*rd! rejected", "p@ssw*rd!"),
+            ("Secret connection_pin: 123456 written", "123456"),
+            ("LLMConfig { api_key: Some(\"plainvalue\") }", "plainvalue"),
+            ("edamame_posture start --password hunter --user bob", "hunter"),
+            (r#"{"id": "12345"}"#, "12345"),
+            ("uuid 3f2504e0-4f89-11d3-9a0c-0305e82c3301", "3f2504e0"),
+        ] {
+            let out = redact_log_line(line);
+            assert!(!out.contains(hidden), "{hidden} leaked from {line:?}: {out}");
+            assert!(out.contains('*'), "{line:?}: {out}");
+        }
+    }
+
+    /// A secret-like label with a word after `:` reads as `name: value`: it
+    /// stays masked, and the log format needs another label (core's
+    /// `<call>_with_api_key:` prefixes and `Secret <slot>:` lines, core's
+    /// community LAN line, flodbadd's capture device line).
+    #[test]
+    fn ambiguous_labels_stay_masked() {
+        for (line, masked) in [
+            (
+                "get_agentic_subscription_status_with_api_key: Request failed for https://x",
+                "get_agentic_subscription_status_with_api_key: ******* failed for https://x",
+            ),
+            (
+                "Secret connection_pin: secret store write failed (create failed); the record keeps the credentials",
+                "Secret connection_pin: ****** store write failed (create failed); the record keeps the credentials",
+            ),
+            (
+                "Received 18 devices from the community, accepted 18, last seen device: 2026-10-13 20:05:44 UTC",
+                "Received 18 devices from the community, accepted 18, last seen device: ********** 20:05:44 UTC",
+            ),
+            (
+                "Attempting to find interface from device: eth0",
+                "Attempting to find interface from device: ****",
+            ),
+        ] {
+            assert_eq!(redact_log_line(line), masked);
+        }
     }
 
     #[test]
