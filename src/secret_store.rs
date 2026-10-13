@@ -26,6 +26,8 @@
 
 use anyhow::{anyhow, Context, Result};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, SystemTime};
 
 /// A place credentials can live outside the persisted config.
 pub trait SecretStore: Send + Sync {
@@ -51,14 +53,75 @@ fn validate_name(name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Write `bytes` to `path` through a sibling temp file and a rename, so a
-/// crash never leaves a truncated secret. On unix the file is created `0600`
-/// (never wider, even for an instant) and the directory is kept `0700`.
+/// A temp file older than this was abandoned by a writer that died between
+/// creating and renaming it (a write takes milliseconds); a younger one may
+/// be another process's write in flight.
+const ABANDONED_TEMP_AGE: Duration = Duration::from_secs(10 * 60);
+
+/// How many times a rename Windows refuses for a moment is tried again.
+const RENAME_RETRIES: u32 = 5;
+
+/// Numbers this process's temp files: with the pid and a random part, a
+/// name no other write uses.
+static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// `.<file name>.<pid>-<sequence>-<random>.tmp` next to `path`: unique to one
+/// write, hidden on unix, never a store file (names cannot start with `.`).
+fn temp_path_for(path: &Path) -> PathBuf {
+    let file_name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    path.with_file_name(format!(
+        ".{file_name}.{}-{sequence}-{:08x}.tmp",
+        std::process::id(),
+        rand::random::<u32>()
+    ))
+}
+
+/// Whether `candidate` is a temp file [`temp_path_for`] names for the store
+/// file `file_name`.
+fn is_temp_of(candidate: &str, file_name: &str) -> bool {
+    let Some(unique) = candidate
+        .strip_prefix('.')
+        .and_then(|rest| rest.strip_prefix(file_name))
+        .and_then(|rest| rest.strip_prefix('.'))
+        .and_then(|rest| rest.strip_suffix(".tmp"))
+    else {
+        return false;
+    };
+    let digits = |part: &str| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit());
+    let mut parts = unique.split('-');
+    match (parts.next(), parts.next(), parts.next(), parts.next()) {
+        (Some(pid), Some(sequence), Some(random), None) => {
+            digits(pid)
+                && digits(sequence)
+                && random.len() == 8
+                && random.bytes().all(|b| b.is_ascii_hexdigit())
+        }
+        _ => false,
+    }
+}
+
+/// Write `bytes` to `path` through a temp file of its own and a rename, so a
+/// crash never leaves a truncated secret and concurrent writers never meet:
+/// each write creates its own temp (`create_new`, never another writer's
+/// file) and the last rename wins, whole. On unix the temp is created `0600`
+/// (never wider, even for an instant) and the directory is kept `0700`. A
+/// failed write removes its temp; temps abandoned by writers that died are
+/// swept ([`sweep_abandoned_temps`]).
+///
+/// Before 2.0.8 every write of an item used the one name `<name>.tmp`,
+/// removed it and created it again: two processes writing one item at once
+/// (each upgrade started the app twice on a Windows host) collided, the
+/// second failing with "file exists" (on unix it could also rename the
+/// first one's half-written file), and the write was retried only at a
+/// later save.
 fn write_file_atomically(dir: &Path, path: &Path, bytes: &[u8]) -> Result<()> {
     use std::io::Write;
     ensure_private_dir(dir)?;
-    let tmp = path.with_extension("tmp");
-    let _ = std::fs::remove_file(&tmp);
+    let tmp = temp_path_for(path);
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -69,11 +132,86 @@ fn write_file_atomically(dir: &Path, path: &Path, bytes: &[u8]) -> Result<()> {
     let mut file = options
         .open(&tmp)
         .with_context(|| format!("create {}", tmp.display()))?;
-    file.write_all(bytes)
+    let written = file
+        .write_all(bytes)
         .and_then(|_| file.sync_all())
-        .with_context(|| format!("write {}", tmp.display()))?;
+        .with_context(|| format!("write {}", tmp.display()));
     drop(file);
-    std::fs::rename(&tmp, path).with_context(|| format!("rename to {}", path.display()))?;
+    let result = written.and_then(|_| {
+        rename_over(&tmp, path).with_context(|| format!("rename to {}", path.display()))
+    });
+    if result.is_ok() {
+        sweep_abandoned_temps(path);
+    } else {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
+}
+
+/// `std::fs::rename` over an existing file, atomic on every platform.
+/// Windows can refuse it for a moment while another process holds the
+/// target or the source (a concurrent writer's rename, a reader, an
+/// antivirus scan of the file just closed): such a refusal is retried
+/// briefly. A unix rename does not fail that way.
+fn rename_over(from: &Path, to: &Path) -> std::io::Result<()> {
+    let mut attempt = 0;
+    loop {
+        match std::fs::rename(from, to) {
+            Err(e) if attempt < RENAME_RETRIES && rename_refusal_is_transient(&e) => {
+                attempt += 1;
+                std::thread::sleep(Duration::from_millis(10 * u64::from(attempt)));
+            }
+            result => return result,
+        }
+    }
+}
+
+/// `ERROR_ACCESS_DENIED`, `ERROR_SHARING_VIOLATION`, `ERROR_LOCK_VIOLATION`:
+/// what Windows answers while another handle is in the way.
+fn rename_refusal_is_transient(error: &std::io::Error) -> bool {
+    cfg!(windows) && matches!(error.raw_os_error(), Some(5 | 32 | 33))
+}
+
+/// Remove the temp files of `path`'s item that writers which died mid-write
+/// left behind, this module's own and the `<name>.tmp` of builds before
+/// 2.0.8, once [`ABANDONED_TEMP_AGE`] old: each holds the secret it was
+/// writing, which must not outlive the item (a sign-out deletes it). Younger
+/// ones may be another writer's, in flight. Best effort.
+fn sweep_abandoned_temps(path: &Path) {
+    let (Some(dir), Some(file_name)) = (path.parent(), path.file_name().and_then(|n| n.to_str()))
+    else {
+        return;
+    };
+    let legacy = path.with_extension("tmp");
+    let legacy_name = legacy.file_name().and_then(|name| name.to_str());
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let now = SystemTime::now();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if Some(name) != legacy_name && !is_temp_of(name, file_name) {
+            continue;
+        }
+        let abandoned = entry
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .and_then(|modified| now.duration_since(modified).ok())
+            .is_some_and(|age| age >= ABANDONED_TEMP_AGE);
+        if abandoned {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// Remove an item's file, then the temp files its dead writers left.
+fn remove_secret_file(path: &Path) -> Result<()> {
+    remove_file_if_present(path)?;
+    sweep_abandoned_temps(path);
     Ok(())
 }
 
@@ -147,7 +285,7 @@ impl SecretStore for OwnerOnlyFileStore {
     }
 
     fn delete(&self, name: &str) -> Result<()> {
-        remove_file_if_present(&self.path(name)?)
+        remove_secret_file(&self.path(name)?)
     }
 }
 
@@ -273,7 +411,7 @@ impl SecretStore for DpapiFileStore {
     }
 
     fn delete(&self, name: &str) -> Result<()> {
-        remove_file_if_present(&self.path(name)?)
+        remove_secret_file(&self.path(name)?)
     }
 }
 
@@ -652,6 +790,156 @@ mod tests {
         assert_eq!(file_mode, 0o600);
         assert_eq!(dir_mode, 0o700);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Eight writers hammer one item at once, as the two app processes an
+    /// upgrade starts on Windows did with `connection_pin`: every write must
+    /// land, the value read back must be one of them whole, and no temp file
+    /// may be left behind.
+    fn concurrent_writers_all_land(store: std::sync::Arc<dyn SecretStore>, dir: &Path) {
+        const WRITERS: usize = 8;
+        const WRITES: usize = 40;
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(WRITERS));
+        let handles: Vec<_> = (0..WRITERS)
+            .map(|writer| {
+                let store = store.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    (0..WRITES)
+                        .filter_map(|n| {
+                            store
+                                .write("connection_pin", &format!("writer-{writer}-value-{n}"))
+                                .err()
+                                .map(|e| format!("{e:#}"))
+                        })
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        let failures: Vec<String> = handles
+            .into_iter()
+            .flat_map(|handle| handle.join().unwrap())
+            .collect();
+        assert!(
+            failures.is_empty(),
+            "{} of {} concurrent writes failed, first: {:?}",
+            failures.len(),
+            WRITERS * WRITES,
+            failures.first()
+        );
+        let value = store.read("connection_pin").unwrap().expect("a value");
+        let (writer, n) = value
+            .strip_prefix("writer-")
+            .and_then(|rest| rest.split_once("-value-"))
+            .expect("a whole value");
+        assert!(writer.parse::<usize>().unwrap() < WRITERS, "{value}");
+        assert!(n.parse::<usize>().unwrap() < WRITES, "{value}");
+        let leftovers: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| !name.starts_with("connection_pin."))
+            .collect();
+        assert!(leftovers.is_empty(), "temp files left: {leftovers:?}");
+    }
+
+    #[test]
+    fn concurrent_writers_of_one_item_all_succeed() {
+        let dir = temp_dir("concurrent");
+        concurrent_writers_all_land(std::sync::Arc::new(OwnerOnlyFileStore::new(&dir)), &dir);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn concurrent_dpapi_writers_of_one_item_all_succeed() {
+        let dir = temp_dir("concurrent-dpapi");
+        concurrent_writers_all_land(std::sync::Arc::new(DpapiFileStore::new(&dir)), &dir);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn set_age(path: &Path, age: std::time::Duration) {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() - age)
+            .unwrap();
+    }
+
+    /// The fixed `<name>.tmp` of builds before 2.0.8 can be left over (a
+    /// writer died mid-write) or still held by another process, which on
+    /// Windows makes it impossible to remove (a directory stands in for such
+    /// a file here: it cannot be removed or created over either).
+    #[test]
+    fn a_leftover_temp_file_never_blocks_a_write() {
+        let dir = temp_dir("held-tmp");
+        std::fs::create_dir_all(dir.join("connection_pin.tmp")).unwrap();
+        let store = OwnerOnlyFileStore::new(&dir);
+        store.write("connection_pin", "123456").unwrap();
+        assert_eq!(
+            store.read("connection_pin").unwrap().as_deref(),
+            Some("123456")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A temp file holds the secret it was writing: once abandoned (older
+    /// than any write takes) it is swept by the next write or delete of its
+    /// item; a recent one may be another writer's, in flight, and stays.
+    #[test]
+    fn abandoned_temp_files_are_swept_and_recent_ones_left_alone() {
+        let dir = temp_dir("stale-tmp");
+        let store = OwnerOnlyFileStore::new(&dir);
+        store.write("connection_pin", "first").unwrap();
+        let old = std::time::Duration::from_secs(3600);
+        let legacy_abandoned = dir.join("connection_pin.tmp");
+        let abandoned = dir.join(".connection_pin.secret.4242-7-0badf00d.tmp");
+        let in_flight = dir.join(".connection_pin.secret.4343-1-cafe0123.tmp");
+        let other_item = dir.join(".other.secret.4242-8-0badf00d.tmp");
+        for path in [&legacy_abandoned, &abandoned, &in_flight, &other_item] {
+            std::fs::write(path, "stale secret").unwrap();
+        }
+        for path in [&legacy_abandoned, &abandoned, &other_item] {
+            set_age(path, old);
+        }
+
+        store.write("connection_pin", "second").unwrap();
+        assert_eq!(
+            store.read("connection_pin").unwrap().as_deref(),
+            Some("second")
+        );
+        assert!(!legacy_abandoned.exists(), "pre-2.0.8 temp not swept");
+        assert!(!abandoned.exists(), "abandoned temp not swept");
+        assert!(in_flight.exists(), "a recent temp may be in flight");
+        assert!(other_item.exists(), "another item's temp is not ours");
+
+        set_age(&in_flight, old);
+        store.delete("connection_pin").unwrap();
+        assert!(!in_flight.exists(), "delete leaves no copy of the secret");
+        assert_eq!(store.read("connection_pin").unwrap(), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn temp_names_belong_to_their_item_only() {
+        let path = Path::new("/s/connection_pin.secret");
+        let temp = temp_path_for(path);
+        let name = temp.file_name().unwrap().to_str().unwrap();
+        assert_eq!(temp.parent(), path.parent());
+        assert!(is_temp_of(name, "connection_pin.secret"), "{name}");
+        assert_ne!(temp, temp_path_for(path), "two writes share a temp name");
+        for other in [
+            "connection_pin.secret",
+            "connection_pin.tmp",
+            ".connection_pin.secret.tmp",
+            ".connection_pin.secret.x-1-0badf00d.tmp",
+            ".connection_pin.secret.extra.secret.1-2-0badf00d.tmp",
+            ".connection_pin.secret.1-2-0badf00d.tmp.bak",
+        ] {
+            assert!(!is_temp_of(other, "connection_pin.secret"), "{other}");
+        }
     }
 
     #[test]
