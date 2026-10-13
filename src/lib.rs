@@ -57,6 +57,8 @@ pub mod managed_config;
 pub mod mcp_tool_integrity;
 /// Authenticity of the downloaded models (`model-signatures`, 2.0.3).
 pub mod model_authenticity;
+/// Raise the soft open-files limit of a long-running process (2.0.8).
+pub mod open_files_limit;
 pub mod order;
 pub mod order_type;
 pub mod peer_ids;
