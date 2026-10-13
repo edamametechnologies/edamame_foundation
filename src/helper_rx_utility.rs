@@ -183,6 +183,39 @@ pub async fn utility_helper_flags() -> Result<String> {
     Ok(crate::helper_state::get_helper_flags())
 }
 
+/// Which helper process is answering. `instance_id` is new in every process,
+/// so the core can tell a restarted helper from the one it configured even
+/// when the restart fell between two of its availability checks: the 2.0.7
+/// PKG upgrade on fmba-3 started the helper three times in 21 s, the app
+/// never saw it unavailable, and the file monitor it had started was gone.
+/// State the core pushes (capture, its policy, the file monitor) lives in
+/// this process only; the core re-applies it when the id changes. Helpers
+/// before 2.0.8 do not know this order.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct HelperInstanceInfo {
+    pub instance_id: String,
+    /// RFC 3339, taken when the helper started its interface monitor.
+    pub started_at: String,
+    pub pid: u32,
+    pub version: String,
+}
+
+static HELPER_INSTANCE: once_cell::sync::Lazy<HelperInstanceInfo> =
+    once_cell::sync::Lazy::new(|| HelperInstanceInfo {
+        instance_id: uuid::Uuid::new_v4().to_string(),
+        started_at: chrono::Utc::now().to_rfc3339(),
+        pid: std::process::id(),
+        version: CARGO_PKG_VERSION.to_string(),
+    });
+
+pub fn helper_instance() -> &'static HelperInstanceInfo {
+    &HELPER_INSTANCE
+}
+
+pub async fn utility_helper_instance() -> Result<String> {
+    Ok(serde_json::to_string(helper_instance())?)
+}
+
 /// The helper's model authenticity snapshot: its threat model is the copy
 /// it runs elevated scripts from, and its lists are the ones capture
 /// matches. Thin delegate to the shared snapshot, which a standalone core
@@ -585,6 +618,9 @@ pub async fn utility_get_whitelist_name() -> Result<String> {
 
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub fn start_interface_monitor() {
+    // Called once at helper start: fix the instance identity (and its
+    // `started_at`) now rather than at the core's first question.
+    let _ = helper_instance();
     let rt = crate::runtime::handle();
 
     #[cfg(all(
@@ -1273,6 +1309,18 @@ mod tests {
     use macaddr::MacAddr6;
     use serde_json;
     use std::net::{IpAddr, Ipv4Addr};
+
+    #[tokio::test]
+    async fn the_helper_instance_is_one_per_process_and_round_trips() {
+        let first = helper_instance().clone();
+        assert_eq!(helper_instance(), &first, "stable within the process");
+        assert_eq!(first.pid, std::process::id());
+        assert_eq!(first.version, CARGO_PKG_VERSION);
+        assert!(uuid::Uuid::parse_str(&first.instance_id).is_ok());
+        let json = utility_helper_instance().await.expect("serializes");
+        let parsed: HelperInstanceInfo = serde_json::from_str(&json).expect("the core parses it");
+        assert_eq!(parsed, first);
+    }
 
     #[test]
     fn test_require_caller_home_rejects_empty() {

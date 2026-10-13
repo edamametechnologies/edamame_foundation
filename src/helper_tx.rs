@@ -44,6 +44,7 @@ pub const UTILITY_ORDER_NAMES: &[&str] = &[
     "getappleid_email",
     "helper_check",
     "helper_flags",
+    "helper_instance",
     "is_capturing",
     "kill_process",
     "mdns_resolve",
