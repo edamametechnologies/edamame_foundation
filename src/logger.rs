@@ -675,6 +675,20 @@ pub fn init_logger(
     }
 }
 
+/// Backtraces for panics, not for errors. `RUST_BACKTRACE=1` alone also
+/// turns on `Backtrace::capture`, which every `anyhow::Error` calls: each
+/// error walked the stack and each `{:?}` of one printed an unsymbolized
+/// trace into the logs. With `RUST_LIB_BACKTRACE=0` (std's documented split)
+/// only panics keep theirs; a user's own `RUST_LIB_BACKTRACE` wins. The panic
+/// hook captures with `Backtrace::force_capture` anyway, so the panic
+/// artifact, stderr and the Sentry event keep their backtraces.
+fn configure_backtraces() {
+    std::env::set_var("RUST_BACKTRACE", "1");
+    if std::env::var_os("RUST_LIB_BACKTRACE").is_none() {
+        std::env::set_var("RUST_LIB_BACKTRACE", "0");
+    }
+}
+
 fn init_logger_once(
     executable_type: &str,
     url: &str,
@@ -687,8 +701,7 @@ fn init_logger_once(
     // Store executable type for panic handler
     let _ = EXECUTABLE_TYPE.set(executable_type.to_string());
 
-    // Force backtrace
-    std::env::set_var("RUST_BACKTRACE", "1");
+    configure_backtraces();
 
     // Set a panic hook that logs to tracing and stderr (only once to avoid replacement)
     PANIC_HOOK_INIT.call_once(|| {
@@ -1372,6 +1385,53 @@ mod tests {
         assert!(sentry_event_to_send(event("gate: set directly")).is_some());
         set_error_reporting_enabled(false);
         assert!(!error_reporting_enabled());
+    }
+
+    /// Errors carry no backtrace (an `anyhow::Error` captures one when
+    /// `Backtrace::capture` is on), panics keep theirs (the hook uses
+    /// `Backtrace::force_capture`), and a user's own `RUST_LIB_BACKTRACE`
+    /// wins. Checked in a child process: std reads the variables once, at the
+    /// first capture of the process.
+    #[test]
+    fn error_backtraces_are_off_and_panic_backtraces_stay_on() {
+        use std::backtrace::{Backtrace, BacktraceStatus};
+        const CHILD: &str = "EDAMAME_BACKTRACE_CHILD";
+        const NAME: &str = "logger::tests::error_backtraces_are_off_and_panic_backtraces_stay_on";
+        if let Some(expect) = std::env::var_os(CHILD) {
+            configure_backtraces();
+            let error_backtrace = anyhow::anyhow!("an error").backtrace().status();
+            if expect == "errors_off" {
+                assert_eq!(error_backtrace, BacktraceStatus::Disabled);
+                assert_eq!(Backtrace::capture().status(), BacktraceStatus::Disabled);
+            } else {
+                assert_eq!(error_backtrace, BacktraceStatus::Captured);
+            }
+            assert_eq!(
+                Backtrace::force_capture().status(),
+                BacktraceStatus::Captured
+            );
+            assert_eq!(std::env::var("RUST_BACKTRACE").as_deref(), Ok("1"));
+            println!("{CHILD} ok");
+            return;
+        }
+        for (user_setting, expect) in [(None, "errors_off"), (Some("1"), "errors_on")] {
+            let mut child = std::process::Command::new(current_exe().unwrap());
+            child
+                .args(["--exact", NAME, "--nocapture", "--test-threads=1"])
+                .env(CHILD, expect)
+                .env_remove("RUST_BACKTRACE")
+                .env_remove("RUST_LIB_BACKTRACE");
+            if let Some(value) = user_setting {
+                child.env("RUST_LIB_BACKTRACE", value);
+            }
+            let output = child.output().unwrap();
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(
+                output.status.success() && stdout.contains(&format!("{CHILD} ok")),
+                "{expect}: {stdout}{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
     }
 
     #[test]
