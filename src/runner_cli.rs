@@ -1,11 +1,13 @@
 use anyhow::{anyhow, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use std::process::Stdio;
+use std::sync::LazyLock;
 use std::{env, path::PathBuf};
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use tokio::time::{timeout, Duration, Instant};
 use tracing::{debug, error, warn};
+use undeadlock::CustomDashMap;
 
 #[cfg(target_os = "windows")]
 use std::ffi::{c_void, OsStr, OsString};
@@ -706,32 +708,94 @@ pub(crate) fn is_valid_unix_username(username: &str) -> bool {
         && chars.all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | '@'))
 }
 
+/// Homes the user database gave for an account, kept for the process's
+/// life (2.0.8). Every personated order used to spawn `/bin/sh` with two
+/// pipes just to read it again, a burst of descriptors at each threat-check
+/// round that the helper could not afford at a wake (EMFILE on fmba-3, where
+/// the lookup itself then failed). A lookup that fails is not kept and is
+/// tried again by the next order, nor is the default `/Users/<name>` /
+/// `/home/<name>` used for an account the database did not answer for: a
+/// directory service that comes up late is still consulted.
+static RESOLVED_HOMES: LazyLock<CustomDashMap<String, String>> =
+    LazyLock::new(|| CustomDashMap::new("runner_cli_resolved_homes"));
+
 async fn resolve_home_unix(username: &str) -> Result<String> {
     if !is_valid_unix_username(username) {
         return Err(anyhow!(
             "Refusing to resolve a home directory for an invalid account name"
         ));
     }
-    // Look up the user via NSS (getpwnam_r), which respects nsswitch.conf so LDAP/SSSD
-    // entries on Linux are resolved correctly. Falls back to dscl on macOS systems where
-    // the binary is the canonical source of truth and finally to a default location if
-    // the user is genuinely missing from the database. The name reaches the script as
-    // $1, never spliced into its text.
-    const SCRIPT: &str = concat!(
-        "HOME=$(getent passwd \"$1\" 2>/dev/null | cut -d: -f6) || ",
-        "HOME=$(dscl . -read \"/Users/$1\" NFSHomeDirectory 2>/dev/null | awk '{print $2}') || ",
-        "{ [ \"$(uname)\" = \"Darwin\" ] && HOME=\"/Users/$1\" || HOME=\"/home/$1\"; }; ",
-        "echo \"$HOME\""
-    );
+    resolve_home_cached(&RESOLVED_HOMES, username, lookup_home_unix).await
+}
 
-    // The script is POSIX: run it with /bin/sh, which every unix host has,
-    // rather than /bin/bash, which minimal Linux images (Alpine, distroless,
-    // busybox containers) do not ship.
+/// `username`'s home from `cache`, else from `lookup` (kept in `cache` when
+/// the user database answered), else the platform default (not kept).
+async fn resolve_home_cached<F, Fut>(
+    cache: &CustomDashMap<String, String>,
+    username: &str,
+    lookup: F,
+) -> Result<String>
+where
+    F: FnOnce(String) -> Fut,
+    Fut: std::future::Future<Output = Result<Option<String>>>,
+{
+    if let Some(home) = cache.get(username) {
+        return Ok(home.value().clone());
+    }
+    match lookup(username.to_string()).await? {
+        Some(home) => {
+            cache.insert(username.to_string(), home.clone());
+            Ok(home)
+        }
+        None => Ok(default_unix_home(username)),
+    }
+}
+
+fn default_unix_home(username: &str) -> String {
+    if cfg!(target_os = "macos") {
+        format!("/Users/{}", username)
+    } else {
+        format!("/home/{}", username)
+    }
+}
+
+/// The account's home from the user database, `None` when it does not know
+/// the account. In process first (`getpwnam_r`: Open Directory on macOS, NSS
+/// on Linux, so LDAP / SSSD accounts too, no process spawned), then on Linux
+/// `getent`, which reaches NSS when a statically linked build's libc reads
+/// only `/etc/passwd`. Before 2.0.8 the macOS lookup never ran: the script's
+/// `getent` step (absent on macOS) read as a success with an empty answer,
+/// so macOS always used the `/Users/<name>` default.
+async fn lookup_home_unix(username: String) -> Result<Option<String>> {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        let name = username.clone();
+        let home = tokio::task::spawn_blocking(move || {
+            use uzers::os::unix::UserExt;
+            uzers::get_user_by_name(&name).map(|user| user.home_dir().to_path_buf())
+        })
+        .await
+        .map_err(|e| anyhow!("Home lookup task failed: {}", e))?;
+        if let Some(home) = home {
+            let home = home.to_string_lossy().trim().to_string();
+            if !home.is_empty() {
+                return Ok(Some(home));
+            }
+        }
+    }
+    if !cfg!(target_os = "linux") {
+        return Ok(None);
+    }
+    // The name reaches the script as $1, never spliced into its text. The
+    // script is POSIX: run it with /bin/sh, which every unix host has, rather
+    // than /bin/bash, which minimal Linux images (Alpine, distroless, busybox
+    // containers) do not ship.
+    const SCRIPT: &str = "getent passwd \"$1\" 2>/dev/null | cut -d: -f6";
     let output = Command::new("/bin/sh")
         .arg("-c")
         .arg(SCRIPT)
         .arg("resolve_home")
-        .arg(username)
+        .arg(&username)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -748,14 +812,7 @@ async fn resolve_home_unix(username: &str) -> Result<String> {
         ));
     }
     let home = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if home.is_empty() {
-        if cfg!(target_os = "macos") {
-            return Ok(format!("/Users/{}", username));
-        } else {
-            return Ok(format!("/home/{}", username));
-        }
-    }
-    Ok(home)
+    Ok((!home.is_empty()).then_some(home))
 }
 
 #[cfg(test)]
@@ -808,6 +865,64 @@ mod tests {
     async fn resolve_home_unix_falls_back_for_an_unknown_account() {
         let home = resolve_home_unix("edamame_no_such_user_zz").await.unwrap();
         assert!(home.ends_with("/edamame_no_such_user_zz"), "{home}");
+    }
+
+    /// The user database is asked once per account for the process's life;
+    /// a failed lookup and the default guessed for an account the database
+    /// did not answer for are not kept: the next order asks again.
+    #[tokio::test]
+    async fn resolved_homes_are_kept_and_failures_are_not() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let cache = CustomDashMap::new("test_resolved_homes");
+        let lookups = AtomicUsize::new(0);
+        let found = |name: String| {
+            lookups.fetch_add(1, Ordering::SeqCst);
+            async move { Ok(Some(format!("/srv/homes/{name}"))) }
+        };
+        let failing = |_: String| {
+            lookups.fetch_add(1, Ordering::SeqCst);
+            async { Err(anyhow!("Too many open files (os error 24)")) }
+        };
+        let unknown = |_: String| {
+            lookups.fetch_add(1, Ordering::SeqCst);
+            async { Ok(None) }
+        };
+
+        for _ in 0..3 {
+            let home = resolve_home_cached(&cache, "alice", found).await.unwrap();
+            assert_eq!(home, "/srv/homes/alice");
+        }
+        assert_eq!(lookups.load(Ordering::SeqCst), 1, "asked again");
+
+        assert!(resolve_home_cached(&cache, "bob", failing).await.is_err());
+        let home = resolve_home_cached(&cache, "bob", found).await.unwrap();
+        assert_eq!(home, "/srv/homes/bob");
+        assert_eq!(lookups.load(Ordering::SeqCst), 3, "a failure was kept");
+
+        let home = resolve_home_cached(&cache, "carol", unknown).await.unwrap();
+        assert_eq!(home, default_unix_home("carol"));
+        let home = resolve_home_cached(&cache, "carol", found).await.unwrap();
+        assert_eq!(home, "/srv/homes/carol");
+        assert_eq!(lookups.load(Ordering::SeqCst), 5, "a guess was kept");
+    }
+
+    /// The current account resolves, in process, to the home its user
+    /// database entry holds.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[tokio::test]
+    async fn the_current_account_resolves_from_the_user_database() {
+        use uzers::os::unix::UserExt;
+        let Some(user) = uzers::get_user_by_uid(uzers::get_current_uid()) else {
+            return;
+        };
+        let name = user.name().to_string_lossy().into_owned();
+        if !is_valid_unix_username(&name) {
+            return;
+        }
+        let expected = user.home_dir().to_string_lossy().into_owned();
+        let found = lookup_home_unix(name.clone()).await.unwrap();
+        assert_eq!(found.as_deref(), Some(expected.as_str()));
+        assert_eq!(resolve_home_unix(&name).await.unwrap(), expected);
     }
     use serial_test::serial;
 
