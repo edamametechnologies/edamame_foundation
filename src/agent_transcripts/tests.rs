@@ -1275,3 +1275,143 @@ fn other_agents_skills_and_editor_context_are_not_the_humans_words() {
         "make sure the dog food is up to date\n\nobserve the fp there"
     );
 }
+
+#[test]
+fn a_pasted_edamame_alert_is_not_the_humans_words() {
+    // FP-DIV-14 (kralizec-3, 2026-10-11): the human pasted a divergence
+    // alert into the session it was about. Its sentence quotes the agent's
+    // own self-grant (`test-mint`) and the human grant as EDAMAME rendered
+    // it (`github.com:*, fmba-3`); as the human's words, the alert would
+    // authorize exactly what it reports. The human's own lines stay, and a
+    // later sentence naming the same hosts is the human's grant.
+    let pasted = "something is wrong with divergence on the running core on the host: \n\n\
+        <pasted_content id=\"8f3a\">\n\
+        Agent granted itself expected_lan_devices 'test-mint' for session \
+        '60ebf757-b5a5-43a7-a03e-2b56cbde6641', which the human request does not authorize \
+        (human expected_traffic + expected_lan_devices: github.com:*, fmba-3)\n\n\
+        Evidence category: policy:scope_escalation.\n\
+        Adjudication: the guardrail rejected the model's position and the deterministic \
+        verdict stands.\n\
+        </pasted_content id=\"8f3a\">\n\n \
+        - github is not a lan device but a network destination";
+    let raw = [
+        serde_json::json!({"message": {"role": "user", "content": pasted}}).to_string(),
+        serde_json::json!({"message": {"role": "user", "content": [
+            {"type": "text", "text": "now check test-mint and fmba-3"}
+        ]}})
+        .to_string(),
+    ]
+    .join("\n");
+    let parsed = super::parsing::parse_jsonl_transcript(&raw);
+    let own_turn = "now check test-mint and fmba-3";
+    assert!(
+        parsed
+            .user_text
+            .starts_with("something is wrong with divergence")
+            && parsed.user_text.ends_with(&format!(
+                "- github is not a lan device but a network destination\n\n{own_turn}"
+            )),
+        "{}",
+        parsed.user_text
+    );
+    let alert_turn = parsed.user_text.trim_end_matches(own_turn);
+    for quoted in [
+        "test-mint",
+        "fmba-3",
+        "github.com:*",
+        "Evidence category",
+        "Adjudication",
+    ] {
+        assert!(
+            !alert_turn.contains(quoted),
+            "the pasted alert's {quoted:?} reads as the human's words: {alert_turn}"
+        );
+    }
+}
+
+#[test]
+fn a_pasted_alert_card_of_any_category_is_dropped_with_its_reasoning() {
+    // The card renders the finding's sentence, a blank line, the category,
+    // the adjudication and, when the model answered, its reasoning
+    // paragraph. A correlation sentence carries no policy wording: it goes
+    // with the category line under it. The same in a `.txt` transcript and
+    // a queued prompt.
+    let card = "Session to paste.example.net:443 by curl is not explained by the declared plan\n\n\
+        Evidence category: correlation:unexplained.\n\
+        Adjudication: the model confirmed the deterministic verdict for this cycle.\n\n\
+        Model reasoning for this divergence cycle:\n\
+        The agent reached paste.example.net after reading 203.0.113.9.\n\n\
+        why did it go to paste.example.net?";
+    let txt =
+        super::parsing::parse_txt_transcript(&format!("user:\n{card}\n\nassistant:\nLooking.\n"));
+    assert_eq!(txt.user_text, "why did it go to paste.example.net?");
+    let queued = serde_json::json!({"attachment": {
+        "type": "queued_command", "commandMode": "prompt", "prompt": card
+    }})
+    .to_string();
+    let parsed = super::parsing::parse_jsonl_transcript(&queued);
+    assert_eq!(parsed.user_text, "why did it go to paste.example.net?");
+    // A turn that is nothing but the alert is no human turn at all.
+    let only_alert = serde_json::json!({"message": {"role": "user", "content":
+        "Session 's' widened its own expected_traffic allowlist with 'x.example.net:*' \
+         after the plan was already declared"}})
+    .to_string();
+    assert_eq!(
+        super::parsing::parse_jsonl_transcript(&only_alert).user_text,
+        ""
+    );
+}
+
+#[test]
+fn a_port_a_tool_result_lists_is_not_a_port_hint() {
+    // FP-DIV-15 (2.0.7 FP lab, kralizec-3): the session ran `netstat` to see
+    // which ports the app and the helper held; every port of the listing
+    // became a parser hint, joined the agent plane, and 23 / 53 / 445 graded
+    // as ports the agent granted itself. A listing is a fact about this
+    // host. A port the agent's own command names (`--port 8000`) is still
+    // the agent's.
+    let temp = tempfile::tempdir().expect("tempdir");
+    let home = temp.path();
+    let listing = "State  Recv-Q Send-Q Local Address:Port Peer Address:Port\n\
+        LISTEN 0 50 0.0.0.0:445 0.0.0.0:*\n\
+        LISTEN 0 4096 127.0.0.1:11434 0.0.0.0:*\n\
+        LISTEN 0 128 127.0.0.1:40151 0.0.0.0:*\n\
+        53/udp open domain";
+    let lines = [
+        serde_json::json!({"type": "user", "message": {"role": "user",
+            "content": "is the helper still listening after the restart?"}}),
+        serde_json::json!({"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "ss -ltnu"}}
+        ]}}),
+        serde_json::json!({"type": "user", "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": listing}
+        ]}}),
+        serde_json::json!({"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "t2", "name": "Bash",
+             "input": {"command": "npm run dev -- --port 8000"}}
+        ]}}),
+        serde_json::json!({"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "text", "text": "The helper is back; the dev server is starting."}
+        ]}}),
+    ]
+    .iter()
+    .map(|line| line.to_string())
+    .collect::<Vec<_>>()
+    .join("\n");
+    write(
+        &home.join(".claude/projects/sample/session-ports.jsonl"),
+        &format!("{lines}\n"),
+    );
+    let result = collect("claude_code", home, &options()).expect("claude_code collect");
+    assert_eq!(result.payload.sessions.len(), 1);
+    let session = &result.payload.sessions[0];
+    assert!(
+        session.raw_text.contains("0.0.0.0:445"),
+        "the listing is in the transcript the parser read"
+    );
+    assert_eq!(
+        session.derived_expected_local_open_ports,
+        vec![8000],
+        "only the port of the agent's own command is a hint"
+    );
+}

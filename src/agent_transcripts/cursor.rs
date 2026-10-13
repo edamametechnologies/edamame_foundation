@@ -107,16 +107,19 @@ pub fn collect(home: &Path, options: &CollectOptions) -> anyhow::Result<CollectR
                 let extracted_paths = extract_paths(&combined, &workspace_root);
                 let tool_names = extract_tool_names(&parsed.raw_text, &parsed.assistant_text);
                 let commands = extract_commands(&parsed.raw_text, &parsed.assistant_text);
-                // Traffic derives from what the agent SAID and the tool-call
-                // arguments it issued -- never from tool RESULT bodies (in
-                // `raw_text`), whose every domain-shaped string would inflate
-                // the egress allowlist (e.g. URLs inside WebSearch results).
-                let traffic_text = format!(
+                // Traffic and port hints derive from what the agent SAID and
+                // the tool-call arguments it issued -- never from tool RESULT
+                // bodies (in `raw_text`), whose every domain-shaped string
+                // would inflate the egress allowlist (e.g. URLs inside
+                // WebSearch results) and whose every port a listing shows
+                // (`netstat`, `lsof`) would read as one the agent opens
+                // (FP-DIV-15).
+                let hint_text = format!(
                     "{}\n\n{}\n\n{}",
                     parsed.user_text, parsed.assistant_text, parsed.tool_input_text
                 );
-                let traffic = extract_traffic(&traffic_text, &commands, &llm_hosts);
-                let ports = extract_ports(&combined, &commands);
+                let traffic = extract_traffic(&hint_text, &commands, &llm_hosts);
+                let ports = extract_ports(&hint_text, &commands);
                 let inferred = super::parsing::infer_process_paths(&commands, &workspace_root);
                 let expected_open =
                     classify_open_files_excluding_sensitive(&extracted_paths, &home_str);

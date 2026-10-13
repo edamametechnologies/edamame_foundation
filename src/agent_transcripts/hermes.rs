@@ -284,12 +284,14 @@ fn build_session(
     let extracted_paths = extract_paths(&combined, workspace_root);
     let tool_names = extract_tool_names(&inputs.raw_text, &inputs.assistant_text);
     let commands = extract_commands(&inputs.raw_text, &inputs.assistant_text);
-    // Tool-result bodies (in raw_text) are excluded from traffic derivation;
-    // only what the agent said contributes host declarations here.
-    let traffic_text = format!("{}\n\n{}", inputs.user_text, inputs.assistant_text);
+    // Tool-result bodies (in raw_text) are excluded from traffic and port
+    // derivation; only what was said contributes host and port declarations
+    // here (a port a `netstat` listing shows is not one the agent opens,
+    // FP-DIV-15).
+    let hint_text = format!("{}\n\n{}", inputs.user_text, inputs.assistant_text);
     let llm_hosts = crate::agent_visibility_params::agent_llm_hosts("hermes");
-    let traffic = extract_traffic(&traffic_text, &commands, &llm_hosts);
-    let ports = extract_ports(&combined, &commands);
+    let traffic = extract_traffic(&hint_text, &commands, &llm_hosts);
+    let ports = extract_ports(&hint_text, &commands);
     let inferred = infer_process_paths(&commands, workspace_root);
     let expected_open = classify_open_files_excluding_sensitive(&extracted_paths, home_str);
     let _expected_sensitive = classify_sensitive_paths(&extracted_paths, home_str);
@@ -507,7 +509,14 @@ fn manifest_text(obj: &Value) -> (String, String, String) {
             let label = if role.is_empty() { "message" } else { &role };
             raw.push(format!("{label}: {content}"));
             match role.as_str() {
-                "user" | "human" | "operator" => user.push(content),
+                // Read like a parsed human turn: an EDAMAME alert pasted
+                // into it is not the human's words.
+                "user" | "human" | "operator" => {
+                    let human = super::parsing::without_pasted_alerts(&content);
+                    if !human.is_empty() {
+                        user.push(human);
+                    }
+                }
                 "assistant" | "ai" | "model" | "agent" => assistant.push(content),
                 _ => {}
             }
@@ -529,7 +538,11 @@ fn manifest_text(obj: &Value) -> (String, String, String) {
     } else {
         // No role markers: treat the blob as the user-side intent record so
         // title inference and path/command extraction still have signal.
-        (content.clone(), String::new(), content)
+        (
+            super::parsing::without_pasted_alerts(&content),
+            String::new(),
+            content,
+        )
     }
 }
 

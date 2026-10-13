@@ -2591,6 +2591,20 @@ pub fn params() -> Arc<CveDetectionParams> {
     PARAMS_SNAPSHOT.load().clone()
 }
 
+/// Installs `json` (the published `cve-detection-params-db.json` shape) as
+/// the params every accessor reads, for offline replays that score a
+/// candidate params file against the FP and attack corpora
+/// (`edamame_core/tools/fp_loop`). Not a runtime override: no RPC or MCP
+/// route reaches it, the CloudModel keeps its own data, and its next update
+/// replaces the snapshot. Born-complete rules apply: a candidate missing a
+/// field is refused, like a published file.
+pub fn install_params_snapshot_from_json(json: &str) -> Result<()> {
+    let parsed: CveDetectionParamsJSON =
+        serde_json::from_str(json).with_context(|| "Failed to parse candidate CVE params JSON")?;
+    PARAMS_SNAPSHOT.store(Arc::new(CveDetectionParams::new_from_json(&parsed)));
+    Ok(())
+}
+
 pub fn is_generic_reuse_token(token: &str) -> bool {
     PARAMS_SNAPSHOT.load().generic_reuse_tokens.contains(token)
 }
@@ -3379,6 +3393,65 @@ fn browser_profile_state_group_for_root(
         }
     }
     None
+}
+
+/// A component updater's version directory name: digits, optionally
+/// separated by single dots (`1798`, `151.0.7922.174`, `1.20261011.2`).
+fn is_version_path_segment(segment: &str) -> bool {
+    !segment.is_empty()
+        && segment
+            .split('.')
+            .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
+/// FP-WIN-36 -- the directories a Chromium browser's component updater
+/// moves into place below its user-data root (params
+/// `chromium_user_data_root_markers`):
+///
+/// - a component's versioned install directory itself -- exactly two
+///   segments below the root, the second a version
+///   (`User Data/OptimizationGuideModelsManifest/1.20261011.2`,
+///   `User Data/Crowd Deny/2026.10.1.64`, `User Data/PKIMetadata/1798`,
+///   `User Data/Snapshots/151.0.7922.174`);
+/// - with `directory_change`, a direct child of the root: the component
+///   directory a version was added to or removed from
+///   (`User Data/OptimizationGuideModelsManifest`).
+///
+/// Structure, not names: the components change with every browser release
+/// (a name list chased them: FP-WIN-19, FP-WIN-26, the 2.0.5 additions), the
+/// install layout does not; the updater unpacks a version elsewhere and
+/// moves the whole directory into place. Nothing INSIDE a version directory
+/// matches: a component may carry native code the browser loads
+/// (`WidevineCdm/<version>/.../widevinecdm.dll`, FP-WIN-30's guard), and a
+/// snapshot holds copies of profile stores (`Snapshots/<version>/Default/Login Data`,
+/// FP-WIN-26). A profile directory never holds a version as a direct child.
+pub fn is_browser_component_payload(path: &str, directory_change: bool) -> bool {
+    if path.is_empty() {
+        return false;
+    }
+    let lower = path.to_ascii_lowercase().replace('\\', "/");
+    let snapshot = PARAMS_SNAPSHOT.load();
+    snapshot
+        .non_sensitive_browser_data_subtrees
+        .chromium_user_data_root_markers
+        .iter()
+        .filter(|marker| !marker.is_empty())
+        .filter_map(|marker| {
+            lower
+                .find(marker.as_str())
+                .map(|at| &lower[at + marker.len()..])
+        })
+        .any(|below_root| {
+            let segments: Vec<&str> = below_root
+                .split('/')
+                .filter(|segment| !segment.is_empty())
+                .collect();
+            match segments.as_slice() {
+                [_component] => directory_change,
+                [_component, version] => is_version_path_segment(version),
+                _ => false,
+            }
+        })
 }
 
 /// Returns a stable browser-managed volatile-state bucket for FIM paths
@@ -5010,6 +5083,47 @@ mod tests {
         assert!(is_non_sensitive_browser_data(
             "/Users/me/Library/Application Support/BraveSoftware/Brave-Browser/User Data/Default/Code Cache/js/0"
         ));
+    }
+
+    #[test]
+    fn test_is_browser_component_payload_follows_the_install_layout() {
+        const ROOT: &str = "C:\\Users\\frank\\AppData/Local\\Google\\Chrome\\User Data";
+        let at = |rest: &str| format!("{ROOT}\\{rest}");
+        // FP-WIN-36, shiawase on 2.0.7: a component's version directory and
+        // its content, whatever the component is called.
+        for rest in [
+            "OptimizationGuideModelsManifest\\1.20261011.2",
+            "Snapshots\\151.0.7922.174",
+            "PKIMetadata\\1798",
+            "Crowd Deny\\2026.10.1.64",
+            "SomeFutureComponent\\3.1",
+        ] {
+            assert!(is_browser_component_payload(&at(rest), false), "{rest}");
+        }
+        // The component directory itself only as a directory change.
+        assert!(is_browser_component_payload(&at("WasmTtsEngine"), true));
+        assert!(!is_browser_component_payload(&at("WasmTtsEngine"), false));
+        // Profiles never hold a version as a direct child; named stores and
+        // anything outside a browser root are not component payloads.
+        for rest in [
+            // Inside a version directory: native code, snapshot copies.
+            "WidevineCdm\\4.10.2891.0\\_platform_specific\\win_x64\\widevinecdm.dll",
+            "Snapshots\\151.0.7922.174\\Default\\AutofillStrikeDatabase",
+            "SomeFutureComponent\\3.1\\manifest.json",
+            "Profile 1\\GCM Store",
+            "Profile 1\\Local Extension Settings\\aeblfdkhhhdcdjpifhhbdiojplfjncoa",
+            "Default\\Login Data",
+            "Snapshots\\latest\\Default",
+            "OptimizationGuideModelsManifest\\1.2026x.2",
+            "OptimizationGuideModelsManifest\\1..2",
+        ] {
+            assert!(!is_browser_component_payload(&at(rest), false), "{rest}");
+        }
+        assert!(!is_browser_component_payload(
+            "C:/Users/frank/AppData/Local/Vendor/Data/Component/1.2.3",
+            true
+        ));
+        assert!(!is_browser_component_payload("", true));
     }
 
     #[test]

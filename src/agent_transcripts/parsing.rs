@@ -142,7 +142,12 @@ pub fn parse_txt_transcript(raw_text: &str) -> ParsedTranscript {
             return;
         }
         match role {
-            Some("user") => user.push(joined),
+            Some("user") => {
+                let human = without_pasted_alerts(&joined);
+                if !human.is_empty() {
+                    user.push(human);
+                }
+            }
             Some("assistant") => assistant.push(joined),
             _ => {}
         }
@@ -269,6 +274,67 @@ fn is_harness_user_text(text: &str) -> bool {
         .any(|prefix| text.starts_with(prefix))
 }
 
+/// One human turn without the EDAMAME alerts pasted into it (FP-DIV-14).
+///
+/// A human who pastes a divergence finding back into the conversation ("what
+/// is this?") writes EDAMAME's sentence into the turn: the agent's own
+/// self-grant (`'test-mint'`) and the human grant as EDAMAME rendered it
+/// (`github.com:*, fmba-3`). As the human's words it would authorize exactly
+/// what it reports. The alert's lines are dropped by its own fixed wording
+/// (`crate::divergence_alert_text`, shared with the core's renderer): a
+/// policy sentence, the evidence card's category and adjudication lines, the
+/// finding sentence the card renders above its category line (any
+/// category), and the model's reasoning paragraph under its heading. The
+/// human's own lines around the paste stay, a sentence naming the same host
+/// included.
+pub fn without_pasted_alerts(text: &str) -> String {
+    use crate::divergence_alert_text::{classify_alert_line, AlertLine};
+
+    let lines: Vec<&str> = text.split('\n').collect();
+    let mut dropped = vec![false; lines.len()];
+    let mut in_reasoning = false;
+    for (index, line) in lines.iter().enumerate() {
+        if in_reasoning {
+            if line.trim().is_empty() {
+                in_reasoning = false;
+            } else {
+                dropped[index] = true;
+            }
+            continue;
+        }
+        match classify_alert_line(line) {
+            Some(AlertLine::Sentence) => dropped[index] = true,
+            Some(AlertLine::Category) => {
+                dropped[index] = true;
+                // The card renders the finding's sentence, then a blank
+                // line, then the category: the sentence of a category whose
+                // wording carries no marker of its own goes with it.
+                if let Some(sentence) = (0..index).rev().find(|&i| !lines[i].trim().is_empty()) {
+                    dropped[sentence] = true;
+                }
+            }
+            Some(AlertLine::ReasoningHeading) => {
+                dropped[index] = true;
+                in_reasoning = true;
+            }
+            None => {}
+        }
+    }
+    if !dropped.contains(&true) {
+        return text.trim().to_string();
+    }
+    // The blank lines that framed the dropped ones fold into one.
+    let mut kept: Vec<&str> = Vec::new();
+    for (line, dropped) in lines.iter().zip(dropped) {
+        let blank_after_blank =
+            line.trim().is_empty() && kept.last().is_some_and(|last| last.trim().is_empty());
+        if !dropped && !blank_after_blank {
+            kept.push(line);
+        }
+    }
+    kept.join("\n").trim().to_string()
+}
+
 pub fn parse_jsonl_transcript(raw_text: &str) -> ParsedTranscript {
     let mut user_sections = Vec::new();
     let mut assistant_sections = Vec::new();
@@ -298,7 +364,10 @@ pub fn parse_jsonl_transcript(raw_text: &str) -> ParsedTranscript {
                         && !text.trim().starts_with("<task-notification>")
                         && !is_harness_user_text(&text)
                     {
-                        user_sections.push(text.trim().to_string());
+                        let human = without_pasted_alerts(&text);
+                        if !human.is_empty() {
+                            user_sections.push(human);
+                        }
                     }
                 }
             }
@@ -340,7 +409,12 @@ pub fn parse_jsonl_transcript(raw_text: &str) -> ParsedTranscript {
             || is_harness_user_text(trimmed);
         match role {
             "user" if harness_turn => {}
-            "user" => user_sections.push(trimmed.to_string()),
+            "user" => {
+                let human = without_pasted_alerts(trimmed);
+                if !human.is_empty() {
+                    user_sections.push(human);
+                }
+            }
             "assistant" => assistant_sections.push(trimmed.to_string()),
             _ => {}
         }

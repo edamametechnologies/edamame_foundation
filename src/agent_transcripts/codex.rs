@@ -248,16 +248,19 @@ pub(crate) fn build_payload(
                 let extracted_paths = extract_paths(&combined, &workspace_root);
                 let tool_names = extract_tool_names(&parsed.raw_text, &parsed.assistant_text);
                 let commands = extract_commands(&parsed.raw_text, &parsed.assistant_text);
-                // Traffic derives from what the agent SAID and the tool-call
-                // arguments it issued -- never from tool RESULT bodies (in
-                // `raw_text`), whose every domain-shaped string would inflate
-                // the egress allowlist (e.g. URLs inside WebSearch results).
-                let traffic_text = format!(
+                // Traffic and port hints derive from what the agent SAID and
+                // the tool-call arguments it issued -- never from tool RESULT
+                // bodies (in `raw_text`), whose every domain-shaped string
+                // would inflate the egress allowlist (e.g. URLs inside
+                // WebSearch results) and whose every port a listing shows
+                // (`netstat`, `lsof`) would read as one the agent opens
+                // (FP-DIV-15).
+                let hint_text = format!(
                     "{}\n\n{}\n\n{}",
                     parsed.user_text, parsed.assistant_text, parsed.tool_input_text
                 );
-                let traffic = extract_traffic(&traffic_text, &commands, llm_hosts);
-                let ports = extract_ports(&combined, &commands);
+                let traffic = extract_traffic(&hint_text, &commands, llm_hosts);
+                let ports = extract_ports(&hint_text, &commands);
                 let inferred = super::parsing::infer_process_paths(&commands, &workspace_root);
                 let expected_open =
                     classify_open_files_excluding_sensitive(&extracted_paths, &home_str);
@@ -731,7 +734,9 @@ fn thread_row_to_session(
     // is the authoritative user intent for divergence modeling.
     if user_text.trim().is_empty() {
         if let Some(message) = first_user.clone() {
-            user_text = message;
+            // The thread table's copy of the first prompt, read like a parsed
+            // turn: an EDAMAME alert pasted into it is not the human's words.
+            user_text = super::parsing::without_pasted_alerts(&message);
         }
     }
     if assistant_text.trim().is_empty() {
@@ -772,12 +777,14 @@ fn thread_row_to_session(
     let extracted_paths = extract_paths(&combined, workspace_root);
     let tool_names = extract_tool_names(&raw_text, &assistant_text);
     let commands = extract_commands(&raw_text, &assistant_text);
-    // Tool-result bodies (in raw_text) are excluded from traffic derivation;
-    // only what the agent said contributes host declarations here.
-    let traffic_text = format!("{}\n\n{}", user_text, assistant_text);
+    // Tool-result bodies (in raw_text) are excluded from traffic and port
+    // derivation; only what was said contributes host and port declarations
+    // here (a port a `netstat` listing shows is not one the agent opens,
+    // FP-DIV-15).
+    let hint_text = format!("{}\n\n{}", user_text, assistant_text);
     let llm_hosts = crate::agent_visibility_params::agent_llm_hosts("codex");
-    let traffic = extract_traffic(&traffic_text, &commands, &llm_hosts);
-    let ports = extract_ports(&combined, &commands);
+    let traffic = extract_traffic(&hint_text, &commands, &llm_hosts);
+    let ports = extract_ports(&hint_text, &commands);
     let inferred = super::parsing::infer_process_paths(&commands, workspace_root);
     let expected_open = classify_open_files_excluding_sensitive(&extracted_paths, workspace_root);
     let _expected_sensitive = classify_sensitive_paths(&extracted_paths, workspace_root);
