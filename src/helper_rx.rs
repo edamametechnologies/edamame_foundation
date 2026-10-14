@@ -618,6 +618,11 @@ pub async fn rpc_run(
                 any(target_os = "macos", target_os = "linux", target_os = "windows"),
                 feature = "packetcapture"
             ))]
+            "clear_capture_sessions" => utility_clear_capture_sessions().await,
+            #[cfg(all(
+                any(target_os = "macos", target_os = "linux", target_os = "windows"),
+                feature = "packetcapture"
+            ))]
             "is_capturing" => utility_is_capturing().await,
             #[cfg(all(
                 any(target_os = "macos", target_os = "linux", target_os = "windows"),

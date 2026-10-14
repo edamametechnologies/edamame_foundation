@@ -19,6 +19,7 @@ pub const UTILITY_ORDER_NAMES: &[&str] = &[
     "attest_dev_trees",
     "augment_custom_whitelists",
     "broadcast_ping",
+    "clear_capture_sessions",
     "clear_file_events",
     "collect_agent_transcripts",
     "collect_agent_visibility",

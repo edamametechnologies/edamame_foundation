@@ -316,6 +316,18 @@ pub async fn utility_restart_capture() -> Result<String> {
     Ok("".to_string())
 }
 
+/// Drop the captured sessions without stopping the capture (the core's
+/// `clear_detections`).
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux", target_os = "windows"),
+    feature = "packetcapture"
+))]
+pub async fn utility_clear_capture_sessions() -> Result<String> {
+    CAPTURE.read().await.clear_sessions().await;
+    info!("Captured sessions cleared");
+    Ok("".to_string())
+}
+
 #[cfg(all(
     any(target_os = "macos", target_os = "linux", target_os = "windows"),
     feature = "packetcapture"
