@@ -1,30 +1,38 @@
 //! The open-files limit of a long-running EDAMAME process (2.0.8).
 //!
-//! launchd starts a daemon with a soft `RLIMIT_NOFILE` of 256 (`launchctl
-//! limit maxfiles`) and the helper's plist sets no `SoftResourceLimits`. At a
-//! wake or a network change the helper (packet capture per interface, mDNS,
-//! gRPC connections, FIM, a shell per threat check) ran out of descriptors on
-//! fmba-3, twice in four days (`EMFILE`, os error 24), and every operation
-//! that needed one failed meanwhile: the full-disk-access check, the home
-//! resolution of personated orders, the firewall checks.
+//! A long-running process (the helper, the posture daemon, the app's core)
+//! holds sockets, capture handles, file watches and child pipes at once, for
+//! days. launchd starts a daemon with a soft `RLIMIT_NOFILE` of 256
+//! (`launchctl limit maxfiles`), which leaves such a process little headroom.
+//! [`raise_open_files_limit`] raises the soft limit to [`OPEN_FILES_TARGET`]
+//! within the hard limit. It never lowers the soft limit and never touches
+//! the hard one. The helper calls it at start; the posture daemon and the
+//! app's core can too.
 //!
-//! [`raise_open_files_limit`] raises the soft limit toward the hard one,
-//! capped at [`OPEN_FILES_TARGET`]; it never lowers it. The helper calls it
-//! at start; the posture daemon and the app's core can too.
+//! The target is `FD_SETSIZE` (1024) and goes no higher: code in these
+//! processes waits on descriptors with `select` (`pnet_datalink`'s BPF and
+//! Linux channels, used by the ARP scan), and an `fd_set` holds only
+//! descriptor numbers below `FD_SETSIZE`. A soft limit of 1024 keeps every
+//! descriptor the process opens below it.
 //!
 //! | Platform | Effect |
 //! |---|---|
 //! | macOS | soft limit up to min([`OPEN_FILES_TARGET`], hard, `OPEN_MAX`, `kern.maxfilesperproc`) |
-//! | Linux | soft limit up to min([`OPEN_FILES_TARGET`], hard) (a systemd service starts at 1024) |
+//! | Linux | soft limit up to min([`OPEN_FILES_TARGET`], hard) (a systemd service already starts at 1024) |
 //! | Windows | not applicable: no per-process descriptor limit of this kind |
 //! | iOS, Android | not applicable: app processes, not called |
 
 use std::sync::OnceLock;
 
-/// The soft open-files limit a long-running EDAMAME process asks for: 32
-/// times launchd's default of 256, far above the helper's peaks, and below
-/// macOS's `OPEN_MAX` (10240), the most `setrlimit` accepts there.
-pub const OPEN_FILES_TARGET: u64 = 8192;
+/// The soft open-files limit a long-running EDAMAME process asks for:
+/// `FD_SETSIZE`, four times launchd's default of 256, and the highest
+/// limit under which every descriptor number still fits an `fd_set` (see
+/// the module docs).
+pub const OPEN_FILES_TARGET: u64 = 1024;
+
+// The target never passes FD_SETSIZE where the limit is raised.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+const _: () = assert!(OPEN_FILES_TARGET <= libc::FD_SETSIZE as u64);
 
 /// The soft open-files limit before and after [`raise_open_files_limit`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -158,20 +166,28 @@ mod tests {
 
     #[test]
     fn the_goal_is_the_target_within_the_hard_limit_and_the_platform_cap() {
+        assert_eq!(OPEN_FILES_TARGET, 1024);
         // launchd's default under an unlimited hard limit.
         assert_eq!(soft_limit_goal(256, None, Some(10240)), OPEN_FILES_TARGET);
-        // systemd's default (1024 / 524288).
+        // A hard limit and a platform cap above the target do not lift it
+        // past FD_SETSIZE.
+        assert_eq!(
+            soft_limit_goal(256, Some(1_048_576), Some(10240)),
+            OPEN_FILES_TARGET
+        );
+        // systemd's default (1024 / 524288) is the target already.
         assert_eq!(
             soft_limit_goal(1024, Some(524_288), None),
             OPEN_FILES_TARGET
         );
         // A hard limit below the target is the ceiling.
-        assert_eq!(soft_limit_goal(256, Some(4096), None), 4096);
+        assert_eq!(soft_limit_goal(256, Some(512), None), 512);
         // So is a platform cap below it (a low kern.maxfilesperproc).
-        assert_eq!(soft_limit_goal(256, None, Some(2048)), 2048);
-        // Never lowered.
+        assert_eq!(soft_limit_goal(256, None, Some(768)), 768);
+        // Never lowered, even above the target.
         assert_eq!(soft_limit_goal(65_536, Some(1_048_576), None), 65_536);
         assert_eq!(soft_limit_goal(4096, Some(4096), None), 4096);
+        assert_eq!(soft_limit_goal(2048, None, Some(10240)), 2048);
     }
 
     /// In a child process, whose limit can be lowered without starving the
