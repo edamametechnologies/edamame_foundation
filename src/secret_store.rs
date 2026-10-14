@@ -106,18 +106,12 @@ fn is_temp_of(candidate: &str, file_name: &str) -> bool {
 
 /// Write `bytes` to `path` through a temp file of its own and a rename, so a
 /// crash never leaves a truncated secret and concurrent writers never meet:
-/// each write creates its own temp (`create_new`, never another writer's
-/// file) and the last rename wins, whole. On unix the temp is created `0600`
-/// (never wider, even for an instant) and the directory is kept `0700`. A
-/// failed write removes its temp; temps abandoned by writers that died are
-/// swept ([`sweep_abandoned_temps`]).
-///
-/// Before 2.0.8 every write of an item used the one name `<name>.tmp`,
-/// removed it and created it again: two processes writing one item at once
-/// (each upgrade started the app twice on a Windows host) collided, the
-/// second failing with "file exists" (on unix it could also rename the
-/// first one's half-written file), and the write was retried only at a
-/// later save.
+/// each write creates its own uniquely named temp (`create_new`, never
+/// another writer's file), so two processes writing one item at once both
+/// complete, and the last rename wins, whole. On unix the temp is created
+/// `0600` (never wider, even for an instant) and the directory is kept
+/// `0700`. A failed write removes its temp; a temp whose writer died before
+/// its rename is swept once it is old enough ([`sweep_abandoned_temps`]).
 fn write_file_atomically(dir: &Path, path: &Path, bytes: &[u8]) -> Result<()> {
     use std::io::Write;
     ensure_private_dir(dir)?;
@@ -173,10 +167,10 @@ fn rename_refusal_is_transient(error: &std::io::Error) -> bool {
 }
 
 /// Remove the temp files of `path`'s item that writers which died mid-write
-/// left behind, this module's own and the `<name>.tmp` of builds before
-/// 2.0.8, once [`ABANDONED_TEMP_AGE`] old: each holds the secret it was
-/// writing, which must not outlive the item (a sign-out deletes it). Younger
-/// ones may be another writer's, in flight. Best effort.
+/// left behind, under this module's names and the fixed `<name>.tmp` name,
+/// once [`ABANDONED_TEMP_AGE`] old: a temp file must not outlive its item (a
+/// sign-out deletes it). Younger ones may be another writer's, in flight.
+/// Best effort.
 fn sweep_abandoned_temps(path: &Path) {
     let (Some(dir), Some(file_name)) = (path.parent(), path.file_name().and_then(|n| n.to_str()))
     else {
@@ -868,8 +862,8 @@ mod tests {
             .unwrap();
     }
 
-    /// The fixed `<name>.tmp` of builds before 2.0.8 can be left over (a
-    /// writer died mid-write) or still held by another process, which on
+    /// A fixed-name `<name>.tmp` can be left over (a writer died
+    /// mid-write) or still held by another process, which on
     /// Windows makes it impossible to remove (a directory stands in for such
     /// a file here: it cannot be removed or created over either).
     #[test]
@@ -910,7 +904,7 @@ mod tests {
             store.read("connection_pin").unwrap().as_deref(),
             Some("second")
         );
-        assert!(!legacy_abandoned.exists(), "pre-2.0.8 temp not swept");
+        assert!(!legacy_abandoned.exists(), "fixed-name temp not swept");
         assert!(!abandoned.exists(), "abandoned temp not swept");
         assert!(in_flight.exists(), "a recent temp may be in flight");
         assert!(other_item.exists(), "another item's temp is not ours");
