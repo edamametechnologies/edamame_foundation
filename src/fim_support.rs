@@ -1,4 +1,4 @@
-use flodbadd::fim::{self, FimConfig, FimMode};
+use flodbadd::fim::{self, FimConfig, FimMode, FimWatchRoots};
 use std::path::{Path, PathBuf};
 
 pub fn current_fim_config() -> FimConfig {
@@ -29,6 +29,33 @@ pub fn resolve_fim_watch_paths(
         Some(home) => default_watch_paths_for_home(home),
         None => fim::default_watch_paths(mode),
     }
+}
+
+/// [`resolve_fim_watch_paths`] with who chose each root ([`FimWatchRoots`]):
+/// explicit `paths` are the operator's and keep every event; the default
+/// roots are split by `sensitive-paths-db.json::watch_roots_early_drop`, the
+/// generic application-data trees taking the watcher's early drop. Both FIM
+/// startup paths (standalone core, helper daemon) call this with the same
+/// arguments.
+pub fn resolve_fim_watch_roots(
+    paths: &[String],
+    user_home: Option<&Path>,
+    mode: FimMode,
+) -> FimWatchRoots {
+    if !paths.is_empty() {
+        return FimWatchRoots::operator(paths.iter().map(PathBuf::from).collect());
+    }
+
+    match user_home {
+        Some(home) => default_watch_roots_for_home(home),
+        None => fim::default_watch_roots(mode),
+    }
+}
+
+/// [`default_watch_paths_for_home`] with who chose each root, as in
+/// [`resolve_fim_watch_roots`].
+pub fn default_watch_roots_for_home(home: &Path) -> FimWatchRoots {
+    fim::default_watch_roots_for_home(home)
 }
 
 pub fn default_watch_paths_for_home(home: &Path) -> Vec<PathBuf> {
@@ -147,6 +174,27 @@ mod tests {
                 paths
             );
         }
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// The roots split the same directories the plain paths list, each
+    /// once, and explicit paths stay the operator's whole.
+    #[test]
+    fn test_resolve_fim_watch_roots_matches_the_paths() {
+        let home = temp_home("roots");
+        std::fs::create_dir_all(home.join(".ssh")).unwrap();
+        let paths = resolve_fim_watch_paths(&[], Some(&home), FimMode::Desktop);
+        let roots = resolve_fim_watch_roots(&[], Some(&home), FimMode::Desktop);
+        let mut split = roots.all();
+        let mut plain = paths.clone();
+        split.sort();
+        plain.sort();
+        assert_eq!(split, plain);
+        assert!(roots.operator.contains(&home.join(".ssh")));
+
+        let explicit = vec![home.join("project").to_string_lossy().to_string()];
+        let roots = resolve_fim_watch_roots(&explicit, Some(&home), FimMode::Desktop);
+        assert_eq!(roots, FimWatchRoots::operator(vec![home.join("project")]));
         let _ = std::fs::remove_dir_all(&home);
     }
 

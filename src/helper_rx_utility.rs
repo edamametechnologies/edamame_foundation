@@ -1054,11 +1054,13 @@ pub async fn utility_start_file_monitor(paths_json: &str, start_args_json: &str)
 
     let raw_paths: Vec<String> = serde_json::from_str(paths_json).unwrap_or_default();
     let user_home_path = (!user_home.is_empty()).then(|| std::path::Path::new(&user_home));
-    let watch_paths =
-        crate::fim_support::resolve_fim_watch_paths(&raw_paths, user_home_path, FimMode::Desktop);
+    // Explicit paths keep every event; the default roots are split by the
+    // catalog (`watch_roots_early_drop`), as on the standalone path.
+    let watch_roots =
+        crate::fim_support::resolve_fim_watch_roots(&raw_paths, user_home_path, FimMode::Desktop);
 
     let config = crate::fim_support::current_fim_config();
-    match FimWatcher::start(watch_paths, config) {
+    match FimWatcher::start_with_roots(watch_roots, config) {
         Ok(watcher) => {
             let mut guard = FIM_WATCHER.write().await;
             *guard = Some(watcher);
