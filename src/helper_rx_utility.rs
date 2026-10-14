@@ -658,8 +658,13 @@ pub fn start_interface_monitor() {
                     if is_capturing {
                         info!("Interfaces changed, restarting capture on {:?}", interfaces);
                         match capture.write().await.restart(&interfaces).await {
-                            Ok(_) => {
+                            Ok(outcome) if outcome.restarted() => {
                                 info!("Capture restarted successfully");
+                            }
+                            // Skipped (same interfaces, none, or not
+                            // capturing): not a restart.
+                            Ok(outcome) => {
+                                tracing::debug!("Capture not restarted: {:?}", outcome);
                             }
                             Err(e) => {
                                 error!("Failed to restart capture: {}", e);
