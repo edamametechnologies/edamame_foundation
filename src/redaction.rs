@@ -9,8 +9,8 @@
 //!   Slack `xox?-` / `xapp-`, Google `AIza`, `Bearer` values, JWTs, PEM private
 //!   key blocks, `user:password@` URL userinfo) plus the values of
 //!   secret-named fields (`pin`, `password`, `api_key`, `*_token`, `secret`,
-//!   `authorization`, ... in JSON, `key=value`, `key: value` and
-//!   `--flag value` shapes).
+//!   `authorization`, ... in JSON, `key=value`, `key: value`,
+//!   `--flag value` and `name value` shapes).
 //! - [`redact_log_line`]: [`redact_text`] plus the privacy keys the log files
 //!   have always masked (`id`, `uuid`, `device`, `device_id`, `code`, ...).
 //!   Used by the file / stdout / memory log writers and the Sentry scrubber.
@@ -57,6 +57,7 @@ const SECRET_EXACT_FIELDS: &[&str] = &[
     "psk",
     "password",
     "passwd",
+    "pwd",
     "secret",
     "token",
     "authorization",
@@ -67,9 +68,9 @@ const SECRET_EXACT_FIELDS: &[&str] = &[
 
 /// Name endings that make a field a secret with any `_` / `-` separated
 /// prefix: `api_key`, `edamame_api_key`, `mcp_psk`, `oauth_refresh_token`,
-/// `slack_bot_token`, `client_secret`, `edamame_pin`, `x-api-key`, ... Whole
-/// segments only, so `finding_key`, `session_id` and `input_tokens` stay
-/// readable.
+/// `slack_bot_token`, `client_secret`, `edamame_pin`, `x-api-key`,
+/// `mysql_pwd`, ... Whole segments only, so `finding_key`, `session_id` and
+/// `input_tokens` stay readable.
 const SECRET_FIELD_SUFFIXES: &[&str] = &[
     "api_key",
     "apikey",
@@ -81,6 +82,7 @@ const SECRET_FIELD_SUFFIXES: &[&str] = &[
     "token",
     "password",
     "passwd",
+    "pwd",
     "pin",
     "credential",
     "credentials",
@@ -91,6 +93,48 @@ const SECRET_FIELD_SUFFIXES: &[&str] = &[
 /// Privacy keys the log writers mask on top of the secrets (whole words,
 /// case-sensitive, as the logger always did).
 const LOG_PRIVACY_FIELDS: &[&str] = &["id", "uuid", "device", "Device ID", "device_id", "code"];
+
+/// Name endings, compared without `_` and `-`, whose value is a secret
+/// whatever it looks like: after one of them a plain word is a value too
+/// (`password hunter`) and a small number is no exemption (`pin: 123`). The
+/// other names (`key`, `credentials`, `cookie`, `authorization`, `pem` and
+/// the privacy keys) are also ordinary words of log text.
+const STRONG_SECRET_SUFFIXES: &[&str] = &[
+    "password",
+    "passwd",
+    "pwd",
+    "psk",
+    "pin",
+    "secret",
+    "token",
+    "apikey",
+    "accesskey",
+    "secretkey",
+    "privatekey",
+];
+
+/// Words that are prose, not a value, after a strongly secret name and
+/// spaces alone: function words, and the words EDAMAME's log lines,
+/// notifications and threat names put after such a name (`token required`,
+/// `secret store unavailable`, `password is too weak`, `no password
+/// manager`, `PIN success flag`, `daily token budget`, `Token URL:`). Any
+/// other plain word there is masked (`password hunter`). A password that is
+/// exactly one of these words reads through: the price of those lines
+/// staying readable.
+const PROSE_AFTER_SECRET_NAME: &str = concat!(
+    "a an the this that these those it its and or nor but not no never yet so if as at by ",
+    "for from in into of on per than then to via with without is are was were be been ",
+    "being has have had do does did will would can cannot could may might must should ",
+    "still already also only now again here isn't aren't wasn't weren't hasn't haven't ",
+    "doesn't don't didn't won't can't couldn't shouldn't wouldn't ",
+    "accepted access auth authentication available budget called changed configured ",
+    "content data disabled empty enabled endpoint exchange expired expires exposure ",
+    "failed file flag found hint hints insufficient invalid length loaded manager ",
+    "material missing permissions prompt refresh refreshed rejected removed required ",
+    "reset rotated rotation saved scan set signal stats store stored strengths success ",
+    "successfully type unavailable unset updated url usage valid validated validation ",
+    "verified waste",
+);
 
 /// True when a field (JSON key, header, flag, env var) of this name carries a
 /// secret. Case-insensitive; `-` and `_` are equivalent; a leading `--` / `-`
@@ -116,14 +160,24 @@ pub fn is_secret_field_name(name: &str) -> bool {
     })
 }
 
+/// How a named field is written (see [`FIELD_SHAPES`]).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ShapeKind {
+    Flag,
+    Pair,
+    Spaced,
+}
+
 /// Capture groups of one way a named field is written (see
 /// [`build_named_field_regex`]).
 struct FieldShape {
+    kind: ShapeKind,
     key: &'static str,
     name: &'static str,
     escaped: &'static str,
     quoted: &'static str,
     raw: &'static str,
+    single: &'static str,
     bare: &'static str,
 }
 
@@ -133,34 +187,40 @@ struct FieldShape {
 /// (`PIN 654321 accepted`).
 const FIELD_SHAPES: [FieldShape; 3] = [
     FieldShape {
+        kind: ShapeKind::Flag,
         key: "flag_key",
         name: "flag_name",
         escaped: "flag_escaped",
         quoted: "flag_quoted",
         raw: "flag_raw",
+        single: "flag_single",
         bare: "flag_bare",
     },
     FieldShape {
+        kind: ShapeKind::Pair,
         key: "pair_key",
         name: "pair_name",
         escaped: "pair_escaped",
         quoted: "pair_quoted",
         raw: "pair_raw",
+        single: "pair_single",
         bare: "pair_bare",
     },
     FieldShape {
+        kind: ShapeKind::Spaced,
         key: "spaced_key",
         name: "spaced_name",
         escaped: "spaced_escaped",
         quoted: "spaced_quoted",
         raw: "spaced_raw",
+        single: "spaced_single",
         bare: "spaced_bare",
     },
 ];
 
 /// Regex over `<name><sep><value>` for the given name alternation, in the
-/// three [`FIELD_SHAPES`]. The value is masked with one `*` per character,
-/// keeping its own quoting (plain, JSON-escaped or none).
+/// three [`FIELD_SHAPES`]. Which values are masked is decided in
+/// [`NamedFields::mask`].
 fn build_named_field_regex(names: &str) -> Regex {
     // Keys and values may be JSON-escaped (`\"pin\":\"123456\"`) when a
     // JSON string is logged through Debug. A quoted value steps over its
@@ -169,73 +229,116 @@ fn build_named_field_regex(names: &str) -> Regex {
     // JSON-escaped form sees those as `\\n`, `\\\\` and `\\\"`, and ends
     // at the first `\"` that does not close one of them. `"[^"]+"` stays
     // as the fallback for a quoted value ending in a lone backslash. A
-    // bare value may hold a backslash but not start with one, so the
-    // backslash of an escaped key is never masked in place of a value.
+    // single-quoted value runs to its closing quote on the same line
+    // (`--password 'correct horse'`).
     let quoted = r#"(?:[^"\\]|\\.)+"#;
     let escaped = r#"(?:[^"\\]|\\[^"\\]|\\\\(?:\\.|[^"\\]))+"#;
-    let bare = r#"\b[^\s",}\\][^\s",}]*"#;
-    // After spaces alone, a bare word is a value only when it is not a
-    // plain word: it holds a digit or a symbol (`654321`, `hunter2`,
-    // `p@ss`, `a.b`). Letters, `_`, `'`, `-` and trailing punctuation are
-    // prose (`token required`, `Secret store: file`, `Cached logon
-    // credentials enabled`). In the pattern rather than in the replacement,
-    // so a word that is no value is not consumed and can still name the
-    // field that follows it (`Secret connection_pin: 123456`).
-    let spaced_bare =
-        r#"\b[\p{L}_'-]*(?:[^\p{L}_'\-.,:;!?)\]\s",}\\]|[.,:;!?)\]][^\s",}])[^\s",}]*"#;
-    let value = |shape: &FieldShape, bare: &str| {
+    // A bare value runs to the next space, `"`, `,` or `}`. It may start
+    // with a quote or a symbol (`'hunter2`, `$ecret99`, `!Passw0rd`, `-1`),
+    // but not with a backslash (the backslash of an escaped key is never
+    // masked in place of a value), a bracket (`[REDACTED]`, `(none)`, the
+    // `{` of a nested struct), `:`, `=` or `&` (`token::refresh`, `pin ==
+    // 0`, `pin: &str`), or a dash before anything but a digit (the next
+    // flag in `--password --user bob`).
+    let bare = r#"(?:[^\s",}\\()\[\]{<>:=&-]|-[0-9.])[^\s",}]*"#;
+    let value = |shape: &FieldShape| {
         format!(
-            r#"(?:\\"(?P<{}>{escaped})\\"|"(?P<{}>{quoted})"|"(?P<{}>[^"]+)"|(?P<{}>{bare}))"#,
-            shape.escaped, shape.quoted, shape.raw, shape.bare
+            r#"(?:\\"(?P<{}>{escaped})\\"|"(?P<{}>{quoted})"|"(?P<{}>[^"]+)"|'(?P<{}>[^'\n]+)'|(?P<{}>{bare}))"#,
+            shape.escaped, shape.quoted, shape.raw, shape.single, shape.bare
         )
     };
     let [flag, pair, spaced] = &FIELD_SHAPES;
     // A separator is required between name and value, so `--pin-file` or
     // `pin_llm_adjudication` are not read as a `pin` followed by a value.
-    // A flag's dashes start the text or follow a space, quote, bracket or
-    // comma (`well-known-token` is no flag). A flag or a pair steps over the
-    // `Some(` of an `Option` around its value.
+    // A flag's dashes start the text or follow a character that is no
+    // letter, digit or `_` (` --pin`, `ARGS=--password`, `"--pin`), so
+    // `well-known-token` is no flag. A flag or a pair steps over the `Some(`
+    // of an `Option` around its value. A pair's name may be quoted either
+    // way (`"pin":`, `'password':`, `\"pin\":`).
     let pattern = [
         format!(
-            r#"(?P<{}>(?:^|[\s"'(\[,])--?\b(?P<{}>{names})\b(?:\s*=\s*|\s+)(?:Some\()?){}"#,
+            r#"(?P<{}>\B--?\b(?P<{}>{names})\b(?:\s*=\s*|\s+)(?:Some\()?){}"#,
             flag.key,
             flag.name,
-            value(flag, bare)
+            value(flag)
         ),
         format!(
-            r#"(?P<{}>\\?"?\b(?P<{}>{names})\b\\?"?\s*[:=]\s*(?:Some\()?){}"#,
+            r#"(?P<{}>\\?["']?\b(?P<{}>{names})\b\\?["']?\s*[:=]\s*(?:Some\()?){}"#,
             pair.key,
             pair.name,
-            value(pair, bare)
+            value(pair)
         ),
         format!(
             r#"(?P<{}>\b(?P<{}>{names})\b\s+){}"#,
             spaced.key,
             spaced.name,
-            value(spaced, spaced_bare)
+            value(spaced)
         ),
     ]
     .join("|");
     Regex::new(&pattern).expect("Failed to compile named-field redaction regex")
 }
 
-/// Bare values that hide nothing whichever name they follow, so they stay
-/// readable: booleans and unset markers (`false`, `None`, `null`); numbers
-/// of at most three integer digits (`48`, `3.65`, `-1`: sub-scores, counts,
-/// event ids; under ten bits, nothing a PIN, a key or an identifier is made
-/// of); and after `code`, a status or error code (an integer, a hex code, or
-/// a name such as `Unavailable` or `ERROR_ACCESS_DENIED`). A quoted value
-/// is never exempt, nor is anything else: an ambiguous field stays masked.
+/// Whether a field of this name (as [`build_named_field_regex`] matched it)
+/// holds a secret whatever its value looks like ([`STRONG_SECRET_SUFFIXES`]).
+fn is_strong_secret_name(name: &str) -> bool {
+    let compact: String = name
+        .chars()
+        .filter(|c| !matches!(c, '_' | '-'))
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
+    STRONG_SECRET_SUFFIXES
+        .iter()
+        .any(|suffix| compact.ends_with(suffix))
+}
+
+/// Punctuation that ends a word of prose (`token required.`, `password
+/// hunter,`): it does not make the word a value.
+const TRAILING_PUNCTUATION: [char; 8] = ['.', ',', ':', ';', '!', '?', ')', ']'];
+
+/// Letters, `_`, `'` and `-` only: a word of prose or an identifier, with
+/// no digit or symbol.
+fn is_plain_word(word: &str) -> bool {
+    word.chars()
+        .all(|c| c.is_alphabetic() || matches!(c, '_' | '\'' | '-'))
+}
+
+fn is_prose_after_secret_name(word: &str) -> bool {
+    PROSE_AFTER_SECRET_NAME
+        .split_ascii_whitespace()
+        .any(|prose| word.eq_ignore_ascii_case(prose))
+}
+
+/// After a name that is not strongly secret and spaces alone, a word is a
+/// value when it starts with a letter, a digit or `_` and holds a digit or a
+/// symbol (`device 4f3c2a1b...`, `code 1168`, `uuid 3f2504e0-...`), or is a
+/// run of 16 letters or more (`key ABCDEFGHIJKLMNOP`). Any other word is
+/// prose (`device type`, `credentials enabled`, `code is`, `key isn't`, `id
+/// 'privacy'`).
+fn word_is_value_after_weak_name(word: &str) -> bool {
+    let body = word.trim_end_matches(TRAILING_PUNCTUATION);
+    let letter_run = body.chars().count() >= 16 && body.chars().all(char::is_alphabetic);
+    word.starts_with(|c: char| c.is_alphanumeric() || c == '_')
+        && (!is_plain_word(body) || letter_run)
+}
+
+/// Bare values that hide nothing, so they stay readable: booleans and unset
+/// markers (`false`, `None`, `null`) after any name; after a name that is
+/// not strongly secret, a number of at most three integer digits and two
+/// decimals (`48`, `3.65`, `-1`: sub-scores, counts, event ids; under ten
+/// bits, nothing a key or an identifier is made of); and after `code`, a
+/// status or error code ([`is_status_code`]). A quoted value is never
+/// exempt, nor is anything else: an ambiguous field stays masked.
 fn bare_value_hides_nothing(name: &str, value: &str) -> bool {
     let value = value.trim_end_matches([')', ']', ';', ',', '.', ':']);
     ["true", "false", "none", "null"]
         .iter()
         .any(|word| value.eq_ignore_ascii_case(word))
-        || is_small_number(value)
+        || (!is_strong_secret_name(name) && is_small_number(value))
         || (name == "code" && is_status_code(value))
 }
 
-/// At most three integer digits, an optional sign and fraction.
+/// At most three integer digits and two decimals, an optional sign.
 fn is_small_number(value: &str) -> bool {
     let unsigned = value.strip_prefix('-').unwrap_or(value);
     let (integer, fraction) = match unsigned.split_once('.') {
@@ -243,22 +346,29 @@ fn is_small_number(value: &str) -> bool {
         None => (unsigned, None),
     };
     let digits = |part: &str| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit());
-    integer.len() <= 3 && digits(integer) && fraction.is_none_or(digits)
+    integer.len() <= 3
+        && digits(integer)
+        && fraction.is_none_or(|fraction| fraction.len() <= 2 && digits(fraction))
 }
 
-/// A status or error code: an integer (`10061`, `-2147024891`), a hex code
-/// (`0x80070005`) or a name made of letters and `_` (`Unavailable`,
-/// `ConnectionRefused`, `ERROR_ACCESS_DENIED`).
+/// A status or error code: at most four decimal digits (`400`, `1168`), a
+/// negative number (`-2147024891`, `-32601`: HRESULTs and JSON-RPC errors
+/// written signed), a hex code (`0x80070005`) or a name made of letters and
+/// `_` (`Unavailable`, `ConnectionRefused`, `ERROR_ACCESS_DENIED`). Five
+/// digits or more are never a status code here, Windows socket errors
+/// (`10061`) included: one-time codes and PINs are written that way
+/// (`code: 482913`).
 fn is_status_code(value: &str) -> bool {
-    let unsigned = value.strip_prefix('-').unwrap_or(value);
-    let decimal = !unsigned.is_empty() && unsigned.bytes().all(|b| b.is_ascii_digit());
+    let digits = |part: &str| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit());
+    let decimal = value.len() <= 4 && digits(value);
+    let negative = value.strip_prefix('-').is_some_and(digits);
     let hex = value
         .strip_prefix("0x")
         .or_else(|| value.strip_prefix("0X"))
         .is_some_and(|hex| !hex.is_empty() && hex.bytes().all(|b| b.is_ascii_hexdigit()));
     let name = value.starts_with(|c: char| c.is_ascii_alphabetic())
         && value.bytes().all(|b| b.is_ascii_alphabetic() || b == b'_');
-    decimal || hex || name
+    decimal || negative || hex || name
 }
 
 fn secret_names_alternation() -> String {
@@ -276,14 +386,14 @@ fn secret_names_alternation() -> String {
 }
 
 lazy_static! {
-    static ref SECRET_FIELD_REGEX: Regex = build_named_field_regex(&secret_names_alternation());
-    static ref LOG_FIELD_REGEX: Regex = {
+    static ref SECRET_FIELDS: NamedFields = NamedFields::new(&secret_names_alternation());
+    static ref LOG_FIELDS: NamedFields = {
         let privacy = LOG_PRIVACY_FIELDS
             .iter()
             .map(|k| regex::escape(k))
             .collect::<Vec<_>>()
             .join("|");
-        build_named_field_regex(&format!("{}|{}", secret_names_alternation(), privacy))
+        NamedFields::new(&format!("{}|{}", secret_names_alternation(), privacy))
     };
 
     /// Known secret shapes, one alternation so a log line is scanned once.
@@ -345,48 +455,135 @@ fn is_auth_scheme(value: &str) -> bool {
         .any(|scheme| value.eq_ignore_ascii_case(scheme))
 }
 
-fn mask_field_values(regex: &Regex, input: &str) -> String {
-    regex
-        .replace_all(input, |caps: &Captures| {
-            let Some(shape) = FIELD_SHAPES
-                .iter()
-                .find(|shape| caps.name(shape.key).is_some())
-            else {
-                return caps[0].to_string();
+/// One named-field pass: the field regex, and the names alone (a word after
+/// a name that is itself a name is not its value).
+struct NamedFields {
+    fields: Regex,
+    name: Regex,
+}
+
+impl NamedFields {
+    fn new(names: &str) -> Self {
+        Self {
+            fields: build_named_field_regex(names),
+            name: Regex::new(&format!("^(?:{names})$"))
+                .expect("Failed to compile field name regex"),
+        }
+    }
+
+    /// Mask the field values in `input`, one `*` per character, keeping the
+    /// value's own quoting (JSON-escaped, double, single or none). A match
+    /// whose value hides nothing is left as it is and the search goes on
+    /// from its value, so a word that is no value can still name the field
+    /// that follows it (`Secret connection_pin: 123456`).
+    fn mask(&self, input: &str) -> String {
+        let mut out = String::with_capacity(input.len());
+        let mut copied = 0;
+        let mut at = 0;
+        while let Some(caps) = self.fields.captures_at(input, at) {
+            let (Some(whole), Some((shape, key))) = (
+                caps.get(0),
+                FIELD_SHAPES
+                    .iter()
+                    .find_map(|shape| caps.name(shape.key).map(|key| (shape, key))),
+            ) else {
+                break;
             };
-            let key = &caps[shape.key];
-            // Keep the value's own quoting (JSON-escaped, plain or none).
+            let name = caps.name(shape.name).map_or("", |m| m.as_str());
             let (quote, value) = if let Some(m) = caps.name(shape.escaped) {
-                ("\\\"", m.as_str())
+                ("\\\"", m)
             } else if let Some(m) = caps.name(shape.quoted).or_else(|| caps.name(shape.raw)) {
-                ("\"", m.as_str())
+                ("\"", m)
+            } else if let Some(m) = caps.name(shape.single) {
+                ("'", m)
+            } else if let Some(m) = caps.name(shape.bare) {
+                ("", m)
             } else {
-                let bare = caps.name(shape.bare).map_or("", |m| m.as_str());
-                let name = caps.name(shape.name).map_or("", |m| m.as_str());
-                if is_auth_scheme(bare) || bare_value_hides_nothing(name, bare) {
-                    return caps[0].to_string();
-                }
-                ("", bare)
+                break;
             };
-            format!(
-                "{}{}{}{}",
-                key,
-                quote,
-                "*".repeat(value.chars().count()),
-                quote
-            )
-        })
-        .into_owned()
+            let secret = match quote {
+                "" => {
+                    self.bare_value_is_secret(input, shape.kind, key.start(), name, value.as_str())
+                }
+                // After spaces alone and a weaker name, a quoted word is
+                // prose unless a word in it is a value (`id 'privacy'`).
+                "'" if shape.kind == ShapeKind::Spaced && !is_strong_secret_name(name) => value
+                    .as_str()
+                    .split_whitespace()
+                    .any(word_is_value_after_weak_name),
+                _ => true,
+            };
+            if secret {
+                out.push_str(&input[copied..key.start()]);
+                out.push_str(key.as_str());
+                out.push_str(quote);
+                out.push_str(&"*".repeat(value.as_str().chars().count()));
+                out.push_str(quote);
+                copied = whole.end();
+                at = copied;
+            } else {
+                at = value.start();
+            }
+        }
+        out.push_str(&input[copied..]);
+        out
+    }
+
+    /// Whether a bare (unquoted) value is a secret to mask. In a URL query
+    /// (`?code=`, `&device_id=`) every value is; after spaces alone the word
+    /// has to read as a value ([`Self::spaced_word_is_value`]); then booleans,
+    /// unset markers, small numbers, status codes and authorization schemes
+    /// stay readable ([`bare_value_hides_nothing`]).
+    fn bare_value_is_secret(
+        &self,
+        input: &str,
+        kind: ShapeKind,
+        key_start: usize,
+        name: &str,
+        value: &str,
+    ) -> bool {
+        if kind == ShapeKind::Pair && input[..key_start].ends_with(['?', '&', '#']) {
+            return true;
+        }
+        if kind == ShapeKind::Spaced && !self.spaced_word_is_value(name, value) {
+            return false;
+        }
+        !(is_auth_scheme(value) || bare_value_hides_nothing(name, value))
+    }
+
+    /// Whether a word after a name and spaces alone is the name's value
+    /// rather than the prose that goes on. After a strongly secret name it
+    /// is, unless it holds no letter or digit (`token | head`, an already
+    /// masked `pin ****`), is a prose word ([`PROSE_AFTER_SECRET_NAME`]) or
+    /// is a name of its own (`password pin 1234` masks the PIN): `password
+    /// hunter`, `token abc-def_ghi`, `password $ecret99`. After another name
+    /// it is only when it reads as one ([`word_is_value_after_weak_name`]).
+    fn spaced_word_is_value(&self, name: &str, word: &str) -> bool {
+        if !is_strong_secret_name(name) {
+            return word_is_value_after_weak_name(word);
+        }
+        let body = word.trim_end_matches(TRAILING_PUNCTUATION);
+        if !body.chars().any(char::is_alphanumeric) {
+            return false;
+        }
+        if !is_plain_word(body) {
+            return true;
+        }
+        let body = body.trim_matches('\'');
+        !(is_prose_after_secret_name(body) || self.name.is_match(body))
+    }
 }
 
 /// Mask the values of secret-named fields (`pin: 123456`, `"api_key":"..."`,
 /// `password=...`, `--pin 123456`, `PIN 654321`, `Authorization: ...`), one
-/// `*` per character. After spaces alone only a value-like word counts
-/// (`token required` is prose), and booleans, unset markers and small
-/// numbers are never masked (`is_success_pin: false`, `credentials: 48`).
-/// Shapes are not consulted.
+/// `*` per character. After spaces alone a word counts when it reads as a
+/// value: any word after a strongly secret name but prose (`password
+/// hunter`, not `token required`), a word with a digit or a symbol after the
+/// others (`credentials enabled` is prose). Booleans and unset markers are
+/// never masked (`is_success_pin: false`), nor are small numbers after a name
+/// that is not strongly secret (`credentials: 48`). Shapes are not consulted.
 pub fn redact_named_fields(text: &str) -> String {
-    mask_field_values(&SECRET_FIELD_REGEX, text)
+    SECRET_FIELDS.mask(text)
 }
 
 /// Secrets out of free text: known shapes first, then secret-named fields.
@@ -399,10 +596,11 @@ pub fn redact_text(text: &str) -> String {
 /// [`redact_text`] plus the privacy keys the log writers have always masked
 /// (`id`, `uuid`, `device`, `device_id`, `code`). For log lines and the Sentry
 /// scrubber; not for text shown to the operator, where ids are useful. A
-/// status or error code after `code` (`code: Unavailable`, `code 1168`) is
-/// not an identifier and stays readable.
+/// status or error code after `code` (`code: Unavailable`, `code 1168`,
+/// `code: -32601`) is not an identifier and stays readable; five digits or
+/// more after `code`, and any value in a URL query, stay masked.
 pub fn redact_log_line(text: &str) -> String {
-    mask_field_values(&LOG_FIELD_REGEX, &redact_secret_tokens(text))
+    LOG_FIELDS.mask(&redact_secret_tokens(text))
 }
 
 // ---------------------------------------------------------------------------
@@ -896,8 +1094,9 @@ mod tests {
     fn log_lines_keep_status_codes_small_ids_and_prose() {
         for line in [
             "Error sending request to helper: Status { code: Unavailable, message: \"tcp connect error\", source: None }",
-            "Os { code: 10061, kind: ConnectionRefused, message: \"No connection could be made\" }",
+            "Os { code: 2, kind: NotFound, message: \"No such file or directory\" }",
             "Os { code: -2147024891, kind: PermissionDenied }; HRESULT code=0x80070005",
+            "JSON-RPC error code: -32601, error code: 80",
             "GetIpNetTable2 failed with code 1168",
             "Call to backend failed with error code: InvalidSignature - report_score failed",
             "failed with code 400, response body: \"x\", error code is InputValidationFailed",
@@ -986,6 +1185,126 @@ mod tests {
         }
     }
 
+    /// After `code`, a one-time code or a PIN is masked however it is
+    /// written: five digits or more, and any value in a URL query (the Hub
+    /// PIN travels as `code=`).
+    #[test]
+    fn log_lines_mask_codes_that_are_no_status_code() {
+        for (line, hidden) in [
+            ("code: 482913", "482913"),
+            ("code=482913", "482913"),
+            (r#"{"code":482913}"#, "482913"),
+            ("Enter the mfa code 482913 to continue", "482913"),
+            ("Os { code: 10061, kind: ConnectionRefused }", "10061"),
+            ("GET /hub/enroll?code=482913 HTTP/1.1", "482913"),
+            ("GET /hub/enroll?user=bob&code=482913", "482913"),
+            ("GET /hub/enroll?code=4829&user=bob", "4829"),
+            (
+                "GET /oauth/callback?code=AbCdEfGhIjKl&state=x",
+                "AbCdEfGhIjKl",
+            ),
+            ("GET /oauth/callback?id=42", "42"),
+        ] {
+            let out = redact_log_line(line);
+            assert!(
+                !out.contains(hidden),
+                "{hidden} leaked from {line:?}: {out}"
+            );
+            assert!(out.contains('*'), "{line:?}: {out}");
+        }
+        assert_eq!(
+            redact_log_line("Enter the mfa code 482913 to continue"),
+            "Enter the mfa code ****** to continue"
+        );
+        assert_eq!(
+            redact_log_line("GET /hub/enroll?user=bob&code=4829"),
+            "GET /hub/enroll?user=bob&code=****"
+        );
+    }
+
+    /// Values the named-field pass let through: a plain word after a
+    /// strongly secret name, a flag after `=`, a small number after a
+    /// strongly secret name or one with a long fraction, a value starting
+    /// with a quote or a symbol, a single-quoted value, a quoted name.
+    #[test]
+    fn plain_quoted_and_symbol_values_are_masked() {
+        for (line, hidden) in [
+            ("password hunter", "hunter"),
+            ("login with password hunter.", "hunter"),
+            ("token abc-def_ghi", "abc-def_ghi"),
+            ("key ABCDEFGHIJKLMNOP", "ABCDEFGHIJKLMNOP"),
+            ("ARGS=--password hunter", "hunter"),
+            ("password pin 1234", "1234"),
+            ("pin: 123", "123"),
+            ("psk=42", "42"),
+            ("token: 7.25", "7.25"),
+            ("secret 12", "12"),
+            ("credentials: 3.14159", "3.14159"),
+            ("password: 'hunter2'", "hunter2"),
+            ("--password 'hunter2'", "hunter2"),
+            ("--password 'correct horse battery'", "horse"),
+            ("password 'correct horse battery'", "horse"),
+            ("password: $ecret99", "ecret99"),
+            ("password: !Passw0rd", "Passw0rd"),
+            ("password $ecret99", "ecret99"),
+            ("{'password': 'hunter2'}", "hunter2"),
+            ("Server=db;Uid=sa;Pwd=hunter2;", "hunter2"),
+            ("MYSQL_PWD=hunter2", "hunter2"),
+        ] {
+            for out in [redact_text(line), redact_log_line(line)] {
+                assert!(
+                    !out.contains(hidden),
+                    "{hidden} leaked from {line:?}: {out}"
+                );
+                assert!(out.contains('*'), "{line:?}: {out}");
+            }
+        }
+        for (line, masked) in [
+            ("password hunter", "password ******"),
+            ("ARGS=--password hunter", "ARGS=--password ******"),
+            ("password: 'hunter2'", "password: '*******'"),
+            ("{'password': 'hunter2'}", "{'password': '*******'}"),
+            ("password pin 1234", "password pin ****"),
+            ("pin: 123", "pin: ***"),
+        ] {
+            assert_eq!(redact_text(line), masked);
+        }
+    }
+
+    /// Next to those, what stays readable: status and error codes after
+    /// `code`, prose after a strongly secret name, prose and quoted words
+    /// after the weaker names, and EDAMAME's own lines that put a word after
+    /// a secret name.
+    #[test]
+    fn codes_and_prose_stay_readable_next_to_the_masked_values() {
+        for line in [
+            "Os { code: 2, kind: NotFound }",
+            "Status { code: Unavailable, message: \"tcp connect error\" }",
+            "error code: 80",
+            "HRESULT code=0x80070005, JSON-RPC code: -32601",
+            "GetIpNetTable2 failed with code 1168",
+            "No refresh token available - skipping retry",
+            "OAuth token refresh not needed on startup",
+            "Access token refreshed successfully",
+            "Token exchange failed: timed out",
+            "PIN success flag switched to true",
+            "Empty PIN and no Hub enrollment credential",
+            "Ensure your firewall is configured and PSK is secure!",
+            "Using GitHub token from secure file: /run/secrets/gh",
+            "Secret store (connection_pin): adoption task failed",
+            "Agent cursor exceeded its daily token budget: 120 tokens vs 100 cap",
+            "Unknown consent document id 'privacy'",
+            "the key isn't loaded",
+            "cd $PWD && make",
+            "--password --user bob",
+            "api_key: [REDACTED]",
+            "edamame_core::agentic::token::refresh: started",
+            "fn set_pin(pin: &str, token: &'a str) { if pin == \"\" {} }",
+        ] {
+            assert_eq!(redact_log_line(line), line, "over-redacted");
+        }
+    }
+
     #[test]
     fn secret_field_names() {
         for name in [
@@ -1007,10 +1326,13 @@ mod tests {
             "aws_secret_access_key",
             "password",
             "credentials",
+            "pwd",
+            "MYSQL_PWD",
         ] {
             assert!(is_secret_field_name(name), "{name} should be secret");
         }
         for name in [
+            "cwd",
             "finding_key",
             "session_id",
             "input_tokens",
