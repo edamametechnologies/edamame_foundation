@@ -734,6 +734,29 @@ pub struct WindowsTempPowershellStubJSON {
     pub name_suffix: String,
 }
 
+/// The WiX Burn bundle layout. A bundle creates a per-invocation `{GUID}`
+/// directory under an OS temp root and keeps its own copies in the
+/// `staging_directories` below it (`.ba` bootstrapper application, `.be`
+/// elevated engine, `.cr` clean room; one path segment each). Its engine
+/// writes directly in an OS temp root:
+/// - the bundle log `<prefix>_<timestamp><log_extension>` and the package
+///   logs `<prefix>_<timestamp>_<index>_<package><log_extension>`, the
+///   timestamp `log_timestamp_digits` digits, the index
+///   `package_log_index_digits` digits;
+/// - logs ending with `elevated_log_suffix`;
+/// - delete-on-reboot markers
+///   `<delete_on_reboot_prefix><hex><delete_on_reboot_suffix>`.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct WixBurnLayoutJSON {
+    pub staging_directories: Vec<String>,
+    pub log_extension: String,
+    pub elevated_log_suffix: String,
+    pub log_timestamp_digits: usize,
+    pub package_log_index_digits: usize,
+    pub delete_on_reboot_prefix: String,
+    pub delete_on_reboot_suffix: String,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 pub struct PlatformOwnedUserStoreJSON {
     pub library_root: String,
@@ -1232,6 +1255,8 @@ pub struct CveDetectionParamsJSON {
     /// Ephemeral PowerShell stub names in the Windows per-user temp root
     /// (see [`WindowsTempPowershellStubJSON`]).
     pub windows_temp_powershell_stub: WindowsTempPowershellStubJSON,
+    /// The WiX Burn bundle layout (see [`WixBurnLayoutJSON`]).
+    pub wix_burn_layout: WixBurnLayoutJSON,
 }
 
 fn normalize_runtime_perfdata_entry(entry: &RuntimePerfdataEntryJSON) -> RuntimePerfdataEntryJSON {
@@ -1465,6 +1490,9 @@ pub struct CveDetectionParams {
     pub os_temp_roots: OsTempRootsJSON,
     pub temp_scratch_name: TempScratchNameJSON,
     pub windows_temp_powershell_stub: WindowsTempPowershellStubJSON,
+    /// `wix_burn_layout`, lowercase and trimmed; staging directory entries
+    /// that are empty or not one path segment are dropped.
+    pub wix_burn_layout: WixBurnLayoutJSON,
 }
 
 impl CloudSignature for CveDetectionParams {
@@ -1633,6 +1661,29 @@ fn normalized_os_temp_roots(roots: &OsTempRootsJSON) -> OsTempRootsJSON {
         macos_per_user_temp_trees: normalized_path_fragments(&roots.macos_per_user_temp_trees),
         macos_per_user_temp_parent: fragment(&roots.macos_per_user_temp_parent),
         macos_per_user_temp_leaf: fragment(&roots.macos_per_user_temp_leaf),
+    }
+}
+
+/// The Burn layout loads lowercased and trimmed. A staging directory is one
+/// path segment: an empty entry, or one holding a separator, is dropped (it
+/// could never name the segment below the bundle's `{GUID}` directory).
+fn normalized_wix_burn_layout(layout: &WixBurnLayoutJSON) -> WixBurnLayoutJSON {
+    let token = |value: &str| value.trim().to_ascii_lowercase();
+    WixBurnLayoutJSON {
+        staging_directories: layout
+            .staging_directories
+            .iter()
+            .map(|directory| token(directory))
+            .filter(|directory| {
+                !directory.is_empty() && !directory.contains('/') && !directory.contains('\\')
+            })
+            .collect(),
+        log_extension: token(&layout.log_extension),
+        elevated_log_suffix: token(&layout.elevated_log_suffix),
+        log_timestamp_digits: layout.log_timestamp_digits,
+        package_log_index_digits: layout.package_log_index_digits,
+        delete_on_reboot_prefix: token(&layout.delete_on_reboot_prefix),
+        delete_on_reboot_suffix: token(&layout.delete_on_reboot_suffix),
     }
 }
 
@@ -2510,6 +2561,7 @@ impl CveDetectionParams {
                     .trim()
                     .to_ascii_lowercase(),
             },
+            wix_burn_layout: normalized_wix_burn_layout(&json.wix_burn_layout),
         }
     }
 
@@ -4589,6 +4641,11 @@ pub fn windows_temp_powershell_stub() -> WindowsTempPowershellStubJSON {
     PARAMS_SNAPSHOT.load().windows_temp_powershell_stub.clone()
 }
 
+/// The WiX Burn bundle layout (see [`WixBurnLayoutJSON`]), normalized.
+pub fn wix_burn_layout() -> WixBurnLayoutJSON {
+    PARAMS_SNAPSHOT.load().wix_burn_layout.clone()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6393,6 +6450,37 @@ mod tests {
             .posix_temp_roots
             .contains(&"/private/var/tmp/".to_string()));
         assert!(temp_scratch_name().min_token_len > 0);
+    }
+
+    /// The Burn layout loads lowercased and trimmed; a staging directory that
+    /// is empty or not one path segment is dropped. The shipped snapshot
+    /// carries the three Burn staging directories and the log shape.
+    #[test]
+    fn test_wix_burn_layout_is_normalized() {
+        let p = params_from_edited_snapshot(|value| {
+            value["wix_burn_layout"]["staging_directories"] =
+                serde_json::json!([" .CR ", "", "a/b", "c\\d", ".be"]);
+            value["wix_burn_layout"]["log_extension"] = serde_json::json!(".LOG");
+            value["wix_burn_layout"]["delete_on_reboot_prefix"] = serde_json::json!(" DEL");
+        });
+        assert_eq!(p.wix_burn_layout.staging_directories, vec![".cr", ".be"]);
+        assert_eq!(p.wix_burn_layout.log_extension, ".log");
+        assert_eq!(p.wix_burn_layout.delete_on_reboot_prefix, "del");
+
+        let shipped = params_from_edited_snapshot(|_| {}).wix_burn_layout;
+        for directory in [".ba", ".be", ".cr"] {
+            assert!(
+                shipped.staging_directories.iter().any(|d| d == directory),
+                "shipped Burn staging directories lack {directory}"
+            );
+        }
+        assert_eq!(shipped.log_extension, ".log");
+        assert!(shipped
+            .elevated_log_suffix
+            .ends_with(&shipped.log_extension));
+        assert!(shipped.log_timestamp_digits > 0 && shipped.package_log_index_digits > 0);
+        assert!(!shipped.delete_on_reboot_prefix.is_empty());
+        assert!(!shipped.delete_on_reboot_suffix.is_empty());
     }
 
     #[test]
