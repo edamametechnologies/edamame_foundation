@@ -339,6 +339,7 @@ pub fn parse_jsonl_transcript(raw_text: &str) -> ParsedTranscript {
     let mut user_sections = Vec::new();
     let mut assistant_sections = Vec::new();
     let mut tool_input_sections = Vec::new();
+    let content_keys = crate::agent_visibility_params::transcript_content_input_keys();
 
     for line in raw_text.split('\n') {
         let line = line.trim();
@@ -388,7 +389,7 @@ pub fn parse_jsonl_transcript(raw_text: &str) -> ParsedTranscript {
             for item in items {
                 if item.get("type").and_then(|v| v.as_str()) == Some("tool_use") {
                     if let Some(input) = item.get("input") {
-                        collect_tool_input_strings(input, &mut tool_input_sections);
+                        collect_tool_input_strings(input, &content_keys, &mut tool_input_sections);
                     }
                 }
             }
@@ -430,9 +431,17 @@ pub fn parse_jsonl_transcript(raw_text: &str) -> ParsedTranscript {
 
 /// Flatten a `tool_use` input value into plain strings for traffic/host
 /// derivation. Recurses objects/arrays and keeps only string leaves (a
-/// WebFetch `url`, a WebSearch `query`, a Bash `command`); numbers/bools carry
-/// no host.
-fn collect_tool_input_strings(value: &serde_json::Value, out: &mut Vec<String>) {
+/// WebFetch `url`, a Bash `command`, a `file_path`); numbers/bools carry no
+/// host. The value of a key in `content_keys` (the params'
+/// `transcript_hints.content_input_keys`, lowercased) is skipped at any
+/// depth: a host written into a file body, an edit, a sub-agent brief or a
+/// search query is content the agent produced, not traffic the session
+/// makes.
+fn collect_tool_input_strings(
+    value: &serde_json::Value,
+    content_keys: &[String],
+    out: &mut Vec<String>,
+) {
     match value {
         serde_json::Value::String(s) => {
             let t = s.trim();
@@ -442,12 +451,16 @@ fn collect_tool_input_strings(value: &serde_json::Value, out: &mut Vec<String>) 
         }
         serde_json::Value::Array(items) => {
             for item in items {
-                collect_tool_input_strings(item, out);
+                collect_tool_input_strings(item, content_keys, out);
             }
         }
         serde_json::Value::Object(map) => {
-            for item in map.values() {
-                collect_tool_input_strings(item, out);
+            for (key, item) in map {
+                let key = key.to_ascii_lowercase();
+                if content_keys.iter().any(|content| *content == key) {
+                    continue;
+                }
+                collect_tool_input_strings(item, content_keys, out);
             }
         }
         _ => {}
@@ -3993,6 +4006,53 @@ mod host_plausibility_tests {
         assert!(parsed.tool_input_text.contains("gh release view"));
         // A tool result is never user text.
         assert!(!parsed.user_text.contains("example.org"));
+    }
+
+    /// What the agent wrote or briefed is not what it acted on: a host named
+    /// in a `Write` body, an `Edit` string, a sub-agent `prompt`, a Bash
+    /// `description` or a search `query` is content, not traffic the session
+    /// makes. The command, the url and the paths stay.
+    #[test]
+    fn jsonl_tool_input_skips_content_the_agent_wrote() {
+        let raw = concat!(
+            r#"{"role":"assistant","message":{"content":["#,
+            r#"{"type":"tool_use","name":"Bash","input":{"command":"ssh deploy@build-01.example.net uptime","description":"check mirror.example.org"}},"#,
+            r#"{"type":"tool_use","name":"Write","input":{"file_path":"/repo/NOTES.md","content":"geolocation goes to ip-api.example.com"}},"#,
+            r#"{"type":"tool_use","name":"Edit","input":{"file_path":"/repo/ci.yml","old_string":"a","new_string":"lookup at cloudkit.example.com"}},"#,
+            r#"{"type":"tool_use","name":"Agent","input":{"description":"review","prompt":"the bots run on bots.example.com"}},"#,
+            r#"{"type":"tool_use","name":"WebSearch","input":{"query":"status of status.example.com"}},"#,
+            r#"{"type":"tool_use","name":"WebFetch","input":{"url":"https://docs.example.io/page","prompt":"see also other.example.com"}}"#,
+            r#"]}}"#,
+        );
+        let parsed = parse_jsonl_transcript(raw);
+        let text = &parsed.tool_input_text;
+        for kept in [
+            "ssh deploy@build-01.example.net uptime",
+            "/repo/NOTES.md",
+            "/repo/ci.yml",
+            "https://docs.example.io/page",
+        ] {
+            assert!(text.contains(kept), "{kept} must stay: {text:?}");
+        }
+        for skipped in [
+            "mirror.example.org",
+            "ip-api.example.com",
+            "cloudkit.example.com",
+            "bots.example.com",
+            "status.example.com",
+            "other.example.com",
+        ] {
+            assert!(!text.contains(skipped), "{skipped} is content: {text:?}");
+        }
+        let traffic = extract_traffic(text, &[], &[]);
+        assert!(
+            traffic.iter().any(|h| h == "docs.example.io:443"),
+            "{traffic:?}"
+        );
+        assert!(
+            !traffic.iter().any(|h| h.starts_with("ip-api.example.com")),
+            "{traffic:?}"
+        );
     }
 
     #[test]
