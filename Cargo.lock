@@ -1145,7 +1145,7 @@ dependencies = [
 [[package]]
 name = "flodbadd"
 version = "2.0.9"
-source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#44d591b28d96d7f1581cd0eea5b77c5319d24994"
+source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#52db0bedeb4b0bc9733ba6566e06d667c88ac67e"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -4009,7 +4009,7 @@ dependencies = [
 [[package]]
 name = "threatmodels_rs"
 version = "0.1.1"
-source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#d184eae974f9ad4a3e07644cc12c8bd268816186"
+source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#1406e5be7ad6502519aacfc83bd9beedb30d68c5"
 dependencies = [
  "anyhow",
  "chrono",
