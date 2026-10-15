@@ -685,6 +685,130 @@ pub fn redact_cli_args<S: AsRef<str>>(args: &[S], extra_secret_flags: &[&str]) -
     out
 }
 
+/// Longest argument of a captured command line that leaves the host whole
+/// (see [`redact_command_line`]); a longer one keeps its head and a count.
+pub const COMMAND_LINE_ARG_MAX_CHARS: usize = 256;
+
+/// A command line EDAMAME captured from another process, made safe to leave
+/// the host (an LLM prompt, an MCP answer, an export): [`redact_cli_args`],
+/// then every `NAME=value` assignment keeps its name and loses its value
+/// (assignments are how a command line carries configuration and credentials,
+/// and the name is the context), then [`redact_text`] per argument, and each
+/// argument capped at [`COMMAND_LINE_ARG_MAX_CHARS`] characters so a long blob
+/// (a certificate bundle, an encoded key) never travels whole.
+pub fn redact_command_line<S: AsRef<str>>(args: &[S]) -> Vec<String> {
+    redact_cli_args(args, &[])
+        .into_iter()
+        .map(|arg| {
+            let arg = match arg.split_once('=') {
+                Some((name, value)) if is_assignment_name(name) && !value.is_empty() => {
+                    format!("{name}={REDACTED}")
+                }
+                _ => redact_text(&arg),
+            };
+            cap_argument(arg)
+        })
+        .collect()
+}
+
+/// A command, or a path taken from one (an interpreter's inline `-c` script),
+/// made safe to leave the host: [`redact_text`] and the
+/// [`COMMAND_LINE_ARG_MAX_CHARS`] cap.
+pub fn redact_command_text(text: &str) -> String {
+    cap_argument(redact_text(text))
+}
+
+/// `NAME` of a `NAME=value` assignment, as shells and `env` write them.
+fn is_assignment_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// JSON keys whose value is a captured argv (flodbadd's session L7, the LLM
+/// session summary).
+const COMMAND_LINE_ARRAY_KEYS: &[&str] = &["cmd", "parent_cmd", "grandparent_cmd", "process_cmd"];
+
+/// JSON keys whose string value is a command, or a path taken from one: an
+/// interpreter's script argument can be a whole inline `-c` command.
+const COMMAND_TEXT_KEYS: &[&str] = &[
+    "command",
+    "script_path",
+    "parent_script_path",
+    "grandparent_script_path",
+];
+
+/// Every captured command line in a JSON document EDAMAME is about to hand
+/// off the host (an MCP answer, an export), redacted in place: arrays under a
+/// `cmd`-named key through [`redact_command_line`], commands and script paths
+/// through [`redact_text`] and the same length cap. A JSON document carried in
+/// a string value (an export that nests one) is redacted the same way.
+pub fn redact_command_lines_in_json(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            for (key, item) in map.iter_mut() {
+                let key = key.as_str();
+                match item {
+                    Value::Array(args) if COMMAND_LINE_ARRAY_KEYS.contains(&key) => {
+                        let text: Vec<String> = args
+                            .iter()
+                            .map(|a| a.as_str().map(str::to_string).unwrap_or_else(|| a.to_string()))
+                            .collect();
+                        *args = redact_command_line(&text).into_iter().map(Value::String).collect();
+                    }
+                    Value::String(text)
+                        if COMMAND_LINE_ARRAY_KEYS.contains(&key) || COMMAND_TEXT_KEYS.contains(&key) =>
+                    {
+                        *text = redact_command_text(text);
+                    }
+                    _ => redact_command_lines_in_json(item),
+                }
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(redact_command_lines_in_json),
+        Value::String(text) => {
+            let trimmed = text.trim_start();
+            if !(trimmed.starts_with('{') || trimmed.starts_with('[')) {
+                return;
+            }
+            if let Ok(mut inner) = serde_json::from_str::<Value>(text) {
+                let before = inner.clone();
+                redact_command_lines_in_json(&mut inner);
+                if inner != before {
+                    if let Ok(redacted) = serde_json::to_string(&inner) {
+                        *text = redacted;
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// [`redact_command_lines_in_json`] on a serialized document; text that is not
+/// JSON is returned unchanged, and a document with nothing to redact keeps its
+/// formatting.
+pub fn redact_command_lines_in_json_text(text: &str) -> String {
+    let Ok(mut value) = serde_json::from_str::<Value>(text) else {
+        return text.to_string();
+    };
+    let before = value.clone();
+    redact_command_lines_in_json(&mut value);
+    if value == before {
+        return text.to_string();
+    }
+    serde_json::to_string_pretty(&value).unwrap_or_else(|_| text.to_string())
+}
+
+fn cap_argument(arg: String) -> String {
+    let total = arg.chars().count();
+    if total <= COMMAND_LINE_ARG_MAX_CHARS {
+        return arg;
+    }
+    let head: String = arg.chars().take(COMMAND_LINE_ARG_MAX_CHARS).collect();
+    format!("{head}...[{} more chars]", total - COMMAND_LINE_ARG_MAX_CHARS)
+}
+
 // ---------------------------------------------------------------------------
 // URLs and excerpts (moved from agent_visibility in 2.0.2, behaviour unchanged
 // apart from the `edm_` / `edak_` prefixes the excerpt masker now knows)
@@ -1410,6 +1534,90 @@ mod tests {
                 REDACTED,
             ]
         );
+    }
+
+    #[test]
+    fn redact_command_line_masks_assignments_flags_shapes_and_caps_blobs() {
+        let anthropic = format!("sk-ant-api03-{}", "A".repeat(40));
+        let blob = "M".repeat(4000);
+        let args = vec![
+            "env".to_string(),
+            "APPLE_DEVELOPER_ID_APPLICATION_KEY=MIIJQgIBADANBgkqhkiG9w0BAQEFAASCCSwwggkoAgEAAoICAQC".to_string(),
+            "ANTHROPIC_API_KEY=x".to_string(),
+            "CC=gcc".to_string(),
+            "curl".to_string(),
+            "-H".to_string(),
+            format!("Authorization: Bearer {anthropic}"),
+            "--password".to_string(),
+            "hunter2".to_string(),
+            "https://user:pa55word@example.com/path?token=abc123".to_string(),
+            "/usr/bin/node".to_string(),
+            "--port=8080".to_string(),
+            "a=b=c".to_string(),
+            "--title=Cursor Helper".to_string(),
+            "--empty=".to_string(),
+            blob.clone(),
+        ];
+        let out = redact_command_line(&args);
+        assert_eq!(out[0], "env");
+        assert_eq!(out[1], "APPLE_DEVELOPER_ID_APPLICATION_KEY=[REDACTED]");
+        assert_eq!(out[2], "ANTHROPIC_API_KEY=[REDACTED]");
+        assert_eq!(out[3], "CC=[REDACTED]");
+        assert_eq!(out[4], "curl");
+        assert!(!out[6].contains(&anthropic), "{}", out[6]);
+        assert_eq!(out[7], "--password");
+        assert_eq!(out[8], REDACTED);
+        assert!(!out[9].contains("pa55word"), "{}", out[9]);
+        assert_eq!(out[10], "/usr/bin/node");
+        assert_eq!(out[11], "--port=8080");
+        assert_eq!(out[12], "a=[REDACTED]");
+        assert_eq!(out[13], "--title=Cursor Helper");
+        assert_eq!(out[14], "--empty=");
+        assert!(out[15].len() < 400, "a long blob is capped: {} chars", out[15].len());
+        assert!(out[15].ends_with(&format!("...[{} more chars]", 4000 - COMMAND_LINE_ARG_MAX_CHARS)));
+        assert!(out.iter().all(|a| !a.contains("MIIJQgIBADANBgkqhkiG9w0BAQEFAASCCSww")));
+    }
+
+    #[test]
+    fn command_lines_in_json_are_redacted_wherever_they_sit() {
+        let inner = serde_json::json!({"l7": {"parent_cmd": ["env", "API_TOKEN=nested-secret"]}});
+        let mut doc = serde_json::json!({
+            "sessions": [{
+                "l7": {
+                    "process_name": "node",
+                    "cmd": ["node", "server.js", "--password", "hunter2"],
+                    "parent_cmd": ["Cursor Helper (Plugin)", "ANTHROPIC_API_KEY=not-a-real-key"],
+                    "grandparent_cmd": [],
+                    "parent_script_path": "curl -H 'Authorization: Bearer abcdefghijklmnopqrstuvwxyz123456' https://x",
+                }
+            }],
+            "summary": {"command": "mysql --password=s3cret db"},
+            "trace": inner.to_string(),
+            "finding_key": "vuln:abc",
+        });
+        redact_command_lines_in_json(&mut doc);
+        let text = doc.to_string();
+        for leaked in ["hunter2", "not-a-real-key", "abcdefghijklmnopqrstuvwxyz123456", "s3cret", "nested-secret"] {
+            assert!(!text.contains(leaked), "{leaked} survived: {text}");
+        }
+        assert_eq!(doc["sessions"][0]["l7"]["cmd"][1], "server.js");
+        assert_eq!(doc["sessions"][0]["l7"]["process_name"], "node");
+        assert_eq!(doc["finding_key"], "vuln:abc");
+    }
+
+    #[test]
+    fn json_text_without_command_lines_keeps_its_formatting() {
+        let text = "{\n  \"score\": 3.5,\n  \"name\": \"x\"\n}";
+        assert_eq!(redact_command_lines_in_json_text(text), text);
+        assert_eq!(redact_command_lines_in_json_text("not json"), "not json");
+        let redacted = redact_command_lines_in_json_text(r#"{"cmd":["env","A_TOKEN=zzz"]}"#);
+        assert!(redacted.contains("A_TOKEN=[REDACTED]"), "{redacted}");
+    }
+
+    #[test]
+    fn redact_command_line_leaves_an_ordinary_command_readable() {
+        let args = ["/opt/homebrew/bin/node", "/Users/u/app/server.js", "--inspect", "-p", "3000"];
+        assert_eq!(redact_command_line(&args), args.to_vec());
     }
 
     #[test]

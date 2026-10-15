@@ -142,7 +142,8 @@ pub fn sanitize_session_for_llm(
         "process_path": process_path,
         "process_username": process_username,
         "process_pid": process_pid,
-        "process_cmd": process_cmd,
+        // Captured command lines leave the host only redacted.
+        "process_cmd": process_cmd.map(crate::redaction::redact_command_line),
         "process_cwd": process_cwd,
         "process_memory": process_memory,
         "process_start_time": process_start_time,
@@ -159,7 +160,7 @@ pub fn sanitize_session_for_llm(
         "parent_pid": parent_pid,
         "parent_process_name": parent_process_name,
         "parent_process_path": parent_process_path,
-        "parent_cmd": parent_cmd,
+        "parent_cmd": parent_cmd.map(crate::redaction::redact_command_line),
         "source_asn": src_asn.map(|(num, country, owner)| json!({
             "as_number": num,
             "country": country,
@@ -237,7 +238,11 @@ mod tests {
     fn test_sanitize_session_for_llm() {
         use std::net::Ipv4Addr;
 
-        let cmd = vec!["firefox".to_string(), "--new-window".to_string()];
+        let cmd = vec![
+            "firefox".to_string(),
+            "--new-window".to_string(),
+            "API_TOKEN=not-a-real-token".to_string(),
+        ];
         let disk_usage = (1000, 500, 2000, 1000);
 
         let result = sanitize_session_for_llm(
@@ -293,6 +298,9 @@ mod tests {
 
         assert!(result.contains("test-uid-123"));
         assert!(result.contains("firefox"));
+        // Captured command lines are redacted before they reach a prompt.
+        assert!(result.contains("API_TOKEN=[REDACTED]"), "{result}");
+        assert!(!result.contains("not-a-real-token"), "{result}");
         assert!(result.contains("example.com"));
         assert!(result.contains("Cloudflare"));
         assert!(result.contains("anomaly:suspicious"));
