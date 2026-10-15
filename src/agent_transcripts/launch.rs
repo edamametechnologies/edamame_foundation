@@ -1019,6 +1019,72 @@ fn command_text(args: &Value, vocab: &WorkspaceAttributionJSON) -> Option<String
 }
 
 // ---------------------------------------------------------------------------
+// The words of a command that act on this host
+// ---------------------------------------------------------------------------
+
+/// The words of a shell `command` that act on this host: the words of every
+/// simple command, its redirection targets and heredoc bodies, except the
+/// remote command of a remote-shell call (`ssh [options] host <command>`,
+/// the params' `transcript_hints.remote_shell_programs`). The remote command
+/// runs on the remote host, so a path it names is that host's file, not one
+/// of this host's (`ssh build 'cat ~/.aws/config'` reads the remote copy).
+/// The destination word is kept (it names a host, not a path), and so are
+/// the options before it (`-i ~/.ssh/key` is a local file). Wrappers and
+/// assignments are skipped as for the launch recognizer (`sudo ssh host
+/// ...`). A heredoc cannot be tied to its command by the lexer and stays in
+/// the result, as before.
+pub fn local_command_words(command: &str) -> Vec<String> {
+    let params = agent_visibility_params::params();
+    let vocab = &params.workspace_attribution;
+    let shells = &params.transcript_hints.remote_shell_programs;
+    let lexed = lex_shell(command);
+    let mut out = Vec::new();
+    for words in &lexed.commands {
+        let keep = command_word_index(words, vocab)
+            .and_then(|index| remote_command_start(words, index, vocab, shells))
+            .unwrap_or(words.len());
+        out.extend(words[..keep].iter().cloned());
+    }
+    out.extend(lexed.redirect_targets);
+    out.extend(lexed.heredocs);
+    out
+}
+
+/// The index of the first word of a remote-shell call's remote command: the
+/// word after the destination, the options before it skipped (an option the
+/// params list takes the next word as its value). `None` when
+/// `words[command]` is not a remote shell, or the call names no remote
+/// command (an interactive login).
+fn remote_command_start(
+    words: &[String],
+    command: usize,
+    vocab: &WorkspaceAttributionJSON,
+    shells: &[ProgramOptionsJSON],
+) -> Option<usize> {
+    let program = exe_basename(&words[command], vocab);
+    let shell = shells.iter().find(|shell| shell.program == program)?;
+    let mut i = command + 1;
+    while i < words.len() {
+        let word = &words[i];
+        if word == "--" {
+            i += 1;
+            break;
+        }
+        if !word.starts_with('-') || word == "-" {
+            break;
+        }
+        i += if shell.options.iter().any(|option| option == word) {
+            2
+        } else {
+            1
+        };
+    }
+    // `words[i]` is the destination.
+    let start = i + 1;
+    (start < words.len()).then_some(start)
+}
+
+// ---------------------------------------------------------------------------
 // Shell lexing (grammar mechanics)
 // ---------------------------------------------------------------------------
 
@@ -1675,6 +1741,48 @@ mod tests {
 
     fn words(cmd: &str) -> Vec<Vec<String>> {
         lex_shell(cmd).commands
+    }
+
+    /// The remote command of an ssh call is the remote host's, its options
+    /// and anything outside it are this host's.
+    #[test]
+    #[serial_test::serial]
+    fn local_command_words_leave_out_the_remote_command() {
+        let has = |words: &[String], w: &str| words.iter().any(|x| x.contains(w));
+        let words = local_command_words(
+            "ssh -o ConnectTimeout=15 -i ~/.ssh/lab_key me@lab-host 'ls -la ~/.aws/config'",
+        );
+        assert!(
+            has(&words, "~/.ssh/lab_key"),
+            "a local option value: {words:?}"
+        );
+        assert!(has(&words, "me@lab-host"), "{words:?}");
+        assert!(!has(&words, "~/.aws/config"), "remote: {words:?}");
+
+        let words = local_command_words("ssh lab-host 'cat ~/.aws/config'; cat ~/.aws/credentials");
+        assert!(!has(&words, "~/.aws/config"), "{words:?}");
+        assert!(
+            has(&words, "~/.aws/credentials"),
+            "a local command after it: {words:?}"
+        );
+
+        let words =
+            local_command_words("cat ~/.aws/config | sudo ssh -p 2222 lab-host 'cat > /tmp/x'");
+        assert!(has(&words, "~/.aws/config"), "piped from here: {words:?}");
+        assert!(!has(&words, "/tmp/x"), "{words:?}");
+
+        // An unquoted redirection is applied by this shell.
+        let words = local_command_words("ssh lab-host uptime > ~/.ssh/uptime.log");
+        assert!(has(&words, "~/.ssh/uptime.log"), "{words:?}");
+        assert!(
+            !words.iter().any(|w| w == "uptime"),
+            "the remote command: {words:?}"
+        );
+
+        // Not a remote shell, and an interactive login, keep every word.
+        let words = local_command_words("cat ~/.aws/config");
+        assert!(has(&words, "~/.aws/config"));
+        assert_eq!(local_command_words("ssh lab-host"), vec!["ssh", "lab-host"]);
     }
 
     #[test]
