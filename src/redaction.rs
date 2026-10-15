@@ -752,12 +752,20 @@ pub fn redact_command_lines_in_json(value: &mut Value) {
                     Value::Array(args) if COMMAND_LINE_ARRAY_KEYS.contains(&key) => {
                         let text: Vec<String> = args
                             .iter()
-                            .map(|a| a.as_str().map(str::to_string).unwrap_or_else(|| a.to_string()))
+                            .map(|a| {
+                                a.as_str()
+                                    .map(str::to_string)
+                                    .unwrap_or_else(|| a.to_string())
+                            })
                             .collect();
-                        *args = redact_command_line(&text).into_iter().map(Value::String).collect();
+                        *args = redact_command_line(&text)
+                            .into_iter()
+                            .map(Value::String)
+                            .collect();
                     }
                     Value::String(text)
-                        if COMMAND_LINE_ARRAY_KEYS.contains(&key) || COMMAND_TEXT_KEYS.contains(&key) =>
+                        if COMMAND_LINE_ARRAY_KEYS.contains(&key)
+                            || COMMAND_TEXT_KEYS.contains(&key) =>
                     {
                         *text = redact_command_text(text);
                     }
@@ -806,7 +814,10 @@ fn cap_argument(arg: String) -> String {
         return arg;
     }
     let head: String = arg.chars().take(COMMAND_LINE_ARG_MAX_CHARS).collect();
-    format!("{head}...[{} more chars]", total - COMMAND_LINE_ARG_MAX_CHARS)
+    format!(
+        "{head}...[{} more chars]",
+        total - COMMAND_LINE_ARG_MAX_CHARS
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -1573,9 +1584,18 @@ mod tests {
         assert_eq!(out[12], "a=[REDACTED]");
         assert_eq!(out[13], "--title=Cursor Helper");
         assert_eq!(out[14], "--empty=");
-        assert!(out[15].len() < 400, "a long blob is capped: {} chars", out[15].len());
-        assert!(out[15].ends_with(&format!("...[{} more chars]", 4000 - COMMAND_LINE_ARG_MAX_CHARS)));
-        assert!(out.iter().all(|a| !a.contains("MIIJQgIBADANBgkqhkiG9w0BAQEFAASCCSww")));
+        assert!(
+            out[15].len() < 400,
+            "a long blob is capped: {} chars",
+            out[15].len()
+        );
+        assert!(out[15].ends_with(&format!(
+            "...[{} more chars]",
+            4000 - COMMAND_LINE_ARG_MAX_CHARS
+        )));
+        assert!(out
+            .iter()
+            .all(|a| !a.contains("MIIJQgIBADANBgkqhkiG9w0BAQEFAASCCSww")));
     }
 
     #[test]
@@ -1597,7 +1617,13 @@ mod tests {
         });
         redact_command_lines_in_json(&mut doc);
         let text = doc.to_string();
-        for leaked in ["hunter2", "not-a-real-key", "abcdefghijklmnopqrstuvwxyz123456", "s3cret", "nested-secret"] {
+        for leaked in [
+            "hunter2",
+            "not-a-real-key",
+            "abcdefghijklmnopqrstuvwxyz123456",
+            "s3cret",
+            "nested-secret",
+        ] {
             assert!(!text.contains(leaked), "{leaked} survived: {text}");
         }
         assert_eq!(doc["sessions"][0]["l7"]["cmd"][1], "server.js");
@@ -1616,7 +1642,13 @@ mod tests {
 
     #[test]
     fn redact_command_line_leaves_an_ordinary_command_readable() {
-        let args = ["/opt/homebrew/bin/node", "/Users/u/app/server.js", "--inspect", "-p", "3000"];
+        let args = [
+            "/opt/homebrew/bin/node",
+            "/Users/u/app/server.js",
+            "--inspect",
+            "-p",
+            "3000",
+        ];
         assert_eq!(redact_command_line(&args), args.to_vec());
     }
 
