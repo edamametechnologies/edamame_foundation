@@ -753,6 +753,26 @@ pub struct AgentLlmTrafficJSON {
     pub provider_endpoints: Vec<String>,
 }
 
+/// What the transcript parser does not take as the agent's own actions when
+/// it derives the expected traffic, ports and acted-on paths of a session.
+///
+/// `content_input_keys`: tool-call input keys whose values are content the
+/// agent wrote or briefed (a `Write` body, an `Edit` string, a sub-agent
+/// `prompt`, a Bash `description`, a search `query`) rather than the command,
+/// URL or path it acted on. A host written into a file is not traffic the
+/// session makes. Compared with the lowercased key (lowercased by
+/// [`AgentVisibilityParams::new_from_json`]).
+///
+/// `remote_shell_programs`: remote shells (`ssh`) and the options of each
+/// that take a value: in `ssh [options] host 'command'`, the command runs on
+/// the host, so the paths it names are not this host's files. Programs are
+/// lowercased basenames; options are matched as written.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct TranscriptHintsJSON {
+    pub content_input_keys: Vec<String>,
+    pub remote_shell_programs: Vec<ProgramOptionsJSON>,
+}
+
 /// Raw JSON shape of `agent-visibility-params-db.json`. No serde defaults:
 /// the published JSON always carries every field; a missing field fails the
 /// parse and the embedded snapshot (which has all fields) stays in effect.
@@ -814,6 +834,9 @@ pub struct AgentVisibilityParamsJSON {
     /// Per agent type, the agent's own model traffic (see
     /// [`AgentLlmTrafficJSON`]).
     pub agent_llm_traffic: std::collections::BTreeMap<String, AgentLlmTrafficJSON>,
+    /// What the transcript parser does not take as the agent's actions (see
+    /// [`TranscriptHintsJSON`]).
+    pub transcript_hints: TranscriptHintsJSON,
 }
 
 /// Normalized runtime snapshot of the agent-visibility params.
@@ -862,6 +885,8 @@ pub struct AgentVisibilityParams {
     /// Per agent type, its own model traffic: `llm_hosts` as written (the
     /// parser declares them verbatim), `provider_endpoints` lowercased.
     pub agent_llm_traffic: std::collections::BTreeMap<String, AgentLlmTrafficJSON>,
+    /// Content input keys and remote-shell programs lowercased.
+    pub transcript_hints: TranscriptHintsJSON,
 }
 
 impl CloudSignature for AgentVisibilityParams {
@@ -1173,6 +1198,18 @@ impl AgentVisibilityParams {
                     )
                 })
                 .collect(),
+            transcript_hints: TranscriptHintsJSON {
+                content_input_keys: lower(&json.transcript_hints.content_input_keys),
+                remote_shell_programs: json
+                    .transcript_hints
+                    .remote_shell_programs
+                    .iter()
+                    .map(|p| ProgramOptionsJSON {
+                        program: p.program.to_ascii_lowercase(),
+                        options: p.options.clone(),
+                    })
+                    .collect(),
+            },
         }
     }
 }
@@ -1385,6 +1422,26 @@ pub fn mcp_credential_markers() -> McpCredentialMarkersJSON {
 /// goal keys, and the plain-text markers (names and markers lowercased).
 pub fn delegation_markers() -> DelegationMarkersJSON {
     PARAMS_SNAPSHOT.load().delegation_markers.clone()
+}
+
+/// Tool-call input keys whose values are content, not an action target
+/// (lowercased; see [`TranscriptHintsJSON`]).
+pub fn transcript_content_input_keys() -> Vec<String> {
+    PARAMS_SNAPSHOT
+        .load()
+        .transcript_hints
+        .content_input_keys
+        .clone()
+}
+
+/// Remote shells and their options that take a value (programs lowercased;
+/// see [`TranscriptHintsJSON`]).
+pub fn transcript_remote_shell_programs() -> Vec<ProgramOptionsJSON> {
+    PARAMS_SNAPSHOT
+        .load()
+        .transcript_hints
+        .remote_shell_programs
+        .clone()
 }
 
 /// The model traffic the transcript parser declares for `agent_type` (the
@@ -1634,6 +1691,29 @@ mod tests {
                     "{agent}: provider endpoint {endpoint} is not in llm_hosts"
                 );
             }
+        }
+    }
+
+    /// The content keys are lowercased and never an action key; ssh is a
+    /// remote shell with its value-taking options.
+    #[test]
+    #[serial]
+    fn test_transcript_hints_accessors() {
+        let keys = transcript_content_input_keys();
+        for key in ["content", "new_string", "prompt", "description", "query"] {
+            assert!(keys.iter().any(|k| k == key), "{key} missing: {keys:?}");
+        }
+        assert!(keys.iter().all(|k| *k == k.to_ascii_lowercase()));
+        for key in ["command", "cmd", "url", "file_path", "path"] {
+            assert!(!keys.iter().any(|k| k == key), "{key} is an action key");
+        }
+        let shells = transcript_remote_shell_programs();
+        let ssh = shells
+            .iter()
+            .find(|p| p.program == "ssh")
+            .expect("ssh is a remote shell");
+        for option in ["-i", "-o", "-p", "-J", "-l"] {
+            assert!(ssh.options.iter().any(|o| o == option), "{option}");
         }
     }
 
