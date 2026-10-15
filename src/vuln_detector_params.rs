@@ -845,6 +845,11 @@ pub struct CveDetectionParamsJSON {
     pub signature: String,
     pub checks: HashMap<String, CheckMetadata>,
     pub credential_harvest_min_labels: usize,
+    /// Path endings of credential-class files that carry no secret (an ssh
+    /// client's config and trust store, public keys, the AWS CLI's config):
+    /// they do not count toward the breadth of a harvest reached through
+    /// remembered reads.
+    pub credential_harvest_non_secret_suffixes: Vec<String>,
     pub secret_content_scan_max_bytes: u64,
     pub secret_content_min_hits: usize,
     pub secret_content_script_extensions: Vec<String>,
@@ -1308,6 +1313,11 @@ pub struct CveDetectionParams {
     pub signature: String,
     pub checks: HashMap<String, CheckMetadata>,
     pub credential_harvest_min_labels: usize,
+    /// Path endings of credential-class files that carry no secret (an ssh
+    /// client's config and trust store, public keys, the AWS CLI's config):
+    /// they do not count toward the breadth of a harvest reached through
+    /// remembered reads.
+    pub credential_harvest_non_secret_suffixes: Vec<String>,
     pub secret_content_scan_max_bytes: u64,
     pub secret_content_min_hits: usize,
     pub secret_content_script_extensions: Vec<String>,
@@ -1798,6 +1808,11 @@ impl CveDetectionParams {
             signature: json.signature.clone(),
             checks: json.checks.clone(),
             credential_harvest_min_labels: json.credential_harvest_min_labels,
+            credential_harvest_non_secret_suffixes: json
+                .credential_harvest_non_secret_suffixes
+                .iter()
+                .map(|suffix| suffix.to_ascii_lowercase())
+                .collect(),
             secret_content_scan_max_bytes: json.secret_content_scan_max_bytes,
             secret_content_min_hits: json.secret_content_min_hits,
             secret_content_script_extensions: json
@@ -4137,6 +4152,18 @@ pub fn check_reference(check_name: &str, fallback: &str) -> String {
 
 pub fn credential_harvest_min_labels() -> usize {
     PARAMS_SNAPSHOT.load().credential_harvest_min_labels
+}
+
+/// Whether `path` is a credential-class file that carries no secret
+/// (`credential_harvest_non_secret_suffixes`): it does not count toward the
+/// breadth of a harvest reached through remembered reads.
+pub fn is_credential_harvest_non_secret(path: &str) -> bool {
+    let normalized = path.trim().to_ascii_lowercase().replace('\\', "/");
+    PARAMS_SNAPSHOT
+        .load()
+        .credential_harvest_non_secret_suffixes
+        .iter()
+        .any(|suffix| !suffix.is_empty() && normalized.ends_with(suffix.as_str()))
 }
 
 pub fn secret_content_scan_max_bytes() -> u64 {
