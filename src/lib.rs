@@ -77,6 +77,10 @@ pub mod runtime;
 pub mod score;
 pub mod secret_content_scan;
 pub mod secret_store;
+/// B4: the kernel-side sensors this process runs, for the core's coverage
+/// record (standalone in process, on the app path through the helper).
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+pub mod sensor_coverage;
 pub mod sudoers_grading;
 pub mod supported_agents;
 pub mod threat;

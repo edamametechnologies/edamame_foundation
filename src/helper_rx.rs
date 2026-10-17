@@ -772,6 +772,7 @@ pub async fn rpc_run(
                 utility_run_agent_cli_fix_interactive(arg1, arg2).await
             }
             "collect_agent_visibility" => utility_collect_agent_visibility(arg1, arg2).await,
+            "collect_sensor_coverage" => utility_collect_sensor_coverage(arg1, arg2).await,
             "read_instruction_content" => utility_read_instruction_content(arg1, arg2).await,
             "reveal_path_in_file_manager" => utility_reveal_path_in_file_manager(arg1, arg2).await,
             "kill_process" => utility_kill_process(arg1).await,

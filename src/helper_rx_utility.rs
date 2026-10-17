@@ -895,6 +895,14 @@ pub async fn utility_run_agent_cli_fix_interactive(
 /// always built in one discovery pass since it is cheap). `arg2` is a JSON
 /// object carrying the user home: `{"home": "/Users/foo"}` (empty -> resolve
 /// `real_home_dir()`).
+/// B4: the kernel-side sensors running in this helper, for the core's
+/// coverage record. No arguments; a stateless query.
+pub async fn utility_collect_sensor_coverage(_arg1: &str, _arg2: &str) -> Result<String> {
+    let snapshot = crate::sensor_coverage::collect_sensor_coverage();
+    serde_json::to_string(&snapshot)
+        .map_err(|e| anyhow::anyhow!("Failed to serialize sensor coverage: {}", e))
+}
+
 pub async fn utility_collect_agent_visibility(_domain: &str, args_json: &str) -> Result<String> {
     #[derive(serde::Deserialize)]
     struct Args {

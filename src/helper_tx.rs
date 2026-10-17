@@ -23,6 +23,7 @@ pub const UTILITY_ORDER_NAMES: &[&str] = &[
     "clear_file_events",
     "collect_agent_transcripts",
     "collect_agent_visibility",
+    "collect_sensor_coverage",
     "collect_workspace_inventory",
     "compare_custom_whitelists",
     "confirm_absent_instruction_paths",
