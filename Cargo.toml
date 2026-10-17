@@ -97,7 +97,6 @@ hex = "0.4.3"
 md5 = "0.8.0"
 
 # Zip extraction (agent plugin provisioning)
-zip = { version = "8.3", default-features = false, features = ["deflate"] }
 
 # Cross-platform directory resolution
 dirs = "6"
