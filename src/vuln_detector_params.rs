@@ -145,6 +145,37 @@ pub struct CloudProviderSdkDestinationsJSON {
     pub gcp: CloudProviderSdkDestinationListJSON,
 }
 
+/// The services a credential class is used with, keyed by the
+/// sensitive-path label of the files that hold it (`ssh`, `aws`, `claude`,
+/// ...). The attack-pattern detector's `credential_misrouted` check reads a
+/// holder's external sessions against this table: a process that read the
+/// class and reached only destinations outside it has carried the
+/// credential somewhere it is never used (DETECTION-APPROACH-2026-10 P1).
+/// Every field is present in the published JSON (born complete).
+///
+/// - `included_path_suffixes`: when non-empty, only files whose lowercased
+///   path contains one of these count as the class's secret-bearing files
+///   (`~/.aws/credentials`, not `~/.aws/config`). An entry ending in `/`
+///   names a directory.
+/// - `excluded_path_suffixes`: files of the label that never count (`ssh`'s
+///   `config`, `known_hosts`, `.pub`).
+/// - `ports`, `domain_suffixes`, `asn_owners`: destinations native to the
+///   class, matched like `CloudProviderSdkDestinationListJSON`.
+/// - `cloud_provider`: a `cloud_provider_sdk_destinations` key whose list is
+///   native too (empty for none).
+/// - `agent_type`: an `agent_llm_traffic` key (agent-visibility params)
+///   whose model-provider endpoints are native too (empty for none).
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct CredentialNativeServiceJSON {
+    pub included_path_suffixes: Vec<String>,
+    pub excluded_path_suffixes: Vec<String>,
+    pub ports: Vec<u16>,
+    pub domain_suffixes: Vec<String>,
+    pub asn_owners: Vec<String>,
+    pub cloud_provider: String,
+    pub agent_type: String,
+}
+
 /// CI-runner workspace path substrings + suppressible filename
 /// basenames for the FP-CI-7 dotenv demotion. Path substrings are
 /// matched against a forward-slash-normalized, lowercased version of
@@ -883,6 +914,7 @@ pub struct CveDetectionParamsJSON {
     pub edamame_daemon_self_telemetry_writers: PlatformStringLists,
     pub edamame_daemon_self_telemetry_install_prefixes: PlatformStringLists,
     pub cloud_provider_sdk_destinations: CloudProviderSdkDestinationsJSON,
+    pub credential_native_services: std::collections::BTreeMap<String, CredentialNativeServiceJSON>,
     /// Software-distribution / self-update / CDN backends that packaged
     /// desktop applications legitimately reach to fetch updates, plugin
     /// manifests, and config (FP-MAC-14). Single org-identity list:
@@ -1283,6 +1315,25 @@ fn normalize_runtime_perfdata_entry(entry: &RuntimePerfdataEntryJSON) -> Runtime
     }
 }
 
+/// Lowercase every string of a credential native-service entry for the
+/// snapshot (paths and destinations are matched lowercased).
+fn lowercase_credential_native_service(
+    entry: &CredentialNativeServiceJSON,
+) -> CredentialNativeServiceJSON {
+    let lower = |list: &Vec<String>| -> Vec<String> {
+        list.iter().map(|s| s.to_ascii_lowercase()).collect()
+    };
+    CredentialNativeServiceJSON {
+        included_path_suffixes: lower(&entry.included_path_suffixes),
+        excluded_path_suffixes: lower(&entry.excluded_path_suffixes),
+        ports: entry.ports.clone(),
+        domain_suffixes: lower(&entry.domain_suffixes),
+        asn_owners: lower(&entry.asn_owners),
+        cloud_provider: entry.cloud_provider.to_ascii_lowercase(),
+        agent_type: entry.agent_type.to_ascii_lowercase(),
+    }
+}
+
 /// Lowercase every entry of a cloud-provider SDK destination list for
 /// the snapshot (matching is done against lowercased session fields).
 fn lowercase_cloud_provider_sdk_destination_list(
@@ -1353,6 +1404,7 @@ pub struct CveDetectionParams {
     pub platform_credential_helper_routine_destinations:
         PlatformCredentialHelperRoutineDestinationsJSON,
     pub cloud_provider_sdk_destinations: CloudProviderSdkDestinationsJSON,
+    pub credential_native_services: std::collections::BTreeMap<String, CredentialNativeServiceJSON>,
     pub software_distribution_backends: CloudProviderSdkDestinationListJSON,
     pub platform_metadata_endpoints: PlatformStringLists,
     pub platform_runtime_probe_filename_patterns: PlatformStringLists,
@@ -2148,6 +2200,16 @@ impl CveDetectionParams {
                     &json.cloud_provider_sdk_destinations.gcp,
                 ),
             },
+            credential_native_services: json
+                .credential_native_services
+                .iter()
+                .map(|(label, entry)| {
+                    (
+                        label.to_ascii_lowercase(),
+                        lowercase_credential_native_service(entry),
+                    )
+                })
+                .collect(),
             software_distribution_backends: lowercase_cloud_provider_sdk_destination_list(
                 &json.software_distribution_backends,
             ),
@@ -3157,6 +3219,160 @@ pub fn cloud_provider_sdk_destination_matches(
         }
     }
     false
+}
+
+/// The native-service entry of a credential label (`credential_native_services`),
+/// or None for a label the table does not bind.
+pub fn credential_native_service(label: &str) -> Option<CredentialNativeServiceJSON> {
+    PARAMS_SNAPSHOT
+        .load()
+        .credential_native_services
+        .get(&label.to_ascii_lowercase())
+        .cloned()
+}
+
+/// Whether `path` is one of the secret-bearing files of `label` under its
+/// native-service entry: inside `included_path_suffixes` when that list is
+/// non-empty, and outside `excluded_path_suffixes`. False for an unbound
+/// label.
+pub fn credential_native_service_file_applies(label: &str, path: &str) -> bool {
+    let Some(entry) = credential_native_service(label) else {
+        return false;
+    };
+    let lower = path.to_ascii_lowercase().replace('\\', "/");
+    let hit = |suffix: &String| -> bool {
+        if suffix.is_empty() {
+            return false;
+        }
+        if suffix.ends_with('/') {
+            lower.contains(suffix.as_str())
+        } else {
+            lower.ends_with(suffix.as_str()) || lower.contains(&format!("{suffix}/"))
+        }
+    };
+    if entry.excluded_path_suffixes.iter().any(hit) {
+        return false;
+    }
+    entry.included_path_suffixes.is_empty() || entry.included_path_suffixes.iter().any(hit)
+}
+
+/// Whether a destination is native to `label`'s credential class: one of
+/// its ports, domain suffixes or ASN owners, its cloud provider's SDK
+/// destinations, or its agent type's model-provider hosts. False for an
+/// unbound label or an empty destination.
+pub fn credential_native_service_destination_matches(
+    label: &str,
+    dst_port: Option<u16>,
+    dst_domain: Option<&str>,
+    dst_ip: Option<&str>,
+    dst_asn_owner: Option<&str>,
+) -> bool {
+    let Some(entry) = credential_native_service(label) else {
+        return false;
+    };
+    let domain = dst_domain
+        .map(|d| d.to_ascii_lowercase())
+        .filter(|d| !d.is_empty());
+    let asn = dst_asn_owner
+        .map(|a| a.to_ascii_lowercase())
+        .filter(|a| !a.is_empty());
+    if let Some(port) = dst_port {
+        if entry.ports.contains(&port) {
+            return true;
+        }
+    }
+    if let Some(domain) = domain.as_deref() {
+        if domain_matches_suffix_list(domain, &entry.domain_suffixes) {
+            return true;
+        }
+    }
+    if let Some(asn) = asn.as_deref() {
+        if entry
+            .asn_owners
+            .iter()
+            .any(|owner| !owner.is_empty() && asn.contains(owner.as_str()))
+        {
+            return true;
+        }
+    }
+    if !entry.cloud_provider.is_empty()
+        && cloud_provider_sdk_destination_matches(
+            &entry.cloud_provider,
+            dst_domain,
+            dst_ip,
+            dst_asn_owner,
+        )
+    {
+        return true;
+    }
+    !entry.agent_type.is_empty()
+        && agent_model_provider_destination_matches(
+            &entry.agent_type,
+            dst_port,
+            dst_domain,
+            dst_ip,
+            dst_asn_owner,
+        )
+}
+
+/// Whether a destination is one of `agent_type`'s model-provider hosts
+/// (agent-visibility params `agent_llm_traffic`: `provider_endpoints` and
+/// `llm_hosts`, `host:port` or `asn:OWNER` entries). A `host:port` entry
+/// covers the host and its subdomains on that port; a bare suffix such as
+/// `amazonaws.com:443` covers every host under it.
+pub fn agent_model_provider_destination_matches(
+    agent_type: &str,
+    dst_port: Option<u16>,
+    dst_domain: Option<&str>,
+    dst_ip: Option<&str>,
+    dst_asn_owner: Option<&str>,
+) -> bool {
+    let domain = dst_domain
+        .map(|d| d.to_ascii_lowercase())
+        .filter(|d| !d.is_empty());
+    let ip = dst_ip
+        .map(|i| i.to_ascii_lowercase())
+        .filter(|i| !i.is_empty());
+    let asn = dst_asn_owner
+        .map(|a| a.to_ascii_lowercase())
+        .filter(|a| !a.is_empty());
+    let mut entries = crate::agent_visibility_params::agent_provider_endpoints(agent_type);
+    entries.extend(crate::agent_visibility_params::agent_llm_hosts(agent_type));
+    entries.iter().any(|entry| {
+        let entry = entry.to_ascii_lowercase();
+        if let Some(owner) = entry.strip_prefix("asn:") {
+            return !owner.is_empty() && asn.as_deref().is_some_and(|a| a.contains(owner));
+        }
+        let (host, port) = match entry.rsplit_once(':') {
+            Some((host, port)) => (host.to_string(), port.parse::<u16>().ok()),
+            None => (entry.clone(), None),
+        };
+        if host.is_empty() {
+            return false;
+        }
+        if let (Some(want), Some(seen)) = (port, dst_port) {
+            if want != seen {
+                return false;
+            }
+        }
+        domain
+            .as_deref()
+            .is_some_and(|d| d == host || d.ends_with(&format!(".{host}")))
+            || ip.as_deref().is_some_and(|i| i == host)
+    })
+}
+
+/// Case-insensitive suffix match against a list in the
+/// `CloudProviderSdkDestinationListJSON::domain_suffixes` style: a leading
+/// dot means "any host under"; the bare name matches too.
+fn domain_matches_suffix_list(domain: &str, suffixes: &[String]) -> bool {
+    suffixes.iter().any(|suffix| {
+        if suffix.is_empty() {
+            return false;
+        }
+        let bare = suffix.strip_prefix('.').unwrap_or(suffix.as_str());
+        domain == bare || domain.ends_with(&format!(".{bare}"))
+    })
 }
 
 /// True when the egress destination belongs to a recognized
@@ -6719,5 +6935,105 @@ mod tests {
             ),
             "unexpected update status: {status:?}"
         );
+    }
+
+    /// `credential_native_services`: the secret-bearing files of a class and
+    /// the destinations native to it, read from the embedded snapshot.
+    #[test]
+    #[serial]
+    fn credential_native_service_files_and_destinations() {
+        let applies = credential_native_service_file_applies;
+        assert!(applies("ssh", "/Users/dev/.ssh/id_ed25519"));
+        assert!(!applies("ssh", "/Users/dev/.ssh/config"));
+        assert!(!applies("ssh", "/Users/dev/.ssh/known_hosts"));
+        assert!(!applies("ssh", "/Users/dev/.ssh/id_ed25519.pub"));
+        assert!(applies("aws", "/Users/dev/.aws/credentials"));
+        assert!(applies(
+            "aws",
+            "C:\\Users\\dev\\.aws\\sso\\cache\\0a1b.json"
+        ));
+        assert!(!applies("aws", "/Users/dev/.aws/config"));
+        assert!(applies("claude", "/Users/dev/.claude/.credentials.json"));
+        assert!(!applies("claude", "/Users/dev/.claude/settings.json"));
+        assert!(!applies("kube", "/Users/dev/.kube/config"), "unbound label");
+
+        let native = |label: &str, port: u16, domain: &str| {
+            credential_native_service_destination_matches(
+                label,
+                Some(port),
+                Some(domain),
+                None,
+                None,
+            )
+        };
+        assert!(native("ssh", 22, "github.com"));
+        assert!(native("ssh", 443, "ssh.github.com"));
+        assert!(!native("ssh", 443, "api.anthropic.com"));
+        assert!(native("aws", 443, "sts.amazonaws.com"));
+        assert!(!native("aws", 443, "files.example.net"));
+        assert!(native("claude", 443, "api.anthropic.com"));
+        assert!(!native("claude", 443, "files.example.net"));
+        assert!(
+            !native("kube", 443, "kubernetes.default.svc"),
+            "unbound label"
+        );
+        assert!(credential_native_service_destination_matches(
+            "aws",
+            Some(443),
+            None,
+            Some("52.46.141.158"),
+            Some("AMAZON-02 Amazon.com, Inc.")
+        ));
+    }
+
+    /// An agent type's model-provider hosts: `host:port` entries cover the
+    /// host and its subdomains on that port, a bare suffix every host under
+    /// it, `asn:OWNER` the ASN owner.
+    #[test]
+    #[serial]
+    fn agent_model_provider_destinations() {
+        let matches = agent_model_provider_destination_matches;
+        assert!(matches(
+            "claude_code",
+            Some(443),
+            Some("api.anthropic.com"),
+            None,
+            None
+        ));
+        assert!(!matches(
+            "claude_code",
+            Some(80),
+            Some("api.anthropic.com"),
+            None,
+            None
+        ));
+        assert!(matches(
+            "claude_code",
+            Some(443),
+            Some("bedrock-runtime.eu-west-1.amazonaws.com"),
+            None,
+            None
+        ));
+        assert!(matches(
+            "claude_code",
+            Some(443),
+            None,
+            None,
+            Some("ANTHROPIC PBC")
+        ));
+        assert!(!matches(
+            "claude_code",
+            Some(443),
+            Some("files.example.net"),
+            None,
+            None
+        ));
+        assert!(!matches(
+            "no_such_agent",
+            Some(443),
+            Some("api.anthropic.com"),
+            None,
+            None
+        ));
     }
 }
