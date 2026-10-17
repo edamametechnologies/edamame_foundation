@@ -909,7 +909,7 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 [[package]]
 name = "edamame_backend"
 version = "0.3.5"
-source = "git+https://github.com/edamametechnologies/edamame_backend?branch=main#f72f80029d56ee04bbbf3a25043cd3d4d620813f"
+source = "git+https://github.com/edamametechnologies/edamame_backend?branch=main#7712976f3fd222f9d9cf5e30d146d9e4ed4a7ced"
 dependencies = [
  "anyhow",
  "blake3",
@@ -989,7 +989,6 @@ dependencies = [
  "uzers",
  "wez-mdns",
  "windows 0.62.2",
- "zip 8.6.0",
 ]
 
 [[package]]
@@ -1145,7 +1144,7 @@ dependencies = [
 [[package]]
 name = "flodbadd"
 version = "2.0.9"
-source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#2984a63b892d7d50723e6f4093c31e4fd2c721c9"
+source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#459bbbfd8a6eba237343fcf2cae35b0cac1a2794"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -1195,7 +1194,7 @@ dependencies = [
  "uzers",
  "wez-mdns",
  "windows 0.62.2",
- "zip 7.2.0",
+ "zip",
 ]
 
 [[package]]
@@ -4009,7 +4008,7 @@ dependencies = [
 [[package]]
 name = "threatmodels_rs"
 version = "0.1.1"
-source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#8a1546769417a8bdef708c1fc072d7d6165091f0"
+source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#e4a38877977d02540f3a0affc444c345d02a6749"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4364,7 +4363,7 @@ checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 [[package]]
 name = "undeadlock"
 version = "1.2.0"
-source = "git+https://github.com/edamametechnologies/undeadlock?branch=main#37c1fd0e26f296c8c9c3d47251981267665e6bbf"
+source = "git+https://github.com/edamametechnologies/undeadlock?branch=main#df54446ff5bf473df3ee605009ffbdc89bcfa94a"
 dependencies = [
  "dashmap",
  "tokio",
@@ -5223,20 +5222,6 @@ name = "zip"
 version = "7.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c42e33efc22a0650c311c2ef19115ce232583abbe80850bc8b66509ebef02de0"
-dependencies = [
- "crc32fast",
- "flate2",
- "indexmap 2.14.2",
- "memchr",
- "typed-path",
- "zopfli",
-]
-
-[[package]]
-name = "zip"
-version = "8.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d04a6b5381502aa6087c94c669499eb1602eb9c5e8198e534de571f7154809b"
 dependencies = [
  "crc32fast",
  "flate2",
