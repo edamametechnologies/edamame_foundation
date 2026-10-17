@@ -312,7 +312,15 @@ fn first_non_empty_line(text: &str) -> Option<String> {
 pub(crate) fn harness_processes(
     home: &Path,
 ) -> std::collections::BTreeMap<String, super::HarnessProcess> {
-    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
+    let found = harness_pid_files(home);
+    if found.is_empty() {
+        return Default::default();
+    }
+    live_harness_processes(found)
+}
+
+/// `(pid, session id, recorded start)` from each `<pid>.json` file, unchecked.
+fn harness_pid_files(home: &Path) -> Vec<(u32, String, Option<u64>)> {
     let mut found: Vec<(u32, String, Option<u64>)> = Vec::new();
     let dir = home.join(".claude").join("sessions");
     let Ok(entries) = std::fs::read_dir(&dir) else {
@@ -344,9 +352,17 @@ pub(crate) fn harness_processes(
             found.push((pid, session_id, started_at_ms));
         }
     }
-    if found.is_empty() {
-        return Default::default();
-    }
+    found
+}
+
+/// The pid files whose process is alive with a matching start. `sysinfo`
+/// is a desktop dependency (the same targets as the helper); a phone runs no
+/// agent harness, so the other targets bind nothing.
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+fn live_harness_processes(
+    found: Vec<(u32, String, Option<u64>)>,
+) -> std::collections::BTreeMap<String, super::HarnessProcess> {
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
     // One refresh per distinct pid: two pid files can name one process (a
     // session that was cleared and restarted in the same harness).
     let pids: Vec<Pid> = found
@@ -387,7 +403,17 @@ pub(crate) fn harness_processes(
     map
 }
 
-#[cfg(test)]
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+fn live_harness_processes(
+    _found: Vec<(u32, String, Option<u64>)>,
+) -> std::collections::BTreeMap<String, super::HarnessProcess> {
+    Default::default()
+}
+
+#[cfg(all(
+    test,
+    any(target_os = "macos", target_os = "linux", target_os = "windows")
+))]
 mod harness_process_tests {
     use super::*;
 
