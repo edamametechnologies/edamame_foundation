@@ -386,6 +386,7 @@ mod tests {
         let epoch = chrono::DateTime::<chrono::Utc>::from_timestamp(0, 0).unwrap();
         CollectedRawSession {
             session_key: String::new(),
+            harness_process: None,
             title: String::new(),
             user_text: user.to_string(),
             assistant_text: String::new(),

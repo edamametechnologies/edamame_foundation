@@ -133,6 +133,7 @@ pub fn collect(home: &Path, options: &CollectOptions) -> anyhow::Result<CollectR
 
                 CollectedRawSession {
                     session_key: session_id,
+                    harness_process: None,
                     title,
                     user_text: parsed.user_text.clone(),
                     assistant_text: parsed.assistant_text.clone(),

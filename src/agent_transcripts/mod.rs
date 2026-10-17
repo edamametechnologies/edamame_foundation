@@ -110,9 +110,27 @@ impl Default for CollectOptions {
 /// Foundation does not depend on core, so we redefine the shape here. Field
 /// names match exactly so serde round-trips identically through
 /// `upsert_behavioral_model_from_raw_sessions`.
+/// The harness process a transcript belongs to, when the harness records it
+/// (B2, session binding): Claude Code writes `~/.claude/sessions/<pid>.json`
+/// with the pid, the session id and the process start; the sibling `*.key`
+/// files are never read. Only a live process whose start matches the file is
+/// reported, so a reused pid never binds a new process to an old transcript.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HarnessProcess {
+    pub pid: u32,
+    /// The process start the pid file recorded, UNIX milliseconds.
+    pub proc_started_at_ms: Option<u64>,
+    /// Where the binding came from (`claude_sessions_pid_file`).
+    pub source: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CollectedRawSession {
     pub session_key: String,
+    /// `#[serde(default)]`: the session cache and the core hand-off carry
+    /// sessions written before the field existed.
+    #[serde(default)]
+    pub harness_process: Option<HarnessProcess>,
     pub title: String,
     pub user_text: String,
     pub assistant_text: String,

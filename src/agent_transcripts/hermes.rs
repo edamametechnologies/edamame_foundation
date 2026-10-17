@@ -304,6 +304,7 @@ fn build_session(
 
     CollectedRawSession {
         session_key: inputs.session_key,
+        harness_process: None,
         title,
         user_text: inputs.user_text,
         assistant_text: inputs.assistant_text,

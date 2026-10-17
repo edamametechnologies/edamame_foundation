@@ -148,6 +148,7 @@ pub(crate) fn build_payload(
 
                 CollectedRawSession {
                     session_key: session_id,
+                    harness_process: None,
                     title,
                     user_text: parsed.user_text.clone(),
                     assistant_text: parsed.assistant_text.clone(),
@@ -203,6 +204,12 @@ pub(crate) fn build_payload(
         let end = sessions.iter().map(|s| s.modified_at).max().unwrap_or(now);
         (start, end)
     };
+
+    // B2: bind each transcript to the live harness process that owns it.
+    let harness = harness_processes(home);
+    for session in sessions.iter_mut() {
+        session.harness_process = harness.get(session.session_key.trim()).cloned();
+    }
 
     Ok(CollectResult {
         payload: CollectedPayload {
@@ -294,4 +301,172 @@ fn first_non_empty_line(text: &str) -> Option<String> {
         .map(str::trim)
         .find(|line| !line.is_empty() && !(line.starts_with('<') && line.ends_with('>')))
         .map(str::to_string)
+}
+
+/// The live Claude Code harness processes, keyed by session id, from
+/// `~/.claude/sessions/<pid>.json` (B2). Each file carries `pid`,
+/// `sessionId` and `startedAt` (UNIX ms); the sibling `*.key` files are
+/// never opened. A pid is reported only when the process is alive and its
+/// start matches the file within five seconds (a reused pid is a different
+/// process), or when the system cannot say when it started.
+pub(crate) fn harness_processes(
+    home: &Path,
+) -> std::collections::BTreeMap<String, super::HarnessProcess> {
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
+    let mut found: Vec<(u32, String, Option<u64>)> = Vec::new();
+    let dir = home.join(".claude").join("sessions");
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Default::default();
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+            continue;
+        };
+        let pid = value
+            .get("pid")
+            .and_then(|v| v.as_u64())
+            .and_then(|p| u32::try_from(p).ok());
+        let session_id = value
+            .get("sessionId")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        let started_at_ms = value.get("startedAt").and_then(|v| v.as_u64());
+        if let (Some(pid), Some(session_id)) = (pid, session_id) {
+            found.push((pid, session_id, started_at_ms));
+        }
+    }
+    if found.is_empty() {
+        return Default::default();
+    }
+    // One refresh per distinct pid: two pid files can name one process (a
+    // session that was cleared and restarted in the same harness).
+    let pids: Vec<Pid> = found
+        .iter()
+        .map(|(pid, _, _)| *pid)
+        .collect::<std::collections::BTreeSet<u32>>()
+        .into_iter()
+        .map(Pid::from_u32)
+        .collect();
+    let mut system = System::new();
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&pids),
+        true,
+        ProcessRefreshKind::nothing(),
+    );
+    let mut map = std::collections::BTreeMap::new();
+    for (pid, session_id, started_at_ms) in found {
+        let Some(process) = system.process(Pid::from_u32(pid)) else {
+            continue;
+        };
+        let live_start_ms = process.start_time().saturating_mul(1000);
+        let start_matches = match started_at_ms {
+            Some(recorded) if live_start_ms > 0 => recorded.abs_diff(live_start_ms) <= 5_000,
+            _ => true,
+        };
+        if !start_matches {
+            continue;
+        }
+        map.insert(
+            session_id,
+            super::HarnessProcess {
+                pid,
+                proc_started_at_ms: started_at_ms,
+                source: "claude_sessions_pid_file".to_string(),
+            },
+        );
+    }
+    map
+}
+
+#[cfg(test)]
+mod harness_process_tests {
+    use super::*;
+
+    fn scratch_home(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "edamame_harness_{}_{}_{}",
+            tag,
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        ));
+        std::fs::create_dir_all(dir.join(".claude").join("sessions")).unwrap();
+        dir
+    }
+
+    fn own_start_ms() -> Option<u64> {
+        use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
+        let pid = Pid::from_u32(std::process::id());
+        let mut system = System::new();
+        system.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&[pid]),
+            true,
+            ProcessRefreshKind::nothing(),
+        );
+        system
+            .process(pid)
+            .map(|p| p.start_time().saturating_mul(1000))
+            .filter(|ms| *ms > 0)
+    }
+
+    #[test]
+    fn pid_files_bind_live_harnesses_and_skip_dead_or_reused_pids() {
+        let home = scratch_home("live");
+        let sessions = home.join(".claude").join("sessions");
+        let me = std::process::id();
+        let started = own_start_ms().unwrap_or(0);
+        std::fs::write(
+            sessions.join(format!("{me}.json")),
+            format!(
+                r#"{{"pid":{me},"sessionId":"s-live","cwd":"/tmp/x","startedAt":{started},"kind":"interactive"}}"#
+            ),
+        )
+        .unwrap();
+        // A reused pid: the file says the process started a day earlier.
+        std::fs::write(
+            sessions.join("reused.json"),
+            format!(
+                r#"{{"pid":{me},"sessionId":"s-reused","startedAt":{}}}"#,
+                started.saturating_sub(86_400_000)
+            ),
+        )
+        .unwrap();
+        // A pid that is not alive.
+        std::fs::write(
+            sessions.join("dead.json"),
+            r#"{"pid":4000000,"sessionId":"s-dead","startedAt":1}"#,
+        )
+        .unwrap();
+        // The key file beside a pid file is never read.
+        std::fs::write(sessions.join(format!("{me}.deadbeef.key")), "not json").unwrap();
+        let map = harness_processes(&home);
+        let live = map.get("s-live").unwrap_or_else(|| {
+            panic!(
+                "the live harness binds: map={map:?} me={me} started={started} sysinfo_start={:?}",
+                own_start_ms()
+            )
+        });
+        assert_eq!(live.pid, me);
+        assert_eq!(live.source, "claude_sessions_pid_file");
+        if started > 0 {
+            assert!(!map.contains_key("s-reused"), "a reused pid does not bind");
+        }
+        assert!(!map.contains_key("s-dead"));
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn a_home_without_pid_files_binds_nothing() {
+        let home = scratch_home("empty");
+        assert!(harness_processes(&home).is_empty());
+        let _ = std::fs::remove_dir_all(&home);
+    }
 }

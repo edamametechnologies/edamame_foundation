@@ -274,6 +274,7 @@ pub(crate) fn build_payload(
 
                 CollectedRawSession {
                     session_key: session_id,
+                    harness_process: None,
                     title,
                     user_text: parsed.user_text.clone(),
                     assistant_text: parsed.assistant_text.clone(),
@@ -806,6 +807,7 @@ fn thread_row_to_session(
 
     Some(CollectedRawSession {
         session_key: thread_id,
+        harness_process: None,
         title,
         user_text,
         assistant_text,
