@@ -1218,31 +1218,36 @@ pub fn extract_commands(raw_text: &str, assistant_text: &str) -> Vec<String> {
 
     if !assistant_text.is_empty() {
         let cleaned = assistant_text.replace('`', "");
-        // Word-boundary prose patterns mirror PROSE_COMMAND_PATTERNS in
-        // edamame_cursor/adapters/session_prediction_adapter.mjs: they catch
-        // command mentions anywhere in the assistant text, not only at line
-        // start. Bounded suffix length limits accidental over-capture.
+        // Prose patterns (from the Cursor plugin's PROSE_COMMAND_PATTERNS,
+        // which no longer produce models): they catch command mentions
+        // anywhere in the assistant text, not only at line start. Bounded
+        // suffix length limits accidental over-capture. A command word counts
+        // at the start of the text or after a character that cannot end a
+        // path component: `\b` alone also matched inside a path, reading
+        // `~/.ssh or ~/.aws.` as the command `ssh or ~/.aws.`. A `/` stays a
+        // start: `/usr/bin/ssh host` names the command.
+        const COMMAND_START: &str = r"(?:^|[^\w.~\\-])";
         let prose_patterns: &[&str] = &[
-            r#"\b(cargo\s+(?:build|test|run|check|clippy|fmt|bench|doc|publish|install|clean)(?:\s+[^\n]{0,120})?)"#,
-            r#"\b(flutter\s+(?:build|run|test|analyze|gen-l10n|pub\s+\w+)(?:\s+[^\n]{0,80})?)"#,
-            r#"\b(git\s+(?:clone|pull|push|fetch|commit|checkout|merge|rebase|diff|status|log|stash|add|reset|branch)(?:\s+[^\n]{0,80})?)"#,
-            r#"\b(npm\s+(?:install|run|test|build|publish|ci|start)(?:\s+[^\n]{0,80})?)"#,
-            r#"\b(yarn\s+(?:install|add|test|build|start)(?:\s+[^\n]{0,80})?)"#,
-            r#"\b(make\s+\w+(?:\s+[^\n]{0,80})?)"#,
-            r#"\b(docker\s+(?:build|run|pull|push|compose|exec)(?:\s+[^\n]{0,80})?)"#,
-            r#"\b(curl\s+[^\n]{0,120})"#,
-            r#"\b(wget\s+[^\n]{0,120})"#,
-            r#"\b(ssh\s+[^\n]{0,80})"#,
-            r#"\b(scp\s+[^\n]{0,80})"#,
-            r#"\b(rsync\s+[^\n]{0,80})"#,
-            r#"\b(kubectl\s+(?:get|apply|delete|describe|logs|exec|port-forward)(?:\s+[^\n]{0,80})?)"#,
-            r#"\b(terraform\s+(?:init|plan|apply|destroy|validate)(?:\s+[^\n]{0,80})?)"#,
-            r#"\b(aws\s+\w+(?:\s+[^\n]{0,80})?)"#,
-            r#"\b(gcloud\s+\w+(?:\s+[^\n]{0,80})?)"#,
-            r#"\b(az\s+\w+(?:\s+[^\n]{0,80})?)"#,
+            r#"(cargo\s+(?:build|test|run|check|clippy|fmt|bench|doc|publish|install|clean)(?:\s+[^\n]{0,120})?)"#,
+            r#"(flutter\s+(?:build|run|test|analyze|gen-l10n|pub\s+\w+)(?:\s+[^\n]{0,80})?)"#,
+            r#"(git\s+(?:clone|pull|push|fetch|commit|checkout|merge|rebase|diff|status|log|stash|add|reset|branch)(?:\s+[^\n]{0,80})?)"#,
+            r#"(npm\s+(?:install|run|test|build|publish|ci|start)(?:\s+[^\n]{0,80})?)"#,
+            r#"(yarn\s+(?:install|add|test|build|start)(?:\s+[^\n]{0,80})?)"#,
+            r#"(make\s+\w+(?:\s+[^\n]{0,80})?)"#,
+            r#"(docker\s+(?:build|run|pull|push|compose|exec)(?:\s+[^\n]{0,80})?)"#,
+            r#"(curl\s+[^\n]{0,120})"#,
+            r#"(wget\s+[^\n]{0,120})"#,
+            r#"(ssh\s+[^\n]{0,80})"#,
+            r#"(scp\s+[^\n]{0,80})"#,
+            r#"(rsync\s+[^\n]{0,80})"#,
+            r#"(kubectl\s+(?:get|apply|delete|describe|logs|exec|port-forward)(?:\s+[^\n]{0,80})?)"#,
+            r#"(terraform\s+(?:init|plan|apply|destroy|validate)(?:\s+[^\n]{0,80})?)"#,
+            r#"(aws\s+\w+(?:\s+[^\n]{0,80})?)"#,
+            r#"(gcloud\s+\w+(?:\s+[^\n]{0,80})?)"#,
+            r#"(az\s+\w+(?:\s+[^\n]{0,80})?)"#,
         ];
         for pattern in prose_patterns {
-            if let Ok(regex) = Regex::new(pattern) {
+            if let Ok(regex) = Regex::new(&format!("{COMMAND_START}{pattern}")) {
                 for caps in regex.captures_iter(&cleaned) {
                     if let Some(value) = caps.get(1) {
                         add(value.as_str());
@@ -4518,6 +4523,35 @@ mod codex_code_mode_tests {
             .replace("\"event_msg\"", "\"response_item\"");
         assert!(extract_tool_call_events(&bare, 8).is_empty());
         assert!(extract_commands(&bare, "").is_empty());
+    }
+}
+
+#[cfg(test)]
+mod prose_command_tests {
+    use super::extract_commands;
+
+    #[test]
+    fn a_dot_directory_in_prose_is_not_a_command() {
+        // The assistant restating an instruction not to read two folders.
+        for text in [
+            "I will not read files under ~/.ssh or ~/.aws.",
+            "Leaving C:\\Users\\me\\.ssh alone as asked.",
+            "Nothing under ~/.kube, ~/.docker or ~/.aws credentials was touched.",
+        ] {
+            assert!(extract_commands("", text).is_empty(), "{text}");
+        }
+        assert_eq!(
+            extract_commands("", "Next I run ssh git@github.com -T to check the key."),
+            vec!["ssh git@github.com -T to check the key.".to_string()]
+        );
+        assert_eq!(
+            extract_commands("", "(curl https://example.org/health)"),
+            vec!["curl https://example.org/health)".to_string()]
+        );
+        assert_eq!(
+            extract_commands("", "/usr/bin/ssh host uptime"),
+            vec!["ssh host uptime".to_string()]
+        );
     }
 }
 
