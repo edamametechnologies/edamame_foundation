@@ -1253,7 +1253,22 @@ pub struct CveDetectionParamsJSON {
     pub measurement_derived_directory_segments: Vec<String>,
     /// Words of a declared task that make it measurement work (`test`,
     /// `coverage`, `fixture`, ...): such a task may touch the surface.
+    /// Matched as substrings by 2.1.0 and earlier clients ("latest" holds
+    /// "test"); later clients read `measurement_intent_words` instead.
     pub measurement_intent_tokens: Vec<String>,
+    /// Whole words that name measurement work in a declared task (`test`,
+    /// `spec`, `coverage`, the test runners' names). Whole words only:
+    /// "latest", "inspect" and "specific" name no test.
+    pub measurement_intent_words: Vec<String>,
+    /// Verbs that ask for measurement-surface edits when they precede an
+    /// intent word in the same clause ("fix the failing tests").
+    pub measurement_authoring_verbs: Vec<String>,
+    /// Verbs that ask for a run of the measurement surface ("run the
+    /// tests"): a run does not entitle the agent to edit a test.
+    pub measurement_execution_verbs: Vec<String>,
+    /// Commands that run tests when they come right before an intent word
+    /// (`npm test`, `cargo test`, `go test`, `npx jest`).
+    pub measurement_runner_prefixes: Vec<String>,
     /// Distinct paths one writer must lay down within the burst before its
     /// writes read as a materialisation batch (a clone, an extract).
     pub evaluator_materialisation_min_paths: usize,
@@ -1532,6 +1547,10 @@ pub struct CveDetectionParams {
     pub measurement_harness_directory_paths: Vec<String>,
     pub measurement_derived_directory_segments: HashSet<String>,
     pub measurement_intent_tokens: Vec<String>,
+    pub measurement_intent_words: HashSet<String>,
+    pub measurement_authoring_verbs: HashSet<String>,
+    pub measurement_execution_verbs: HashSet<String>,
+    pub measurement_runner_prefixes: HashSet<String>,
     pub evaluator_materialisation_min_paths: usize,
     pub evaluator_materialisation_measurement_divisor: usize,
     pub evaluator_materialisation_burst_secs: i64,
@@ -2544,6 +2563,10 @@ impl CveDetectionParams {
                 &json.measurement_derived_directory_segments,
             ),
             measurement_intent_tokens: lowercase_tokens(&json.measurement_intent_tokens),
+            measurement_intent_words: lowercase_token_set(&json.measurement_intent_words),
+            measurement_authoring_verbs: lowercase_token_set(&json.measurement_authoring_verbs),
+            measurement_execution_verbs: lowercase_token_set(&json.measurement_execution_verbs),
+            measurement_runner_prefixes: lowercase_token_set(&json.measurement_runner_prefixes),
             evaluator_materialisation_min_paths: json.evaluator_materialisation_min_paths,
             evaluator_materialisation_measurement_divisor: json
                 .evaluator_materialisation_measurement_divisor
@@ -6500,6 +6523,16 @@ mod tests {
             .contains("site-packages"));
         assert!(p.measurement_harness_filenames.contains("conftest.py"));
         assert!(p.measurement_intent_tokens.iter().any(|t| t == "ci "));
+        // Whole words: no "ci " padding, and the runners by name.
+        assert!(p.measurement_intent_words.contains("ci"));
+        assert!(p.measurement_intent_words.contains("pytest"));
+        assert!(!p.measurement_intent_words.iter().any(|w| w.contains(' ')));
+        assert!(p.measurement_authoring_verbs.contains("fix"));
+        assert!(p.measurement_execution_verbs.contains("run"));
+        assert!(p.measurement_runner_prefixes.contains("npm"));
+        assert!(p
+            .measurement_authoring_verbs
+            .is_disjoint(&p.measurement_execution_verbs));
         assert_eq!(
             p.measurement_harness_directory_paths,
             vec![".github/workflows".to_string()]
