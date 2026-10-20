@@ -776,7 +776,26 @@ fn require_caller_home(home: &str, order: &str) -> Result<std::path::PathBuf> {
             order
         ));
     }
-    Ok(std::path::PathBuf::from(home))
+    let home = std::path::PathBuf::from(home);
+    // A `~/.edamame` that a root process created with this user's HOME (a
+    // `sudo` run that kept HOME) belongs to root, and the user's own EDAMAME
+    // cannot write there (its secret store cannot be created). The helper is
+    // root and gives the folder back (`user_home_fs`).
+    match crate::user_home_fs::restore_edamame_dir_owner(&home) {
+        Ok(true) => tracing::info!(
+            "{}: gave the root-owned {} back to the home's owner",
+            order,
+            home.join(crate::user_home_fs::EDAMAME_HOME_DIR).display()
+        ),
+        Ok(false) => {}
+        Err(e) => tracing::debug!(
+            "{}: could not check the owner of {}: {}",
+            order,
+            home.join(crate::user_home_fs::EDAMAME_HOME_DIR).display(),
+            e
+        ),
+    }
+    Ok(home)
 }
 
 /// Helper-side transcript collection. `arg1` is the agent type, `arg2` is a

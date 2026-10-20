@@ -90,5 +90,7 @@ pub mod threat_metrics_ios;
 pub mod threat_metrics_linux;
 pub mod threat_metrics_macos;
 pub mod threat_metrics_windows;
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+pub mod user_home_fs;
 pub mod version;
 pub mod vuln_detector_params;

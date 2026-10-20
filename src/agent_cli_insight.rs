@@ -162,31 +162,55 @@ fn sanitize_log_fragment(s: &str) -> String {
     }
 }
 
-/// Give the newly-created log file (and its parent dir) back to the real user
-/// when we are running as root (helper daemon case). No-op when not root or
-/// on non-unix. Best-effort -- a chown failure never blocks the run.
-#[cfg(unix)]
-fn chown_fix_log_to_user(path: &Path, home: Option<&Path>) {
-    use std::os::unix::fs::MetadataExt;
-    if unsafe { libc::getuid() } != 0 {
-        return;
+/// Write a new fix-run asset (the prompt, the launch script). In the user's
+/// home it goes through [`crate::user_home_fs`]: created as the home's owner,
+/// every missing folder too, so the user's own EDAMAME can always write
+/// `~/.edamame`; never through a symlink and never over an existing file (the
+/// helper writes as root, and the run's names are predictable). Without a
+/// home, a new file in the temp fallback.
+fn write_fix_run_file(
+    home: Option<&Path>,
+    run_dir: &Path,
+    name: &str,
+    contents: &[u8],
+    mode: u32,
+) -> Result<PathBuf> {
+    if let Some(home) = home {
+        return crate::user_home_fs::create_user_file(
+            home,
+            &fix_run_relative_dir(),
+            name,
+            contents,
+            mode,
+        )
+        .map_err(|e| {
+            anyhow!(
+                "Failed to write {} under {}: {}",
+                name,
+                run_dir.display(),
+                e
+            )
+        });
     }
-    let Some(home) = home else {
-        return;
-    };
-    let Ok(meta) = std::fs::metadata(home) else {
-        return;
-    };
-    let (uid, gid) = (meta.uid(), meta.gid());
-    if let Ok(c_path) = std::ffi::CString::new(path.to_string_lossy().as_bytes()) {
-        unsafe {
-            libc::chown(c_path.as_ptr(), uid, gid);
-        }
+    std::fs::create_dir_all(run_dir)
+        .map_err(|e| anyhow!("Failed to create fix-run dir {}: {}", run_dir.display(), e))?;
+    let path = run_dir.join(name);
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .map_err(|e| anyhow!("Failed to create {}: {}", path.display(), e))?;
+    std::io::Write::write_all(&mut file, contents)
+        .map_err(|e| anyhow!("Failed to write {}: {}", path.display(), e))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = file.set_permissions(std::fs::Permissions::from_mode(mode));
     }
+    #[cfg(not(unix))]
+    let _ = mode;
+    Ok(path)
 }
-
-#[cfg(not(unix))]
-fn chown_fix_log_to_user(_path: &Path, _home: Option<&Path>) {}
 
 fn insight_args(agent_type: &str) -> Vec<String> {
     match agent_type {
@@ -259,9 +283,14 @@ fn interactive_fix_args(agent_type: &str) -> Option<(Vec<String>, &'static str)>
 /// shell / PowerShell escaping hazard).
 fn fix_run_dir(home: Option<&Path>) -> PathBuf {
     match home {
-        Some(h) => h.join(".edamame").join("agent-fix-runs"),
+        Some(h) => h.join(fix_run_relative_dir()),
         None => std::env::temp_dir().join("edamame-agent-fix-runs"),
     }
+}
+
+/// [`fix_run_dir`] relative to the home.
+fn fix_run_relative_dir() -> PathBuf {
+    Path::new(crate::user_home_fs::EDAMAME_HOME_DIR).join("agent-fix-runs")
 }
 
 /// Single-quote a string for safe inclusion in a POSIX shell script.
@@ -381,18 +410,18 @@ pub fn run_agent_cli_fix_interactive(
 
     // Write the seeded prompt into a user-owned assets dir.
     let run_dir = fix_run_dir(home);
-    std::fs::create_dir_all(&run_dir)
-        .map_err(|e| anyhow!("Failed to create fix-run dir {}: {}", run_dir.display(), e))?;
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
     let slug = sanitize_log_fragment(agent_type);
-    let prompt_path = run_dir.join(format!("{}-{}.prompt.txt", slug, ts));
-    std::fs::write(&prompt_path, prompt)
-        .map_err(|e| anyhow!("Failed to write prompt file: {}", e))?;
-    chown_fix_log_to_user(&run_dir, home);
-    chown_fix_log_to_user(&prompt_path, home);
+    let prompt_path = write_fix_run_file(
+        home,
+        &run_dir,
+        &format!("{}-{}.prompt.txt", slug, ts),
+        prompt.as_bytes(),
+        0o600,
+    )?;
 
     let binary_str = binary.to_string_lossy().to_string();
     let human_command = {
@@ -469,15 +498,13 @@ fn write_posix_launch_script(ctx: &LaunchCtx, ext: &str) -> Result<PathBuf> {
         sh_single_quote(&ctx.workspace.to_string_lossy()),
         invoke,
     );
-    let script = ctx.run_dir.join(format!("{}-{}.{}", ctx.slug, ctx.ts, ext));
-    std::fs::write(&script, body).map_err(|e| anyhow!("Failed to write launch script: {}", e))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755));
-    }
-    chown_fix_log_to_user(&script, ctx.home);
-    Ok(script)
+    write_fix_run_file(
+        ctx.home,
+        ctx.run_dir,
+        &format!("{}-{}.{}", ctx.slug, ctx.ts, ext),
+        body.as_bytes(),
+        0o755,
+    )
 }
 
 #[cfg(target_os = "macos")]
@@ -626,8 +653,13 @@ fn launch_interactive_terminal(ctx: LaunchCtx) -> Result<u32> {
         prompt_read,
         call,
     );
-    let script = ctx.run_dir.join(format!("{}-{}.ps1", ctx.slug, ctx.ts));
-    std::fs::write(&script, body).map_err(|e| anyhow!("Failed to write launch script: {}", e))?;
+    let script = write_fix_run_file(
+        ctx.home,
+        ctx.run_dir,
+        &format!("{}-{}.ps1", ctx.slug, ctx.ts),
+        body.as_bytes(),
+        0o755,
+    )?;
     let script_str = script.to_string_lossy().to_string();
     let workspace_str = ctx.workspace.to_string_lossy().to_string();
     let cmdline = format!(

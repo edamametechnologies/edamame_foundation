@@ -210,7 +210,15 @@ fn remove_secret_file(path: &Path) -> Result<()> {
 }
 
 fn ensure_private_dir(dir: &Path) -> Result<()> {
-    std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
+    std::fs::create_dir_all(dir).map_err(|e| {
+        let note = (e.kind() == std::io::ErrorKind::PermissionDenied)
+            .then(|| blocking_owner(dir))
+            .flatten();
+        match note {
+            Some(note) => anyhow!("create {}: {}; {}", dir.display(), e, note),
+            None => anyhow!("create {}: {}", dir.display(), e),
+        }
+    })?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -218,6 +226,46 @@ fn ensure_private_dir(dir: &Path) -> Result<()> {
             .with_context(|| format!("chmod 700 {}", dir.display()))?;
     }
     Ok(())
+}
+
+/// Why `dir` cannot be created: its nearest existing folder belongs to another
+/// account, for example a `~/.edamame` that a root process created with this
+/// user's `HOME` (a `sudo` run that kept `HOME`). The error names that account
+/// rather than a bare EACCES.
+#[cfg(unix)]
+fn blocking_owner(dir: &Path) -> Option<String> {
+    use std::os::unix::fs::MetadataExt;
+    let me = unsafe { libc::geteuid() };
+    let mut ancestor = dir.parent();
+    while let Some(path) = ancestor {
+        if let Ok(meta) = std::fs::symlink_metadata(path) {
+            return ownership_note(path, meta.uid(), me);
+        }
+        ancestor = path.parent();
+    }
+    None
+}
+
+#[cfg(not(unix))]
+fn blocking_owner(_dir: &Path) -> Option<String> {
+    None
+}
+
+/// The note [`blocking_owner`] adds, or None when the folder is this process's.
+#[cfg_attr(not(unix), allow(dead_code))]
+fn ownership_note(folder: &Path, owner_uid: u32, process_uid: u32) -> Option<String> {
+    if owner_uid == process_uid {
+        return None;
+    }
+    let owner = if owner_uid == 0 {
+        "root".to_string()
+    } else {
+        format!("uid {owner_uid}")
+    };
+    Some(format!(
+        "{} belongs to {owner}, not to this process (uid {process_uid})",
+        folder.display()
+    ))
 }
 
 fn read_file_if_present(path: &Path) -> Result<Option<Vec<u8>>> {
@@ -727,6 +775,20 @@ impl SecretStore for MemorySecretStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_folder_of_another_account_is_named_in_the_error() {
+        let note = ownership_note(Path::new("/Users/someone/.edamame"), 0, 501).unwrap();
+        assert!(
+            note.contains("/Users/someone/.edamame belongs to root"),
+            "{note}"
+        );
+        assert!(note.contains("uid 501"), "{note}");
+        assert!(ownership_note(Path::new("/x"), 502, 501)
+            .unwrap()
+            .contains("belongs to uid 502"));
+        assert_eq!(ownership_note(Path::new("/x"), 501, 501), None);
+    }
 
     fn temp_dir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
