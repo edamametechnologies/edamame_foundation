@@ -1269,6 +1269,10 @@ pub struct CveDetectionParamsJSON {
     /// Commands that run tests when they come right before an intent word
     /// (`npm test`, `cargo test`, `go test`, `npx jest`).
     pub measurement_runner_prefixes: Vec<String>,
+    /// Words that negate the authoring verb right after them: "do not change
+    /// the tests", "never edit", "without touching" forbid the edit rather
+    /// than ask for it. `t` is the n't of "don't" ("don't" is two words).
+    pub measurement_negation_words: Vec<String>,
     /// Distinct paths one writer must lay down within the burst before its
     /// writes read as a materialisation batch (a clone, an extract).
     pub evaluator_materialisation_min_paths: usize,
@@ -1551,6 +1555,7 @@ pub struct CveDetectionParams {
     pub measurement_authoring_verbs: HashSet<String>,
     pub measurement_execution_verbs: HashSet<String>,
     pub measurement_runner_prefixes: HashSet<String>,
+    pub measurement_negation_words: HashSet<String>,
     pub evaluator_materialisation_min_paths: usize,
     pub evaluator_materialisation_measurement_divisor: usize,
     pub evaluator_materialisation_burst_secs: i64,
@@ -2567,6 +2572,7 @@ impl CveDetectionParams {
             measurement_authoring_verbs: lowercase_token_set(&json.measurement_authoring_verbs),
             measurement_execution_verbs: lowercase_token_set(&json.measurement_execution_verbs),
             measurement_runner_prefixes: lowercase_token_set(&json.measurement_runner_prefixes),
+            measurement_negation_words: lowercase_token_set(&json.measurement_negation_words),
             evaluator_materialisation_min_paths: json.evaluator_materialisation_min_paths,
             evaluator_materialisation_measurement_divisor: json
                 .evaluator_materialisation_measurement_divisor
@@ -6530,9 +6536,15 @@ mod tests {
         assert!(p.measurement_authoring_verbs.contains("fix"));
         assert!(p.measurement_execution_verbs.contains("run"));
         assert!(p.measurement_runner_prefixes.contains("npm"));
+        assert!(p.measurement_negation_words.contains("not"));
+        assert!(p.measurement_negation_words.contains("t"));
+        assert!(p.measurement_authoring_verbs.contains("touch"));
         assert!(p
             .measurement_authoring_verbs
             .is_disjoint(&p.measurement_execution_verbs));
+        assert!(p
+            .measurement_negation_words
+            .is_disjoint(&p.measurement_authoring_verbs));
         assert_eq!(
             p.measurement_harness_directory_paths,
             vec![".github/workflows".to_string()]
