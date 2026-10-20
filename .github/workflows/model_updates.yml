@@ -89,6 +89,18 @@ jobs:
             windows)
               # Pin to 25.3.0: Chocolatey protoc 34.0.0 breaks PATH discovery for prost-build
               choco install protoc --version=25.3.0 -y
+              # A feed outage can leave choco reporting success with nothing installed:
+              # protoc then comes from its own release, checked by SHA-256.
+              if ! command -v protoc >/dev/null 2>&1; then
+                echo "::warning::protoc is not on PATH after choco install; taking protoc 25.3 from its GitHub release"
+                protoc_zip="$RUNNER_TEMP/protoc-25.3-win64.zip"
+                curl -fsSL --retry 3 --retry-delay 10 -o "$protoc_zip" https://github.com/protocolbuffers/protobuf/releases/download/v25.3/protoc-25.3-win64.zip
+                echo "d6b336b852726364313330631656b7f395dde5b1141b169f5c4b8d43cdf01482  $protoc_zip" | sha256sum -c -
+                powershell.exe -NoProfile -NonInteractive -Command "Expand-Archive -LiteralPath '$protoc_zip' -DestinationPath '$RUNNER_TEMP/protoc' -Force"
+                echo "$RUNNER_TEMP/protoc/bin" >> "$GITHUB_PATH"
+                export PATH="$(cygpath -u "$RUNNER_TEMP/protoc/bin"):$PATH"
+              fi
+              protoc --version
               ;;
           esac
           command -v protoc
