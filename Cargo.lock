@@ -909,7 +909,7 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 [[package]]
 name = "edamame_backend"
 version = "0.3.5"
-source = "git+https://github.com/edamametechnologies/edamame_backend?branch=main#2981e3f6a46ad5698ac2744340cc505cc4712730"
+source = "git+https://github.com/edamametechnologies/edamame_backend?branch=main#b708fb8ebca299a297705ae732981814ed8214af"
 dependencies = [
  "anyhow",
  "blake3",
@@ -923,7 +923,7 @@ dependencies = [
 
 [[package]]
 name = "edamame_foundation"
-version = "2.1.0"
+version = "2.1.1"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -1143,8 +1143,8 @@ dependencies = [
 
 [[package]]
 name = "flodbadd"
-version = "2.1.0"
-source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#bf5c030ae5cc83eb4ca6cc6fd3f53e50a52fddd3"
+version = "2.1.1"
+source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#422cdc96e56fa1cf0c22bbfad8c7e1e7256afd52"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -3414,9 +3414,9 @@ checksum = "eec689c0bc40ff2458a5977b6619cb718087084a18e02a131c599b62d05e1a5f"
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.15"
+version = "0.103.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3c3cf1d8b1e7d4927e2d154c3fcb02979afb9939629c62cd9048d4f07b60ac2"
+checksum = "4443b1b6d39d7c663139942cc4558262562d2c84123bb6282ef177009ca8b281"
 dependencies = [
  "ring",
  "rustls-pki-types",
@@ -4020,7 +4020,7 @@ dependencies = [
 [[package]]
 name = "threatmodels_rs"
 version = "0.1.1"
-source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#5f88adb838eeddffa15ead8bcee5dd4e81d49e8b"
+source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#a8d75b7d0bdea1dc8e2a5f4423130bb2d233d162"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4375,7 +4375,7 @@ checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 [[package]]
 name = "undeadlock"
 version = "1.2.0"
-source = "git+https://github.com/edamametechnologies/undeadlock?branch=main#b7357fede61aa1765bdd4f52a50c4710aa7d1113"
+source = "git+https://github.com/edamametechnologies/undeadlock?branch=main#ec740075f6ebdfc4ee6a4436c7110cdad0f097de"
 dependencies = [
  "dashmap",
  "tokio",
@@ -4638,9 +4638,9 @@ dependencies = [
 
 [[package]]
 name = "webpki-roots"
-version = "1.0.9"
+version = "1.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7dcd9d09a39985f5344844e66b0c530a33843579125f23e21e9f0f220850f22a"
+checksum = "1c1c8e20c8a38fc7d65abfe74eb7280e4aa667e8eec8bc84996d2874810748d9"
 dependencies = [
  "rustls-pki-types",
 ]
