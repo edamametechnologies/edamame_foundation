@@ -176,6 +176,21 @@ pub struct CredentialNativeServiceJSON {
     pub agent_type: String,
 }
 
+/// A data root an installed application claims (2.2 relations): the
+/// directory its own profile or store lives in, and the publishers that own
+/// it: a macOS team id, a Windows Authenticode signer (matched as a
+/// case-insensitive substring), a Linux package name, or `platform` for an
+/// OS-signed binary. A process holding a lock inside a claimed root owns it
+/// only when its publisher is one of the owners; an unclaimed root belongs
+/// to whoever holds its locks. A wrong or missing owner only withholds the
+/// lowering.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct ClaimedAppDataRootJSON {
+    /// Lower-cased, `/`-separated path fragment of the root.
+    pub pattern: String,
+    pub owners: Vec<String>,
+}
+
 /// CI-runner workspace path substrings + suppressible filename
 /// basenames for the FP-CI-7 dotenv demotion. Path substrings are
 /// matched against a forward-slash-normalized, lowercased version of
@@ -1029,6 +1044,19 @@ pub struct CveDetectionParamsJSON {
     /// udp/123 sessions below this volume stay routine even when the
     /// gate above is enabled.
     pub dns_ntp_non_routine_min_outbound_bytes: u64,
+    /// Autonomous systems whose address space serves only their owner's
+    /// own platform (no customer hosting): a TCP 80 / 443 flow from an
+    /// OS-signed process to one of them without a resolved name is routine,
+    /// as a named one is. Apple's relay and CloudKit endpoints answer from
+    /// bare addresses; a multi-tenant cloud (Azure, AWS, GCP) never belongs
+    /// here, any customer can rent addresses in it (2.2).
+    pub routine_platform_asns: Vec<u32>,
+    /// Basenames (lower-cased) of the lock files an application holds open
+    /// inside a profile or store it uses (LevelDB `LOCK`, Firefox
+    /// `parent.lock`): the OWNS-by-lock relation (2.2).
+    pub ownership_lock_file_names: Vec<String>,
+    /// Data roots installed applications claim (see the struct docs).
+    pub claimed_app_data_roots: Vec<ClaimedAppDataRootJSON>,
     /// Gate: when true, the anomaly arm of the
     /// EvidenceFloor rule "anomalous AND credential-class files"
     /// requires the graded `abnormal` band (p99.75) instead of any
@@ -1056,6 +1084,14 @@ pub struct CveDetectionParamsJSON {
     /// window (`crs_shadow_disagreements_total` flat across the fleet).
     /// Default false.
     pub crs_authoritative_enabled: bool,
+    /// 2.2 (Frank, 2026-10-23): the checks whose CRS band is authoritative
+    /// (it may raise as well as lower), check by check, after calibration
+    /// and a review of their shadow disagreements on the dogfood fleet.
+    /// Only 2.2+ reads it; clients before 2.2 read the global
+    /// `crs_authoritative_enabled`, which stays false, so publishing a check
+    /// here changes nothing for them. Evidence-floor findings are never
+    /// affected.
+    pub crs_authoritative_checks: Vec<String>,
     /// INC-19 kernel-lineage flip: when true, `kernel_lineage_suspicious`
     /// (own image or ANY kernel ancestor matches the suspicious-lineage
     /// patterns) feeds `suspicious_lineage_present` -- and with it the
@@ -1471,6 +1507,19 @@ pub struct CveDetectionParams {
     /// udp/123 sessions below this volume stay routine even when the
     /// gate above is enabled.
     pub dns_ntp_non_routine_min_outbound_bytes: u64,
+    /// Autonomous systems whose address space serves only their owner's
+    /// own platform (no customer hosting): a TCP 80 / 443 flow from an
+    /// OS-signed process to one of them without a resolved name is routine,
+    /// as a named one is. Apple's relay and CloudKit endpoints answer from
+    /// bare addresses; a multi-tenant cloud (Azure, AWS, GCP) never belongs
+    /// here, any customer can rent addresses in it (2.2).
+    pub routine_platform_asns: Vec<u32>,
+    /// Basenames (lower-cased) of the lock files an application holds open
+    /// inside a profile or store it uses (LevelDB `LOCK`, Firefox
+    /// `parent.lock`): the OWNS-by-lock relation (2.2).
+    pub ownership_lock_file_names: Vec<String>,
+    /// Data roots installed applications claim (see the struct docs).
+    pub claimed_app_data_roots: Vec<ClaimedAppDataRootJSON>,
     /// Gate: when true, the anomaly arm of the
     /// EvidenceFloor rule "anomalous AND credential-class files"
     /// requires the graded `abnormal` band (p99.75) instead of any
@@ -1498,6 +1547,14 @@ pub struct CveDetectionParams {
     /// window (`crs_shadow_disagreements_total` flat across the fleet).
     /// Default false.
     pub crs_authoritative_enabled: bool,
+    /// 2.2 (Frank, 2026-10-23): the checks whose CRS band is authoritative
+    /// (it may raise as well as lower), check by check, after calibration
+    /// and a review of their shadow disagreements on the dogfood fleet.
+    /// Only 2.2+ reads it; clients before 2.2 read the global
+    /// `crs_authoritative_enabled`, which stays false, so publishing a check
+    /// here changes nothing for them. Evidence-floor findings are never
+    /// affected.
+    pub crs_authoritative_checks: Vec<String>,
     pub kernel_lineage_flip_enabled: bool,
     pub divergence_lineage_floor_enabled: bool,
     pub cross_engine_bus_enabled: bool,
@@ -2445,11 +2502,38 @@ impl CveDetectionParams {
             publisher_attestation_enabled: json.publisher_attestation_enabled,
             treat_high_volume_dns_ntp_as_non_routine: json.treat_high_volume_dns_ntp_as_non_routine,
             dns_ntp_non_routine_min_outbound_bytes: json.dns_ntp_non_routine_min_outbound_bytes,
+            routine_platform_asns: json.routine_platform_asns.clone(),
+            ownership_lock_file_names: json
+                .ownership_lock_file_names
+                .iter()
+                .map(|name| name.trim().to_ascii_lowercase())
+                .filter(|name| !name.is_empty())
+                .collect(),
+            claimed_app_data_roots: json
+                .claimed_app_data_roots
+                .iter()
+                .map(|root| ClaimedAppDataRootJSON {
+                    pattern: root.pattern.trim().to_ascii_lowercase().replace('\\', "/"),
+                    owners: root
+                        .owners
+                        .iter()
+                        .map(|owner| owner.trim().to_ascii_lowercase())
+                        .filter(|owner| !owner.is_empty())
+                        .collect(),
+                })
+                .filter(|root| !root.pattern.is_empty())
+                .collect(),
             evidence_floor_requires_graded_anomaly: json.evidence_floor_requires_graded_anomaly,
             ambient_baseline_enabled: json.ambient_baseline_enabled,
             ambient_baseline_min_recurrent_days: json.ambient_baseline_min_recurrent_days,
             ambient_baseline_ttl_days: json.ambient_baseline_ttl_days,
             crs_authoritative_enabled: json.crs_authoritative_enabled,
+            crs_authoritative_checks: json
+                .crs_authoritative_checks
+                .iter()
+                .map(|check| check.trim().to_ascii_lowercase())
+                .filter(|check| !check.is_empty())
+                .collect(),
             kernel_lineage_flip_enabled: json.kernel_lineage_flip_enabled,
             divergence_lineage_floor_enabled: json.divergence_lineage_floor_enabled,
             cross_engine_bus_enabled: json.cross_engine_bus_enabled,
@@ -4299,6 +4383,41 @@ pub fn dns_ntp_non_routine_min_outbound_bytes() -> u64 {
         .dns_ntp_non_routine_min_outbound_bytes
 }
 
+/// `name` (a file's basename) is a lock file an application holds inside a
+/// profile or store it uses (`ownership_lock_file_names`).
+pub fn is_ownership_lock_file_name(name: &str) -> bool {
+    let name = name.trim().to_ascii_lowercase();
+    PARAMS_SNAPSHOT
+        .load()
+        .ownership_lock_file_names
+        .iter()
+        .any(|lock| *lock == name)
+}
+
+/// The owners of the claimed data root `path` lies in, when one claims it
+/// (`claimed_app_data_roots`); `None` for an unclaimed path.
+pub fn claimed_app_data_root_owners(path: &str) -> Option<Vec<String>> {
+    let normalized = format!(
+        "{}/",
+        path.trim().to_ascii_lowercase().replace('\\', "/").trim_end_matches('/')
+    );
+    PARAMS_SNAPSHOT
+        .load()
+        .claimed_app_data_roots
+        .iter()
+        .find(|root| normalized.contains(&root.pattern))
+        .map(|root| root.owners.clone())
+}
+
+/// The flow's autonomous system serves only its owner's platform (see the
+/// field docs).
+pub fn is_routine_platform_asn(as_number: u32) -> bool {
+    PARAMS_SNAPSHOT
+        .load()
+        .routine_platform_asns
+        .contains(&as_number)
+}
+
 /// Graded EvidenceFloor gate (see the field docs).
 pub fn evidence_floor_requires_graded_anomaly() -> bool {
     PARAMS_SNAPSHOT
@@ -4320,6 +4439,15 @@ pub fn ambient_baseline_ttl_days() -> u64 {
 }
 
 /// R4 (A4) clamp-flip switch (see the field docs).
+/// The CRS band is authoritative for `check` (see `crs_authoritative_checks`).
+pub fn crs_authoritative_for_check(check: &str) -> bool {
+    let snapshot = PARAMS_SNAPSHOT.load();
+    snapshot.crs_authoritative_enabled || {
+        let check = check.trim().to_ascii_lowercase();
+        snapshot.crs_authoritative_checks.iter().any(|c| *c == check)
+    }
+}
+
 pub fn crs_authoritative_enabled() -> bool {
     PARAMS_SNAPSHOT.load().crs_authoritative_enabled
 }

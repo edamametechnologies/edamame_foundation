@@ -22,11 +22,16 @@
 //! enrichment tick re-queries the same handful of paths every cycle.
 
 use lazy_static::lazy_static;
-use std::time::UNIX_EPOCH;
+use serde::{Deserialize, Serialize};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 use undeadlock::CustomDashMap;
 
 /// Signing/provenance verdict for one binary path.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// Also the wire shape of the `attest_binaries` helper order: on the app path
+/// the verification runs in the helper, outside the app's sandbox, where the
+/// platform tool can read the binary and its trust settings.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BinaryAttestation {
     /// Binary lives under a canonical OS install path (`/System/`,
     /// `/usr/` excluding `/usr/local/`, `/bin/`, `/sbin/`,
@@ -41,13 +46,42 @@ pub struct BinaryAttestation {
     /// platform-signed (a measured negative); `None` = the check is
     /// unimplemented on this platform or could not run (unmeasured).
     pub platform_signed: Option<bool>,
-    /// First signing authority (macOS `Authority=` line), when
-    /// available. Reserved for the destination<->publisher affinity
-    /// relation.
+    /// The signer of a VALID signature: the first signing authority on
+    /// macOS (`Authority=`, only when the signature verified; none for an
+    /// ad-hoc signature), the Authenticode signer on Windows, the owning
+    /// package on Linux. `Some` means the binary was installed by a named
+    /// publisher or package: the INSTALLED-BY relation (2.2).
     pub publisher: Option<String>,
 }
 
 const CACHE_MAX_ENTRIES: usize = 4096;
+
+/// Wall-clock budget of one [`attest_binaries`] batch. A cold cache costs a
+/// platform-tool spawn per binary; the rest of the batch stays unmeasured and
+/// the next tick asks again (the cache keeps what this one verified).
+pub const BINARY_ATTESTATION_BUDGET: Duration = Duration::from_secs(20);
+
+/// Most distinct paths one [`attest_binaries`] batch verifies.
+pub const MAX_ATTESTED_BINARIES: usize = 512;
+
+/// One path's verdict in an [`AttestationBatch`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PathAttestation {
+    pub path: String,
+    pub attestation: BinaryAttestation,
+}
+
+/// Result of one [`attest_binaries`] batch; the reply of the
+/// `attest_binaries` helper order.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct AttestationBatch {
+    /// One entry per path verified in this batch.
+    pub attestations: Vec<PathAttestation>,
+    /// Paths were left unverified because the batch reached
+    /// [`BINARY_ATTESTATION_BUDGET`] or [`MAX_ATTESTED_BINARIES`]: they are
+    /// unmeasured, not unsigned.
+    pub truncated: bool,
+}
 
 lazy_static! {
     /// path -> (mtime_secs, size, attestation).
@@ -73,6 +107,40 @@ pub fn is_canonical_os_path(path: &str) -> bool {
         // canonical OS path for the BS-9 platform-requester rule.
         || normalized.starts_with("c:/program files/windows defender/")
         || normalized.starts_with("c:/programdata/microsoft/windows defender/")
+}
+
+/// Verify every path (deduplicated, in the order given, bounded by
+/// [`BINARY_ATTESTATION_BUDGET`] and [`MAX_ATTESTED_BINARIES`]). The
+/// standalone core calls this in process; the helper serves it to the app.
+pub fn attest_binaries(paths: &[String]) -> AttestationBatch {
+    let started = Instant::now();
+    attest_binaries_until(paths, attest_binary, || {
+        started.elapsed() >= BINARY_ATTESTATION_BUDGET
+    })
+}
+
+fn attest_binaries_until(
+    paths: &[String],
+    mut attest: impl FnMut(&str) -> BinaryAttestation,
+    mut out_of_time: impl FnMut() -> bool,
+) -> AttestationBatch {
+    let mut seen = std::collections::HashSet::new();
+    let mut batch = AttestationBatch::default();
+    for raw in paths {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() || !seen.insert(trimmed.to_string()) {
+            continue;
+        }
+        if seen.len() > MAX_ATTESTED_BINARIES || out_of_time() {
+            batch.truncated = true;
+            break;
+        }
+        batch.attestations.push(PathAttestation {
+            path: trimmed.to_string(),
+            attestation: attest(trimmed),
+        });
+    }
+    batch
 }
 
 /// Verify the code-signing provenance of `path`, with caching.
@@ -134,10 +202,27 @@ fn verify_platform_signature(path: &str) -> (Option<bool>, Option<String>) {
     let verify = Command::new("/usr/bin/codesign")
         .args(["--verify", "-R=anchor apple", path])
         .output();
-    let signed = match verify {
-        Ok(output) => Some(output.status.success()),
+    let (signed, exit_code) = match verify {
+        Ok(output) => (
+            classify_codesign_verify(
+                output.status.code(),
+                &String::from_utf8_lossy(&output.stderr),
+            ),
+            output.status.code(),
+        ),
         Err(_) => return (None, None),
     };
+    if signed.is_none() {
+        return (None, None);
+    }
+    // The signer only of a signature that verified (0 Apple, 3 another
+    // signer): a modified or unsigned binary still prints its old authority,
+    // and a publisher must mean a valid signature on every platform (the
+    // Windows arm reports one only for a verified Authenticode signer). An
+    // ad-hoc signature has no authority: no publisher.
+    if !matches!(exit_code, Some(0) | Some(3)) {
+        return (signed, None);
+    }
     let publisher = Command::new("/usr/bin/codesign")
         .args(["--display", "--verbose=2", path])
         .output()
@@ -148,6 +233,33 @@ fn verify_platform_signature(path: &str) -> (Option<bool>, Option<String>) {
                 .find_map(|line| line.strip_prefix("Authority=").map(str::to_string))
         });
     (signed, publisher)
+}
+
+/// Verdict of `codesign --verify -R=anchor apple`: 0 is Apple's signature; 3
+/// is a valid signature that is not Apple's; 1 is a measured negative only
+/// when codesign says the code is unsigned or its signature is broken. Every
+/// other failure (the file could not be read, the sandbox refused the
+/// trust-settings lookup, codesign itself failed) measured nothing.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn classify_codesign_verify(exit_code: Option<i32>, stderr: &str) -> Option<bool> {
+    match exit_code {
+        Some(0) => Some(true),
+        Some(3) => Some(false),
+        Some(1) => {
+            let text = stderr.to_ascii_lowercase();
+            let measured = [
+                "code object is not signed at all",
+                "invalid signature",
+                "a sealed resource is missing or invalid",
+                "code has no resources but signature indicates they must be present",
+                "main executable failed strict validation",
+            ]
+            .iter()
+            .any(|marker| text.contains(marker));
+            measured.then_some(false)
+        }
+        _ => None,
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -503,6 +615,91 @@ fn verify_platform_signature(_path: &str) -> (Option<bool>, Option<String>) {
     // Mobile / other platforms: unmeasured, asserts nothing (the
     // detector does not run enrichment there anyway).
     (None, None)
+}
+
+#[cfg(test)]
+mod batch_tests {
+    use super::*;
+
+    fn signed(_: &str) -> BinaryAttestation {
+        BinaryAttestation {
+            canonical_path: true,
+            platform_signed: Some(true),
+            publisher: None,
+        }
+    }
+
+    #[test]
+    fn a_batch_verifies_each_distinct_path_once_in_order() {
+        let paths = vec![
+            "/usr/libexec/a".to_string(),
+            " /usr/libexec/a ".to_string(),
+            String::new(),
+            "/usr/bin/b".to_string(),
+        ];
+        let mut asked = Vec::new();
+        let batch = attest_binaries_until(
+            &paths,
+            |path| {
+                asked.push(path.to_string());
+                signed(path)
+            },
+            || false,
+        );
+        assert_eq!(asked, vec!["/usr/libexec/a", "/usr/bin/b"]);
+        assert_eq!(batch.attestations.len(), 2);
+        assert!(!batch.truncated);
+    }
+
+    #[test]
+    fn a_batch_out_of_time_leaves_the_rest_unmeasured() {
+        let paths: Vec<String> = (0..5).map(|i| format!("/usr/bin/t{i}")).collect();
+        let mut calls = 0;
+        let batch = attest_binaries_until(&paths, signed, || {
+            calls += 1;
+            calls > 2
+        });
+        assert_eq!(batch.attestations.len(), 2);
+        assert!(batch.truncated);
+    }
+
+    #[test]
+    fn a_batch_round_trips_on_the_wire() {
+        let batch = AttestationBatch {
+            attestations: vec![PathAttestation {
+                path: "/usr/libexec/networkserviceproxy".to_string(),
+                attestation: signed(""),
+            }],
+            truncated: false,
+        };
+        let json = serde_json::to_string(&batch).unwrap();
+        assert_eq!(serde_json::from_str::<AttestationBatch>(&json).unwrap(), batch);
+    }
+
+    #[test]
+    fn codesign_verdicts_are_measured_only_when_codesign_says_so() {
+        assert_eq!(classify_codesign_verify(Some(0), ""), Some(true));
+        assert_eq!(
+            classify_codesign_verify(
+                Some(3),
+                "test-requirement: code failed to satisfy specified code requirement(s)"
+            ),
+            Some(false)
+        );
+        assert_eq!(
+            classify_codesign_verify(Some(1), "/x/ls-copy: code object is not signed at all"),
+            Some(false)
+        );
+        assert_eq!(
+            classify_codesign_verify(Some(1), "/x/app: invalid signature (code or signature have been modified)"),
+            Some(false)
+        );
+        // Could not look: unmeasured, never unsigned.
+        assert_eq!(classify_codesign_verify(Some(1), "/nonexistent/x: No such file or directory"), None);
+        assert_eq!(classify_codesign_verify(Some(1), "Operation not permitted"), None);
+        assert_eq!(classify_codesign_verify(Some(2), ""), None);
+        assert_eq!(classify_codesign_verify(None, ""), None);
+    }
 }
 
 #[cfg(test)]

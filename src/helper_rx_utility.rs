@@ -922,6 +922,39 @@ pub async fn utility_collect_sensor_coverage(_arg1: &str, _arg2: &str) -> Result
         .map_err(|e| anyhow::anyhow!("Failed to serialize sensor coverage: {}", e))
 }
 
+/// The kernel process events this helper's sensors delivered at or after
+/// `arg1` (epoch milliseconds; empty or 0 for the whole ring), for the app's
+/// lineage table (`process_event_relay::process_events_since`). Thin
+/// delegate; the standalone core drains the ring in process.
+pub async fn utility_process_events_since(since_ms: &str) -> Result<String> {
+    let since_ms = match since_ms.trim() {
+        "" => 0,
+        text => text
+            .parse::<u64>()
+            .map_err(|e| anyhow::anyhow!("Invalid since timestamp: {}", e))?,
+    };
+    let batch = crate::process_event_relay::process_events_since(since_ms);
+    serde_json::to_string(&batch)
+        .map_err(|e| anyhow::anyhow!("Failed to serialize process events: {}", e))
+}
+
+/// Platform signature verdicts for the binaries in `arg1` (a JSON array of
+/// paths): the helper runs the verification outside the app's sandbox
+/// (`publisher_attestation::attest_binaries`). Thin delegate; the standalone
+/// core calls the same function in process.
+pub async fn utility_attest_binaries(paths_json: &str) -> Result<String> {
+    let paths: Vec<String> = serde_json::from_str(paths_json)
+        .map_err(|e| anyhow::anyhow!("Failed to parse binary paths: {}", e))?;
+    // A platform-tool spawn per cold path: off the async workers.
+    let batch = tokio::task::spawn_blocking(move || {
+        crate::publisher_attestation::attest_binaries(&paths)
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("Binary attestation task failed: {}", e))?;
+    serde_json::to_string(&batch)
+        .map_err(|e| anyhow::anyhow!("Failed to serialize binary attestations: {}", e))
+}
+
 pub async fn utility_collect_agent_visibility(_domain: &str, args_json: &str) -> Result<String> {
     #[derive(serde::Deserialize)]
     struct Args {

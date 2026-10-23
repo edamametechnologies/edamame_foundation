@@ -16,6 +16,7 @@ pub static HELPER_FATAL_ERROR: AtomicBool = AtomicBool::new(false);
 
 pub const UTILITY_ORDER_NAMES: &[&str] = &[
     "arp_resolve",
+    "attest_binaries",
     "attest_dev_trees",
     "augment_custom_whitelists",
     "broadcast_ping",
@@ -53,6 +54,7 @@ pub const UTILITY_ORDER_NAMES: &[&str] = &[
     "merge_custom_whitelists",
     "model_authenticity",
     "process_credential_signals",
+    "process_events_since",
     "read_instruction_content",
     "restart_capture",
     "reveal_path_in_file_manager",

@@ -65,6 +65,7 @@ pub mod peer_ids;
 /// Operator hard kill of a process by pid (standalone + helper order).
 pub mod process_control;
 pub mod process_credential_signals;
+pub mod process_event_relay;
 /// Test-only regression corpus for the literal prompt-injection scanner
 /// (INC-20's semantic detector is parked, 2026-09-08).
 #[cfg(test)]
