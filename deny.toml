@@ -45,7 +45,7 @@ all-features = true
 db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
 # RustSec CVEs MUST fail CI by default. The list below holds the advisories
-# still present in the workspace dependency graph, last triaged 2026-10-17.
+# still present in the workspace dependency graph, last triaged 2026-10-24.
 # Each entry has a `reason` and a TODO category. When a new advisory appears
 # that is NOT in this list, the gate will fail and force triage. Treat
 # this as a working backlog, not a permanent allowlist:
@@ -80,6 +80,7 @@ ignore = [
     { id = "RUSTSEC-2025-0141", reason = "unmaintained: bincode (the project stopped development; the advisory covers every version, including the bincode 2.0.1 in the graph). edamame_foundation and edamame_core use it (serde) to encode session payloads on the mutually-authenticated core <-> helper gRPC channel. TODO: migrate to postcard, wincode or bitcode." },
     # ---- vulnerabilities (real CVEs, accepted only with rationale) -
     { id = "RUSTSEC-2023-0071", reason = "vulnerability: rsa Marvin attack, a timing side-channel on operations with the RSA PRIVATE key (decryption, signing). NOT APPLICABLE: rsa 0.9 comes only from jsonwebtoken's rust_crypto backend in edamame_core, which only VERIFIES RS256 token signatures with the issuer's public key from its JWKS (src/agentic/oauth.rs validate_token: DecodingKey::from_rsa_components + decode). No RSA private key exists in the process and nothing decrypts or signs with RSA. Alternative not taken: jsonwebtoken's aws_lc_rs backend drops the rsa crate but adds aws-lc-sys, a C/assembly build on every shipped target (iOS, Android, Windows, Linux, macOS)." },
+    { id = "RUSTSEC-2026-0387", reason = "vulnerability: crypto-bigint timing variability, operations meant to be constant-time that could branch on SECRET integers. NOT APPLICABLE: crypto-bigint 0.5.5 comes only from jsonwebtoken's rust_crypto backend in edamame_core, through p256 / p384 (elliptic-curve 0.13) for ES256 / ES384. edamame_core only verifies RS256 tokens (src/agentic/oauth.rs validate_token: Validation::new(Algorithm::RS256) with DecodingKey::from_rsa_components), so a token naming another algorithm is rejected before any elliptic-curve arithmetic runs, and verification handles no secret integer. No 0.5.x release carries the fix (0.7.6 does). Alternative not taken: the aws_lc_rs backend, as for RUSTSEC-2023-0071. TODO: drop once jsonwebtoken's rust_crypto backend moves to elliptic-curve 0.14 / crypto-bigint 0.7." },
 ]
 
 [licenses]
