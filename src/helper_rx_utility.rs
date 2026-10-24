@@ -946,11 +946,10 @@ pub async fn utility_attest_binaries(paths_json: &str) -> Result<String> {
     let paths: Vec<String> = serde_json::from_str(paths_json)
         .map_err(|e| anyhow::anyhow!("Failed to parse binary paths: {}", e))?;
     // A platform-tool spawn per cold path: off the async workers.
-    let batch = tokio::task::spawn_blocking(move || {
-        crate::publisher_attestation::attest_binaries(&paths)
-    })
-    .await
-    .map_err(|e| anyhow::anyhow!("Binary attestation task failed: {}", e))?;
+    let batch =
+        tokio::task::spawn_blocking(move || crate::publisher_attestation::attest_binaries(&paths))
+            .await
+            .map_err(|e| anyhow::anyhow!("Binary attestation task failed: {}", e))?;
     serde_json::to_string(&batch)
         .map_err(|e| anyhow::anyhow!("Failed to serialize binary attestations: {}", e))
 }

@@ -49,16 +49,16 @@ En rapportant un score détaillé, vous acceptez de partager les informations su
   * Windows Hello n'est pas disponible
   * Le verrouillage de l'économiseur d'écran n'est pas correctement configuré
   * Règle métier non respectée
-  * Agent Cursor non sécurisé (observateur en pause)
-  * Agent Claude Code non sécurisé (observateur en pause)
-  * Agent Claude Desktop non sécurisé (observateur en pause)
-  * Agent OpenClaw non sécurisé (observateur en pause)
+  * Agent Cursor non sécurisé
+  * Agent Claude Code non sécurisé
+  * Agent Claude Desktop non sécurisé
+  * Agent OpenClaw non sécurisé
   * Agent IA avec un rayon d'impact eleve sur l'hote
   * Agents IA sans harnais de gouvernance
   * L'agent echappe a la frontiere de son harnais de gouvernance
   * Un agent IA expose un serveur MCP non protege
-  * Agent Codex CLI non sécurisé (observateur en pause)
-  * Agent Hermes non sécurisé (observateur en pause)
+  * Agent Codex CLI non sécurisé
+  * Agent Hermes non sécurisé
 
 **Qui voit ces informations et combien de temps EDAMAME Hub les conserve**
 * Les administrateurs du domaine auquel vous êtes connecté voient ces informations dans EDAMAME Hub, et le personnel d'EDAMAME peut les consulter depuis la console d'administration d'EDAMAME

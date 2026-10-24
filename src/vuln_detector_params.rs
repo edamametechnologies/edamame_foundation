@@ -4399,7 +4399,10 @@ pub fn is_ownership_lock_file_name(name: &str) -> bool {
 pub fn claimed_app_data_root_owners(path: &str) -> Option<Vec<String>> {
     let normalized = format!(
         "{}/",
-        path.trim().to_ascii_lowercase().replace('\\', "/").trim_end_matches('/')
+        path.trim()
+            .to_ascii_lowercase()
+            .replace('\\', "/")
+            .trim_end_matches('/')
     );
     PARAMS_SNAPSHOT
         .load()
@@ -4444,7 +4447,10 @@ pub fn crs_authoritative_for_check(check: &str) -> bool {
     let snapshot = PARAMS_SNAPSHOT.load();
     snapshot.crs_authoritative_enabled || {
         let check = check.trim().to_ascii_lowercase();
-        snapshot.crs_authoritative_checks.iter().any(|c| *c == check)
+        snapshot
+            .crs_authoritative_checks
+            .iter()
+            .any(|c| *c == check)
     }
 }
 

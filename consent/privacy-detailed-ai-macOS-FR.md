@@ -53,16 +53,16 @@ En rapportant un score détaillé, vous acceptez de partager les informations su
   * Navigateur Chrome non à jour
   * Règle métier non respectée
   * CLI non restreint pour les utilisateurs standard
-  * Agent Cursor non sécurisé (observateur en pause)
-  * Agent Claude Code non sécurisé (observateur en pause)
-  * Agent Claude Desktop non sécurisé (observateur en pause)
-  * Agent OpenClaw non sécurisé (observateur en pause)
+  * Agent Cursor non sécurisé
+  * Agent Claude Code non sécurisé
+  * Agent Claude Desktop non sécurisé
+  * Agent OpenClaw non sécurisé
   * Agent IA avec un rayon d'impact eleve sur l'hote
   * Agents IA sans harnais de gouvernance
   * L'agent echappe a la frontiere de son harnais de gouvernance
   * Un agent IA expose un serveur MCP non protege
-  * Agent Codex CLI non sécurisé (observateur en pause)
-  * Agent Hermes non sécurisé (observateur en pause)
+  * Agent Codex CLI non sécurisé
+  * Agent Hermes non sécurisé
 
 * Les détails IA de cette machine :
   * Configuration IA de cette machine, envoyée dans chaque rapport tant que les détails IA sont partagés, même quand aucun test IA n'est en échec

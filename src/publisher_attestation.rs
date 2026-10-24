@@ -673,7 +673,10 @@ mod batch_tests {
             truncated: false,
         };
         let json = serde_json::to_string(&batch).unwrap();
-        assert_eq!(serde_json::from_str::<AttestationBatch>(&json).unwrap(), batch);
+        assert_eq!(
+            serde_json::from_str::<AttestationBatch>(&json).unwrap(),
+            batch
+        );
     }
 
     #[test]
@@ -691,12 +694,21 @@ mod batch_tests {
             Some(false)
         );
         assert_eq!(
-            classify_codesign_verify(Some(1), "/x/app: invalid signature (code or signature have been modified)"),
+            classify_codesign_verify(
+                Some(1),
+                "/x/app: invalid signature (code or signature have been modified)"
+            ),
             Some(false)
         );
         // Could not look: unmeasured, never unsigned.
-        assert_eq!(classify_codesign_verify(Some(1), "/nonexistent/x: No such file or directory"), None);
-        assert_eq!(classify_codesign_verify(Some(1), "Operation not permitted"), None);
+        assert_eq!(
+            classify_codesign_verify(Some(1), "/nonexistent/x: No such file or directory"),
+            None
+        );
+        assert_eq!(
+            classify_codesign_verify(Some(1), "Operation not permitted"),
+            None
+        );
         assert_eq!(classify_codesign_verify(Some(2), ""), None);
         assert_eq!(classify_codesign_verify(None, ""), None);
     }
