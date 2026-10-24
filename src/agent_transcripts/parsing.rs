@@ -1832,7 +1832,9 @@ fn tool_target_signature(name: &str, input: Option<&serde_json::Value>) -> Strin
 //   Linux, `["C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
 //   "-Command", "Invoke-RestMethod ..."]` on Windows;
 // - `{"type": "FileChange", "changes": {"/abs/notes/x.md": {"type": "add",
-//   "content": ...}}}` for an `apply_patch`.
+//   "content": ...}}}` for an `apply_patch`;
+// - `McpToolCall` for an MCP call actually recorded by the runtime, with
+//   server, tool, arguments, status and result.
 //
 // None of it was decoded (FP lab 2026-10-06, 0.160.0 / 0.160.1 rollouts on
 // macOS, Windows and Linux): every code-mode session reached the divergence
@@ -1966,6 +1968,8 @@ fn codex_command_error(item: &serde_json::Value) -> Option<String> {
 /// (the command's output, and an `error` when it failed); a `FileChange` is
 /// one `apply_patch` `function_call` per path written (arguments `{"path":
 /// <path>}`), with no result: the item reports the patch, not a command.
+/// A `McpToolCall` records the runtime MCP invocation and its result, including
+/// protocol-error messages and application-error result content.
 /// Empty for every other line.
 fn codex_code_mode_blocks(value: &serde_json::Value) -> Vec<serde_json::Value> {
     let Some(item) = codex_completed_item(value) else {
@@ -1996,6 +2000,75 @@ fn codex_code_mode_blocks(value: &serde_json::Value) -> Vec<serde_json::Value> {
             }
             if let Some(error) = codex_command_error(item) {
                 result["error"] = error.into();
+            }
+            vec![call, result]
+        }
+        "McpToolCall" => {
+            let server = item
+                .get("server")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim();
+            let tool = item
+                .get("tool")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim();
+            let status = item.get("status").and_then(|v| v.as_str()).unwrap_or("");
+            if server.is_empty()
+                || tool.is_empty()
+                || !(status.eq_ignore_ascii_case("completed")
+                    || status.eq_ignore_ascii_case("failed"))
+            {
+                return Vec::new();
+            }
+            let name = format!("mcp__{server}__{tool}");
+            let mut call = serde_json::json!({
+                "type": "function_call",
+                "name": name,
+                "arguments": item.get("arguments").cloned().unwrap_or_else(|| serde_json::json!({})),
+            });
+            let output = item
+                .get("result")
+                .map(|v| v.to_string())
+                .unwrap_or_default();
+            let mut result = serde_json::json!({
+                "type": "function_call_output",
+                "output": output.chars().take(CODEX_OUTPUT_CHARS).collect::<String>(),
+            });
+            if let Some(id) = item
+                .get("id")
+                .and_then(|v| v.as_str())
+                .filter(|id| !id.is_empty())
+            {
+                call["call_id"] = id.into();
+                result["call_id"] = id.into();
+            }
+            let failed = status.eq_ignore_ascii_case("failed")
+                || item.get("error").is_some_and(|value| !value.is_null())
+                || item.get("result").is_some_and(|value| {
+                    ["isError", "is_error"]
+                        .iter()
+                        .any(|key| value.get(*key).and_then(|flag| flag.as_bool()) == Some(true))
+                });
+            if failed {
+                // Protocol failures carry item.error; application failures may
+                // only carry result.content with isError. Reuse the consumers'
+                // text extraction so both preserve the actual error detail.
+                let mut error = extract_error_message(item);
+                if error.trim().is_empty() {
+                    if let Some(value) = item.get("result") {
+                        error = extract_error_message(value);
+                    }
+                }
+                if error.trim().is_empty() {
+                    error = "MCP tool call failed".to_string();
+                }
+                result["error"] = error
+                    .chars()
+                    .take(CODEX_OUTPUT_CHARS)
+                    .collect::<String>()
+                    .into();
             }
             vec![call, result]
         }
@@ -4121,7 +4194,7 @@ mod host_plausibility_tests {
 
 /// One typed tool-call event decoded from a structured transcript block
 /// (Anthropic `tool_use`, Codex `function_call`, a Codex code-mode
-/// `CommandExecution` / `FileChange` item), with the enclosing line's
+/// `CommandExecution` / `FileChange` / `McpToolCall` item), with the enclosing line's
 /// in-transcript timestamp when the format carries one (Cursor `.txt`
 /// exports carry neither blocks nor timestamps and yield none).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
@@ -5197,5 +5270,115 @@ mod denylist_bypass_tests {
 {"type":"assistant","message":{"content":[{"type":"tool_use","id":"t2","name":"Bash","input":{"command":"ls -la"}}]}}
 {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t2","content":"total 0","is_error":false}]}}"#;
         assert!(extract_denylist_bypass_events(raw, 16).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod native_mcp_tests {
+    use super::*;
+    // Captured using Codex CLI 0.163.0 against a fixed-response local MCP.
+    // Session/call IDs, timestamps and marker names are anonymized; the
+    // status/result/error shapes and failure messages are otherwise preserved.
+    const REAL: &str = include_str!("fixtures/codex-mcp-native-0.163.0.jsonl");
+    fn event() -> serde_json::Value {
+        serde_json::from_str(REAL.lines().nth(1).unwrap()).unwrap()
+    }
+    #[test]
+    fn real_codex_0163_success_and_both_failure_classes() {
+        let events = extract_tool_call_events(REAL, 64);
+        assert_eq!(
+            events.iter().map(|x| x.name.as_str()).collect::<Vec<_>>(),
+            vec![
+                "mcp__lab__success",
+                "mcp__lab__application_error",
+                "mcp__lab__protocol_error"
+            ]
+        );
+        let errors = parse_tool_error_details(REAL);
+        assert_eq!(errors.len(), 2);
+        assert_eq!(errors[0].tool_name, "mcp__lab__application_error");
+        assert!(errors[0].message.contains("MCP_FIXTURE_APPLICATION_ERROR"));
+        assert_eq!(errors[1].tool_name, "mcp__lab__protocol_error");
+        assert!(errors[1].message.contains("MCP_FIXTURE_PROTOCOL_ERROR"));
+        assert!(!errors[1].message.starts_with("{\"message"));
+    }
+    #[test]
+    fn completed_with_is_error_content_retains_detail() {
+        let mut value = event();
+        value["payload"]["item"]["status"] = "completed".into();
+        let errors = parse_tool_error_details(&value.to_string());
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].message.contains("MCP_FIXTURE_APPLICATION_ERROR"));
+    }
+    #[test]
+    fn null_error_does_not_hide_result_detail() {
+        let mut value = event();
+        value["payload"]["item"]["error"] = serde_json::Value::Null;
+        assert!(parse_tool_error_details(&value.to_string())[0]
+            .message
+            .contains("MCP_FIXTURE_APPLICATION_ERROR"));
+    }
+    #[test]
+    fn snake_case_flag_and_missing_id_supported() {
+        let mut value = event();
+        let item = &mut value["payload"]["item"];
+        item["status"] = "completed".into();
+        item.as_object_mut().unwrap().remove("id");
+        item["result"].as_object_mut().unwrap().remove("isError");
+        item["result"]["is_error"] = true.into();
+        assert_eq!(extract_tool_call_events(&value.to_string(), 64).len(), 1);
+        assert!(codex_code_mode_blocks(&value)[1]["error"]
+            .as_str()
+            .unwrap()
+            .contains("MCP_FIXTURE_APPLICATION_ERROR"));
+    }
+    #[test]
+    fn explicit_protocol_error_retained_even_with_completed_status() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(REAL.lines().nth(2).unwrap()).unwrap();
+        value["payload"]["item"]["status"] = "completed".into();
+        assert!(parse_tool_error_details(&value.to_string())[0]
+            .message
+            .contains("MCP_FIXTURE_PROTOCOL_ERROR"));
+    }
+    #[test]
+    fn empty_error_uses_result_and_unicode_is_character_capped() {
+        let mut value = event();
+        let item = &mut value["payload"]["item"];
+        item["error"] = "".into();
+        item["result"]["content"][0]["text"] = "я".repeat(900).into();
+        let blocks = codex_code_mode_blocks(&value);
+        assert_eq!(
+            blocks[1]["error"].as_str().unwrap().chars().count(),
+            CODEX_OUTPUT_CHARS
+        );
+    }
+    #[test]
+    fn no_detail_uses_generic_fallback() {
+        let mut value = event();
+        value["payload"]["item"]["result"] = serde_json::Value::Null;
+        assert_eq!(
+            codex_code_mode_blocks(&value)[1]["error"],
+            "MCP tool call failed"
+        );
+    }
+    #[test]
+    fn started_cancelled_and_incomplete_are_not_completed_calls() {
+        let mut value = event();
+        value["payload"]["type"] = "item_started".into();
+        assert!(codex_code_mode_blocks(&value).is_empty());
+        value["payload"]["type"] = "item_completed".into();
+        value["payload"]["item"]["status"] = "cancelled".into();
+        assert!(codex_code_mode_blocks(&value).is_empty());
+        value["payload"]["item"]["status"] = "failed".into();
+        value["payload"]["item"]["server"] = "".into();
+        assert!(codex_code_mode_blocks(&value).is_empty());
+    }
+    #[test]
+    fn quoted_event_and_unexecuted_script_are_not_calls() {
+        let quote = serde_json::json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"text","text":REAL}]}});
+        assert!(extract_tool_call_events(&quote.to_string(), 64).is_empty());
+        let script = serde_json::json!({"type":"response_item","payload":{"type":"custom_tool_call","name":"exec","input":"if(false) await tools.mcp__lab__application_error({});"}});
+        assert!(extract_tool_call_events(&script.to_string(), 64).is_empty());
     }
 }
