@@ -1324,6 +1324,14 @@ pub struct CveDetectionParamsJSON {
     /// who authorizes an SSH connection authorizes the client reading and
     /// updating these. Never private keys.
     pub ssh_client_state_files: Vec<String>,
+    /// Process names of git when it starts the SSH client as its transport
+    /// (`git`, `git-lfs`): the parent of an ssh session that serves a clone,
+    /// fetch or push.
+    pub git_ssh_parent_process_names: Vec<String>,
+    /// The commands git asks the remote end to run over SSH
+    /// (`git-upload-pack`, `git-receive-pack`, ...): an ssh command line that
+    /// names one is git's transport.
+    pub git_ssh_remote_commands: Vec<String>,
     /// Hosts the divergence correlation plane never counts as unexplained
     /// egress, by class with the ports each covers (see
     /// [`DivergenceInfrastructureEndpointClassJSON`]).
@@ -1618,6 +1626,10 @@ pub struct CveDetectionParams {
     pub evaluator_materialisation_burst_secs: i64,
     pub evaluator_session_attribution_slack_secs: i64,
     pub ssh_client_state_files: Vec<String>,
+    /// `git_ssh_parent_process_names`, lowercase and trimmed.
+    pub git_ssh_parent_process_names: HashSet<String>,
+    /// `git_ssh_remote_commands`, lowercase and trimmed.
+    pub git_ssh_remote_commands: HashSet<String>,
     /// `divergence_infrastructure_endpoints`, lowercase and trimmed, each
     /// suffix with its leading dot, empty entries dropped.
     pub divergence_infrastructure_endpoints: Vec<DivergenceInfrastructureEndpointClassJSON>,
@@ -2669,6 +2681,8 @@ impl CveDetectionParams {
                 .map(|path| path.trim().to_string())
                 .filter(|path| !path.is_empty())
                 .collect(),
+            git_ssh_parent_process_names: lowercase_token_set(&json.git_ssh_parent_process_names),
+            git_ssh_remote_commands: lowercase_token_set(&json.git_ssh_remote_commands),
             divergence_infrastructure_endpoints: normalized_divergence_infrastructure_endpoints(
                 &json.divergence_infrastructure_endpoints,
             ),
@@ -6696,6 +6710,9 @@ mod tests {
             .next()
             .unwrap_or("")
             .starts_with("id_")));
+        assert!(p.git_ssh_parent_process_names.contains("git"));
+        assert!(p.git_ssh_remote_commands.contains("git-upload-pack"));
+        assert!(p.git_ssh_remote_commands.contains("git-receive-pack"));
     }
 
     /// Runtime and dependency-tree lists load lowercased; the marker order
