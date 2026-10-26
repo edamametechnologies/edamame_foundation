@@ -875,6 +875,16 @@ pub struct WalletKeyEnvNamesJSON {
     pub suffixes: Vec<String>,
 }
 
+/// A CLI's own SQLite sidecar files in its credential cache directory: a
+/// path containing one of `dirs` (lowercase, `/`) and ending with one of
+/// `suffixes` (`.db-wal`, `.db-shm`, ...). The database's journal, not a
+/// cached credential.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct CredentialCacheSqliteSidecarsJSON {
+    pub dirs: Vec<String>,
+    pub suffixes: Vec<String>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 pub struct AgentHarnessOutputCaptureJSON {
     pub agent: String,
@@ -1332,6 +1342,9 @@ pub struct CveDetectionParamsJSON {
     /// (`git-upload-pack`, `git-receive-pack`, ...): an ssh command line that
     /// names one is git's transport.
     pub git_ssh_remote_commands: Vec<String>,
+    /// A CLI's own SQLite sidecars in its credential cache directory (see
+    /// [`CredentialCacheSqliteSidecarsJSON`]).
+    pub credential_cache_sqlite_sidecars: CredentialCacheSqliteSidecarsJSON,
     /// Hosts the divergence correlation plane never counts as unexplained
     /// egress, by class with the ports each covers (see
     /// [`DivergenceInfrastructureEndpointClassJSON`]).
@@ -1630,6 +1643,9 @@ pub struct CveDetectionParams {
     pub git_ssh_parent_process_names: HashSet<String>,
     /// `git_ssh_remote_commands`, lowercase and trimmed.
     pub git_ssh_remote_commands: HashSet<String>,
+    /// `credential_cache_sqlite_sidecars`, lowercase, `/`-separated, empty
+    /// entries dropped.
+    pub credential_cache_sqlite_sidecars: CredentialCacheSqliteSidecarsJSON,
     /// `divergence_infrastructure_endpoints`, lowercase and trimmed, each
     /// suffix with its leading dot, empty entries dropped.
     pub divergence_infrastructure_endpoints: Vec<DivergenceInfrastructureEndpointClassJSON>,
@@ -2683,6 +2699,16 @@ impl CveDetectionParams {
                 .collect(),
             git_ssh_parent_process_names: lowercase_token_set(&json.git_ssh_parent_process_names),
             git_ssh_remote_commands: lowercase_token_set(&json.git_ssh_remote_commands),
+            credential_cache_sqlite_sidecars: CredentialCacheSqliteSidecarsJSON {
+                dirs: json
+                    .credential_cache_sqlite_sidecars
+                    .dirs
+                    .iter()
+                    .map(|dir| dir.trim().replace('\\', "/").to_ascii_lowercase())
+                    .filter(|dir| !dir.is_empty())
+                    .collect(),
+                suffixes: lowercase_token_list(&json.credential_cache_sqlite_sidecars.suffixes),
+            },
             divergence_infrastructure_endpoints: normalized_divergence_infrastructure_endpoints(
                 &json.divergence_infrastructure_endpoints,
             ),
@@ -5033,6 +5059,44 @@ pub fn is_agent_harness_output_capture(path: &str) -> bool {
     })
 }
 
+/// `path` is a CLI's own SQLite sidecar in its credential cache directory
+/// (params `credential_cache_sqlite_sidecars`).
+pub fn is_credential_cache_sqlite_sidecar(path: &str) -> bool {
+    let normalized = path.trim().replace('\\', "/").to_ascii_lowercase();
+    let snapshot = PARAMS_SNAPSHOT.load();
+    let sidecars = &snapshot.credential_cache_sqlite_sidecars;
+    sidecars
+        .dirs
+        .iter()
+        .any(|dir| normalized.contains(dir.as_str()))
+        && sidecars
+            .suffixes
+            .iter()
+            .any(|suffix| normalized.ends_with(suffix.as_str()))
+}
+
+/// The agent whose own temp root `segment` names: a directory directly
+/// under an OS temp root matching the root names or prefixes of the agent's
+/// `agent_harness_output_capture` layout (Claude Code: `claude`,
+/// `claude-<uid>`). The caller checks the directory sits under a temp root.
+pub fn agent_harness_temp_root_agent(segment: &str) -> Option<String> {
+    let segment = segment.trim().to_ascii_lowercase();
+    if segment.is_empty() {
+        return None;
+    }
+    let snapshot = PARAMS_SNAPSHOT.load();
+    snapshot
+        .agent_harness_output_capture
+        .iter()
+        .find(|entry| {
+            entry.root_names.iter().any(|name| segment == *name)
+                || entry.root_prefixes.iter().any(|prefix| {
+                    segment.len() > prefix.len() && segment.starts_with(prefix.as_str())
+                })
+        })
+        .map(|entry| entry.agent.clone())
+}
+
 /// `label` is `prefix` followed only by ASCII digits (none counts).
 fn is_numbered_label(label: &str, prefix: &str) -> bool {
     !prefix.is_empty()
@@ -6713,6 +6777,23 @@ mod tests {
         assert!(p.git_ssh_parent_process_names.contains("git"));
         assert!(p.git_ssh_remote_commands.contains("git-upload-pack"));
         assert!(p.git_ssh_remote_commands.contains("git-receive-pack"));
+        assert!(is_credential_cache_sqlite_sidecar(
+            "/Users/u/.aws/cli/cache/session.db-wal"
+        ));
+        assert!(is_credential_cache_sqlite_sidecar(
+            r"C:\Users\u\.aws\cli\cache\session.db-shm"
+        ));
+        assert!(!is_credential_cache_sqlite_sidecar(
+            "/Users/u/.aws/cli/cache/0123abcd.json"
+        ));
+        assert!(!is_credential_cache_sqlite_sidecar(
+            "/Users/u/.aws/credentials"
+        ));
+        assert_eq!(
+            agent_harness_temp_root_agent("claude-501").as_deref(),
+            Some("claude_code")
+        );
+        assert_eq!(agent_harness_temp_root_agent("claudette"), None);
     }
 
     /// Runtime and dependency-tree lists load lowercased; the marker order
