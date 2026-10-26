@@ -1330,6 +1330,13 @@ pub struct CveDetectionParamsJSON {
     /// How far outside a session's transcript span (file birth to last
     /// write) a write is still graded against that session.
     pub evaluator_session_attribution_slack_secs: i64,
+    /// How long after a transcript's last line a file write the monitor
+    /// stamped (observation time, after its coalescer) still belongs to that
+    /// session.
+    pub fim_observation_lag_secs: i64,
+    /// A project's own package-manager and agent tool configuration files,
+    /// relative to the working tree (`.npmrc`, `.mcp.json`, ...).
+    pub project_tool_config_files: Vec<String>,
     /// The SSH client's own host-key state (`~/.ssh/known_hosts`): a human
     /// who authorizes an SSH connection authorizes the client reading and
     /// updating these. Never private keys.
@@ -1638,6 +1645,10 @@ pub struct CveDetectionParams {
     pub evaluator_materialisation_measurement_divisor: usize,
     pub evaluator_materialisation_burst_secs: i64,
     pub evaluator_session_attribution_slack_secs: i64,
+    pub fim_observation_lag_secs: i64,
+    /// `project_tool_config_files`, lowercase, `/`-separated, no leading
+    /// `/`, empty entries dropped.
+    pub project_tool_config_files: Vec<String>,
     pub ssh_client_state_files: Vec<String>,
     /// `git_ssh_parent_process_names`, lowercase and trimmed.
     pub git_ssh_parent_process_names: HashSet<String>,
@@ -2691,6 +2702,19 @@ impl CveDetectionParams {
                 .max(1),
             evaluator_materialisation_burst_secs: json.evaluator_materialisation_burst_secs,
             evaluator_session_attribution_slack_secs: json.evaluator_session_attribution_slack_secs,
+            fim_observation_lag_secs: json.fim_observation_lag_secs.max(0),
+            project_tool_config_files: json
+                .project_tool_config_files
+                .iter()
+                .map(|entry| {
+                    entry
+                        .trim()
+                        .replace('\\', "/")
+                        .trim_matches('/')
+                        .to_ascii_lowercase()
+                })
+                .filter(|entry| !entry.is_empty())
+                .collect(),
             ssh_client_state_files: json
                 .ssh_client_state_files
                 .iter()
@@ -6765,6 +6789,19 @@ mod tests {
         assert_eq!(p.evaluator_materialisation_measurement_divisor, 4);
         assert_eq!(p.evaluator_materialisation_burst_secs, 120);
         assert_eq!(p.evaluator_session_attribution_slack_secs, 300);
+        assert_eq!(p.fim_observation_lag_secs, 10);
+        assert!(p
+            .project_tool_config_files
+            .iter()
+            .any(|entry| entry == ".npmrc"));
+        assert!(p
+            .project_tool_config_files
+            .iter()
+            .any(|entry| entry == ".mcp.json"));
+        assert!(p
+            .project_tool_config_files
+            .iter()
+            .all(|entry| !entry.starts_with('/') && !entry.contains('\\')));
         assert!(p
             .ssh_client_state_files
             .iter()
