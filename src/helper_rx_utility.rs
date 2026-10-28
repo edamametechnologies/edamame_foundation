@@ -492,6 +492,168 @@ pub async fn utility_get_filter() -> Result<String> {
     Ok(json_filter)
 }
 
+/// Append to each session's `l7.open_files` the lock files its process
+/// holds, and those its parent of the same image holds (2.2.2).
+///
+/// The detector's OWNS-by-lock relation reads the lock files a process holds
+/// inside a store from `l7.open_files` (`vuln_detector_params::
+/// ownership_lock_file_names`): Chromium's network service holds the
+/// profile's `Cookies` while the browser process of the same image holds
+/// the profile's LevelDB `LOCK` files. The sandboxed app cannot enumerate
+/// another process's files, so the relation stayed unmeasured on every App
+/// Store host; the helper runs the capture and measures them here, once per
+/// distinct pid per call, from flodbadd's per-pid cache. Only lock files are
+/// added: a parent's other open files would attribute material to a child
+/// that never opened it.
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux", target_os = "windows"),
+    feature = "packetcapture"
+))]
+pub fn attach_ownership_lock_files(sessions: &mut [flodbadd::sessions::SessionInfo]) {
+    use std::collections::HashMap;
+    let mut locks_by_pid: HashMap<u32, Vec<String>> = HashMap::new();
+    let mut locks_of = |pid: u32| -> Vec<String> {
+        locks_by_pid
+            .entry(pid)
+            .or_insert_with(|| {
+                flodbadd::open_files::get_open_file_paths(pid)
+                    .into_iter()
+                    .filter(|path| is_ownership_lock_path(path))
+                    .collect()
+            })
+            .clone()
+    };
+    for session in sessions.iter_mut() {
+        if let Some(l7) = session.l7.as_mut() {
+            append_ownership_lock_files(l7, &mut locks_of);
+        }
+    }
+}
+
+/// `path`'s basename is one of the params' `ownership_lock_file_names`.
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux", target_os = "windows"),
+    feature = "packetcapture"
+))]
+fn is_ownership_lock_path(path: &str) -> bool {
+    path.replace('\\', "/")
+        .rsplit('/')
+        .next()
+        .is_some_and(crate::vuln_detector_params::is_ownership_lock_file_name)
+}
+
+/// The pure half of [`attach_ownership_lock_files`]: the lock files
+/// `locks_of` reports for the session's process, and for its parent when the
+/// parent runs the same image, appended once each to `l7.open_files`. A pid
+/// of zero, or a parent of another image, is not asked.
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux", target_os = "windows"),
+    feature = "packetcapture"
+))]
+pub fn append_ownership_lock_files(
+    l7: &mut flodbadd::sessions::SessionL7,
+    locks_of: &mut dyn FnMut(u32) -> Vec<String>,
+) {
+    let mut pids: Vec<u32> = Vec::new();
+    if l7.pid > 0 {
+        pids.push(l7.pid);
+    }
+    let same_image =
+        !l7.process_path.trim().is_empty() && l7.process_path == l7.parent_process_path;
+    if let (Some(parent_pid), true) = (l7.parent_pid, same_image) {
+        if parent_pid > 0 && parent_pid != l7.pid {
+            pids.push(parent_pid);
+        }
+    }
+    for pid in pids {
+        for lock in locks_of(pid) {
+            if !l7.open_files.contains(&lock) {
+                l7.open_files.push(lock);
+            }
+        }
+    }
+}
+
+#[cfg(all(
+    test,
+    any(target_os = "macos", target_os = "linux", target_os = "windows"),
+    feature = "packetcapture"
+))]
+mod ownership_lock_tests {
+    use super::*;
+    use flodbadd::sessions::SessionL7;
+
+    fn l7(pid: u32, parent_pid: Option<u32>, image: &str, parent_image: &str) -> SessionL7 {
+        SessionL7 {
+            pid,
+            parent_pid,
+            process_path: image.to_string(),
+            parent_process_path: parent_image.to_string(),
+            open_files: vec!["/profile/Default/Cookies".to_string()],
+            ..Default::default()
+        }
+    }
+
+    /// Chromium's network service (the session's process) holds Cookies; the
+    /// browser process of the same image holds the profile's LevelDB locks.
+    #[test]
+    fn a_same_image_parent_s_locks_join_the_session_s_open_files() {
+        let mut session = l7(87512, Some(87498), "/apps/chrome", "/apps/chrome");
+        let mut asked: Vec<u32> = Vec::new();
+        let mut locks_of = |pid: u32| {
+            asked.push(pid);
+            match pid {
+                87498 => vec![
+                    "/profile/Default/IndexedDB/x.leveldb/LOCK".to_string(),
+                    "/profile/Default/shared_proto_db/LOCK".to_string(),
+                ],
+                87512 => vec!["/profile/Default/shared_proto_db/LOCK".to_string()],
+                _ => Vec::new(),
+            }
+        };
+        append_ownership_lock_files(&mut session, &mut locks_of);
+        assert_eq!(asked, vec![87512, 87498]);
+        assert_eq!(
+            session.open_files,
+            vec![
+                "/profile/Default/Cookies",
+                "/profile/Default/shared_proto_db/LOCK",
+                "/profile/Default/IndexedDB/x.leveldb/LOCK",
+            ]
+        );
+    }
+
+    /// A parent of another image is not asked (its locks are its own), nor is
+    /// a pid of zero.
+    #[test]
+    fn a_parent_of_another_image_or_no_pid_is_not_asked() {
+        let mut session = l7(4200, Some(1), "/apps/chrome", "/sbin/launchd");
+        let mut asked: Vec<u32> = Vec::new();
+        let mut locks_of = |pid: u32| {
+            asked.push(pid);
+            vec!["/profile/LOCK".to_string()]
+        };
+        append_ownership_lock_files(&mut session, &mut locks_of);
+        let mut orphan = l7(0, None, "", "");
+        append_ownership_lock_files(&mut orphan, &mut locks_of);
+        assert_eq!(asked, vec![4200], "the parent and the orphan are not asked");
+        assert_eq!(
+            session.open_files,
+            vec!["/profile/Default/Cookies", "/profile/LOCK"]
+        );
+        assert_eq!(orphan.open_files, vec!["/profile/Default/Cookies"]);
+    }
+
+    #[test]
+    fn only_lock_named_files_count() {
+        assert!(is_ownership_lock_path(
+            "/profile/Default/shared_proto_db/LOCK"
+        ));
+        assert!(is_ownership_lock_path("C:\\Users\\x\\profile\\lockfile"));
+        assert!(!is_ownership_lock_path("/profile/Default/Cookies"));
+    }
+}
+
 #[cfg(all(
     any(target_os = "macos", target_os = "linux", target_os = "windows"),
     feature = "packetcapture"
@@ -499,7 +661,8 @@ pub async fn utility_get_filter() -> Result<String> {
 pub async fn utility_get_sessions(incremental: bool) -> Result<String> {
     let start = Instant::now();
     info!("Starting get_sessions (incremental: {})", incremental);
-    let sessions = CAPTURE.read().await.get_sessions(incremental).await;
+    let mut sessions = CAPTURE.read().await.get_sessions(incremental).await;
+    attach_ownership_lock_files(&mut sessions);
     let fetch_elapsed_ms = start.elapsed().as_millis();
     // Use bincode for efficient binary serialization (5-10x smaller/faster than JSON)
     // Then base64 encode for transport over the string-based protobuf channel

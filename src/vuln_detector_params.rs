@@ -1054,6 +1054,15 @@ pub struct CveDetectionParamsJSON {
     /// udp/123 sessions below this volume stay routine even when the
     /// gate above is enabled.
     pub dns_ntp_non_routine_min_outbound_bytes: u64,
+    /// A TCP flow on a web port whose packets carry at most this many
+    /// payload bytes on average, and whose outbound rate stays at or below
+    /// `heartbeat_flow_max_outbound_bytes_per_min`, is a keepalive stream
+    /// (TLS pings, WebSocket heartbeats): not egress of material.
+    pub heartbeat_flow_max_average_payload_bytes: u64,
+    /// The outbound rate (payload bytes per minute of the flow's observed
+    /// life) at or below which a small-packet web flow is a keepalive
+    /// stream; see `heartbeat_flow_max_average_payload_bytes`.
+    pub heartbeat_flow_max_outbound_bytes_per_min: u64,
     /// Autonomous systems whose address space serves only their owner's
     /// own platform (no customer hosting): a TCP 80 / 443 flow from an
     /// OS-signed process to one of them without a resolved name is routine,
@@ -1535,6 +1544,15 @@ pub struct CveDetectionParams {
     /// udp/123 sessions below this volume stay routine even when the
     /// gate above is enabled.
     pub dns_ntp_non_routine_min_outbound_bytes: u64,
+    /// A TCP flow on a web port whose packets carry at most this many
+    /// payload bytes on average, and whose outbound rate stays at or below
+    /// `heartbeat_flow_max_outbound_bytes_per_min`, is a keepalive stream
+    /// (TLS pings, WebSocket heartbeats): not egress of material.
+    pub heartbeat_flow_max_average_payload_bytes: u64,
+    /// The outbound rate (payload bytes per minute of the flow's observed
+    /// life) at or below which a small-packet web flow is a keepalive
+    /// stream; see `heartbeat_flow_max_average_payload_bytes`.
+    pub heartbeat_flow_max_outbound_bytes_per_min: u64,
     /// Autonomous systems whose address space serves only their owner's
     /// own platform (no customer hosting): a TCP 80 / 443 flow from an
     /// OS-signed process to one of them without a resolved name is routine,
@@ -2541,6 +2559,9 @@ impl CveDetectionParams {
             publisher_attestation_enabled: json.publisher_attestation_enabled,
             treat_high_volume_dns_ntp_as_non_routine: json.treat_high_volume_dns_ntp_as_non_routine,
             dns_ntp_non_routine_min_outbound_bytes: json.dns_ntp_non_routine_min_outbound_bytes,
+            heartbeat_flow_max_average_payload_bytes: json.heartbeat_flow_max_average_payload_bytes,
+            heartbeat_flow_max_outbound_bytes_per_min: json
+                .heartbeat_flow_max_outbound_bytes_per_min,
             routine_platform_asns: json.routine_platform_asns.clone(),
             ownership_lock_file_names: json
                 .ownership_lock_file_names
@@ -4445,6 +4466,21 @@ pub fn dns_ntp_non_routine_min_outbound_bytes() -> u64 {
     PARAMS_SNAPSHOT
         .load()
         .dns_ntp_non_routine_min_outbound_bytes
+}
+
+/// Keepalive-stream bounds (see the field docs): average payload bytes per
+/// packet, and outbound payload bytes per minute of the flow's observed
+/// life.
+pub fn heartbeat_flow_max_average_payload_bytes() -> u64 {
+    PARAMS_SNAPSHOT
+        .load()
+        .heartbeat_flow_max_average_payload_bytes
+}
+
+pub fn heartbeat_flow_max_outbound_bytes_per_min() -> u64 {
+    PARAMS_SNAPSHOT
+        .load()
+        .heartbeat_flow_max_outbound_bytes_per_min
 }
 
 /// `name` (a file's basename) is a lock file an application holds inside a
@@ -6790,6 +6826,8 @@ mod tests {
         assert_eq!(p.evaluator_materialisation_burst_secs, 120);
         assert_eq!(p.evaluator_session_attribution_slack_secs, 300);
         assert_eq!(p.fim_observation_lag_secs, 10);
+        assert_eq!(p.heartbeat_flow_max_average_payload_bytes, 64);
+        assert_eq!(p.heartbeat_flow_max_outbound_bytes_per_min, 256);
         assert!(p
             .project_tool_config_files
             .iter()

