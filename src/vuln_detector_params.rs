@@ -191,6 +191,15 @@ pub struct ClaimedAppDataRootJSON {
     pub owners: Vec<String>,
 }
 
+/// A web flow's transport and port (`standard_web_flows`): HTTPS over QUIC
+/// (HTTP/3) is UDP 443 beside TCP 80 / 443.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct StandardWebFlowJSON {
+    /// `tcp` or `udp`.
+    pub protocol: String,
+    pub port: u16,
+}
+
 /// CI-runner workspace path substrings + suppressible filename
 /// basenames for the FP-CI-7 dotenv demotion. Path substrings are
 /// matched against a forward-slash-normalized, lowercased version of
@@ -1070,6 +1079,10 @@ pub struct CveDetectionParamsJSON {
     /// bare addresses; a multi-tenant cloud (Azure, AWS, GCP) never belongs
     /// here, any customer can rent addresses in it (2.2).
     pub routine_platform_asns: Vec<u32>,
+    /// The transports and ports of web traffic (2.2.3): what the session
+    /// classifiers count as ordinary web egress (a named destination on one
+    /// is routine; the credential-store and keepalive rules read it).
+    pub standard_web_flows: Vec<StandardWebFlowJSON>,
     /// Basenames (lower-cased) of the lock files an application holds open
     /// inside a profile or store it uses (LevelDB `LOCK`, Firefox
     /// `parent.lock`): the OWNS-by-lock relation (2.2).
@@ -1560,6 +1573,8 @@ pub struct CveDetectionParams {
     /// bare addresses; a multi-tenant cloud (Azure, AWS, GCP) never belongs
     /// here, any customer can rent addresses in it (2.2).
     pub routine_platform_asns: Vec<u32>,
+    /// `standard_web_flows`, lower-cased protocol and port.
+    pub standard_web_flows: Vec<(String, u16)>,
     /// Basenames (lower-cased) of the lock files an application holds open
     /// inside a profile or store it uses (LevelDB `LOCK`, Firefox
     /// `parent.lock`): the OWNS-by-lock relation (2.2).
@@ -2563,6 +2578,11 @@ impl CveDetectionParams {
             heartbeat_flow_max_outbound_bytes_per_min: json
                 .heartbeat_flow_max_outbound_bytes_per_min,
             routine_platform_asns: json.routine_platform_asns.clone(),
+            standard_web_flows: json
+                .standard_web_flows
+                .iter()
+                .map(|flow| (flow.protocol.trim().to_ascii_lowercase(), flow.port))
+                .collect(),
             ownership_lock_file_names: json
                 .ownership_lock_file_names
                 .iter()
@@ -4519,6 +4539,18 @@ pub fn is_routine_platform_asn(as_number: u32) -> bool {
         .load()
         .routine_platform_asns
         .contains(&as_number)
+}
+
+/// A flow on a web transport and port (`standard_web_flows`: TCP 80 / 443,
+/// UDP 443 for HTTPS over QUIC).
+pub fn is_standard_web_flow(protocol: &str, port: u16) -> bool {
+    PARAMS_SNAPSHOT
+        .load()
+        .standard_web_flows
+        .iter()
+        .any(|(flow_protocol, flow_port)| {
+            *flow_port == port && flow_protocol.eq_ignore_ascii_case(protocol.trim())
+        })
 }
 
 /// Graded EvidenceFloor gate (see the field docs).
