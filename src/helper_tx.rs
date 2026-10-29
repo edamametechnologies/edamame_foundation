@@ -55,6 +55,7 @@ pub const UTILITY_ORDER_NAMES: &[&str] = &[
     "model_authenticity",
     "process_credential_signals",
     "process_events_since",
+    "process_open_files",
     "read_instruction_content",
     "restart_capture",
     "reveal_path_in_file_manager",

@@ -66,6 +66,9 @@ pub mod peer_ids;
 pub mod process_control;
 pub mod process_credential_signals;
 pub mod process_event_relay;
+/// Open files of a batch of processes for the detector's live scan
+/// (standalone + helper order).
+pub mod process_open_files;
 /// Test-only regression corpus for the literal prompt-injection scanner
 /// (INC-20's semantic detector is parked, 2026-09-08).
 #[cfg(test)]
