@@ -4,7 +4,32 @@ use std::path::{Path, PathBuf};
 pub fn current_fim_config() -> FimConfig {
     FimConfig {
         hash_size_threshold: crate::vuln_detector_params::fim_hash_size_threshold(),
+        delivery_probe_dir: delivery_probe_dir(),
         ..Default::default()
+    }
+}
+
+/// Where the file monitor's delivery probe writes (`flodbadd::fim_delivery`):
+/// the process's own application data, never a temp or watched home tree,
+/// so another file monitor on the host drops the probe's events. A root
+/// process uses root's home from the user database, not an inherited
+/// `$HOME` (as `secret_store::secrets_location`): `sudo` keeps the calling
+/// user's home on macOS. Both FIM startup paths (standalone core, helper
+/// daemon) take it through [`current_fim_config`].
+pub fn delivery_probe_dir() -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        crate::secret_store::account_home_dir(crate::secret_store::effective_uid())
+            .map(|home| home.join("Library/Application Support/EDAMAME/fim-probe"))
+    }
+    #[cfg(target_os = "linux")]
+    {
+        crate::secret_store::account_home_dir(crate::secret_store::effective_uid())
+            .map(|home| home.join(".local/share/edamame/fim-probe"))
+    }
+    #[cfg(target_os = "windows")]
+    {
+        dirs::data_local_dir().map(|dir| dir.join("EDAMAME").join("fim-probe"))
     }
 }
 

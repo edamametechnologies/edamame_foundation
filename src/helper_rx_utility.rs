@@ -1510,18 +1510,22 @@ pub async fn utility_get_file_monitor_status() -> Result<String> {
                     .iter()
                     .map(|p| p.to_string_lossy().to_string())
                     .collect::<Vec<_>>(),
+                watcher.delivery_status(),
             )
         })
     };
 
+    // `delivery`: whether events still reach the watcher (its delivery
+    // probe); the core reads a status without it as unmeasured delivery.
     let status = match snapshot_inputs {
-        Some((store, is_running, watch_paths)) => {
+        Some((store, is_running, watch_paths, delivery)) => {
             let all_events = store.get_all_events();
             serde_json::json!({
                 "is_monitoring": is_running,
                 "watch_paths": watch_paths,
                 "event_count": store.event_count() as u64,
                 "last_event_time": all_events.first().map(|e| e.timestamp.to_rfc3339()),
+                "delivery": delivery,
             })
         }
         None => serde_json::json!({
@@ -1529,6 +1533,7 @@ pub async fn utility_get_file_monitor_status() -> Result<String> {
             "watch_paths": [],
             "event_count": 0,
             "last_event_time": null,
+            "delivery": null,
         }),
     };
 
