@@ -1353,6 +1353,12 @@ pub struct CveDetectionParamsJSON {
     /// when at least this many distinct executables talk to it in one tick
     /// (Frank, 2026-10-31, forecast ANT-ENT-1).
     pub forward_proxy_min_distinct_processes: usize,
+    /// Divergence: how long a routine-destination `correlation:unexplained`
+    /// observation of an observed agent's process waits when its network
+    /// session started after the behavioral model was ingested (the
+    /// observer has not read the turn that produced it yet). Graded as
+    /// before once this many seconds pass (Frank, 2026-10-31, FP-DIV-23).
+    pub divergence_unexplained_ingest_grace_secs: u64,
     /// Lowercase `/` path suffixes (or `/dir/` fragments) of the credential
     /// caches a CLI writes when it logs in (`com.vercel.cli/auth.json`,
     /// `~/.azure/msal_token_cache.json`, ...). A write to one by an
@@ -1752,6 +1758,12 @@ pub struct CveDetectionParams {
     /// when at least this many distinct executables talk to it in one tick
     /// (Frank, 2026-10-31, forecast ANT-ENT-1).
     pub forward_proxy_min_distinct_processes: usize,
+    /// Divergence: how long a routine-destination `correlation:unexplained`
+    /// observation of an observed agent's process waits when its network
+    /// session started after the behavioral model was ingested (the
+    /// observer has not read the turn that produced it yet). Graded as
+    /// before once this many seconds pass (Frank, 2026-10-31, FP-DIV-23).
+    pub divergence_unexplained_ingest_grace_secs: u64,
     /// Lowercase `/` path suffixes (or `/dir/` fragments) of the credential
     /// caches a CLI writes when it logs in (`com.vercel.cli/auth.json`,
     /// `~/.azure/msal_token_cache.json`, ...). A write to one by an
@@ -2814,7 +2826,9 @@ impl CveDetectionParams {
             global_package_roots: normalized_path_fragments(&json.global_package_roots),
             install_artifact_basenames: lowercase_token_set(&json.install_artifact_basenames),
             dev_tree_markers: trimmed_dev_tree_markers(&json.dev_tree_markers),
-            evaluator_routine_rewrites: lowercased_routine_rewrites(&json.evaluator_routine_rewrites),
+            evaluator_routine_rewrites: lowercased_routine_rewrites(
+                &json.evaluator_routine_rewrites,
+            ),
             user_content_hosting_markers: lowercase_token_list(&json.user_content_hosting_markers),
             credential_service_destinations: json
                 .credential_service_destinations
@@ -2854,6 +2868,7 @@ impl CveDetectionParams {
                 .memory_scrape_inspector_min_attached_targets,
             forward_proxy_ports: json.forward_proxy_ports.clone(),
             forward_proxy_min_distinct_processes: json.forward_proxy_min_distinct_processes,
+            divergence_unexplained_ingest_grace_secs: json.divergence_unexplained_ingest_grace_secs,
             cli_credential_cache_path_suffixes: lowercase_token_list(
                 &json.cli_credential_cache_path_suffixes,
             ),
@@ -5180,6 +5195,12 @@ pub fn cli_credential_cache_path_suffixes() -> Vec<String> {
         .load()
         .cli_credential_cache_path_suffixes
         .clone()
+}
+
+pub fn divergence_unexplained_ingest_grace_secs() -> u64 {
+    PARAMS_SNAPSHOT
+        .load()
+        .divergence_unexplained_ingest_grace_secs
 }
 
 pub fn forward_proxy_min_distinct_processes() -> usize {
