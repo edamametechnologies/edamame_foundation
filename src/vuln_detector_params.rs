@@ -667,6 +667,47 @@ pub struct SandboxContainerLayoutJSON {
     pub inner_roots: Vec<String>,
 }
 
+/// Routine rewrites of a measurement surface that `policy:evaluator_integrity`
+/// does not grade (Frank, 2026-10-31, from the adjudication lab's divergence
+/// forecasts): a formatter's rewrite, the VCS rewriting tracked content after
+/// a branch-switch command of the session, an editor that is not the observed
+/// agent's own harness, and the test runner updating its own snapshot files
+/// after an update command. A snapshot the agent edits with its own tool, a
+/// patch it applies, a test it writes stay graded. Names are lowercase
+/// basenames without `.exe`; commands are lowercase substrings of the
+/// session's tool-call targets; markers are lowercase `/` path fragments.
+/// Where a credential class is used (`credential_service_destinations`): the
+/// destination domains of its service, as `.suffix` (a leading dot matches
+/// the domain itself and its subdomains), and the ports on a private address
+/// its service listens on (a cluster API server, a registry, a vault). The
+/// ROUTES-TO-ITS-SERVICES relation in core lowers a credential holder whose
+/// destination is one of these for a class it holds, when every class it
+/// holds has an entry (Frank, 2026-10-31: cloud CLIs, from the adjudication
+/// lab's forecasts).
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct CredentialServiceDestinationJSON {
+    pub domain_suffixes: Vec<String>,
+    pub private_ports: Vec<u16>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct EvaluatorRoutineRewritesJSON {
+    pub formatter_writers: Vec<String>,
+    /// Formatter invocations for a formatter run by an interpreter (prettier
+    /// under `node`): the writer is generic, the session's command is not.
+    pub formatter_commands: Vec<String>,
+    pub vcs_writers: Vec<String>,
+    pub vcs_rewrite_commands: Vec<String>,
+    pub editor_writers: Vec<String>,
+    pub snapshot_path_markers: Vec<String>,
+    /// A snapshot update is a session command holding one of these words
+    /// (the runner, or its last path component) and one of the flags, as
+    /// whitespace-separated tokens: `npx jest src -u`, `cargo insta accept`.
+    pub snapshot_update_runners: Vec<String>,
+    pub snapshot_update_flags: Vec<String>,
+    pub snapshot_runner_writers: Vec<String>,
+}
+
 /// Per-user stores the operating system owns (macOS): below
 /// `library_root` (profile-relative, `library/`), the owner directory --
 /// the component below one of `library_state_directories` (`Caches`,
@@ -1254,6 +1295,16 @@ pub struct CveDetectionParamsJSON {
     pub global_package_roots: Vec<String>,
     /// Developer toolchain tree markers (see [`DevTreeMarkersJSON`]).
     pub dev_tree_markers: DevTreeMarkersJSON,
+    pub evaluator_routine_rewrites: EvaluatorRoutineRewritesJSON,
+    /// Lowercase substrings of a destination domain that hosts content any
+    /// customer can publish (object storage, serverless and pages hosts,
+    /// tunnels): a domain the attacker can rent under a vendor's name. The
+    /// destination relations in core never accept one as a vendor's own
+    /// backend or a credential's service.
+    pub user_content_hosting_markers: Vec<String>,
+    /// Credential class (a sensitive-paths catalog label) -> its service's
+    /// destinations; see `CredentialServiceDestinationJSON`.
+    pub credential_service_destinations: BTreeMap<String, CredentialServiceDestinationJSON>,
     /// Suffixes (lowercase) of code and persistence definitions that are
     /// never a data artifact, even where `benign_temp_artifact_suffixes`
     /// lists them: PowerShell modules and the launchd / systemd / XDG
@@ -1267,6 +1318,12 @@ pub struct CveDetectionParamsJSON {
     /// Catalog labels that name agent instruction / configuration surfaces
     /// (`instruction`, `claude`, `codex`, `openclaw`).
     pub agent_instruction_labels: Vec<String>,
+    /// Sensitive-path labels whose CRITICAL `file_system_tampering` by a
+    /// process that is not the store's own application sits on the
+    /// adjudication evidence floor: the model may not demote it (core,
+    /// `is_pinned_credential_store_write`; Frank 2026-10-31, from the
+    /// adjudication lab). Every catalog label plus the legacy `appdata`.
+    pub adjudication_pinned_write_labels: Vec<String>,
     /// Agent slug -> path suffixes (lowercase, `/`) of that agent's
     /// ENFORCEMENT configuration (`agent_control_tampering`): the documented
     /// location of each agent's control config. Session transcripts,
@@ -1284,6 +1341,25 @@ pub struct CveDetectionParamsJSON {
     /// read-only within a tick before its reads read as an inventory sweep
     /// rather than a targeted scrape (a theft names its victim).
     pub memory_scrape_read_enumeration_min_distinct_targets: usize,
+    /// `process_memory_scrape`: distinct processes one signed, installed,
+    /// non-script requester has to ATTACH to within a tick before its
+    /// attachments read as a process inspector walking the table (System
+    /// Informer, Process Explorer) rather than a dumper naming its victim
+    /// (Frank, 2026-10-31, forecast ANT-WIN-3).
+    pub memory_scrape_inspector_min_attached_targets: usize,
+    /// LAN ports an explicit forward proxy listens on (`3128`, `8080`, ...).
+    pub forward_proxy_ports: Vec<u16>,
+    /// A LAN destination on a `forward_proxy_ports` port is a forward proxy
+    /// when at least this many distinct executables talk to it in one tick
+    /// (Frank, 2026-10-31, forecast ANT-ENT-1).
+    pub forward_proxy_min_distinct_processes: usize,
+    /// Lowercase `/` path suffixes (or `/dir/` fragments) of the credential
+    /// caches a CLI writes when it logs in (`com.vercel.cli/auth.json`,
+    /// `~/.azure/msal_token_cache.json`, ...). A write to one by an
+    /// interpreter running a script from a temp directory, after that
+    /// process talked to a non-routine destination, is a planted credential
+    /// (Frank, 2026-10-31; forecasts ANT-MAC-6, ANT-LIN-1).
+    pub cli_credential_cache_path_suffixes: Vec<String>,
     /// `process_memory_scrape` census: shortest hex run that marks a path
     /// segment as naming one invocation (`<crate>-<hash>`, a GUID unpack
     /// directory) rather than a tool.
@@ -1646,13 +1722,43 @@ pub struct CveDetectionParams {
     /// `global_package_roots` as lowercase `/` fragments.
     pub global_package_roots: Vec<String>,
     pub dev_tree_markers: DevTreeMarkersJSON,
+    pub evaluator_routine_rewrites: EvaluatorRoutineRewritesJSON,
+    /// Lowercase substrings of a destination domain that hosts content any
+    /// customer can publish (object storage, serverless and pages hosts,
+    /// tunnels): a domain the attacker can rent under a vendor's name. The
+    /// destination relations in core never accept one as a vendor's own
+    /// backend or a credential's service.
+    pub user_content_hosting_markers: Vec<String>,
+    /// Credential class (a sensitive-paths catalog label) -> its service's
+    /// destinations; see `CredentialServiceDestinationJSON`.
+    pub credential_service_destinations: BTreeMap<String, CredentialServiceDestinationJSON>,
     pub code_module_suffixes: Vec<String>,
     pub sensitive_material_labels: HashSet<String>,
     pub agent_instruction_labels: HashSet<String>,
+    pub adjudication_pinned_write_labels: HashSet<String>,
     pub agent_control_config_path_suffixes: BTreeMap<String, Vec<String>>,
     pub publisher_org_stop_tokens: HashSet<String>,
     pub publisher_org_min_token_len: usize,
     pub memory_scrape_read_enumeration_min_distinct_targets: usize,
+    /// `process_memory_scrape`: distinct processes one signed, installed,
+    /// non-script requester has to ATTACH to within a tick before its
+    /// attachments read as a process inspector walking the table (System
+    /// Informer, Process Explorer) rather than a dumper naming its victim
+    /// (Frank, 2026-10-31, forecast ANT-WIN-3).
+    pub memory_scrape_inspector_min_attached_targets: usize,
+    /// LAN ports an explicit forward proxy listens on (`3128`, `8080`, ...).
+    pub forward_proxy_ports: Vec<u16>,
+    /// A LAN destination on a `forward_proxy_ports` port is a forward proxy
+    /// when at least this many distinct executables talk to it in one tick
+    /// (Frank, 2026-10-31, forecast ANT-ENT-1).
+    pub forward_proxy_min_distinct_processes: usize,
+    /// Lowercase `/` path suffixes (or `/dir/` fragments) of the credential
+    /// caches a CLI writes when it logs in (`com.vercel.cli/auth.json`,
+    /// `~/.azure/msal_token_cache.json`, ...). A write to one by an
+    /// interpreter running a script from a temp directory, after that
+    /// process talked to a non-routine destination, is a planted credential
+    /// (Frank, 2026-10-31; forecasts ANT-MAC-6, ANT-LIN-1).
+    pub cli_credential_cache_path_suffixes: Vec<String>,
     pub memory_scrape_per_invocation_min_hex_run: usize,
     pub relay_min_credential_classes: usize,
     /// Domains under which every subdomain belongs to whoever registered it
@@ -1905,6 +2011,28 @@ fn normalized_wix_burn_layout(layout: &WixBurnLayoutJSON) -> WixBurnLayoutJSON {
 /// On-disk names are trimmed but keep their case; empty list entries are
 /// dropped. An empty single name stays empty and its marker never matches
 /// (`dev_tree_attestation` checks).
+fn lowercased_routine_rewrites(
+    rewrites: &EvaluatorRoutineRewritesJSON,
+) -> EvaluatorRoutineRewritesJSON {
+    let lower = |list: &[String]| -> Vec<String> {
+        list.iter()
+            .map(|entry| entry.trim().to_ascii_lowercase())
+            .filter(|entry| !entry.is_empty())
+            .collect()
+    };
+    EvaluatorRoutineRewritesJSON {
+        formatter_writers: lower(&rewrites.formatter_writers),
+        formatter_commands: lower(&rewrites.formatter_commands),
+        vcs_writers: lower(&rewrites.vcs_writers),
+        vcs_rewrite_commands: lower(&rewrites.vcs_rewrite_commands),
+        editor_writers: lower(&rewrites.editor_writers),
+        snapshot_path_markers: lower(&rewrites.snapshot_path_markers),
+        snapshot_update_runners: lower(&rewrites.snapshot_update_runners),
+        snapshot_update_flags: lower(&rewrites.snapshot_update_flags),
+        snapshot_runner_writers: lower(&rewrites.snapshot_runner_writers),
+    }
+}
+
 fn trimmed_dev_tree_markers(markers: &DevTreeMarkersJSON) -> DevTreeMarkersJSON {
     let names = |list: &[String]| -> Vec<String> {
         list.iter()
@@ -2686,9 +2814,27 @@ impl CveDetectionParams {
             global_package_roots: normalized_path_fragments(&json.global_package_roots),
             install_artifact_basenames: lowercase_token_set(&json.install_artifact_basenames),
             dev_tree_markers: trimmed_dev_tree_markers(&json.dev_tree_markers),
+            evaluator_routine_rewrites: lowercased_routine_rewrites(&json.evaluator_routine_rewrites),
+            user_content_hosting_markers: lowercase_token_list(&json.user_content_hosting_markers),
+            credential_service_destinations: json
+                .credential_service_destinations
+                .iter()
+                .map(|(label, service)| {
+                    (
+                        label.trim().to_ascii_lowercase(),
+                        CredentialServiceDestinationJSON {
+                            domain_suffixes: lowercase_token_list(&service.domain_suffixes),
+                            private_ports: service.private_ports.clone(),
+                        },
+                    )
+                })
+                .collect(),
             code_module_suffixes: lowercase_token_list(&json.code_module_suffixes),
             sensitive_material_labels: lowercase_token_set(&json.sensitive_material_labels),
             agent_instruction_labels: lowercase_token_set(&json.agent_instruction_labels),
+            adjudication_pinned_write_labels: lowercase_token_set(
+                &json.adjudication_pinned_write_labels,
+            ),
             agent_control_config_path_suffixes: json
                 .agent_control_config_path_suffixes
                 .iter()
@@ -2704,6 +2850,13 @@ impl CveDetectionParams {
             publisher_org_min_token_len: json.publisher_org_min_token_len,
             memory_scrape_read_enumeration_min_distinct_targets: json
                 .memory_scrape_read_enumeration_min_distinct_targets,
+            memory_scrape_inspector_min_attached_targets: json
+                .memory_scrape_inspector_min_attached_targets,
+            forward_proxy_ports: json.forward_proxy_ports.clone(),
+            forward_proxy_min_distinct_processes: json.forward_proxy_min_distinct_processes,
+            cli_credential_cache_path_suffixes: lowercase_token_list(
+                &json.cli_credential_cache_path_suffixes,
+            ),
             memory_scrape_per_invocation_min_hex_run: json.memory_scrape_per_invocation_min_hex_run,
             relay_min_credential_classes: json.relay_min_credential_classes,
             measurement_test_directory_segments: lowercase_token_set(
@@ -4980,6 +5133,15 @@ pub fn is_agent_instruction_label(label: &str) -> bool {
         .contains(label)
 }
 
+/// True for a lowercase sensitive-path label whose CRITICAL write by a
+/// non-owner the adjudicator may not demote (`adjudication_pinned_write_labels`).
+pub fn is_adjudication_pinned_write_label(label: &str) -> bool {
+    PARAMS_SNAPSHOT
+        .load()
+        .adjudication_pinned_write_labels
+        .contains(label)
+}
+
 /// Agent slug -> enforcement-configuration path suffixes (lowercase, `/`),
 /// in slug order.
 pub fn agent_control_config_path_suffixes() -> BTreeMap<String, Vec<String>> {
@@ -5003,6 +5165,27 @@ pub fn publisher_org_min_token_len() -> usize {
 }
 
 /// Read breadth at which process-memory reads are an inventory sweep.
+pub fn memory_scrape_inspector_min_attached_targets() -> usize {
+    PARAMS_SNAPSHOT
+        .load()
+        .memory_scrape_inspector_min_attached_targets
+}
+
+pub fn forward_proxy_ports() -> Vec<u16> {
+    PARAMS_SNAPSHOT.load().forward_proxy_ports.clone()
+}
+
+pub fn cli_credential_cache_path_suffixes() -> Vec<String> {
+    PARAMS_SNAPSHOT
+        .load()
+        .cli_credential_cache_path_suffixes
+        .clone()
+}
+
+pub fn forward_proxy_min_distinct_processes() -> usize {
+    PARAMS_SNAPSHOT.load().forward_proxy_min_distinct_processes
+}
+
 pub fn memory_scrape_read_enumeration_min_distinct_targets() -> usize {
     PARAMS_SNAPSHOT
         .load()
