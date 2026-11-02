@@ -17,10 +17,10 @@
 //! |---|---|---|
 //! | `vulnerabilities` | every attack-pattern check's `reference` string in `cve-detection-params-db.json` (`checks.<name>.reference`) | same strings |
 //! | `divergence` | the `drift_goal_divergence` visibility rule refs | same rule |
-//! | `escalated` | ASI09 (the advisor escalation IS the human checkpoint; see `OWASPGENAI.md` ASI09) | none |
+//! | `escalated` | ASI09 (the advisor escalation IS the human checkpoint; see `edamame_core/docs/ai-security/23-framework-crosswalks.md` ASI09) | none |
 //! | `mcp_risk` | the `mcp_*` visibility rule refs | same rules |
-//! | `agents_with_blast_radius` | the critical-subprocess catalog (`agent-visibility-params-db.json`) plus ASI10 (`OWASPGENAI.md` harness / blast-radius row) | none |
-//! | `agents_without_harness`, `harness_divergence` | `OWASPGENAI.md` harness / blast-radius row | none |
+//! | `agents_with_blast_radius` | the critical-subprocess catalog (`agent-visibility-params-db.json`) plus ASI10 (`edamame_core/docs/ai-security/23-framework-crosswalks.md` harness / blast-radius row) | none |
+//! | `agents_without_harness`, `harness_divergence` | `edamame_core/docs/ai-security/23-framework-crosswalks.md` harness / blast-radius row | none |
 //! | `unsecured_<agent>` | ASI10 (an unobserved agent is the rogue-agent visibility gap) | none |
 //!
 //! Trust controls follow from the OWASP ids: a control is tagged on a check

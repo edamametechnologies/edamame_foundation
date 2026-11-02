@@ -150,7 +150,7 @@ pub struct CloudProviderSdkDestinationsJSON {
 /// ...). The attack-pattern detector's `credential_misrouted` check reads a
 /// holder's external sessions against this table: a process that read the
 /// class and reached only destinations outside it has carried the
-/// credential somewhere it is never used (DETECTION-APPROACH-2026-10 P1).
+/// credential somewhere it is never used (the 2026-10-17 detection approach, edamame_core/docs/ai-security/24-evolution.md P1).
 /// Every field is present in the published JSON (born complete).
 ///
 /// - `included_path_suffixes`: when non-empty, only files whose lowercased
@@ -1174,7 +1174,7 @@ pub struct CveDetectionParamsJSON {
     /// after a flat `kernel_lineage_shadow_total` window on the fleet and a
     /// green 4-platform gate. Default false.
     pub kernel_lineage_flip_enabled: bool,
-    /// Deterministic divergence floor (DETECTIONGAPSPLAN-2026-09 Inc 5):
+    /// Deterministic divergence floor (the 2026-09-09 detection-gap plan, edamame_core/docs/ai-security/24-evolution.md Inc 5):
     /// when true, an agent-attributed session with untrusted lineage
     /// (`spawned_from_tmp` or kernel `lineage_suspicious`) that is
     /// corroborated by undeclared external egress or sensitive-material

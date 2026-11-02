@@ -4,7 +4,7 @@
 //! OWASP GenAI taxonomies (Agentic `ASI01..ASI10` and LLM `LLM01..LLM10`). Each
 //! row carries:
 //! - a **static coverage grade** (Strong / Partial / Indirect / Out of scope)
-//!   taken verbatim from `edamame_core/OWASPGENAI.md` (the derived crosswalk
+//!   taken verbatim from `edamame_core/docs/ai-security/23-framework-crosswalks.md` (the derived crosswalk
 //!   doc), and
 //! - **live finding attribution** parsed from the `OWASP-<id>` reference tokens
 //!   that visibility findings already carry in `evidence["owasp_refs"]` and that
@@ -63,7 +63,7 @@ impl OwaspFramework {
     }
 }
 
-/// Static per-category coverage grade (from `OWASPGENAI.md`). Honest grading:
+/// Static per-category coverage grade (from `edamame_core/docs/ai-security/23-framework-crosswalks.md`). Honest grading:
 /// EDAMAME is a runtime observer, so a few rows are intentionally Indirect /
 /// Out of scope rather than over-claimed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -131,7 +131,7 @@ impl EnforcementStatus {
 }
 
 // ---------------------------------------------------------------------------
-// Static catalog (verbatim from OWASPGENAI.md per-row "Coverage" column)
+// Static catalog (verbatim from edamame_core/docs/ai-security/23-framework-crosswalks.md per-row "Coverage" column)
 // ---------------------------------------------------------------------------
 
 use OwaspCoverageGrade::{Indirect, OutOfScope, Partial, Strong};
@@ -145,7 +145,7 @@ use EnforcementStatus::{MonitoringOnly, NotApplicable};
 /// OWASP GenAI lists (Agentic 2026, LLM 2025). `rationale` is the per-category
 /// "why this grade" sentence -- what EDAMAME concretely does for this risk and
 /// (for non-Strong rows) what is pending or out of scope. Kept aligned with the
-/// per-row "How EDAMAME maps" column in `edamame_core/OWASPGENAI.md`; surfaced
+/// per-row "How EDAMAME maps" column in `edamame_core/docs/ai-security/23-framework-crosswalks.md`; surfaced
 /// in the scorecard drill-down so a grade is never an opaque label.
 ///
 /// `enforcement` is the honest enforcement status (see [`EnforcementStatus`]):
@@ -434,7 +434,7 @@ pub struct OwaspRow {
     pub grade: OwaspCoverageGrade,
     /// Per-category "why this grade" rationale: what EDAMAME concretely does for
     /// this risk and (for non-Strong rows) what is pending or out of scope.
-    /// Static, sourced from the catalog (mirrors `OWASPGENAI.md`). Lets the UI
+    /// Static, sourced from the catalog (mirrors `edamame_core/docs/ai-security/23-framework-crosswalks.md`). Lets the UI
     /// explain a grade instead of showing an opaque label.
     pub coverage_rationale: String,
     /// Honest enforcement status: whether EDAMAME actively delivers the

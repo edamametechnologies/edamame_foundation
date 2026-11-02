@@ -147,7 +147,7 @@ impl VisibilityFinding {
 /// `LLM*` identifiers). Metadata only: consumed by
 /// `VisibilityFinding::with_owasp` to populate the `owasp_refs` evidence entry.
 /// Returning `None` leaves a finding untagged rather than inventing a mapping.
-/// Keep aligned with the mapping table in `edamame_core/OWASPGENAI.md`.
+/// Keep aligned with the mapping table in `edamame_core/docs/ai-security/23-framework-crosswalks.md`.
 pub(crate) fn owasp_refs_for_rule(rule_id: &str) -> Option<&'static str> {
     match rule_id {
         "drift_goal_divergence" | "drift_recursion_escalation" => {

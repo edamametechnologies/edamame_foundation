@@ -25,7 +25,7 @@
 //! MCP selectors belong to the `mcp_risk` check only -- a "this MCP server is
 //! fine" exception must not silently clear a blast-radius cause.
 //!
-//! See `edamame_core/AIGOVERNANCE.md`.
+//! See `edamame_core/docs/ai-security/12-ai-governance.md`.
 
 use crate::agent_subprocess::normalize_process_basename;
 use crate::agent_visibility::{
@@ -413,7 +413,7 @@ pub fn detail_for_unsecured_agent(agent_type: &str) -> CheckEvidence {
 // "the engine is switched off". They now emit causes like every other AI check,
 // plus the level-3 context that carries the card the device user already sees.
 //
-// Selector-kind boundary (mirrors the MCP rule in AIGOVERNANCE.md §7): the
+// Selector-kind boundary (mirrors the MCP rule in edamame_core/docs/ai-security/12-ai-governance.md §7): the
 // `attack_*`, `divergence_*` and `escalated_*` kinds are emitted ONLY by their
 // own check. Accepting `attack_process:ssh` must never clear a blast-radius
 // cause naming the same binary through `critical_process:ssh`, because the two

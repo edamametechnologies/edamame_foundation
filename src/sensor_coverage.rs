@@ -1,4 +1,4 @@
-//! B4 (ENGINES-ASSESSMENT-2026-10): which kernel-side sensors run in this
+//! B4 (the 2026-10-17 engines assessment, edamame_core/docs/ai-security/24-evolution.md): which kernel-side sensors run in this
 //! process, as a snapshot the core turns into its coverage record.
 //!
 //! The sensors live where the capture runs: the helper on the app path, the
