@@ -101,9 +101,9 @@ dependencies = [
 
 [[package]]
 name = "async-executor"
-version = "1.14.0"
+version = "1.14.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c96bf972d85afc50bf5ab8fe2d54d1586b4e0b46c97c50a0c9e71e2f7bcd812a"
+checksum = "f426a31126c735126297bc5ea7a521263c9faff4f63ca415267ee625651c4f37"
 dependencies = [
  "async-task",
  "concurrent-queue",
@@ -909,7 +909,7 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 [[package]]
 name = "edamame_backend"
 version = "0.3.5"
-source = "git+https://github.com/edamametechnologies/edamame_backend?branch=main#3eefec28d11e1acf8570bc450a25a2785b02f6e1"
+source = "git+https://github.com/edamametechnologies/edamame_backend?branch=main#d3548314c0bded13c8cac30194fa0ebf5e8c39dd"
 dependencies = [
  "anyhow",
  "blake3",
@@ -923,7 +923,7 @@ dependencies = [
 
 [[package]]
 name = "edamame_foundation"
-version = "2.3.1"
+version = "2.3.2"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -1093,7 +1093,7 @@ dependencies = [
 [[package]]
 name = "extended-isolation-forest"
 version = "0.2.3"
-source = "git+https://github.com/edamametechnologies/extended-isolation-forest?branch=main#b373e9dd5681447d5fff50c106a73ec2ee0f4377"
+source = "git+https://github.com/edamametechnologies/extended-isolation-forest?branch=main#42459b2e94b4865eceeb3cade99ae65e85149932"
 dependencies = [
  "num-traits",
  "rand 0.8.8",
@@ -1143,8 +1143,8 @@ dependencies = [
 
 [[package]]
 name = "flodbadd"
-version = "2.3.1"
-source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#9729fb158dfb13f659a18a3086c0536727c605c9"
+version = "2.3.2"
+source = "git+https://github.com/edamametechnologies/flodbadd?branch=main#f23588815ab0a4b8b471b1fa360e0fb4dc646330"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -4020,7 +4020,7 @@ dependencies = [
 [[package]]
 name = "threatmodels_rs"
 version = "0.1.1"
-source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#336c6735be7d97d016769b6647fc61ff71621af2"
+source = "git+https://github.com/edamametechnologies/threatmodels-rs?branch=main#9a813b4dd0f8932efc15551a6b258899b85899f0"
 dependencies = [
  "anyhow",
  "chrono",
