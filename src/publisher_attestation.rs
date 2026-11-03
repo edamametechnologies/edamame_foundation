@@ -537,12 +537,64 @@ mod windows_trust {
 /// link and query both forms.
 #[cfg(target_os = "linux")]
 fn package_query_paths(path: &str) -> Vec<String> {
-    let mut paths = vec![path.to_string()];
-    if let Ok(resolved) = std::fs::canonicalize(path) {
-        let resolved = resolved.to_string_lossy().to_string();
-        if resolved != path {
-            paths.push(resolved);
+    use std::path::{Path, PathBuf};
+
+    // The package database records whichever spelling the package shipped,
+    // and that can be any hop of the link chain, not only its two ends: on a
+    // usrmerge host whose coreutils are the Rust ones (Ubuntu 25.10 and
+    // later) `/bin/ls` is `/usr/bin/ls`, itself a link to
+    // `/usr/lib/cargo/bin/coreutils/ls`, and dpkg knows the middle spelling;
+    // an `/etc/alternatives` link is owned by no package while its target
+    // is. So walk the chain one hop at a time, resolving the directory part
+    // first (the merged prefix) and then the file's own link, and query every
+    // spelling in order, the fully resolved one last.
+    fn dir_resolved(candidate: &Path) -> Option<PathBuf> {
+        let parent = candidate.parent()?;
+        let name = candidate.file_name()?;
+        std::fs::canonicalize(parent).ok().map(|dir| dir.join(name))
+    }
+
+    let mut paths: Vec<String> = vec![path.to_string()];
+    let push = |candidate: &Path, paths: &mut Vec<String>| {
+        let spelled = candidate.to_string_lossy().to_string();
+        if !paths.iter().any(|p| *p == spelled) {
+            paths.push(spelled);
         }
+    };
+    let mut current = PathBuf::from(path);
+    for _ in 0..16 {
+        if let Some(resolved) = dir_resolved(&current) {
+            if resolved != current {
+                push(&resolved, &mut paths);
+                current = resolved;
+            }
+        }
+        let is_link = std::fs::symlink_metadata(&current)
+            .map(|meta| meta.file_type().is_symlink())
+            .unwrap_or(false);
+        if !is_link {
+            break;
+        }
+        let Ok(target) = std::fs::read_link(&current) else {
+            break;
+        };
+        let next = if target.is_absolute() {
+            target
+        } else {
+            match current.parent() {
+                Some(parent) => parent.join(&target),
+                None => target,
+            }
+        };
+        let next = dir_resolved(&next).unwrap_or(next);
+        if next == current {
+            break;
+        }
+        push(&next, &mut paths);
+        current = next;
+    }
+    if let Ok(resolved) = std::fs::canonicalize(path) {
+        push(&resolved, &mut paths);
     }
     paths
 }
@@ -776,7 +828,9 @@ mod tests {
     fn package_query_paths_include_the_usrmerge_resolution() {
         // `/bin/ls` is the canonical usrmerge case: the package database
         // records `/usr/bin/ls`, so querying only the literal path reports a
-        // coreutils binary as unowned.
+        // coreutils binary as unowned. On Ubuntu 25.10 and later `/usr/bin/ls`
+        // is itself a link to the Rust coreutils, so the chain has a middle
+        // hop and the fully resolved path is a third spelling.
         let paths = package_query_paths("/bin/ls");
         assert_eq!(paths.first().map(String::as_str), Some("/bin/ls"));
         if std::path::Path::new("/bin").is_symlink() {
@@ -785,9 +839,18 @@ mod tests {
                 "usrmerge host must also be queried as /usr/bin/ls: {paths:?}"
             );
         }
-        // A path that is already canonical yields exactly one candidate.
-        let single = package_query_paths("/usr/bin/ls");
-        assert_eq!(single.len(), 1);
+        let canonical = std::fs::canonicalize("/bin/ls")
+            .expect("/bin/ls exists on a Linux host")
+            .to_string_lossy()
+            .to_string();
+        assert_eq!(
+            paths.last().map(String::as_str),
+            Some(canonical.as_str()),
+            "the fully resolved path comes last: {paths:?}"
+        );
+        // A path that is already fully resolved yields exactly one candidate.
+        let single = package_query_paths(&canonical);
+        assert_eq!(single, vec![canonical]);
     }
 
     #[cfg(target_os = "linux")]
