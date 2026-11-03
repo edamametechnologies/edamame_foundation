@@ -1131,6 +1131,14 @@ pub struct CveDetectionParamsJSON {
     /// Data roots installed applications claim (see the struct docs).
     pub claimed_app_data_roots: Vec<ClaimedAppDataRootJSON>,
     /// Gate: when true, the anomaly arm of the
+    /// The anomaly corroboration of the EvidenceFloor (its rule 2) and of the
+    /// corroborated-lineage pin reads the session's exported anomaly score:
+    /// the distance of the score above the analyzer's abnormal threshold must
+    /// reach this value (iForest score units; 0.0 = at the abnormal threshold,
+    /// the graded band's edge). A session without an exported score falls
+    /// back to the band membership `evidence_floor_requires_graded_anomaly`
+    /// selects. Calibrate against the gate's attack sessions before raising it.
+    pub evidence_floor_min_anomaly_margin: f32,
     /// EvidenceFloor rule "anomalous AND credential-class files"
     /// requires the graded `abnormal` band (p99.75) instead of any
     /// anomaly (p99.5), so a guaranteed-base-rate suspicious grade
@@ -1664,6 +1672,14 @@ pub struct CveDetectionParams {
     /// Data roots installed applications claim (see the struct docs).
     pub claimed_app_data_roots: Vec<ClaimedAppDataRootJSON>,
     /// Gate: when true, the anomaly arm of the
+    /// The anomaly corroboration of the EvidenceFloor (its rule 2) and of the
+    /// corroborated-lineage pin reads the session's exported anomaly score:
+    /// the distance of the score above the analyzer's abnormal threshold must
+    /// reach this value (iForest score units; 0.0 = at the abnormal threshold,
+    /// the graded band's edge). A session without an exported score falls
+    /// back to the band membership `evidence_floor_requires_graded_anomaly`
+    /// selects. Calibrate against the gate's attack sessions before raising it.
+    pub evidence_floor_min_anomaly_margin: f32,
     /// EvidenceFloor rule "anomalous AND credential-class files"
     /// requires the graded `abnormal` band (p99.75) instead of any
     /// anomaly (p99.5), so a guaranteed-base-rate suspicious grade
@@ -2743,6 +2759,7 @@ impl CveDetectionParams {
                 })
                 .filter(|root| !root.pattern.is_empty())
                 .collect(),
+            evidence_floor_min_anomaly_margin: json.evidence_floor_min_anomaly_margin,
             evidence_floor_requires_graded_anomaly: json.evidence_floor_requires_graded_anomaly,
             ambient_baseline_enabled: json.ambient_baseline_enabled,
             ambient_baseline_min_recurrent_days: json.ambient_baseline_min_recurrent_days,
@@ -4726,6 +4743,13 @@ pub fn evidence_floor_requires_graded_anomaly() -> bool {
     PARAMS_SNAPSHOT
         .load()
         .evidence_floor_requires_graded_anomaly
+}
+
+/// Minimum distance of the session's anomaly score above the abnormal
+/// threshold for the anomaly to corroborate a floor or a pin (see the field
+/// docs).
+pub fn evidence_floor_min_anomaly_margin() -> f32 {
+    PARAMS_SNAPSHOT.load().evidence_floor_min_anomaly_margin
 }
 
 /// Ambient-baseline switch and tunables (see field docs).
