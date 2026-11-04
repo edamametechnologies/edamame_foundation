@@ -196,9 +196,15 @@ pub fn inspect_secret_like_file(path: &str) -> Option<SecretContentFileMatch> {
         // read as AWS credentials, FP-MAC-50 / FP-MAC-54).
         let present = |marker: &str| marker_present(&normalized, marker, SignatureKind::Secret);
         let matched = if signature.mode == "all" {
-            signature.markers.iter().all(|marker| present(marker.as_str()))
+            signature
+                .markers
+                .iter()
+                .all(|marker| present(marker.as_str()))
         } else {
-            signature.markers.iter().any(|marker| present(marker.as_str()))
+            signature
+                .markers
+                .iter()
+                .any(|marker| present(marker.as_str()))
         };
         if !matched {
             continue;
@@ -1043,9 +1049,18 @@ mod tests {
     #[test]
     fn credential_keys_with_an_assigned_value_still_count() {
         for (name, body) in [
-            ("ini", "[default]\naws_access_key_id = AKIAIOSFODNN7EXAMPLE\n"),
-            ("quoted", "AWS_SECRET_ACCESS_KEY=\"wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\"\n"),
-            ("placeholder_word", "aws_access_key_id = your_access_key_here\n"),
+            (
+                "ini",
+                "[default]\naws_access_key_id = AKIAIOSFODNN7EXAMPLE\n",
+            ),
+            (
+                "quoted",
+                "AWS_SECRET_ACCESS_KEY=\"wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\"\n",
+            ),
+            (
+                "placeholder_word",
+                "aws_access_key_id = your_access_key_here\n",
+            ),
         ] {
             let path = unique_path(name, "");
             write_temp(&path, body);
