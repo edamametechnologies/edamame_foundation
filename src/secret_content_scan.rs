@@ -189,23 +189,23 @@ pub fn inspect_secret_like_file(path: &str) -> Option<SecretContentFileMatch> {
         if signature.markers.is_empty() {
             continue;
         }
+        // The same per-occurrence qualification as the transcript scan
+        // (`marker_present`): a value prefix needs a real token body, an
+        // assignment marker a real value (2026-11-04: `${{ secrets.X }}`
+        // references in a workflow and the empty values of a `.env.example`
+        // read as AWS credentials, FP-MAC-50 / FP-MAC-54).
+        let present = |marker: &str| marker_present(&normalized, marker, SignatureKind::Secret);
         let matched = if signature.mode == "all" {
-            signature
-                .markers
-                .iter()
-                .all(|marker| normalized.contains(marker.as_str()))
+            signature.markers.iter().all(|marker| present(marker.as_str()))
         } else {
-            signature
-                .markers
-                .iter()
-                .any(|marker| normalized.contains(marker.as_str()))
+            signature.markers.iter().any(|marker| present(marker.as_str()))
         };
         if !matched {
             continue;
         }
         if signature.per_marker {
             for marker in &signature.markers {
-                if normalized.contains(marker.as_str()) {
+                if present(marker.as_str()) {
                     labels.insert(signature.label.clone());
                     secret_hits += signature.hits;
                 }
@@ -539,6 +539,67 @@ fn marker_followed_by_real_secret_body(normalized: &str, marker: &str) -> bool {
     false
 }
 
+/// An assignment marker names a credential key with its assignment
+/// punctuation (`aws_secret_access_key=`, `aws_access_key_id" :`,
+/// `aws_secret_access_key:`): the key names alone were ruled out by FP-CI-21
+/// (the Gradle daemon's log lists them), so the marker ends where the value
+/// begins. Value-prefix markers end in `_` / `-` / `.` and are disjoint.
+fn marker_is_assignment(marker: &str) -> bool {
+    matches!(marker.trim_end().chars().last(), Some('=') | Some(':'))
+}
+
+/// True when at least one occurrence of assignment `marker` in `normalized`
+/// is followed by a value: after optional blanks and an opening quote, a
+/// run that is not empty, not a reference to a value held elsewhere
+/// (`${{ secrets.AWS_SECRET_ACCESS_KEY }}`, `${VAR}`, `$VAR`, `%VAR%`,
+/// `{{ var }}`, `<your key>`), not a masked display (`****`, `xxxx`) and not
+/// a literal null (`null`, `none`, `nil`, `~`). The key name with nothing
+/// assigned is a template: a `.env.example` (`COGNITO_TOKEN=""`,
+/// `VITE_AWS_REGION=`) or a CI workflow handing a secret through its own
+/// store read as credentials on their way out (the operator Mac,
+/// 2026-10-29 and 2026-11-03: FP-MAC-50's workflow files, FP-MAC-54's
+/// example files). What the value is (a real key or `your_key_here`) is not
+/// decided here: an assigned value of a credential-shaped key counts.
+fn assignment_marker_has_value(normalized: &str, marker: &str) -> bool {
+    let mut from = 0usize;
+    while let Some(rel) = normalized[from..].find(marker) {
+        let value_start = from + rel + marker.len();
+        let rest = normalized[value_start..].trim_start_matches([' ', '\t']);
+        let rest = rest.strip_prefix(['"', '\'']).unwrap_or(rest);
+        let value: &str = rest
+            .split(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | ',' | ';'))
+            .next()
+            .unwrap_or("");
+        if assignment_value_is_real(value) {
+            return true;
+        }
+        from = value_start.max(from + rel + 1);
+    }
+    false
+}
+
+fn assignment_value_is_real(value: &str) -> bool {
+    if value.is_empty() {
+        return false;
+    }
+    // A reference to a value kept elsewhere, or a placeholder slot.
+    if value.starts_with('$') || value.starts_with("{{") || value.starts_with('<') {
+        return false;
+    }
+    if value.starts_with('%') && value.len() > 2 && value.ends_with('%') {
+        return false;
+    }
+    if matches!(value, "null" | "none" | "nil" | "~") {
+        return false;
+    }
+    // A masked display: no alphanumeric character, or a single repeated one.
+    let mut alnum = value.chars().filter(|c| c.is_ascii_alphanumeric());
+    let Some(first) = alnum.next() else {
+        return false;
+    };
+    alnum.any(|c| c != first)
+}
+
 /// Which signature list a marker came from. The two lists need different
 /// occurrence semantics, so the distinction is explicit rather than inferred:
 /// a quoted `"aws_secret_access_key"` is how a real credential file spells its
@@ -684,14 +745,18 @@ fn bait_marker_present(normalized: &str, marker: &str) -> bool {
 ///
 /// Secret value-prefix markers additionally require a plausible token body
 /// (masked displays and bare-prefix mentions are rejected -- see
-/// [`marker_followed_by_real_secret_body`]); other secret markers keep plain
-/// substring semantics. Bait markers are qualified per occurrence by
-/// [`bait_marker_present`].
+/// [`marker_followed_by_real_secret_body`]); an assignment marker needs an
+/// assigned value ([`assignment_marker_has_value`]); other secret markers
+/// keep plain substring semantics. Bait markers are qualified per occurrence
+/// by [`bait_marker_present`].
 fn marker_present(normalized: &str, marker: &str, kind: SignatureKind) -> bool {
     match kind {
         SignatureKind::PromptInjection => bait_marker_present(normalized, marker),
         SignatureKind::Secret if marker_is_value_prefix(marker) => {
             marker_followed_by_real_secret_body(normalized, marker)
+        }
+        SignatureKind::Secret if marker_is_assignment(marker) => {
+            assignment_marker_has_value(normalized, marker)
         }
         SignatureKind::Secret => normalized.contains(marker),
     }
@@ -915,6 +980,72 @@ mod tests {
                 "{\"aws_access_key_id\": \"AKIAIOSFODNN7EXAMPLE\", \"aws_secret_access_key\" : \"wJalrXUtnFEMI\"}\n",
             ),
             ("yaml", "aws_secret_access_key: wJalrXUtnFEMI/K7MDENG\n"),
+        ] {
+            let path = unique_path(name, "");
+            write_temp(&path, body);
+            let scan = inspect_secret_like_file(&path).expect("scan");
+            assert!(
+                scan.secret_labels.iter().any(|l| l == "aws"),
+                "{name}: {scan:?}"
+            );
+            cleanup(&path);
+        }
+    }
+
+    /// 2026-11-04 (the operator Mac): a CI workflow hands AWS credentials
+    /// through its own secret store, a `.env.example` names the keys with
+    /// nothing assigned, a README masks a key. None holds a credential; the
+    /// agent reading the workflow while streaming to its model read as
+    /// `sensitive_material_egress` (FP-MAC-50), a clone of the examples as a
+    /// `file_system_tampering` HIGH (FP-MAC-54).
+    #[test]
+    fn credential_keys_without_an_assigned_value_are_not_credentials() {
+        for (name, body) in [
+            (
+                "workflow",
+                "env:\n  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}\n  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}\n  AWS_REGION: ${{ secrets.AWS_REGION }}\n",
+            ),
+            (
+                "dotenv_example",
+                "# copy to .env\nAWS_ACCESS_KEY_ID=\nAWS_SECRET_ACCESS_KEY=\"\"\nVITE_AWS_REGION=\n",
+            ),
+            (
+                "shell_reference",
+                "export AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID\nexport AWS_SECRET_ACCESS_KEY=\"${AWS_SECRET_ACCESS_KEY}\"\n",
+            ),
+            (
+                "masked_readme",
+                "aws_access_key_id = ********************\naws_secret_access_key = xxxxxxxxxxxxxxxxxxxxxxxx\n",
+            ),
+            (
+                "placeholder_slot",
+                "aws_access_key_id: <your access key>\naws_secret_access_key: {{ aws_secret }}\n",
+            ),
+            (
+                "windows_reference",
+                "set AWS_ACCESS_KEY_ID=%AWS_ACCESS_KEY_ID%\nset AWS_SECRET_ACCESS_KEY=%AWS_SECRET_ACCESS_KEY%\n",
+            ),
+        ] {
+            let path = unique_path(name, "");
+            write_temp(&path, body);
+            let scan = inspect_secret_like_file(&path);
+            let labels = scan
+                .as_ref()
+                .map(|s| s.secret_labels.clone())
+                .unwrap_or_default();
+            assert!(!labels.iter().any(|l| l == "aws"), "{name}: {scan:?}");
+            cleanup(&path);
+        }
+    }
+
+    /// The other half: a value assigned, in every quoting, still counts; a
+    /// placeholder word is a value (what it is cannot be told here).
+    #[test]
+    fn credential_keys_with_an_assigned_value_still_count() {
+        for (name, body) in [
+            ("ini", "[default]\naws_access_key_id = AKIAIOSFODNN7EXAMPLE\n"),
+            ("quoted", "AWS_SECRET_ACCESS_KEY=\"wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\"\n"),
+            ("placeholder_word", "aws_access_key_id = your_access_key_here\n"),
         ] {
             let path = unique_path(name, "");
             write_temp(&path, body);
