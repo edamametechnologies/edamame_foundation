@@ -5113,10 +5113,43 @@ pub fn is_package_bare_runtime_name(name: &str) -> bool {
     PARAMS_SNAPSHOT.load().package_bare_runtimes.contains(name)
 }
 
-/// True when `path` (any separator, any case) sits under a global CLI
-/// install root (`global_package_roots`).
+/// A path shaped for matching against the params' roots and fragments: any
+/// separator, any case, one separator between components. A path built by
+/// concatenation can carry two in a row: npm's Windows cmd-shim runs
+/// `"%dp0%\node_modules\<pkg>\bin\<cli>.js"` with `%dp0%` already ending in
+/// `\`, so the Codex CLI's parent script read
+/// `C:\npm\prefix\\node_modules\@openai\codex\bin\codex.js` and a
+/// `contains("/npm/prefix/node_modules/")` missed it (FP-WIN-42, the CI lab's
+/// Windows leg, 2026-11-04). The roots are fragments, not anchored prefixes,
+/// so a UNC lead-in collapsing to one `/` changes no verdict. Separator
+/// mechanics are not data: they live here, the roots stay in the params.
+pub fn normalized_match_path(path: &str) -> String {
+    let mut out = String::with_capacity(path.len());
+    let mut last_was_separator = false;
+    for ch in path.trim().chars() {
+        let ch = if ch == '\\' {
+            '/'
+        } else {
+            ch.to_ascii_lowercase()
+        };
+        if ch == '/' {
+            if last_was_separator {
+                continue;
+            }
+            last_was_separator = true;
+        } else {
+            last_was_separator = false;
+        }
+        out.push(ch);
+    }
+    out
+}
+
+/// True when `path` (any separator, any case, doubled separators collapsed:
+/// [`normalized_match_path`]) sits under a global CLI install root
+/// (`global_package_roots`).
 pub fn is_under_global_package_root(path: &str) -> bool {
-    let normalized = path.to_ascii_lowercase().replace('\\', "/");
+    let normalized = normalized_match_path(path);
     PARAMS_SNAPSHOT
         .load()
         .global_package_roots
@@ -7035,6 +7068,21 @@ mod tests {
         }
     }
 
+    /// A concatenated path's doubled separator collapses before matching
+    /// (npm's cmd-shim, FP-WIN-42); case and separators fold as before.
+    #[test]
+    fn normalized_match_path_collapses_doubled_separators() {
+        assert_eq!(
+            normalized_match_path(r"C:\npm\prefix\\node_modules\@openai\codex\bin\codex.js"),
+            "c:/npm/prefix/node_modules/@openai/codex/bin/codex.js"
+        );
+        assert_eq!(
+            normalized_match_path("  /usr//local///lib/node_modules/x "),
+            "/usr/local/lib/node_modules/x"
+        );
+        assert_eq!(normalized_match_path(""), "");
+    }
+
     /// The shipped install roots, bare runtimes and measurement-surface
     /// lists load and match on both separators.
     #[test]
@@ -7047,6 +7095,15 @@ mod tests {
         ));
         assert!(is_under_global_package_root(
             r"C:\Users\me\AppData\Roaming\npm\node_modules\@openai\codex\bin\codex.js"
+        ));
+        // npm's cmd-shim doubles the separator after %dp0% (FP-WIN-42).
+        assert!(is_under_global_package_root(
+            r"C:\Users\me\AppData\Roaming\npm\\node_modules\@openai\codex\bin\codex.js"
+        ));
+        // The hosted Windows runner's prefix (threatmodels #773, in the
+        // embedded snapshot), as the shim names it (FP-WIN-42).
+        assert!(is_under_global_package_root(
+            r"C:\npm\prefix\\node_modules\@openai\codex\bin\codex.js"
         ));
         assert!(!is_under_global_package_root(
             "/Users/me/proj/node_modules/.bin/esbuild"
