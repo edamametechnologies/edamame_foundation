@@ -78,6 +78,11 @@ pub struct BrowserAppdataUnknownWriterJSON {
     pub chromium_process_names: Vec<String>,
     pub firefox_process_names: Vec<String>,
     pub directory_target_names: Vec<String>,
+    /// NSS's shared certificate and key database (`~/.pki/nssdb/`, the XDG
+    /// data directory's `pki/nssdb/`), as `/` fragments: a store no
+    /// application's own directory holds, written by the browsers above
+    /// (FP-LIN-6, 2.3.2).
+    pub shared_nss_db_markers: Vec<String>,
 }
 
 /// Per-platform routine egress destinations for trusted platform
@@ -1323,6 +1328,11 @@ pub struct CveDetectionParamsJSON {
     /// is absent here counts as non-credential (`env` deliberately: `.env`
     /// also ships committed in repositories).
     pub sensitive_material_labels: Vec<String>,
+    /// The labels that name a credential file by its own generic name
+    /// (`credentials_json`, `credential`), never a tool's store (2.3.2,
+    /// FP-WIN-44: `is_own_store_generic_label`). A subset of
+    /// `sensitive_material_labels`.
+    pub own_store_generic_labels: Vec<String>,
     /// Catalog labels that name agent instruction / configuration surfaces
     /// (`instruction`, `claude`, `codex`, `openclaw`).
     pub agent_instruction_labels: Vec<String>,
@@ -1756,6 +1766,8 @@ pub struct CveDetectionParams {
     pub credential_service_destinations: BTreeMap<String, CredentialServiceDestinationJSON>,
     pub code_module_suffixes: Vec<String>,
     pub sensitive_material_labels: HashSet<String>,
+    /// `own_store_generic_labels`, lowercase.
+    pub own_store_generic_labels: HashSet<String>,
     pub agent_instruction_labels: HashSet<String>,
     pub adjudication_pinned_write_labels: HashSet<String>,
     pub agent_control_config_path_suffixes: BTreeMap<String, Vec<String>>,
@@ -2304,6 +2316,9 @@ impl CveDetectionParams {
                     .iter()
                     .map(|s| s.to_ascii_lowercase())
                     .collect(),
+                shared_nss_db_markers: normalized_path_fragments(
+                    &json.browser_appdata_unknown_writer.shared_nss_db_markers,
+                ),
             },
             build_output_tree_self_spawn_patterns: PlatformStringLists {
                 macos: json
@@ -2862,6 +2877,7 @@ impl CveDetectionParams {
                 .collect(),
             code_module_suffixes: lowercase_token_list(&json.code_module_suffixes),
             sensitive_material_labels: lowercase_token_set(&json.sensitive_material_labels),
+            own_store_generic_labels: lowercase_token_set(&json.own_store_generic_labels),
             agent_instruction_labels: lowercase_token_set(&json.agent_instruction_labels),
             adjudication_pinned_write_labels: lowercase_token_set(
                 &json.adjudication_pinned_write_labels,
@@ -3310,7 +3326,7 @@ pub fn is_ci_runner_workspace_committed_dotenv(path: &str) -> bool {
     if path.is_empty() {
         return false;
     }
-    let normalized = path.to_ascii_lowercase().replace('\\', "/");
+    let normalized = normalized_match_path(path);
     let basename = normalized
         .rsplit('/')
         .next()
@@ -3642,7 +3658,7 @@ pub fn credential_native_service_file_applies(label: &str, path: &str) -> bool {
     let Some(entry) = credential_native_service(label) else {
         return false;
     };
-    let lower = path.to_ascii_lowercase().replace('\\', "/");
+    let lower = normalized_match_path(path);
     let hit = |suffix: &String| -> bool {
         if suffix.is_empty() {
             return false;
@@ -3867,12 +3883,12 @@ pub fn is_runtime_perfdata_self_write(
     if artifact_path.is_empty() {
         return false;
     }
-    let path_lower = artifact_path.to_ascii_lowercase().replace('\\', "/");
+    let path_lower = normalized_match_path(artifact_path);
     let proc_name_lower = process_name
         .map(|n| n.to_ascii_lowercase())
         .unwrap_or_default();
     let proc_path_lower = process_path
-        .map(|p| p.to_ascii_lowercase().replace('\\', "/"))
+        .map(normalized_match_path)
         .unwrap_or_default();
 
     let snapshot = PARAMS_SNAPSHOT.load();
@@ -3972,7 +3988,7 @@ pub fn is_non_sensitive_browser_data(path: &str) -> bool {
     // is more robust and matches how `is_ci_workspace_path` is used
     // (its patterns are stored with both variants up front, but new
     // pattern lists should prefer the normalize-then-match shape).
-    let lower = path.to_ascii_lowercase().replace('\\', "/");
+    let lower = normalized_match_path(path);
     let snapshot = PARAMS_SNAPSHOT.load();
     let subtrees = &snapshot.non_sensitive_browser_data_subtrees;
 
@@ -4115,7 +4131,7 @@ pub fn is_browser_component_payload(path: &str, directory_change: bool) -> bool 
     if path.is_empty() {
         return false;
     }
-    let lower = path.to_ascii_lowercase().replace('\\', "/");
+    let lower = normalized_match_path(path);
     let snapshot = PARAMS_SNAPSHOT.load();
     snapshot
         .non_sensitive_browser_data_subtrees
@@ -4152,7 +4168,7 @@ pub fn browser_volatile_profile_state_group(path: &str) -> Option<String> {
     if path.is_empty() {
         return None;
     }
-    let lower = path.to_ascii_lowercase().replace('\\', "/");
+    let lower = normalized_match_path(path);
     let snapshot = PARAMS_SNAPSHOT.load();
     let subtrees = &snapshot.non_sensitive_browser_data_subtrees;
 
@@ -4205,7 +4221,7 @@ pub fn is_platform_self_state_directory(path: &str) -> bool {
     if path.is_empty() {
         return false;
     }
-    let lower = path.to_ascii_lowercase().replace('\\', "/");
+    let lower = normalized_match_path(path);
     let snapshot = PARAMS_SNAPSHOT.load();
     let dirs = &snapshot.platform_self_state_directories;
     let lists: [&Vec<String>; 3] = [&dirs.macos, &dirs.linux, &dirs.windows];
@@ -4306,7 +4322,7 @@ pub fn is_edamame_daemon_self_telemetry_writer_for_path(name: &str, path: Option
         return true;
     };
 
-    let normalized = path.to_ascii_lowercase().replace('\\', "/");
+    let normalized = normalized_match_path(path);
     let lower_name = name.to_ascii_lowercase();
     if normalized.starts_with("c:/users/") {
         let rest = normalized.trim_start_matches("c:/users/");
@@ -4333,7 +4349,7 @@ pub fn browser_appdata_unknown_writer_expected_processes(path: &str) -> Vec<Stri
         return Vec::new();
     }
 
-    let normalized = path.to_ascii_lowercase().replace('\\', "/");
+    let normalized = normalized_match_path(path);
     let snapshot = PARAMS_SNAPSHOT.load();
     let config = &snapshot.browser_appdata_unknown_writer;
 
@@ -4401,7 +4417,7 @@ pub fn is_package_manager_temp_path(path: &str) -> bool {
     if path.is_empty() {
         return false;
     }
-    let lower = path.to_ascii_lowercase().replace('\\', "/");
+    let lower = normalized_match_path(path);
     let snapshot = PARAMS_SNAPSHOT.load();
     let dirs = &snapshot.package_manager_temp_path_patterns;
     let lists: [&Vec<String>; 3] = [&dirs.macos, &dirs.linux, &dirs.windows];
@@ -4415,7 +4431,7 @@ fn matches_platform_patterns(path: &str, dirs: &PlatformStringLists) -> bool {
     if path.is_empty() {
         return false;
     }
-    let lower = path.to_ascii_lowercase().replace('\\', "/");
+    let lower = normalized_match_path(path);
     let lists: [&Vec<String>; 3] = [&dirs.macos, &dirs.linux, &dirs.windows];
     lists.iter().any(|list| {
         list.iter()
@@ -4443,7 +4459,7 @@ fn is_linux_systemd_coredump_private_tmp(path: &str) -> bool {
     if path.is_empty() {
         return false;
     }
-    let lower = path.to_ascii_lowercase().replace('\\', "/");
+    let lower = normalized_match_path(path);
     (lower.starts_with("/tmp/systemd-private-") || lower.starts_with("/var/tmp/systemd-private-"))
         && lower.contains("-systemd-coredump@")
         && lower.contains(".service-")
@@ -4457,7 +4473,7 @@ fn is_linux_x11_runtime_artifact(path: &str) -> bool {
     if path.is_empty() {
         return false;
     }
-    let lower = path.to_ascii_lowercase().replace('\\', "/");
+    let lower = normalized_match_path(path);
     if let Some(display) = lower.strip_prefix("/tmp/.x11-unix/x") {
         return is_ascii_digits(display);
     }
@@ -4529,8 +4545,8 @@ pub fn is_app_self_temp_staging_pair(target_path: &str, process_path: &str) -> b
     if target_path.is_empty() || process_path.is_empty() {
         return false;
     }
-    let lower_target = target_path.to_ascii_lowercase().replace('\\', "/");
-    let lower_writer = process_path.to_ascii_lowercase().replace('\\', "/");
+    let lower_target = normalized_match_path(target_path);
+    let lower_writer = normalized_match_path(process_path);
 
     let snapshot = PARAMS_SNAPSHOT.load();
     let lists: [&Vec<AppSelfTempStagingEntryJSON>; 3] = [
@@ -4702,13 +4718,7 @@ pub fn is_ownership_lock_file_name(name: &str) -> bool {
 /// The owners of the claimed data root `path` lies in, when one claims it
 /// (`claimed_app_data_roots`); `None` for an unclaimed path.
 pub fn claimed_app_data_root_owners(path: &str) -> Option<Vec<String>> {
-    let normalized = format!(
-        "{}/",
-        path.trim()
-            .to_ascii_lowercase()
-            .replace('\\', "/")
-            .trim_end_matches('/')
-    );
+    let normalized = format!("{}/", normalized_match_path(path).trim_end_matches('/'));
     PARAMS_SNAPSHOT
         .load()
         .claimed_app_data_roots
@@ -4861,7 +4871,7 @@ pub fn credential_harvest_min_labels() -> usize {
 /// (`credential_harvest_non_secret_suffixes`): it does not count toward the
 /// breadth of a harvest reached through remembered reads.
 pub fn is_credential_harvest_non_secret(path: &str) -> bool {
-    let normalized = path.trim().to_ascii_lowercase().replace('\\', "/");
+    let normalized = normalized_match_path(path);
     PARAMS_SNAPSHOT
         .load()
         .credential_harvest_non_secret_suffixes
@@ -4944,7 +4954,7 @@ pub fn secret_content_scan_excluded_path_patterns() -> Vec<String> {
 /// themselves are already normalized to lowercase + forward slashes by
 /// `CveDetectionParams::new_from_json`.
 pub fn is_secret_content_scan_excluded_path(path: &str) -> bool {
-    let normalized = path.to_ascii_lowercase().replace('\\', "/");
+    let normalized = normalized_match_path(path);
     let snapshot = PARAMS_SNAPSHOT.load();
     snapshot
         .secret_content_scan_excluded_path_patterns
@@ -5111,6 +5121,50 @@ pub fn is_package_manager_runtime_name(name: &str) -> bool {
 /// package-manager runtimes (`package_bare_runtimes`).
 pub fn is_package_bare_runtime_name(name: &str) -> bool {
     PARAMS_SNAPSHOT.load().package_bare_runtimes.contains(name)
+}
+
+/// True for a sensitive-paths label that names a credential file by its own
+/// generic name (`own_store_generic_labels`: `credentials_json`,
+/// `credential`), not by the tool whose store it is (`aws`, `claude`,
+/// `browser_store`, ...). A process may own a store labelled only this way
+/// (FP-WIN-44); a tool's store is that tool's.
+pub fn is_own_store_generic_label(label: &str) -> bool {
+    PARAMS_SNAPSHOT
+        .load()
+        .own_store_generic_labels
+        .contains(&label.trim().to_ascii_lowercase())
+}
+
+/// True when `path` (any separator, any case, doubled separators collapsed)
+/// lies in NSS's shared certificate and key database
+/// (`browser_appdata_unknown_writer.shared_nss_db_markers`: `~/.pki/nssdb/`,
+/// the XDG `pki/nssdb/`), the store Linux Chromium keeps its certificates
+/// and keys in (FP-LIN-6).
+pub fn is_shared_nss_db_path(path: &str) -> bool {
+    let normalized = normalized_match_path(path);
+    PARAMS_SNAPSHOT
+        .load()
+        .browser_appdata_unknown_writer
+        .shared_nss_db_markers
+        .iter()
+        .any(|marker| !marker.is_empty() && normalized.contains(marker.as_str()))
+}
+
+/// True for the process name of a browser the params know
+/// (`browser_appdata_unknown_writer.chromium_process_names` and
+/// `firefox_process_names`), compared lowercase.
+pub fn is_browser_process_name(name: &str) -> bool {
+    let lower = name.trim().to_ascii_lowercase();
+    if lower.is_empty() {
+        return false;
+    }
+    let snapshot = PARAMS_SNAPSHOT.load();
+    let config = &snapshot.browser_appdata_unknown_writer;
+    config
+        .chromium_process_names
+        .iter()
+        .chain(config.firefox_process_names.iter())
+        .any(|known| *known == lower)
 }
 
 /// A path shaped for matching against the params' roots and fragments: any
@@ -5415,7 +5469,7 @@ pub fn is_agent_harness_output_capture(path: &str) -> bool {
 /// `path` is a CLI's own SQLite sidecar in its credential cache directory
 /// (params `credential_cache_sqlite_sidecars`).
 pub fn is_credential_cache_sqlite_sidecar(path: &str) -> bool {
-    let normalized = path.trim().replace('\\', "/").to_ascii_lowercase();
+    let normalized = normalized_match_path(path);
     let snapshot = PARAMS_SNAPSHOT.load();
     let sidecars = &snapshot.credential_cache_sqlite_sidecars;
     sidecars
@@ -7070,6 +7124,67 @@ mod tests {
 
     /// A concatenated path's doubled separator collapses before matching
     /// (npm's cmd-shim, FP-WIN-42); case and separators fold as before.
+    /// Every substring matcher reads one normalized shape: a path with a
+    /// doubled separator (an npm cmd-shim's `%dp0%\\...`, a joined prefix)
+    /// matches exactly as its single-separator spelling does.
+    #[test]
+    fn doubled_separator_paths_match_like_single_ones() {
+        let cases: [(&str, &str, fn(&str) -> bool); 3] = [
+            (
+                "/home/u/.aws/cli/cache/session.db-wal",
+                "/home/u//.aws/cli//cache/session.db-wal",
+                is_credential_cache_sqlite_sidecar,
+            ),
+            (
+                "C:\\\\Users\\\\u\\\\src\\\\x\\\\target\\\\debug\\\\deps\\\\lib.rlib",
+                "C:\\\\Users\\\\u\\\\src\\\\x\\\\\\\\target\\\\debug\\\\\\\\deps\\\\lib.rlib",
+                is_secret_content_scan_excluded_path,
+            ),
+            (
+                "C:\\\\Users\\\\u\\\\AppData\\\\Local\\\\Google\\\\Chrome\\\\User Data\\\\Default\\\\Code Cache\\\\js\\\\index",
+                "C:\\\\Users\\\\u\\\\AppData\\\\Local\\\\Google\\\\Chrome\\\\\\\\User Data\\\\Default\\\\\\\\Code Cache\\\\js\\\\index",
+                is_non_sensitive_browser_data,
+            ),
+        ];
+        for (single, doubled, matcher) in cases {
+            assert!(matcher(single), "{single} should match");
+            assert_eq!(matcher(single), matcher(doubled), "{doubled}");
+        }
+    }
+
+    #[test]
+    fn own_store_generic_labels_are_sensitive_material_labels() {
+        let params = params();
+        assert!(
+            !params.own_store_generic_labels.is_empty(),
+            "the embedded snapshot names the generic credential labels"
+        );
+        for label in &params.own_store_generic_labels {
+            assert!(
+                params.sensitive_material_labels.contains(label),
+                "{label} is not a sensitive material label"
+            );
+            assert!(is_own_store_generic_label(label));
+        }
+        assert!(is_own_store_generic_label("credentials_json"));
+        assert!(!is_own_store_generic_label("aws"));
+        assert!(!is_own_store_generic_label("browser_store"));
+        assert!(!is_own_store_generic_label("claude"));
+    }
+
+    #[test]
+    fn shared_nss_db_paths_and_browser_names() {
+        assert!(is_shared_nss_db_path("/root/.local/share/pki/nssdb/key4.db-journal"));
+        assert!(is_shared_nss_db_path("/home/u/.pki/nssdb/cert9.db"));
+        assert!(!is_shared_nss_db_path("/home/u/.mozilla/firefox/abc.default/key4.db"));
+        assert!(!is_shared_nss_db_path(""));
+        assert!(is_browser_process_name("chrome"));
+        assert!(is_browser_process_name("chrome-headless-shell"));
+        assert!(is_browser_process_name("Firefox"));
+        assert!(!is_browser_process_name("python3"));
+        assert!(!is_browser_process_name(""));
+    }
+
     #[test]
     fn normalized_match_path_collapses_doubled_separators() {
         assert_eq!(
