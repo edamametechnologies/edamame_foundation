@@ -3106,6 +3106,8 @@ lazy_static! {
 async fn refresh_params_snapshot() {
     let db = CVE_PARAMS.data.read().await;
     PARAMS_SNAPSHOT.store(Arc::new(db.clone()));
+    drop(db);
+    sync_capture_params();
 }
 
 pub async fn update(branch: &str, force: bool) -> Result<UpdateStatus> {
@@ -3137,6 +3139,17 @@ pub async fn update(branch: &str, force: bool) -> Result<UpdateStatus> {
 
 pub fn params() -> Arc<CveDetectionParams> {
     PARAMS_SNAPSHOT.load().clone()
+}
+
+/// Hands the capture (flodbadd: in the helper on the app path, in the daemon
+/// standalone) the params it reads: the ownership lock-file names it records
+/// on a session for the detector's OWNS-by-lock relation (FP-MAC-29). Called
+/// at capture start, in the process that runs the capture, and after each
+/// params update.
+pub fn sync_capture_params() {
+    flodbadd::open_files::set_ownership_lock_file_names(
+        &PARAMS_SNAPSHOT.load().ownership_lock_file_names,
+    );
 }
 
 /// Installs `json` (the published `cve-detection-params-db.json` shape) as
