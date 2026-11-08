@@ -1302,6 +1302,12 @@ pub struct CveDetectionParamsJSON {
     /// only package-manager names are these, anchored only under a global
     /// CLI install root, is an installed CLI running, not an install.
     pub package_bare_runtimes: Vec<String>,
+    /// The hosts a package manager downloads from (lowercase host names,
+    /// compared exactly with a session's destination name): pip's index and
+    /// file host (FP-WIN-48, 2.3.2). A host that also takes uploads (npm's
+    /// registry, where `npm publish` sends a package) does not belong: an
+    /// upload is the flow an anomaly must keep corroborating.
+    pub package_index_hosts: Vec<String>,
     /// Path fragments (lowercase, `/`) of global CLI install roots: npm's
     /// global prefix (`/lib/node_modules/`, Windows `/npm/node_modules/`),
     /// bun's and pnpm's global stores, pipx and uv tool environments.
@@ -1751,6 +1757,7 @@ pub struct CveDetectionParams {
     pub package_manager_runtimes: HashSet<String>,
     pub install_artifact_basenames: HashSet<String>,
     pub package_bare_runtimes: HashSet<String>,
+    pub package_index_hosts: HashSet<String>,
     /// `global_package_roots` as lowercase `/` fragments.
     pub global_package_roots: Vec<String>,
     pub dev_tree_markers: DevTreeMarkersJSON,
@@ -2855,6 +2862,7 @@ impl CveDetectionParams {
             dependency_tree_markers: normalized_path_fragments(&json.dependency_tree_markers),
             package_manager_runtimes: lowercase_token_set(&json.package_manager_runtimes),
             package_bare_runtimes: lowercase_token_set(&json.package_bare_runtimes),
+            package_index_hosts: lowercase_token_set(&json.package_index_hosts),
             global_package_roots: normalized_path_fragments(&json.global_package_roots),
             install_artifact_basenames: lowercase_token_set(&json.install_artifact_basenames),
             dev_tree_markers: trimmed_dev_tree_markers(&json.dev_tree_markers),
@@ -5134,6 +5142,14 @@ pub fn is_package_bare_runtime_name(name: &str) -> bool {
     PARAMS_SNAPSHOT.load().package_bare_runtimes.contains(name)
 }
 
+/// True for a host a package manager downloads from (`package_index_hosts`):
+/// the destination name lowercased, a trailing dot removed, compared exactly,
+/// so a subdomain (`upload.pypi.org`) is not the index.
+pub fn is_package_index_host(host: &str) -> bool {
+    let host = host.trim().trim_end_matches('.').to_ascii_lowercase();
+    !host.is_empty() && PARAMS_SNAPSHOT.load().package_index_hosts.contains(&host)
+}
+
 /// True for a sensitive-paths label that names a credential file by its own
 /// generic name (`own_store_generic_labels`: `credentials_json`,
 /// `credential`), not by the tool whose store it is (`aws`, `claude`,
@@ -7211,6 +7227,22 @@ mod tests {
             "/usr/local/lib/node_modules/x"
         );
         assert_eq!(normalized_match_path(""), "");
+    }
+
+    /// The shipped package index hosts match a destination name exactly,
+    /// whatever its case or trailing dot; a subdomain is not the index
+    /// (`upload.pypi.org` takes uploads), nor is the parent domain
+    /// (FP-WIN-48).
+    #[test]
+    fn test_package_index_hosts_match_exactly() {
+        assert!(is_package_index_host("pypi.org"));
+        assert!(is_package_index_host("files.pythonhosted.org"));
+        assert!(is_package_index_host("PyPI.org."));
+        assert!(!is_package_index_host("upload.pypi.org"));
+        assert!(!is_package_index_host("pythonhosted.org"));
+        assert!(!is_package_index_host("pypi.org.evil.example"));
+        assert!(!is_package_index_host(""));
+        assert!(!is_package_index_host("."));
     }
 
     /// The shipped install roots, bare runtimes and measurement-surface
