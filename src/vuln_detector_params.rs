@@ -1308,6 +1308,12 @@ pub struct CveDetectionParamsJSON {
     /// registry, where `npm publish` sends a package) does not belong: an
     /// upload is the flow an anomaly must keep corroborating.
     pub package_index_hosts: Vec<String>,
+    /// The registrable domains one service operates under (lowercase host
+    /// names, two or more per family): PyPI's index `pypi.org` and its file
+    /// host `pythonhosted.org` (FP-DIV-24, 2.3.2). The divergence policy reads
+    /// a human's grant of one member as a grant of the others and their
+    /// subdomains.
+    pub service_host_families: Vec<Vec<String>>,
     /// Path fragments (lowercase, `/`) of global CLI install roots: npm's
     /// global prefix (`/lib/node_modules/`, Windows `/npm/node_modules/`),
     /// bun's and pnpm's global stores, pipx and uv tool environments.
@@ -1758,6 +1764,8 @@ pub struct CveDetectionParams {
     pub install_artifact_basenames: HashSet<String>,
     pub package_bare_runtimes: HashSet<String>,
     pub package_index_hosts: HashSet<String>,
+    /// `service_host_families`, each host lowercased without a trailing dot.
+    pub service_host_families: Vec<Vec<String>>,
     /// `global_package_roots` as lowercase `/` fragments.
     pub global_package_roots: Vec<String>,
     pub dev_tree_markers: DevTreeMarkersJSON,
@@ -2863,6 +2871,17 @@ impl CveDetectionParams {
             package_manager_runtimes: lowercase_token_set(&json.package_manager_runtimes),
             package_bare_runtimes: lowercase_token_set(&json.package_bare_runtimes),
             package_index_hosts: lowercase_token_set(&json.package_index_hosts),
+            service_host_families: json
+                .service_host_families
+                .iter()
+                .map(|family| {
+                    family
+                        .iter()
+                        .map(|host| host.trim().trim_end_matches('.').to_ascii_lowercase())
+                        .filter(|host| !host.is_empty())
+                        .collect()
+                })
+                .collect(),
             global_package_roots: normalized_path_fragments(&json.global_package_roots),
             install_artifact_basenames: lowercase_token_set(&json.install_artifact_basenames),
             dev_tree_markers: trimmed_dev_tree_markers(&json.dev_tree_markers),
@@ -5150,6 +5169,23 @@ pub fn is_package_index_host(host: &str) -> bool {
     !host.is_empty() && PARAMS_SNAPSHOT.load().package_index_hosts.contains(&host)
 }
 
+/// The family of `host` in `service_host_families`: every registrable domain
+/// of the service `host` names, `host` among them. `host` (lowercased, a
+/// trailing dot removed) must be exactly a member: a subdomain of one
+/// (`upload.pypi.org`) names no family.
+pub fn service_host_family(host: &str) -> Option<Vec<String>> {
+    let host = host.trim().trim_end_matches('.').to_ascii_lowercase();
+    if host.is_empty() {
+        return None;
+    }
+    PARAMS_SNAPSHOT
+        .load()
+        .service_host_families
+        .iter()
+        .find(|family| family.contains(&host))
+        .cloned()
+}
+
 /// True for a sensitive-paths label that names a credential file by its own
 /// generic name (`own_store_generic_labels`: `credentials_json`,
 /// `credential`), not by the tool whose store it is (`aws`, `claude`,
@@ -7243,6 +7279,21 @@ mod tests {
         assert!(!is_package_index_host("pypi.org.evil.example"));
         assert!(!is_package_index_host(""));
         assert!(!is_package_index_host("."));
+    }
+
+    /// A service host family is found from a member named exactly (case and a
+    /// trailing dot aside), never from a subdomain or a look-alike.
+    #[test]
+    fn test_service_host_family_is_found_from_a_member_only() {
+        let family = service_host_family("pypi.org").expect("pypi.org is a member");
+        assert!(family.contains(&"pythonhosted.org".to_string()));
+        assert_eq!(service_host_family("PyPI.org."), Some(family.clone()));
+        assert_eq!(service_host_family("pythonhosted.org"), Some(family));
+        assert_eq!(service_host_family("files.pythonhosted.org"), None);
+        assert_eq!(service_host_family("upload.pypi.org"), None);
+        assert_eq!(service_host_family("pypi.org.evil.example"), None);
+        assert_eq!(service_host_family(""), None);
+        assert_eq!(service_host_family("."), None);
     }
 
     /// The shipped install roots, bare runtimes and measurement-surface
