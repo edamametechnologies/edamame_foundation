@@ -741,15 +741,25 @@ pub async fn utility_process_credential_signals(queries_json: &str) -> Result<St
         .map_err(|e| anyhow::anyhow!("Failed to serialize credential signals: {}", e))
 }
 
-/// The open files of the queried processes, read now
+/// The open files of the queried processes, read now, and the holders of
+/// the lock files around `lock_material_json` (paths; empty for none)
 /// (`process_open_files::collect_process_open_files`). Thin delegate; the
 /// standalone core calls the same function in-process.
-pub async fn utility_process_open_files(pids_json: &str) -> Result<String> {
+pub async fn utility_process_open_files(
+    pids_json: &str,
+    lock_material_json: &str,
+) -> Result<String> {
     let pids: Vec<u32> = serde_json::from_str(pids_json)
         .map_err(|e| anyhow::anyhow!("Failed to parse open-file pids: {}", e))?;
+    let lock_material: Vec<String> = if lock_material_json.trim().is_empty() {
+        Vec::new()
+    } else {
+        serde_json::from_str(lock_material_json)
+            .map_err(|e| anyhow::anyhow!("Failed to parse lock material paths: {}", e))?
+    };
     // Per-process handle enumeration: off the async workers.
     let batch = tokio::task::spawn_blocking(move || {
-        crate::process_open_files::collect_process_open_files(&pids)
+        crate::process_open_files::collect_process_open_files(&pids, &lock_material)
     })
     .await
     .map_err(|e| anyhow::anyhow!("Open-file task failed: {}", e))?;
@@ -1357,16 +1367,13 @@ pub async fn utility_get_file_monitor_status() -> Result<String> {
     // `delivery`: whether events still reach the watcher (its delivery
     // probe); the core reads a status without it as unmeasured delivery.
     let status = match snapshot_inputs {
-        Some((store, is_running, watch_paths, delivery)) => {
-            let all_events = store.get_all_events();
-            serde_json::json!({
-                "is_monitoring": is_running,
-                "watch_paths": watch_paths,
-                "event_count": store.event_count() as u64,
-                "last_event_time": all_events.first().map(|e| e.timestamp.to_rfc3339()),
-                "delivery": delivery,
-            })
-        }
+        Some((store, is_running, watch_paths, delivery)) => serde_json::json!({
+            "is_monitoring": is_running,
+            "watch_paths": watch_paths,
+            "event_count": store.event_count() as u64,
+            "last_event_time": store.latest_timestamp().map(|ts| ts.to_rfc3339()),
+            "delivery": delivery,
+        }),
         None => serde_json::json!({
             "is_monitoring": false,
             "watch_paths": [],

@@ -689,6 +689,95 @@ fn configure_backtraces() {
     }
 }
 
+/// The platform the log target is chosen for (the Linux app logs to the
+/// journal through stdout; the macOS app has no journal to speak of).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LogPlatform {
+    MacOs,
+    Linux,
+    Windows,
+    Other,
+}
+
+impl LogPlatform {
+    fn current() -> Self {
+        if cfg!(target_os = "windows") {
+            Self::Windows
+        } else if cfg!(target_os = "macos") {
+            Self::MacOs
+        } else if cfg!(target_os = "linux") {
+            Self::Linux
+        } else {
+            Self::Other
+        }
+    }
+}
+
+/// What the file log's location is chosen from: the executable's directory,
+/// the user's home (`$HOME`: the container on a sandboxed macOS app),
+/// Windows' `%APPDATA%`, and `/var/log/edamame` when a daemon could create
+/// it (`None` otherwise, and on Windows).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct LogPaths {
+    pub exe_dir: PathBuf,
+    pub home: Option<PathBuf>,
+    pub appdata: Option<PathBuf>,
+    pub system_log_dir: Option<PathBuf>,
+}
+
+/// Where `executable_type` writes its file log and the file stem, or `None`
+/// for an executable that logs to stdout only. Pure: every environment
+/// fact comes in through `paths`.
+///
+/// - the daemons (`helper`, `posture`): `/var/log/edamame` when it could be
+///   created, else beside the executable; always beside it on Windows;
+/// - `cli`: beside the executable, unless installed under `/usr` or `/opt`
+///   (always on Windows);
+/// - on Windows every other executable (the app, the verbose daemons): the
+///   app's `%APPDATA%` directory;
+/// - the macOS `app`: `~/Library/Logs/EDAMAME Security` (inside the
+///   container on the sandboxed build). The app has no journal: until
+///   2.3.2 its log went to stdout alone, which nothing keeps for a GUI
+///   application;
+/// - everything else: stdout only.
+pub(crate) fn file_log_target(
+    executable_type: &str,
+    is_installed: bool,
+    platform: LogPlatform,
+    paths: &LogPaths,
+) -> Option<(PathBuf, &'static str)> {
+    let windows = platform == LogPlatform::Windows;
+    match executable_type {
+        "helper" | "posture" => {
+            let dir = if windows {
+                paths.exe_dir.clone()
+            } else {
+                paths
+                    .system_log_dir
+                    .clone()
+                    .unwrap_or_else(|| paths.exe_dir.clone())
+            };
+            let stem = if executable_type == "helper" {
+                "edamame_helper"
+            } else {
+                "edamame_posture"
+            };
+            Some((dir, stem))
+        }
+        "cli" if windows || !is_installed => Some((paths.exe_dir.clone(), "edamame_cli")),
+        "cli" => None,
+        _ if windows => paths
+            .appdata
+            .as_ref()
+            .map(|appdata| (appdata.join("com.edamametech/EDAMAME Security"), "edamame")),
+        "app" if platform == LogPlatform::MacOs => paths
+            .home
+            .as_ref()
+            .map(|home| (home.join("Library/Logs/EDAMAME Security"), "edamame")),
+        _ => None,
+    }
+}
+
 fn init_logger_once(
     executable_type: &str,
     url: &str,
@@ -767,54 +856,41 @@ fn init_logger_once(
     let exe_path_str = exe_path.to_str().unwrap_or("");
     let is_installed = exe_path_str.starts_with("/usr") || exe_path_str.starts_with("/opt/");
 
-    // Optional file writer
-    // Duplicate to file for daemons (helper + posture) on all platforms,
-    // edamame_cli (when not installed in /usr or /opt), and all executables on Windows.
-    let (file_writer, file_guard) = if matches!(executable_type, "helper" | "posture")
-        || (matches!(executable_type, "cli") && !is_installed)
-        || (cfg!(target_os = "windows"))
-    {
-        let log_dir = if matches!(executable_type, "helper" | "posture") {
-            if cfg!(unix) {
-                let preferred = PathBuf::from("/var/log/edamame");
-                if create_dir_all(&preferred).is_ok() {
-                    preferred
-                } else {
-                    let exe_path: PathBuf = current_exe().expect("Failed to get current exe");
-                    exe_path
-                        .parent()
-                        .expect("Failed to get parent of current exe")
-                        .to_path_buf()
-                }
-            } else {
-                let exe_path: PathBuf = current_exe().expect("Failed to get current exe");
-                exe_path
-                    .parent()
-                    .expect("Failed to get parent of current exe")
-                    .to_path_buf()
-            }
-        } else if matches!(executable_type, "cli") {
-            let exe_path: PathBuf = current_exe().expect("Failed to get current exe");
-            exe_path
-                .parent()
-                .expect("Failed to get parent of current exe")
-                .to_path_buf()
+    // Optional file writer (`file_log_target` says which executables get one
+    // and where).
+    let log_paths = LogPaths {
+        exe_dir: exe_path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from(".")),
+        home: var("HOME")
+            .ok()
+            .filter(|h| !h.is_empty())
+            .map(PathBuf::from),
+        appdata: var("APPDATA")
+            .ok()
+            .filter(|a| !a.is_empty())
+            .map(PathBuf::from),
+        system_log_dir: if cfg!(unix) && matches!(executable_type, "helper" | "posture") {
+            let preferred = PathBuf::from("/var/log/edamame");
+            create_dir_all(&preferred).is_ok().then_some(preferred)
         } else {
-            // Windows app
-            let appdata = var("APPDATA").expect("Failed to get APPDATA");
-            let appdata_path = format!("{}/com.edamametech/EDAMAME Security", appdata);
-            create_dir_all(&appdata_path).expect("Failed to create directory");
-            PathBuf::from(appdata_path)
-        };
-        let basename = if matches!(executable_type, "helper") {
-            "edamame_helper"
-        } else if matches!(executable_type, "posture") {
-            "edamame_posture"
-        } else if matches!(executable_type, "cli") {
-            "edamame_cli"
-        } else {
-            "edamame"
-        };
+            None
+        },
+    };
+    let (file_writer, file_guard) = if let Some((log_dir, basename)) = file_log_target(
+        executable_type,
+        is_installed,
+        LogPlatform::current(),
+        &log_paths,
+    ) {
+        if let Err(e) = create_dir_all(&log_dir) {
+            eprintln!(
+                "Warning: could not create the log directory {}: {}",
+                log_dir.display(),
+                e
+            );
+        }
         // Add the PID to the basename
         let pid = std::process::id();
         prune_stale_logs(&log_dir, basename, pid);
@@ -1074,6 +1150,110 @@ pub fn get_all_logs() -> String {
 mod tests {
     use super::*;
     use tracing::{debug, error, info, trace, warn};
+
+    fn paths() -> LogPaths {
+        LogPaths {
+            exe_dir: PathBuf::from("/opt/edamame/bin"),
+            home: Some(PathBuf::from("/Users/u")),
+            appdata: Some(PathBuf::from(r"C:\Users\u\AppData\Roaming")),
+            system_log_dir: Some(PathBuf::from("/var/log/edamame")),
+        }
+    }
+
+    #[test]
+    fn daemons_log_to_the_system_directory_or_beside_the_executable() {
+        let p = paths();
+        for platform in [LogPlatform::MacOs, LogPlatform::Linux] {
+            assert_eq!(
+                file_log_target("helper", true, platform, &p),
+                Some((PathBuf::from("/var/log/edamame"), "edamame_helper"))
+            );
+            assert_eq!(
+                file_log_target("posture", false, platform, &p),
+                Some((PathBuf::from("/var/log/edamame"), "edamame_posture"))
+            );
+        }
+        let no_system = LogPaths {
+            system_log_dir: None,
+            ..paths()
+        };
+        assert_eq!(
+            file_log_target("posture", true, LogPlatform::Linux, &no_system),
+            Some((PathBuf::from("/opt/edamame/bin"), "edamame_posture"))
+        );
+        assert_eq!(
+            file_log_target("helper", true, LogPlatform::Windows, &p),
+            Some((PathBuf::from("/opt/edamame/bin"), "edamame_helper"))
+        );
+    }
+
+    #[test]
+    fn the_cli_logs_beside_itself_unless_installed() {
+        let p = paths();
+        assert_eq!(
+            file_log_target("cli", false, LogPlatform::MacOs, &p),
+            Some((PathBuf::from("/opt/edamame/bin"), "edamame_cli"))
+        );
+        assert_eq!(file_log_target("cli", true, LogPlatform::Linux, &p), None);
+        assert_eq!(
+            file_log_target("cli", true, LogPlatform::Windows, &p),
+            Some((PathBuf::from("/opt/edamame/bin"), "edamame_cli"))
+        );
+        // The verbose CLI logs to stdout (a file on Windows, as every
+        // executable there).
+        assert_eq!(
+            file_log_target("cli_verbose", false, LogPlatform::Linux, &p),
+            None
+        );
+    }
+
+    #[test]
+    fn the_app_logs_to_its_container_on_macos_and_appdata_on_windows() {
+        let p = paths();
+        assert_eq!(
+            file_log_target("app", false, LogPlatform::MacOs, &p),
+            Some((
+                PathBuf::from("/Users/u/Library/Logs/EDAMAME Security"),
+                "edamame"
+            ))
+        );
+        assert_eq!(
+            file_log_target("app", false, LogPlatform::Windows, &p),
+            Some((
+                PathBuf::from(r"C:\Users\u\AppData\Roaming")
+                    .join("com.edamametech/EDAMAME Security"),
+                "edamame"
+            ))
+        );
+        assert_eq!(
+            file_log_target("posture_verbose", false, LogPlatform::Windows, &p),
+            Some((
+                PathBuf::from(r"C:\Users\u\AppData\Roaming")
+                    .join("com.edamametech/EDAMAME Security"),
+                "edamame"
+            ))
+        );
+        // The Linux app logs to the journal through stdout.
+        assert_eq!(file_log_target("app", false, LogPlatform::Linux, &p), None);
+        assert_eq!(
+            file_log_target("posture_verbose", false, LogPlatform::MacOs, &p),
+            None
+        );
+        // Without a home or an APPDATA there is nowhere to write: stdout only.
+        let bare = LogPaths {
+            home: None,
+            appdata: None,
+            ..paths()
+        };
+        assert_eq!(
+            file_log_target("app", false, LogPlatform::MacOs, &bare),
+            None
+        );
+        assert_eq!(
+            file_log_target("app", false, LogPlatform::Windows, &bare),
+            None
+        );
+    }
 
     #[test]
     fn test_prune_stale_logs() {

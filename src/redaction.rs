@@ -12,7 +12,8 @@
 //!   `authorization`, ... in JSON, `key=value`, `key: value`,
 //!   `--flag value` and `name value` shapes).
 //! - [`redact_log_line`]: [`redact_text`] plus the privacy keys the log files
-//!   have always masked (`id`, `uuid`, `device`, `device_id`, `code`, ...).
+//!   have always masked (`id`, `uuid`, `device`, `device_id`, `code`, ...) and
+//!   e-mail addresses (the local part; see [`redact_email`]).
 //!   Used by the file / stdout / memory log writers and the Sentry scrubber.
 //! - [`redact_json_value`] / [`redact_json_str`]: secret-named fields of a JSON
 //!   document replaced whole, JSON nested inside string values included.
@@ -425,6 +426,47 @@ lazy_static! {
         r"|(?P<userinfo>://[^\s/:@]+:)[^\s/@]+@",
     ))
     .expect("Failed to compile secret shape regex");
+
+    /// An e-mail address: a local part, `@`, a dotted domain. The local part
+    /// is what names a person; the domain stays (an organization, a mail
+    /// provider), as the host of a URL stays when its password is masked.
+    static ref EMAIL_REGEX: Regex = Regex::new(
+        r"(?i)(?:^|[^A-Za-z0-9._%+\-/:])(?P<local>[A-Za-z0-9._%+\-]+)@(?P<domain>[A-Za-z0-9](?:[A-Za-z0-9\-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9\-]*[A-Za-z0-9])?)+)\b"
+    )
+    .expect("Failed to compile e-mail regex");
+}
+
+/// One e-mail address made safe to log: `[REDACTED]@example.com`. A value
+/// without an `@` is masked whole. For a log argument that IS an address
+/// (the breach monitor's identities, the Hub account); addresses inside
+/// free text are caught by [`redact_log_line`].
+pub fn redact_email(email: &str) -> String {
+    match email.trim().rsplit_once('@') {
+        Some((_, domain)) if !domain.is_empty() => format!("{}@{}", REDACTED, domain),
+        _ => REDACTED.to_string(),
+    }
+}
+
+/// E-mail addresses anywhere in `text`, each reduced to its domain
+/// ([`redact_email`]). Not an address: a `user@host` without a dotted
+/// domain, the userinfo of a URL (`://user@host`, and `://user:pw@host`,
+/// whose password its own shape masks while the user stays), a path or
+/// scope before the `@` (`@scope/pkg@1.2.3`), and a version (`lodash@4.17.21`:
+/// a domain's last label has a letter).
+fn redact_email_addresses(text: &str) -> String {
+    EMAIL_REGEX
+        .replace_all(text, |caps: &Captures| {
+            let whole = caps.get(0).map(|m| m.as_str()).unwrap_or("");
+            let local = &caps["local"];
+            let domain = &caps["domain"];
+            let last_label = domain.rsplit('.').next().unwrap_or("");
+            if !last_label.chars().any(|c| c.is_ascii_alphabetic()) {
+                return whole.to_string();
+            }
+            let lead = &whole[..whole.len() - local.len() - 1 - domain.len()];
+            format!("{lead}{REDACTED}@{domain}")
+        })
+        .into_owned()
 }
 
 /// Mask the known secret shapes anywhere in `text` (see module docs). Field
@@ -594,13 +636,14 @@ pub fn redact_text(text: &str) -> String {
 }
 
 /// [`redact_text`] plus the privacy keys the log writers have always masked
-/// (`id`, `uuid`, `device`, `device_id`, `code`). For log lines and the Sentry
+/// (`id`, `uuid`, `device`, `device_id`, `code`) and e-mail addresses
+/// ([`redact_email`]: the domain stays). For log lines and the Sentry
 /// scrubber; not for text shown to the operator, where ids are useful. A
 /// status or error code after `code` (`code: Unavailable`, `code 1168`,
 /// `code: -32601`) is not an identifier and stays readable; five digits or
 /// more after `code`, and any value in a URL query, stay masked.
 pub fn redact_log_line(text: &str) -> String {
-    LOG_FIELDS.mask(&redact_secret_tokens(text))
+    LOG_FIELDS.mask(&redact_email_addresses(&redact_secret_tokens(text)))
 }
 
 // ---------------------------------------------------------------------------
@@ -1220,6 +1263,67 @@ mod tests {
         // Operator-facing text keeps ids.
         let text = r#"{"id": "12345"}"#;
         assert_eq!(redact_text(text), text);
+    }
+
+    /// E-mail addresses in log lines keep their domain and lose the local
+    /// part, however they are written; operator-facing text keeps them.
+    #[test]
+    fn log_lines_mask_the_local_part_of_email_addresses() {
+        for (line, masked) in [
+            (
+                "Initializing breach cache with email: jane.doe+work@example.com",
+                "Initializing breach cache with email: [REDACTED]@example.com",
+            ),
+            (
+                "Failed to check email John_Doe99@Mail.Example.co.uk: timeout",
+                "Failed to check email [REDACTED]@Mail.Example.co.uk: timeout",
+            ),
+            (
+                "accounts [\"a@x.org\", \"b@y.net\"] monitored",
+                "accounts [\"[REDACTED]@x.org\", \"[REDACTED]@y.net\"] monitored",
+            ),
+            (
+                "Removing trust domain email from registry: frank@edamame.tech",
+                "Removing trust domain email from registry: [REDACTED]@edamame.tech",
+            ),
+            ("<ops@example.com>", "<[REDACTED]@example.com>"),
+        ] {
+            assert_eq!(redact_log_line(line), masked);
+        }
+        assert_eq!(redact_email("jane@example.com"), "[REDACTED]@example.com");
+        assert_eq!(redact_email(" jane@example.com "), "[REDACTED]@example.com");
+        assert_eq!(redact_email("not-an-address"), REDACTED);
+        assert_eq!(redact_email(""), REDACTED);
+        let text = "breach for jane@example.com";
+        assert_eq!(
+            redact_text(text),
+            text,
+            "operator-facing text keeps addresses"
+        );
+    }
+
+    /// Not an address: a user without a dotted domain, a URL's userinfo
+    /// (its own shape keeps the user), a scoped package or version, an
+    /// npm-style `@scope/name`, decorators and handles.
+    #[test]
+    fn log_lines_keep_what_only_looks_like_an_email() {
+        for line in [
+            "ssh user@host failed",
+            "listening on root@localhost",
+            "fetched https://user@registry.example.com/pkg",
+            "installed @scope/package@1.2.3 and lodash@4.17.21",
+            "image nginx@sha256:abcdef",
+            "decorator @Override applied",
+            "mention @frank in the thread",
+            "process at 0x7f@1",
+        ] {
+            assert_eq!(redact_log_line(line), line, "over-redacted");
+        }
+        // A URL password is masked by its own shape; the user stays.
+        assert_eq!(
+            redact_log_line("https://bob:hunter2@git.example.com/repo"),
+            "https://bob:[REDACTED]@git.example.com/repo"
+        );
     }
 
     /// Log lines the privacy keys masked by mistake (dogfood hosts,

@@ -7,7 +7,7 @@
 //! enumeration out of the app process.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 /// Processes measured per batch; the rest are reported as `truncated`.
@@ -30,16 +30,30 @@ pub struct ProcessOpenFilesBatch {
     pub processes: Vec<ProcessOpenFiles>,
     /// Processes past `MAX_PROCESSES` or the time budget were not measured.
     pub truncated: bool,
+    /// The processes holding each lock file found around `lock_material`
+    /// (`flodbadd::open_files::lock_file_candidates`), by path. Only where
+    /// the enumeration above cannot see a handle held for writing (Windows,
+    /// `flodbadd::open_files::lock_file_holders`); empty elsewhere, and when
+    /// no material was given.
+    pub lock_holders: HashMap<String, Vec<u32>>,
 }
 
 /// Read the open files of each pid now, bypassing the per-pid cache the
-/// L7 resolver uses (one shared handle snapshot per batch on Windows).
-pub fn collect_process_open_files(pids: &[u32]) -> ProcessOpenFilesBatch {
-    collect_with(
+/// L7 resolver uses (one shared handle snapshot per batch on Windows), and
+/// the holders of the lock files around `lock_material` (paths the
+/// processes hold open) where the enumeration leaves those out.
+pub fn collect_process_open_files(pids: &[u32], lock_material: &[String]) -> ProcessOpenFilesBatch {
+    let mut batch = collect_with(
         pids,
         MEASUREMENT_BUDGET,
         flodbadd::open_files::get_open_file_paths_fresh,
-    )
+    );
+    if !lock_material.is_empty() {
+        batch.lock_holders = flodbadd::open_files::lock_file_holders(
+            &flodbadd::open_files::lock_file_candidates(lock_material),
+        );
+    }
+    batch
 }
 
 fn collect_with(
@@ -59,6 +73,7 @@ fn collect_with(
         return ProcessOpenFilesBatch {
             processes: Vec::new(),
             truncated,
+            lock_holders: HashMap::new(),
         };
     }
 
@@ -78,6 +93,7 @@ fn collect_with(
     ProcessOpenFilesBatch {
         processes,
         truncated,
+        lock_holders: HashMap::new(),
     }
 }
 
@@ -105,6 +121,7 @@ mod tests {
                     files: vec!["/home/user/.ssh/id_ed25519".to_string()],
                 }],
                 truncated: false,
+                lock_holders: HashMap::new(),
             }
         );
     }
@@ -136,6 +153,10 @@ mod tests {
                 files: vec!["C:\\Users\\u\\AppData\\Local\\x.db".to_string()],
             }],
             truncated: true,
+            lock_holders: HashMap::from([(
+                "C:\\Users\\u\\AppData\\Local\\lockfile".to_string(),
+                vec![42, 7],
+            )]),
         };
         let json = serde_json::to_string(&batch).unwrap();
         assert_eq!(
