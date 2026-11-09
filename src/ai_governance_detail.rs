@@ -1751,7 +1751,9 @@ mod tests {
 
     #[test]
     fn unsecured_agent_ignores_blank_slug() {
-        assert!(detail_for_unsecured_agent("   ", &[AgentProtectionGap::ObserverPaused]).is_empty());
+        assert!(
+            detail_for_unsecured_agent("   ", &[AgentProtectionGap::ObserverPaused]).is_empty()
+        );
     }
 
     /// Each missing part of the protection is its own cause, so an
@@ -1784,10 +1786,7 @@ mod tests {
             .gaps(true),
             vec![AgentProtectionGap::NoModel]
         );
-        assert_eq!(
-            AgentProtectionGap::NoModel.label(),
-            "no AI model connected"
-        );
+        assert_eq!(AgentProtectionGap::NoModel.label(), "no AI model connected");
     }
 
     #[test]
@@ -2143,7 +2142,11 @@ mod tests {
     #[test]
     fn coverage_rows_default_observer_to_running() {
         let discovered = BTreeMap::from([("hermes".to_string(), true)]);
-        let rows = agent_coverage_rows(&discovered, &BTreeMap::new(), AgentProtectionState::COMPLETE);
+        let rows = agent_coverage_rows(
+            &discovered,
+            &BTreeMap::new(),
+            AgentProtectionState::COMPLETE,
+        );
         assert_eq!(rows.len(), 1);
         assert!(rows[0].monitored);
         assert_eq!(rows[0].state(), "monitored");
@@ -2153,7 +2156,11 @@ mod tests {
     fn coverage_rows_normalize_and_union_keys() {
         let discovered = BTreeMap::from([("  Cursor ".to_string(), true), (String::new(), true)]);
         let observer_enabled = BTreeMap::from([("openclaw".to_string(), false)]);
-        let rows = agent_coverage_rows(&discovered, &observer_enabled, AgentProtectionState::COMPLETE);
+        let rows = agent_coverage_rows(
+            &discovered,
+            &observer_enabled,
+            AgentProtectionState::COMPLETE,
+        );
         let slugs: Vec<&str> = rows.iter().map(|r| r.key.as_str()).collect();
         assert_eq!(slugs, vec!["cursor", "openclaw"]);
         // openclaw is known only to the observer map: paused but not discovered.

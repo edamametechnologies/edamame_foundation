@@ -17,7 +17,7 @@ En rapportant un score détaillé, vous acceptez de partager les informations su
 * Votre score pour chaque catégorie (réseau, intégrité du système, services système, applications, identifiants), votre nombre d'étoiles, et votre pourcentage de conformité pour chaque référentiel de conformité
 * L'historique des remédiations et des retours en arrière que vous avez effectués : le test concerné, l'action, sa date, et si elle a réussi et a été validée
 * Si le partage des détails IA est activé pour cet appareil. Les détails IA eux-mêmes ne sont envoyés que lorsqu'il l'est
-* Lorsque le domaine gère les réglages de cet appareil depuis EDAMAME Hub : la configuration que cet appareil a reçue, si vous l'avez acceptée ou refusée, si cet appareil s'est connecté à EDAMAME Portal avec elle, et tout problème rencontré pour l'appliquer
+* Lorsque le domaine gère les réglages d'EDAMAME Security sur cet appareil depuis EDAMAME Hub : la configuration que cet appareil a reçue, si vous l'avez acceptée ou refusée, si cet appareil s'est connecté à EDAMAME Portal avec elle, et tout problème rencontré pour l'appliquer
 * Le nom, la date et la signature du modèle de menace utilisé, et pour chacun des tests de sécurité suivants : sa définition telle que publiée dans ce modèle, son statut (en échec, réussi ou inconnu) et la date de sa dernière évaluation :
   * EDAMAME Helper inactif
   * Activation de la mise en cache des identifiants de connexion

@@ -17,7 +17,7 @@ By reporting a detailed score, you agree to share the following information with
 * Your score for each category (network, system integrity, system services, applications, credentials), your star rating, and your compliance percentage for each compliance framework
 * The history of the remediations and rollbacks you performed: the check concerned, the action, when it happened, and whether it succeeded and was validated
 * Whether AI details sharing is on for this device. The AI details themselves are sent only when it is
-* When the domain manages this device's settings from EDAMAME Hub: which configuration this device received, whether you accepted or declined it, whether this device connected to the EDAMAME Portal with it, and any problem applying it
+* When the domain manages EDAMAME Security's settings on this device from EDAMAME Hub: which configuration this device received, whether you accepted or declined it, whether this device connected to the EDAMAME Portal with it, and any problem applying it
 * The name, date and signature of the threat model used, and for each of the following security checks: its definition as published in that threat model, its status (failing, passing or unknown) and when it was last evaluated:
   * EDAMAME helper inactive
   * Cached logon credentials enabled
