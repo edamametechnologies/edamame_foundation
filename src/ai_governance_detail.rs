@@ -98,10 +98,21 @@ impl EvidenceBuilder {
     /// to it. Selectors with an empty key are dropped; a cause left with no
     /// selector is dropped entirely, since it could never be accepted.
     fn cause(&mut self, scope: &str, selectors: Vec<(Kind, String)>) {
+        self.cause_with_selectors(
+            scope,
+            selectors
+                .into_iter()
+                .map(|(kind, key)| FailureSelectorBackend::new(kind, key))
+                .collect(),
+        );
+    }
+
+    /// `cause` with selectors already built (a kind the enum does not name
+    /// yet: the wire carries the kind as a string).
+    fn cause_with_selectors(&mut self, scope: &str, selectors: Vec<FailureSelectorBackend>) {
         let mut selectors: Vec<FailureSelectorBackend> = selectors
             .into_iter()
-            .filter(|(_, key)| !key.is_empty())
-            .map(|(kind, key)| FailureSelectorBackend::new(kind, key))
+            .filter(|selector| !selector.key.is_empty())
             .collect();
         if selectors.is_empty() {
             return;
@@ -393,14 +404,106 @@ pub fn detail_for_mcp_risk(risks: &[McpRiskEndpoint]) -> CheckEvidence {
     builder.finish()
 }
 
-/// Evidence for an Active `unsecured_<agent>` check.
-pub fn detail_for_unsecured_agent(agent_type: &str) -> CheckEvidence {
+/// Selector kind of the host-wide protection causes (`protection:<key>`).
+/// Carried as a string on the wire, like every kind
+/// (`FailureSelectorBackend::kind`); `FailureSelectorKindBackend` does not
+/// name it yet.
+pub const PROTECTION_SELECTOR_KIND: &str = "protection";
+
+/// The host-wide half of the `unsecured_<agent>` rule (2.3.2): a discovered
+/// agent is secured only while the attack-pattern detector is on, the
+/// divergence engine is on and an AI model adjudicates
+/// (`LLMConfig::is_operating`), besides its own observer running. `Default`
+/// is nothing on.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AgentProtectionState {
+    pub detector_on: bool,
+    pub divergence_on: bool,
+    pub model_operating: bool,
+}
+
+impl AgentProtectionState {
+    /// Both engines on and a model adjudicating.
+    pub const COMPLETE: Self = Self {
+        detector_on: true,
+        divergence_on: true,
+        model_operating: true,
+    };
+
+    pub fn complete(self) -> bool {
+        self == Self::COMPLETE
+    }
+
+    /// What a discovered agent whose observer is `observer_enabled` lacks,
+    /// in the order the threat names them; empty when it is secured.
+    pub fn gaps(self, observer_enabled: bool) -> Vec<AgentProtectionGap> {
+        let mut gaps = Vec::new();
+        if !self.detector_on {
+            gaps.push(AgentProtectionGap::DetectorOff);
+        }
+        if !self.divergence_on {
+            gaps.push(AgentProtectionGap::DivergenceOff);
+        }
+        if !self.model_operating {
+            gaps.push(AgentProtectionGap::NoModel);
+        }
+        if !observer_enabled {
+            gaps.push(AgentProtectionGap::ObserverPaused);
+        }
+        gaps
+    }
+}
+
+/// One missing part of a discovered agent's protection: a cause of the
+/// Active `unsecured_<agent>` check, accepted on the Hub on its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentProtectionGap {
+    DetectorOff,
+    DivergenceOff,
+    NoModel,
+    ObserverPaused,
+}
+
+impl AgentProtectionGap {
+    /// The cause token: `protection:detector_off`, `protection:divergence_off`,
+    /// `protection:no_model`, `observer:paused`.
+    pub fn selector(self) -> FailureSelectorBackend {
+        match self {
+            Self::ObserverPaused => FailureSelectorBackend::new(Kind::Observer, "paused"),
+            Self::DetectorOff | Self::DivergenceOff | Self::NoModel => FailureSelectorBackend {
+                kind: PROTECTION_SELECTOR_KIND.to_string(),
+                key: match self {
+                    Self::DetectorOff => "detector_off",
+                    Self::DivergenceOff => "divergence_off",
+                    _ => "no_model",
+                }
+                .to_string(),
+            },
+        }
+    }
+
+    /// The words the threat's detail uses.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::DetectorOff => "attack-pattern detector off",
+            Self::DivergenceOff => "intent-divergence engine off",
+            Self::NoModel => "no AI model connected",
+            Self::ObserverPaused => "transcript observer paused",
+        }
+    }
+}
+
+/// Evidence for an Active `unsecured_<agent>` check: one cause per missing
+/// part of the agent's protection (`AgentProtectionState::gaps`).
+pub fn detail_for_unsecured_agent(agent_type: &str, gaps: &[AgentProtectionGap]) -> CheckEvidence {
     let scope = norm(agent_type);
     if scope.is_empty() {
         return CheckEvidence::default();
     }
     let mut builder = EvidenceBuilder::default();
-    builder.cause(&scope, vec![(Kind::Observer, "paused".into())]);
+    for gap in gaps {
+        builder.cause_with_selectors(&scope, vec![gap.selector()]);
+    }
     builder.finish()
 }
 
@@ -1172,10 +1275,13 @@ pub fn detail_for_escalated(actions: &[EscalatedActionSlice], loop_running: bool
 /// The row set is the union of both maps' keys so an agent stays reported even
 /// if only one side knows about it. Absent `discovered` means not on this host;
 /// absent `observer_enabled` means enabled, matching the `unsecured_<agent>`
-/// check's default (the observer runs unless the operator paused it).
+/// check's default (the observer runs unless the operator paused it). A row
+/// is `monitored` only under full protection (`protection`, the host-wide
+/// half of the same rule), so it never contradicts its own check.
 pub fn agent_coverage_rows(
     discovered: &BTreeMap<String, bool>,
     observer_enabled: &BTreeMap<String, bool>,
+    protection: AgentProtectionState,
 ) -> Vec<CoverageRowBackend> {
     // (present, monitored) per normalized slug, defaults applied last so an
     // agent present in only one map still gets a full row.
@@ -1198,7 +1304,7 @@ pub fn agent_coverage_rows(
                 CoverageKindBackend::Agent,
                 slug,
                 found.unwrap_or(false),
-                enabled.unwrap_or(true),
+                enabled.unwrap_or(true) && protection.complete(),
             )
         })
         .collect()
@@ -1635,7 +1741,8 @@ mod tests {
 
     #[test]
     fn untruncated_evidence_is_not_flagged() {
-        let evidence = detail_for_unsecured_agent("claude_code");
+        let evidence =
+            detail_for_unsecured_agent("claude_code", &[AgentProtectionGap::ObserverPaused]);
         assert_eq!(evidence.causes.len(), 1);
         assert_eq!(evidence.causes[0].scope, "claude_code");
         assert_eq!(tokens(&evidence.causes[0]), vec!["observer:paused"]);
@@ -1644,7 +1751,43 @@ mod tests {
 
     #[test]
     fn unsecured_agent_ignores_blank_slug() {
-        assert!(detail_for_unsecured_agent("   ").is_empty());
+        assert!(detail_for_unsecured_agent("   ", &[AgentProtectionGap::ObserverPaused]).is_empty());
+    }
+
+    /// Each missing part of the protection is its own cause, so an
+    /// administrator accepts them one by one; a secured agent has none.
+    #[test]
+    fn unsecured_agent_names_every_missing_part_of_its_protection() {
+        let nothing_on = AgentProtectionState::default();
+        let gaps = nothing_on.gaps(false);
+        assert_eq!(gaps.len(), 4);
+        let evidence = detail_for_unsecured_agent("cursor", &gaps);
+        // `finalize` sorts the causes by their tokens.
+        let causes: Vec<Vec<String>> = evidence.causes.iter().map(tokens).collect();
+        assert_eq!(
+            causes,
+            vec![
+                vec!["observer:paused".to_string()],
+                vec!["protection:detector_off".to_string()],
+                vec!["protection:divergence_off".to_string()],
+                vec!["protection:no_model".to_string()],
+            ]
+        );
+        assert!(evidence.causes.iter().all(|c| c.scope == "cursor"));
+
+        assert!(AgentProtectionState::COMPLETE.gaps(true).is_empty());
+        assert_eq!(
+            AgentProtectionState {
+                model_operating: false,
+                ..AgentProtectionState::COMPLETE
+            }
+            .gaps(true),
+            vec![AgentProtectionGap::NoModel]
+        );
+        assert_eq!(
+            AgentProtectionGap::NoModel.label(),
+            "no AI model connected"
+        );
     }
 
     #[test]
@@ -1960,7 +2103,11 @@ mod tests {
             ("claude_code".to_string(), false),
             ("codex".to_string(), true),
         ]);
-        let rows = agent_coverage_rows(&discovered, &observer_enabled);
+        let rows = agent_coverage_rows(
+            &discovered,
+            &observer_enabled,
+            AgentProtectionState::COMPLETE,
+        );
         let states: Vec<(&str, &str)> = rows.iter().map(|r| (r.key.as_str(), r.state())).collect();
         assert_eq!(
             states,
@@ -1971,12 +2118,32 @@ mod tests {
             ]
         );
         assert!(rows.iter().all(|r| r.kind == "agent"));
+
+        // A host-wide gap (an engine off, no model) unmonitors every present
+        // agent, as its `unsecured_<agent>` check goes Active.
+        let rows = agent_coverage_rows(
+            &discovered,
+            &observer_enabled,
+            AgentProtectionState {
+                divergence_on: false,
+                ..AgentProtectionState::COMPLETE
+            },
+        );
+        let states: Vec<(&str, &str)> = rows.iter().map(|r| (r.key.as_str(), r.state())).collect();
+        assert_eq!(
+            states,
+            vec![
+                ("claude_code", "unmonitored"),
+                ("codex", "absent"),
+                ("cursor", "unmonitored"),
+            ]
+        );
     }
 
     #[test]
     fn coverage_rows_default_observer_to_running() {
         let discovered = BTreeMap::from([("hermes".to_string(), true)]);
-        let rows = agent_coverage_rows(&discovered, &BTreeMap::new());
+        let rows = agent_coverage_rows(&discovered, &BTreeMap::new(), AgentProtectionState::COMPLETE);
         assert_eq!(rows.len(), 1);
         assert!(rows[0].monitored);
         assert_eq!(rows[0].state(), "monitored");
@@ -1986,7 +2153,7 @@ mod tests {
     fn coverage_rows_normalize_and_union_keys() {
         let discovered = BTreeMap::from([("  Cursor ".to_string(), true), (String::new(), true)]);
         let observer_enabled = BTreeMap::from([("openclaw".to_string(), false)]);
-        let rows = agent_coverage_rows(&discovered, &observer_enabled);
+        let rows = agent_coverage_rows(&discovered, &observer_enabled, AgentProtectionState::COMPLETE);
         let slugs: Vec<&str> = rows.iter().map(|r| r.key.as_str()).collect();
         assert_eq!(slugs, vec!["cursor", "openclaw"]);
         // openclaw is known only to the observer map: paused but not discovered.
