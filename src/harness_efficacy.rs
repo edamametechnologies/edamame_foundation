@@ -125,20 +125,35 @@ pub fn action_class_for_check(check: &str) -> Option<HarnessActionClass> {
 }
 
 /// Per-finding harness attribution: which harnesses were present when the
-/// finding fired and whether the finding's action class fell inside each
-/// harness's declared scope.
+/// finding fired, whether the finding's action class fell inside each
+/// harness's declared scope, and whether the finding's process descends
+/// from a governed agent at all.
+///
+/// A harness confines the agent it governs, so a finding counts against it
+/// only when the process behind the finding is measured to descend from an
+/// AI agent (`agent_subtree`, the kernel lineage). A finding of a process
+/// with no measured agent lineage (a user's own tool, a service, a process
+/// the lineage sensor did not see start) says nothing about the harness:
+/// it is unmeasured, never a failure.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HarnessAttribution {
     /// Slugs of every harness detected on the host, sorted.
     pub harnesses_present: Vec<String>,
     /// Action class of the finding's check (`None` when unmapped).
     pub action_class: Option<HarnessActionClass>,
-    /// Present harnesses whose declared scope covers `action_class` -- the
-    /// finding fired *despite* them (efficacy failure evidence).
+    /// The AI agent the finding's process descends from, when measured.
+    pub agent_subtree: Option<String>,
+    /// Present harnesses whose declared scope covers `action_class` while the
+    /// finding's process descends from an agent -- the finding fired
+    /// *despite* them (efficacy failure evidence).
     pub in_scope_harnesses: Vec<String>,
     /// Present harnesses whose declared scope does not cover `action_class`
     /// (the finding says nothing about them).
     pub out_of_scope_harnesses: Vec<String>,
+    /// Present harnesses whose declared scope covers `action_class` but the
+    /// finding's process has no measured agent lineage: unmeasured, not
+    /// counted either way.
+    pub unattributed_harnesses: Vec<String>,
 }
 
 impl HarnessAttribution {
@@ -149,9 +164,18 @@ impl HarnessAttribution {
     }
 }
 
-/// Attribute one finding (by check name) to the detected harnesses. Pure.
-pub fn attribute_finding(check: &str, harnesses: &[AgentHarness]) -> HarnessAttribution {
+/// Attribute one finding (by check name and the agent its process descends
+/// from, when measured) to the detected harnesses. Pure.
+pub fn attribute_finding(
+    check: &str,
+    agent_subtree: Option<&str>,
+    harnesses: &[AgentHarness],
+) -> HarnessAttribution {
     let action_class = action_class_for_check(check);
+    let agent_subtree = agent_subtree
+        .map(str::trim)
+        .filter(|agent| !agent.is_empty())
+        .map(str::to_string);
     let mut present: Vec<&AgentHarness> = harnesses.iter().filter(|h| h.detected).collect();
     present.sort_by(|a, b| a.slug.cmp(&b.slug));
     present.dedup_by(|a, b| a.slug == b.slug);
@@ -159,16 +183,19 @@ pub fn attribute_finding(check: &str, harnesses: &[AgentHarness]) -> HarnessAttr
     let mut attribution = HarnessAttribution {
         harnesses_present: present.iter().map(|h| h.slug.clone()).collect(),
         action_class,
+        agent_subtree: agent_subtree.clone(),
         ..Default::default()
     };
     for h in present {
-        let in_scope = action_class
+        let class_in_scope = action_class
             .map(|class| declared_confinement_scope(&h.slug).contains(&class))
             .unwrap_or(false);
-        if in_scope {
+        if !class_in_scope {
+            attribution.out_of_scope_harnesses.push(h.slug.clone());
+        } else if agent_subtree.is_some() {
             attribution.in_scope_harnesses.push(h.slug.clone());
         } else {
-            attribution.out_of_scope_harnesses.push(h.slug.clone());
+            attribution.unattributed_harnesses.push(h.slug.clone());
         }
     }
     attribution
@@ -190,15 +217,19 @@ pub enum HarnessEfficacyVerdict {
     Failed,
 }
 
-/// One finding as the efficacy roll-up sees it: the check name and whether
+/// One finding as the efficacy roll-up sees it: the check name, whether
 /// the finding currently counts (active, non-dismissed, HIGH/CRITICAL -- the
 /// same alertable gate `VulnerabilityReport::active_alertable_findings_count`
-/// uses, decided by the caller so this module stays free of severity policy).
+/// uses, decided by the caller so this module stays free of severity policy)
+/// and the agent its process descends from, when measured. A finding
+/// without one never counts in scope: a harness confines its agent, and a
+/// process with no measured agent lineage is unmeasured, not a failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EfficacyFindingInput {
     pub check: String,
     pub finding_key: String,
     pub alertable: bool,
+    pub agent_subtree: Option<String>,
 }
 
 /// Efficacy attestation for one harness.
@@ -219,6 +250,10 @@ pub struct HarnessEfficacy {
     /// Active alertable findings outside the declared scope (no bearing on
     /// this harness).
     pub out_of_scope_findings: usize,
+    /// Active alertable findings inside the declared scope whose process has
+    /// no measured agent lineage: unmeasured, counted neither as failure nor
+    /// as out of scope.
+    pub unattributed_findings: usize,
     /// Sorted, de-duplicated check names behind `in_scope_findings`.
     pub in_scope_checks: Vec<String>,
     /// Finding keys behind `in_scope_findings`, sorted, so the UI / CLI can
@@ -230,8 +265,9 @@ pub struct HarnessEfficacy {
 /// Roll the current findings up into one efficacy row per known harness.
 /// Absent harnesses are included (`NotDetected`) so the operator surface can
 /// show the full roster like `detect_agent_harnesses` does. Only findings with
-/// `alertable == true` and a mapped action class are counted. Pure and sorted
-/// by slug.
+/// `alertable == true` and a mapped action class are counted, and only a
+/// finding with a measured agent lineage (`agent_subtree`) counts in scope.
+/// Pure and sorted by slug.
 pub fn harness_efficacy(
     harnesses: &[AgentHarness],
     findings: &[EfficacyFindingInput],
@@ -242,6 +278,7 @@ pub fn harness_efficacy(
             let scope = declared_confinement_scope(&h.slug);
             let mut in_scope = 0usize;
             let mut out_of_scope = 0usize;
+            let mut unattributed = 0usize;
             let mut checks: BTreeSet<String> = BTreeSet::new();
             let mut keys: BTreeSet<String> = BTreeSet::new();
             if h.detected {
@@ -249,12 +286,18 @@ pub fn harness_efficacy(
                     let Some(class) = action_class_for_check(&f.check) else {
                         continue;
                     };
-                    if scope.contains(&class) {
+                    if !scope.contains(&class) {
+                        out_of_scope += 1;
+                    } else if f
+                        .agent_subtree
+                        .as_deref()
+                        .is_some_and(|agent| !agent.trim().is_empty())
+                    {
                         in_scope += 1;
                         checks.insert(f.check.clone());
                         keys.insert(f.finding_key.clone());
                     } else {
-                        out_of_scope += 1;
+                        unattributed += 1;
                     }
                 }
             }
@@ -273,6 +316,7 @@ pub fn harness_efficacy(
                 declared_scope: scope.to_vec(),
                 in_scope_findings: in_scope,
                 out_of_scope_findings: out_of_scope,
+                unattributed_findings: unattributed,
                 in_scope_checks: checks.into_iter().collect(),
                 in_scope_finding_keys: keys.into_iter().collect(),
                 verdict,
@@ -307,6 +351,14 @@ mod tests {
             check: check.to_string(),
             finding_key: key.to_string(),
             alertable,
+            agent_subtree: Some("claude_code".to_string()),
+        }
+    }
+
+    fn unattributed(check: &str, key: &str, alertable: bool) -> EfficacyFindingInput {
+        EfficacyFindingInput {
+            agent_subtree: None,
+            ..finding(check, key, alertable)
         }
     }
 
@@ -348,22 +400,39 @@ mod tests {
             harness("srt", true),
             harness("nono", false),
         ];
-        let a = attribute_finding("sandbox_exploitation", &harnesses);
+        let a = attribute_finding("sandbox_exploitation", Some("claude_code"), &harnesses);
         assert_eq!(a.harnesses_present, vec!["agentfield", "srt"]);
         assert_eq!(a.action_class, Some(HarnessActionClass::ShellExec));
+        assert_eq!(a.agent_subtree.as_deref(), Some("claude_code"));
         assert_eq!(a.in_scope_harnesses, vec!["agentfield"]);
         assert_eq!(a.out_of_scope_harnesses, vec!["srt"]);
+        assert!(a.unattributed_harnesses.is_empty());
         assert!(a.fired_despite_in_scope_harness());
 
-        let b = attribute_finding("credential_harvest", &harnesses);
+        let b = attribute_finding("credential_harvest", Some("cursor"), &harnesses);
         assert_eq!(b.in_scope_harnesses, vec!["srt"]);
         assert_eq!(b.out_of_scope_harnesses, vec!["agentfield"]);
     }
 
     #[test]
+    fn attribution_without_an_agent_lineage_is_unmeasured_not_a_failure() {
+        let harnesses = vec![harness("agentfield", true), harness("srt", true)];
+        for subtree in [None, Some(""), Some("  ")] {
+            let a = attribute_finding("sandbox_exploitation", subtree, &harnesses);
+            assert_eq!(a.harnesses_present, vec!["agentfield", "srt"]);
+            assert_eq!(a.action_class, Some(HarnessActionClass::ShellExec));
+            assert_eq!(a.agent_subtree, None);
+            assert!(a.in_scope_harnesses.is_empty());
+            assert_eq!(a.unattributed_harnesses, vec!["agentfield"]);
+            assert_eq!(a.out_of_scope_harnesses, vec!["srt"]);
+            assert!(!a.fired_despite_in_scope_harness());
+        }
+    }
+
+    #[test]
     fn attribution_is_empty_without_a_detected_harness() {
         let harnesses = vec![harness("agentfield", false)];
-        let a = attribute_finding("credential_harvest", &harnesses);
+        let a = attribute_finding("credential_harvest", Some("claude_code"), &harnesses);
         assert!(a.harnesses_present.is_empty());
         assert!(!a.fired_despite_in_scope_harness());
         assert_eq!(a.action_class, Some(HarnessActionClass::CredentialAccess));
@@ -372,7 +441,7 @@ mod tests {
     #[test]
     fn unmapped_check_is_out_of_scope_for_every_harness() {
         let harnesses = vec![harness("nono", true)];
-        let a = attribute_finding("test", &harnesses);
+        let a = attribute_finding("test", Some("claude_code"), &harnesses);
         assert_eq!(a.action_class, None);
         assert!(a.in_scope_harnesses.is_empty());
         assert_eq!(a.out_of_scope_harnesses, vec!["nono"]);
@@ -390,6 +459,9 @@ mod tests {
             // LOW / dismissed findings arrive as non-alertable and never count.
             finding("credential_harvest", "k2", false),
             finding("token_exfiltration", "k3", true),
+            // An alertable in-class finding of a process with no measured
+            // agent lineage is unmeasured: neither a failure nor out of scope.
+            unattributed("agent_denylist_bypass", "k4", true),
         ];
         let rows = harness_efficacy(&harnesses, &findings);
         assert_eq!(rows.len(), 3);
@@ -399,13 +471,15 @@ mod tests {
         assert_eq!(af.verdict, HarnessEfficacyVerdict::Failed);
         assert_eq!(af.in_scope_findings, 1);
         assert_eq!(af.out_of_scope_findings, 1);
+        assert_eq!(af.unattributed_findings, 1);
         assert_eq!(af.in_scope_checks, vec!["sandbox_exploitation"]);
         assert_eq!(af.in_scope_finding_keys, vec!["k1"]);
 
         let srt = by_slug("srt");
         assert_eq!(srt.verdict, HarnessEfficacyVerdict::Failed);
         assert_eq!(srt.in_scope_checks, vec!["token_exfiltration"]);
-        assert_eq!(srt.out_of_scope_findings, 1);
+        assert_eq!(srt.out_of_scope_findings, 2);
+        assert_eq!(srt.unattributed_findings, 0);
 
         let nono = by_slug("nono");
         assert_eq!(nono.verdict, HarnessEfficacyVerdict::NotDetected);
@@ -422,6 +496,22 @@ mod tests {
         assert_eq!(rows[0].out_of_scope_findings, 1);
         let empty = harness_efficacy(&harnesses, &[]);
         assert_eq!(empty[0].verdict, HarnessEfficacyVerdict::Unobserved);
+    }
+
+    /// In-class findings without a measured agent lineage never fail a
+    /// harness, however many of them there are.
+    #[test]
+    fn efficacy_stays_unobserved_on_unattributed_in_scope_findings() {
+        let harnesses = vec![harness("agentfield", true)];
+        let findings = vec![
+            unattributed("sandbox_exploitation", "k1", true),
+            unattributed("package_install_lifecycle", "k2", true),
+        ];
+        let rows = harness_efficacy(&harnesses, &findings);
+        assert_eq!(rows[0].verdict, HarnessEfficacyVerdict::Unobserved);
+        assert_eq!(rows[0].in_scope_findings, 0);
+        assert_eq!(rows[0].unattributed_findings, 2);
+        assert!(rows[0].in_scope_finding_keys.is_empty());
     }
 
     #[test]

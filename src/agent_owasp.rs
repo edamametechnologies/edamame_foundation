@@ -208,7 +208,7 @@ const OWASP_CATALOG: &[(
         Strong,
         "Code execution lands on the host EDAMAME watches: the sandbox-exploitation check grades suspicious process lineage, corroborated by L7 attribution and file-system-tampering.",
         MonitoringOnly,
-        "Suspicious execution is detected and graded; EDAMAME does not sandbox or kill the offending process.",
+        "Suspicious execution is detected and graded; the offending process is not sandboxed and EDAMAME never kills it on its own. An operator can terminate it through the operator-only kill_process RPC.",
     ),
     (
         "ASI06",
@@ -224,7 +224,7 @@ const OWASP_CATALOG: &[(
         Agentic,
         "Insecure Inter-Agent Communication",
         Partial,
-        "The A2A graph maps inter-agent endpoints and flags spoofed / replayed / cross-zone patterns from network telemetry, but EDAMAME does not itself sign or authenticate A2A messages (that is the framework's job) and the UI surface is pending.",
+        "The A2A graph maps inter-agent endpoints and flags spoofed / replayed / cross-zone patterns from network telemetry, but EDAMAME does not itself sign or authenticate A2A messages (that is the framework's job).",
         MonitoringOnly,
         "Inter-agent patterns are observed from network telemetry; message signing/authentication belongs to the agent framework, and EDAMAME does not block A2A traffic.",
     ),
@@ -253,7 +253,7 @@ const OWASP_CATALOG: &[(
         Strong,
         "A rogue agent is exactly what the two-plane model catches -- divergence verdict, drift, and attack-pattern findings -- and observer-independence guarantees it cannot dismiss its own findings.",
         PartialEnforcement,
-        "Operators can pause the host transcript observer per agent; hard process containment and egress kill are not wired. Pair with a host sandbox (nono/srt) for prevention.",
+        "Operators can pause the host transcript observer per agent and terminate a process through the operator-only kill_process RPC; nothing is contained or killed automatically, and an egress kill is not wired. Pair with a host sandbox (nono/srt) for prevention.",
     ),
     // OWASP Top 10 for LLM Applications (2025).
     (
@@ -454,11 +454,12 @@ pub struct OwaspRow {
     /// True when at least one live finding references this category.
     pub has_live_findings: bool,
     /// True when this category's live assessment depends on the
-    /// behavioral-divergence engine (and therefore a configured LLM provider).
-    /// When the scorecard's [`OwaspScorecard::llm_available`] is false, these
-    /// rows are "Unknown" rather than clean -- the LLM-backed detection is not
-    /// running, so absence of findings carries no signal. Deterministic rows
-    /// keep their normal live state regardless of LLM availability.
+    /// behavioral-divergence engine: a running engine with a behavioral model
+    /// to compare against. When the scorecard's
+    /// [`OwaspScorecard::llm_available`] is false, these rows are "Unknown"
+    /// rather than clean -- the divergence-backed detection is not running, so
+    /// absence of findings carries no signal. Deterministic rows keep their
+    /// normal live state regardless.
     pub llm_dependent: bool,
     /// Drill-down records for contributing findings (tap-through to the
     /// concrete evidence behind this category).
@@ -480,11 +481,15 @@ pub struct OwaspScorecard {
     pub total_alertable: u32,
     /// Number of categories (across both lists) with at least one live finding.
     pub categories_with_findings: u32,
-    /// True when a usable LLM provider is configured (EDAMAME Portal OR
-    /// bring-your-own). When false, the behavioral-divergence engine cannot run,
-    /// so every `llm_dependent` row is "Unknown" rather than clean. Deterministic
-    /// rows are unaffected. This lets the UI honestly say "we can't assess these
-    /// categories right now" instead of implying a clean result.
+    /// True when the behavioral-divergence engine can assess the
+    /// `llm_dependent` rows: the engine is running and holds a behavioral
+    /// model to compare against. The field keeps its pre-2.0 name from when
+    /// the engine needed a configured LLM provider; it has published
+    /// deterministically without one since 2.0, so the gate is the engine and
+    /// its model, not the provider. When false, every `llm_dependent` row is
+    /// "Unknown" rather than clean. Deterministic rows are unaffected. This
+    /// lets the UI honestly say "we can't assess these categories right now"
+    /// instead of implying a clean result.
     pub llm_available: bool,
     /// Agentic rows (`ASI01..ASI10`), catalog order.
     pub agentic_rows: Vec<OwaspRow>,
@@ -538,10 +543,12 @@ pub fn extract_owasp_ids(s: &str) -> Vec<String> {
 /// scorecard, deriving the headline status directly from the attributed
 /// findings. Pure.
 ///
-/// `llm_available` reflects whether a usable LLM provider is configured. It is
-/// recorded on the scorecard and drives the UI's "Unknown" treatment of every
-/// `llm_dependent` (behavioral-divergence-backed) row when false; it does not
-/// change any finding count, severity, or the deterministic headline.
+/// `llm_available` reflects whether the behavioral-divergence engine is running
+/// with a behavioral model (the caller decides; the name predates 2.0, when the
+/// engine needed a configured LLM provider). It is recorded on the scorecard
+/// and drives the UI's "Unknown" treatment of every `llm_dependent`
+/// (behavioral-divergence-backed) row when false; it does not change any
+/// finding count, severity, or the deterministic headline.
 pub fn build_owasp_scorecard(
     inputs: &HashMap<String, OwaspRowInput>,
     llm_available: bool,
@@ -700,6 +707,30 @@ mod tests {
             .iter()
             .chain(sc.llm_rows.iter())
             .all(|r| r.enforcement != EnforcementStatus::Enforced));
+    }
+
+    #[test]
+    fn catalog_text_does_not_describe_shipped_work_as_pending() {
+        let sc = build_owasp_scorecard(&HashMap::new(), true);
+        let row = |id: &str| {
+            sc.agentic_rows
+                .iter()
+                .chain(sc.llm_rows.iter())
+                .find(|r| r.id == id)
+                .unwrap()
+        };
+        // The A2A panel shipped: its coverage text no longer announces a
+        // pending UI surface.
+        assert!(
+            !row("ASI07").coverage_rationale.contains("pending"),
+            "ASI07 coverage text still describes the A2A panel as pending"
+        );
+        // Operator-driven termination exists; the enforcement note names the
+        // RPC rather than claiming nothing can kill the process.
+        assert!(
+            row("ASI05").enforcement_note.contains("kill_process"),
+            "ASI05 enforcement note must name the operator-only kill_process RPC"
+        );
     }
 
     #[test]

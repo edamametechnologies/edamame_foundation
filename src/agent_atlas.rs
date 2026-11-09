@@ -59,9 +59,9 @@ pub type AtlasRowInput = OwaspRowInput;
 pub type AtlasContributingFinding = OwaspContributingFinding;
 
 /// Techniques whose only evidence path runs through the behavioral-divergence
-/// engine, which requires a configured LLM provider. When no provider is
-/// available these rows are "Unknown" rather than "clean" -- the same
-/// treatment the OWASP scorecard gives its `llm_dependent` rows.
+/// engine, which needs to be running with a behavioral model to compare
+/// against. When it is not, these rows are "Unknown" rather than "clean" --
+/// the same treatment the OWASP scorecard gives its `llm_dependent` rows.
 const ATLAS_LLM_DEPENDENT_IDS: &[&str] = &[
     "AML.T0051", // LLM Prompt Injection -- inferred from declared-vs-observed drift
     "AML.T0054", // LLM Jailbreak -- same
