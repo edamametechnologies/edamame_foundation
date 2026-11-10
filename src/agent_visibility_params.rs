@@ -45,6 +45,12 @@
 //!   parser declares (`agent_transcripts`) and the agent's own provider
 //!   endpoints, to which a declared not-expected traffic pattern never
 //!   applies (the divergence engine's correlation plane)
+//! - transcript stores: per agent type, where its transcript store lives
+//!   under a home, what a transcript file and a pid file look like there,
+//!   and what is published about the store (`fim_support`, the store-writer
+//!   record)
+//! - transcript capture: the bounds of the reader that takes the shell calls
+//!   of a transcript as it grows (`agent_transcripts::capture`)
 //!
 //! Unlike the CVE params struct, `AgentVisibilityParamsJSON` carries NO
 //! `#[serde(default)]` fields: this model was born complete, the published
@@ -773,6 +779,93 @@ pub struct TranscriptHintsJSON {
     pub remote_shell_programs: Vec<ProgramOptionsJSON>,
 }
 
+/// The directories of one agent's transcript store, relative to a home and
+/// `/`-separated: on every platform (`common`) and per desktop platform.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct TranscriptStoreRootsJSON {
+    pub common: Vec<String>,
+    pub macos: Vec<String>,
+    pub linux: Vec<String>,
+    pub windows: Vec<String>,
+}
+
+impl TranscriptStoreRootsJSON {
+    /// The roots of the platform this build runs on, `common` first. Empty
+    /// on a platform that runs no agent harness.
+    pub fn for_this_platform(&self) -> Vec<String> {
+        #[cfg(target_os = "macos")]
+        let platform: &[String] = &self.macos;
+        #[cfg(target_os = "linux")]
+        let platform: &[String] = &self.linux;
+        #[cfg(target_os = "windows")]
+        let platform: &[String] = &self.windows;
+        #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+        {
+            let mut roots = self.common.clone();
+            for root in platform {
+                if !roots.contains(root) {
+                    roots.push(root.clone());
+                }
+            }
+            roots
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+        {
+            Vec::new()
+        }
+    }
+}
+
+/// One agent type's transcript store.
+///
+/// - `roots`: the store's directories under a home.
+/// - `path_segment`: a directory name a transcript's path carries below the
+///   root (Cursor keeps transcripts in an `agent-transcripts` directory of
+///   each project), or empty. Lowercased by
+///   [`AgentVisibilityParams::new_from_json`].
+/// - `file_suffixes`: the endings of a transcript file, lowercased.
+/// - `pid_file_roots` / `pid_file_suffixes`: the directories (relative to a
+///   home) and endings of the files that name a harness process; the file's
+///   stem is the process id.
+/// - `writer_images`: tool names of the images that write the store, besides
+///   the agent's own process names; lowercased.
+/// - `append_only`: the harness only ever appends to a transcript.
+/// - `call_logged_before_spawn`: the harness writes a shell call's line
+///   before it starts the command.
+/// - `finding_alerting`: a write to the store by another process is reported
+///   at its own grade.
+///
+/// The three booleans are measured per agent and published; a store the
+/// params do not list answers `false` to each.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct TranscriptStoreJSON {
+    pub roots: TranscriptStoreRootsJSON,
+    pub path_segment: String,
+    pub file_suffixes: Vec<String>,
+    pub pid_file_roots: Vec<String>,
+    pub pid_file_suffixes: Vec<String>,
+    pub writer_images: Vec<String>,
+    pub append_only: bool,
+    pub call_logged_before_spawn: bool,
+    pub finding_alerting: bool,
+}
+
+/// The bounds of the reader of a growing transcript
+/// (`agent_transcripts::capture`): the longest line it parses, how much it
+/// reads in one pass, how far behind the end of a file it may fall (bytes,
+/// seconds), how far a file's own creation time may differ from the creation
+/// recorded for it, and how long after a line was read a report may still
+/// name the process that wrote it (milliseconds).
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TranscriptCaptureJSON {
+    pub max_line_bytes: u64,
+    pub max_pass_bytes: u64,
+    pub max_backlog_bytes: u64,
+    pub max_backlog_secs: u64,
+    pub creation_time_slack_ms: u64,
+    pub late_report_ms: u64,
+}
+
 /// Raw JSON shape of `agent-visibility-params-db.json`. No serde defaults:
 /// the published JSON always carries every field; a missing field fails the
 /// parse and the embedded snapshot (which has all fields) stays in effect.
@@ -837,6 +930,10 @@ pub struct AgentVisibilityParamsJSON {
     /// What the transcript parser does not take as the agent's actions (see
     /// [`TranscriptHintsJSON`]).
     pub transcript_hints: TranscriptHintsJSON,
+    /// Per agent type, its transcript store (see [`TranscriptStoreJSON`]).
+    pub transcript_stores: std::collections::BTreeMap<String, TranscriptStoreJSON>,
+    /// The transcript reader's bounds (see [`TranscriptCaptureJSON`]).
+    pub transcript_capture: TranscriptCaptureJSON,
 }
 
 /// Normalized runtime snapshot of the agent-visibility params.
@@ -887,6 +984,11 @@ pub struct AgentVisibilityParams {
     pub agent_llm_traffic: std::collections::BTreeMap<String, AgentLlmTrafficJSON>,
     /// Content input keys and remote-shell programs lowercased.
     pub transcript_hints: TranscriptHintsJSON,
+    /// Per agent type, its transcript store: the path segment, the endings
+    /// and the writer images lowercased, roots as written.
+    pub transcript_stores: std::collections::BTreeMap<String, TranscriptStoreJSON>,
+    /// The transcript reader's bounds, as written.
+    pub transcript_capture: TranscriptCaptureJSON,
 }
 
 impl CloudSignature for AgentVisibilityParams {
@@ -1210,6 +1312,23 @@ impl AgentVisibilityParams {
                     })
                     .collect(),
             },
+            transcript_stores: json
+                .transcript_stores
+                .iter()
+                .map(|(agent, store)| {
+                    (
+                        agent.clone(),
+                        TranscriptStoreJSON {
+                            path_segment: store.path_segment.to_ascii_lowercase(),
+                            file_suffixes: lower(&store.file_suffixes),
+                            pid_file_suffixes: lower(&store.pid_file_suffixes),
+                            writer_images: lower(&store.writer_images),
+                            ..store.clone()
+                        },
+                    )
+                })
+                .collect(),
+            transcript_capture: json.transcript_capture,
         }
     }
 }
@@ -1467,6 +1586,70 @@ pub fn agent_provider_endpoints(agent_type: &str) -> Vec<String> {
         .get(agent_type)
         .map(|traffic| traffic.provider_endpoints.clone())
         .unwrap_or_default()
+}
+
+/// Every agent type's transcript store, by agent type.
+pub fn transcript_stores() -> std::collections::BTreeMap<String, TranscriptStoreJSON> {
+    PARAMS_SNAPSHOT.load().transcript_stores.clone()
+}
+
+/// `agent_type`'s transcript store. `None` for an agent type the params do
+/// not list.
+pub fn transcript_store(agent_type: &str) -> Option<TranscriptStoreJSON> {
+    PARAMS_SNAPSHOT
+        .load()
+        .transcript_stores
+        .get(agent_type)
+        .cloned()
+}
+
+/// Whether `agent_type`'s harness only ever appends to a transcript, as
+/// published. `false` for an agent type the params do not list.
+pub fn transcript_store_append_only(agent_type: &str) -> bool {
+    PARAMS_SNAPSHOT
+        .load()
+        .transcript_stores
+        .get(agent_type)
+        .is_some_and(|store| store.append_only)
+}
+
+/// Whether `agent_type`'s harness writes a shell call's line before it
+/// starts the command, as published. `false` for an agent type the params do
+/// not list.
+pub fn transcript_call_logged_before_spawn(agent_type: &str) -> bool {
+    PARAMS_SNAPSHOT
+        .load()
+        .transcript_stores
+        .get(agent_type)
+        .is_some_and(|store| store.call_logged_before_spawn)
+}
+
+/// Whether a write to `agent_type`'s store by another process is reported at
+/// its own grade, as published. `false` for an agent type the params do not
+/// list.
+pub fn transcript_store_finding_alerting(agent_type: &str) -> bool {
+    PARAMS_SNAPSHOT
+        .load()
+        .transcript_stores
+        .get(agent_type)
+        .is_some_and(|store| store.finding_alerting)
+}
+
+/// Tool names of the images that write `agent_type`'s store besides the
+/// agent's own process names (lowercase). Empty for an agent type the params
+/// do not list.
+pub fn transcript_store_writer_images(agent_type: &str) -> Vec<String> {
+    PARAMS_SNAPSHOT
+        .load()
+        .transcript_stores
+        .get(agent_type)
+        .map(|store| store.writer_images.clone())
+        .unwrap_or_default()
+}
+
+/// The transcript reader's bounds.
+pub fn transcript_capture() -> TranscriptCaptureJSON {
+    PARAMS_SNAPSHOT.load().transcript_capture
 }
 
 /// The params signature of the current snapshot: a scan state computed under
@@ -1849,6 +2032,150 @@ mod tests {
         assert_eq!(norm.default.match_substring, "default");
         assert_eq!(norm.entries[0].match_substring, "opus");
         assert_eq!(norm.entries[1].match_substring, "gpt-5");
+    }
+
+    /// The embedded snapshot lists a transcript store for every agent type
+    /// the collectors read, each with a root on this platform, endings that
+    /// are lowercase and start with a dot, and its three published booleans
+    /// as shipped in 2.3.3 (all false).
+    #[test]
+    fn test_transcript_stores_ship_complete_and_switched_off() {
+        let params = build_fallback_params();
+        for agent in [
+            "claude_code",
+            "claude_desktop",
+            "codex",
+            "cursor",
+            "hermes",
+            "openclaw",
+        ] {
+            let store = params
+                .transcript_stores
+                .get(agent)
+                .unwrap_or_else(|| panic!("no transcript store for {agent}"));
+            #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+            assert!(
+                !store.roots.for_this_platform().is_empty(),
+                "{agent} has no root on this platform"
+            );
+            for root in store
+                .roots
+                .for_this_platform()
+                .iter()
+                .chain(store.pid_file_roots.iter())
+            {
+                assert!(!root.starts_with('/') && !root.contains('\\'), "{root}");
+                assert!(!root.split('/').any(|part| part == ".."), "{root}");
+            }
+            assert!(!store.file_suffixes.is_empty(), "{agent}");
+            for suffix in store
+                .file_suffixes
+                .iter()
+                .chain(store.pid_file_suffixes.iter())
+            {
+                assert!(suffix.starts_with('.') && suffix.len() > 1, "{suffix}");
+                assert_eq!(suffix, &suffix.to_ascii_lowercase());
+            }
+            assert_eq!(
+                store.pid_file_roots.is_empty(),
+                store.pid_file_suffixes.is_empty(),
+                "{agent}"
+            );
+            assert!(store.writer_images.is_empty(), "{agent}");
+            assert!(!store.append_only, "{agent}");
+            assert!(!store.call_logged_before_spawn, "{agent}");
+            assert!(!store.finding_alerting, "{agent}");
+        }
+        let claude = &params.transcript_stores["claude_code"];
+        assert_eq!(claude.pid_file_suffixes, vec![".json".to_string()]);
+        assert_eq!(
+            params.transcript_stores["cursor"].path_segment,
+            "agent-transcripts"
+        );
+    }
+
+    /// A published file without one of the store's keys, or without the
+    /// reader's bounds, does not parse: the embedded snapshot stays in force.
+    #[test]
+    fn test_transcript_store_keys_are_required() {
+        let complete: serde_json::Value =
+            serde_json::from_str(&AGENT_VISIBILITY_PARAMS_DB).expect("embedded snapshot");
+        assert!(serde_json::from_value::<AgentVisibilityParamsJSON>(complete.clone()).is_ok());
+        for key in [
+            "roots",
+            "path_segment",
+            "file_suffixes",
+            "pid_file_roots",
+            "pid_file_suffixes",
+            "writer_images",
+            "append_only",
+            "call_logged_before_spawn",
+            "finding_alerting",
+        ] {
+            let mut value = complete.clone();
+            value["transcript_stores"]["codex"]
+                .as_object_mut()
+                .expect("store object")
+                .remove(key);
+            assert!(
+                serde_json::from_value::<AgentVisibilityParamsJSON>(value).is_err(),
+                "a store without `{key}` parsed"
+            );
+        }
+        for key in ["transcript_stores", "transcript_capture"] {
+            let mut value = complete.clone();
+            value.as_object_mut().expect("params object").remove(key);
+            assert!(
+                serde_json::from_value::<AgentVisibilityParamsJSON>(value).is_err(),
+                "params without `{key}` parsed"
+            );
+        }
+        let mut value = complete;
+        value["transcript_capture"]
+            .as_object_mut()
+            .expect("capture object")
+            .remove("max_line_bytes");
+        assert!(serde_json::from_value::<AgentVisibilityParamsJSON>(value).is_err());
+    }
+
+    /// The store's compared values load lowercased; an agent type the params
+    /// do not list answers `false` to each published boolean and has no
+    /// writer image.
+    #[test]
+    #[serial]
+    fn test_transcript_store_accessors() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&AGENT_VISIBILITY_PARAMS_DB).expect("embedded snapshot");
+        value["transcript_stores"]["codex"]["path_segment"] = serde_json::json!("Sessions");
+        value["transcript_stores"]["codex"]["file_suffixes"] = serde_json::json!([".JSONL"]);
+        value["transcript_stores"]["codex"]["writer_images"] = serde_json::json!(["Node"]);
+        value["transcript_stores"]["codex"]["finding_alerting"] = serde_json::json!(true);
+        let json: AgentVisibilityParamsJSON =
+            serde_json::from_value(value).expect("edited snapshot parses");
+        let params = AgentVisibilityParams::new_from_json(&json);
+        let codex = &params.transcript_stores["codex"];
+        assert_eq!(codex.path_segment, "sessions");
+        assert_eq!(codex.file_suffixes, vec![".jsonl".to_string()]);
+        assert_eq!(codex.writer_images, vec!["node".to_string()]);
+        assert!(codex.finding_alerting);
+
+        // The shipped snapshot, through the accessors.
+        assert!(transcript_store("claude_code").is_some());
+        assert!(transcript_store("no_such_agent").is_none());
+        assert_eq!(transcript_stores().len(), 6);
+        for agent in ["claude_code", "codex", "no_such_agent"] {
+            assert!(!transcript_store_append_only(agent));
+            assert!(!transcript_call_logged_before_spawn(agent));
+            assert!(!transcript_store_finding_alerting(agent));
+            assert!(transcript_store_writer_images(agent).is_empty());
+        }
+        let capture = transcript_capture();
+        assert_eq!(capture.max_line_bytes, 4 * 1024 * 1024);
+        assert_eq!(capture.max_pass_bytes, 8 * 1024 * 1024);
+        assert_eq!(capture.max_backlog_bytes, 64 * 1024 * 1024);
+        assert_eq!(capture.max_backlog_secs, 30);
+        assert_eq!(capture.creation_time_slack_ms, 2000);
+        assert_eq!(capture.late_report_ms, 15_000);
     }
 
     #[tokio::test]

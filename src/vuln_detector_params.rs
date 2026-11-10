@@ -1468,6 +1468,12 @@ pub struct CveDetectionParamsJSON {
     /// stamped (observation time, after its coalescer) still belongs to that
     /// session.
     pub fim_observation_lag_secs: i64,
+    /// Whether the processes recorded per agent transcript file are read
+    /// (the store-writer record and the trust state built from it).
+    pub transcript_write_trust_enabled: bool,
+    /// How many days a transcript's record is kept after its last recorded
+    /// operation.
+    pub transcript_write_trust_retention_days: u64,
     /// A project's own package-manager and agent tool configuration files,
     /// relative to the working tree (`.npmrc`, `.mcp.json`, ...).
     pub project_tool_config_files: Vec<String>,
@@ -1840,6 +1846,9 @@ pub struct CveDetectionParams {
     pub evaluator_materialisation_burst_secs: i64,
     pub evaluator_session_attribution_slack_secs: i64,
     pub fim_observation_lag_secs: i64,
+    pub transcript_write_trust_enabled: bool,
+    /// At least one day.
+    pub transcript_write_trust_retention_days: u64,
     /// `project_tool_config_files`, lowercase, `/`-separated, no leading
     /// `/`, empty entries dropped.
     pub project_tool_config_files: Vec<String>,
@@ -2972,6 +2981,10 @@ impl CveDetectionParams {
             evaluator_materialisation_burst_secs: json.evaluator_materialisation_burst_secs,
             evaluator_session_attribution_slack_secs: json.evaluator_session_attribution_slack_secs,
             fim_observation_lag_secs: json.fim_observation_lag_secs.max(0),
+            transcript_write_trust_enabled: json.transcript_write_trust_enabled,
+            transcript_write_trust_retention_days: json
+                .transcript_write_trust_retention_days
+                .max(1),
             project_tool_config_files: json
                 .project_tool_config_files
                 .iter()
@@ -5377,6 +5390,21 @@ pub fn divergence_unexplained_ingest_grace_secs() -> u64 {
         .divergence_unexplained_ingest_grace_secs
 }
 
+/// Whether the processes recorded per agent transcript file are read (see
+/// the field docs).
+pub fn transcript_write_trust_enabled() -> bool {
+    PARAMS_SNAPSHOT.load().transcript_write_trust_enabled
+}
+
+/// How long a transcript's record is kept after its last recorded operation,
+/// in milliseconds.
+pub fn transcript_write_trust_retention_ms() -> u64 {
+    PARAMS_SNAPSHOT
+        .load()
+        .transcript_write_trust_retention_days
+        .saturating_mul(24 * 60 * 60 * 1000)
+}
+
 pub fn forward_proxy_min_distinct_processes() -> usize {
     PARAMS_SNAPSHOT.load().forward_proxy_min_distinct_processes
 }
@@ -7113,6 +7141,38 @@ mod tests {
             p.macos_sealed_system_binary_path_prefixes,
             vec!["/usr/sbin/"]
         );
+    }
+
+    /// The transcript-store keys ship as published for 2.3.3 (the record is
+    /// read, a record is kept 30 days), the new check is graded HIGH, and a
+    /// file without one of the keys does not parse.
+    #[test]
+    fn test_transcript_write_trust_params() {
+        let p = params_from_edited_snapshot(|_| {});
+        assert!(p.transcript_write_trust_enabled);
+        assert_eq!(p.transcript_write_trust_retention_days, 30);
+        assert_eq!(
+            p.check_metadata("agent_transcript_tampering")
+                .map(|m| m.severity.as_str()),
+            Some("HIGH")
+        );
+        // A retention of zero would drop a record the moment it is written.
+        let p = params_from_edited_snapshot(|value| {
+            value["transcript_write_trust_retention_days"] = serde_json::json!(0);
+        });
+        assert_eq!(p.transcript_write_trust_retention_days, 1);
+        for key in [
+            "transcript_write_trust_enabled",
+            "transcript_write_trust_retention_days",
+        ] {
+            let mut value: serde_json::Value =
+                serde_json::from_str(&CVE_DETECTION_PARAMS_DB).expect("embedded snapshot");
+            value.as_object_mut().expect("params object").remove(key);
+            assert!(
+                serde_json::from_value::<CveDetectionParamsJSON>(value).is_err(),
+                "params without `{key}` parsed"
+            );
+        }
     }
 
     /// Process-lineage names load lowercased; the agent lookup answers by
