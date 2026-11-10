@@ -1389,6 +1389,24 @@ pub struct CveDetectionParamsJSON {
     /// observer has not read the turn that produced it yet). Graded as
     /// before once this many seconds pass (Frank, 2026-10-31, FP-DIV-23).
     pub divergence_unexplained_ingest_grace_secs: u64,
+    /// Session binding by tool-call time: when true, a session (or a file
+    /// write) whose process tree was started by one conversation's shell
+    /// tool call is bound to that conversation where no harness pid file
+    /// binds it. While false the binding is computed beside the pid-file
+    /// one and counted, and nothing reads it. Default false.
+    pub session_binding_tool_call_enabled: bool,
+    /// Session binding: how far before a tool call's recorded time the
+    /// birth of the process it started may lie, in milliseconds. The harness
+    /// and the sensor stamp the same wall clock; a transcript line can be
+    /// written a moment after its process was spawned.
+    pub session_binding_clock_slack_ms: u64,
+    /// Session binding: how long after a tool call's recorded time, while
+    /// its result is not known yet, the process it started may be born, in
+    /// milliseconds.
+    pub session_binding_spawn_window_ms: u64,
+    /// Session binding: how late the kernel sensor may deliver a process
+    /// birth, in milliseconds (its timestamp is the delivery's).
+    pub session_binding_sensor_lag_ms: u64,
     /// Lowercase `/` path suffixes (or `/dir/` fragments) of the credential
     /// caches a CLI writes when it logs in (`com.vercel.cli/auth.json`,
     /// `~/.azure/msal_token_cache.json`, ...). A write to one by an
@@ -1807,6 +1825,12 @@ pub struct CveDetectionParams {
     /// observer has not read the turn that produced it yet). Graded as
     /// before once this many seconds pass (Frank, 2026-10-31, FP-DIV-23).
     pub divergence_unexplained_ingest_grace_secs: u64,
+    /// Session binding by tool-call time: the switch and its three windows
+    /// (see `CveDetectionParamsJSON`).
+    pub session_binding_tool_call_enabled: bool,
+    pub session_binding_clock_slack_ms: u64,
+    pub session_binding_spawn_window_ms: u64,
+    pub session_binding_sensor_lag_ms: u64,
     /// Lowercase `/` path suffixes (or `/dir/` fragments) of the credential
     /// caches a CLI writes when it logs in (`com.vercel.cli/auth.json`,
     /// `~/.azure/msal_token_cache.json`, ...). A write to one by an
@@ -2929,6 +2953,10 @@ impl CveDetectionParams {
             forward_proxy_ports: json.forward_proxy_ports.clone(),
             forward_proxy_min_distinct_processes: json.forward_proxy_min_distinct_processes,
             divergence_unexplained_ingest_grace_secs: json.divergence_unexplained_ingest_grace_secs,
+            session_binding_tool_call_enabled: json.session_binding_tool_call_enabled,
+            session_binding_clock_slack_ms: json.session_binding_clock_slack_ms,
+            session_binding_spawn_window_ms: json.session_binding_spawn_window_ms,
+            session_binding_sensor_lag_ms: json.session_binding_sensor_lag_ms,
             cli_credential_cache_path_suffixes: lowercase_token_list(
                 &json.cli_credential_cache_path_suffixes,
             ),
@@ -5377,6 +5405,26 @@ pub fn divergence_unexplained_ingest_grace_secs() -> u64 {
         .divergence_unexplained_ingest_grace_secs
 }
 
+/// Session binding by tool-call time switch (see the field docs).
+pub fn session_binding_tool_call_enabled() -> bool {
+    PARAMS_SNAPSHOT.load().session_binding_tool_call_enabled
+}
+
+/// Session binding: slack before a tool call's time, in milliseconds.
+pub fn session_binding_clock_slack_ms() -> u64 {
+    PARAMS_SNAPSHOT.load().session_binding_clock_slack_ms
+}
+
+/// Session binding: spawn window after a tool call's time, in milliseconds.
+pub fn session_binding_spawn_window_ms() -> u64 {
+    PARAMS_SNAPSHOT.load().session_binding_spawn_window_ms
+}
+
+/// Session binding: the sensor's delivery lag, in milliseconds.
+pub fn session_binding_sensor_lag_ms() -> u64 {
+    PARAMS_SNAPSHOT.load().session_binding_sensor_lag_ms
+}
+
 pub fn forward_proxy_min_distinct_processes() -> usize {
     PARAMS_SNAPSHOT.load().forward_proxy_min_distinct_processes
 }
@@ -5638,6 +5686,36 @@ mod tests {
             msg.contains("evidence_weights") || msg.contains("missing field"),
             "error should name the missing field, got: {msg}"
         );
+    }
+
+    /// The session binding by tool-call time ships switched off, with its
+    /// three windows published; a published file without one of the keys
+    /// does not parse (born complete).
+    #[test]
+    fn test_session_binding_params_ship_switched_off() {
+        let json = serde_json::from_str::<CveDetectionParamsJSON>(&CVE_DETECTION_PARAMS_DB)
+            .expect("embedded snapshot parses");
+        assert!(!json.session_binding_tool_call_enabled);
+        assert_eq!(json.session_binding_clock_slack_ms, 1_000);
+        assert_eq!(json.session_binding_spawn_window_ms, 5_000);
+        assert_eq!(json.session_binding_sensor_lag_ms, 2_000);
+        for key in [
+            "session_binding_tool_call_enabled",
+            "session_binding_clock_slack_ms",
+            "session_binding_spawn_window_ms",
+            "session_binding_sensor_lag_ms",
+        ] {
+            let mut value: serde_json::Value =
+                serde_json::from_str(&CVE_DETECTION_PARAMS_DB).expect("valid JSON");
+            assert!(
+                value.as_object_mut().unwrap().remove(key).is_some(),
+                "{key}"
+            );
+            assert!(
+                serde_json::from_value::<CveDetectionParamsJSON>(value).is_err(),
+                "a snapshot without {key} must not parse"
+            );
+        }
     }
 
     #[tokio::test]
