@@ -92,6 +92,7 @@ mod tests {
             file_suffixes: vec![".jsonl".to_string()],
             pid_file_roots: vec![root.join("sessions")],
             pid_file_suffixes: vec![".json".to_string()],
+            creation_reorder_ms: 1_000,
         }
     }
 

@@ -64,9 +64,9 @@ pub fn resolve_fim_watch_paths(
 /// startup paths (standalone core, helper daemon) call this with the same
 /// arguments.
 ///
-/// The agent transcript stores ([`store_specs`]) are attached whatever the
-/// other roots are: explicit paths replace the default roots, never the
-/// stores.
+/// The agent transcript stores are attached whatever the other roots are
+/// ([`attach_stores`], under `user_home`): explicit paths replace the default
+/// roots, never the stores.
 pub fn resolve_fim_watch_roots(
     paths: &[String],
     user_home: Option<&Path>,
@@ -80,31 +80,35 @@ pub fn resolve_fim_watch_roots(
             None => fim::default_watch_roots(mode),
         }
     };
-    roots.with_stores(store_specs(user_home))
+    attach_stores(roots, user_home)
 }
 
-/// The agent transcript stores a file monitor started for `user_home`
-/// records the writers of (`flodbadd::store_writers`): the published
-/// `transcript_stores` under that home, or under the home this process
-/// resolves when the caller gave none. Empty while
-/// `transcript_write_trust_enabled` is published false, and when no home is
-/// known: nothing is recorded then.
-pub fn store_specs(user_home: Option<&Path>) -> Vec<StoreSpec> {
+/// `roots` with the agent transcript stores a file monitor started for
+/// `stores_home` records the writers of (`flodbadd::store_writers`): the
+/// published `transcript_stores` under that home.
+///
+/// The home is the caller's to give: none is resolved here. A caller that
+/// gives none gets roots that say the stores were not resolved
+/// ([`FimWatchRoots::with_unresolved_stores`]), which the file monitor
+/// publishes as such. While `transcript_write_trust_enabled` is published
+/// false there is no store to resolve, with or without a home.
+///
+/// A caller whose roots need no home (explicit paths, the CI roots) passes
+/// the home it resolved for the stores here.
+pub fn attach_stores(roots: FimWatchRoots, stores_home: Option<&Path>) -> FimWatchRoots {
     if !crate::vuln_detector_params::transcript_write_trust_enabled() {
-        return Vec::new();
+        return roots.with_stores(Vec::new());
     }
-    let home = user_home
-        .map(Path::to_path_buf)
-        .or_else(crate::agent_plugin::real_home_dir);
-    match home {
-        Some(home) => store_specs_for_home(&home),
-        None => Vec::new(),
+    match stores_home {
+        Some(home) => roots.with_stores(store_specs_for_home(home)),
+        None => roots.with_unresolved_stores(),
     }
 }
 
 /// The published `transcript_stores` under `home`, one per agent type with
 /// a root on this platform: the store roots and the pid-file roots joined
-/// onto the home, the path segment and the endings as published.
+/// onto the home, the path segment and the endings as published, and the
+/// published `transcript_capture.creation_reorder_ms`.
 pub fn store_specs_for_home(home: &Path) -> Vec<StoreSpec> {
     // Component by component, so the separators are the platform's.
     let under_home = |relative: &String| -> PathBuf {
@@ -113,6 +117,8 @@ pub fn store_specs_for_home(home: &Path) -> Vec<StoreSpec> {
             .filter(|part| !part.is_empty())
             .fold(home.to_path_buf(), |path, part| path.join(part))
     };
+    let creation_reorder_ms =
+        crate::agent_visibility_params::transcript_capture().creation_reorder_ms;
     crate::agent_visibility_params::transcript_stores()
         .into_iter()
         .filter_map(|(agent, store)| {
@@ -132,6 +138,7 @@ pub fn store_specs_for_home(home: &Path) -> Vec<StoreSpec> {
                 file_suffixes: store.file_suffixes,
                 pid_file_roots: store.pid_file_roots.iter().map(under_home).collect(),
                 pid_file_suffixes: store.pid_file_suffixes,
+                creation_reorder_ms,
             })
         })
         .collect()
@@ -324,6 +331,10 @@ mod tests {
         assert_eq!(claude.pid_file_suffixes, vec![".json".to_string()]);
         let cursor = specs.iter().find(|spec| spec.agent == "cursor").unwrap();
         assert_eq!(cursor.path_segment, "agent-transcripts");
+        // Every store carries the published reorder bound.
+        let reorder = crate::agent_visibility_params::transcript_capture().creation_reorder_ms;
+        assert_eq!(reorder, 1_000);
+        assert!(specs.iter().all(|spec| spec.creation_reorder_ms == reorder));
 
         for explicit in [
             Vec::new(),
@@ -331,6 +342,7 @@ mod tests {
         ] {
             let roots = resolve_fim_watch_roots(&explicit, Some(&home), FimMode::Desktop);
             assert_eq!(roots.stores, specs, "explicit paths: {:?}", explicit);
+            assert!(!roots.stores_unresolved);
         }
         // A store root under a watched root is delivered with it; the others
         // are watched for the record only.
@@ -339,6 +351,41 @@ mod tests {
         let only = roots.store_only_roots();
         assert!(!only.contains(&home.join(".claude").join("projects")));
         assert!(only.contains(&home.join(".codex").join("sessions")));
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// No home is resolved here for the stores. A caller that gives none
+    /// gets no store and roots that say so, whatever its other roots are;
+    /// a caller whose roots need no home attaches the stores under the home
+    /// it resolved.
+    #[test]
+    fn test_the_stores_are_resolved_under_the_callers_home_only() {
+        assert!(crate::vuln_detector_params::transcript_write_trust_enabled());
+        let home = temp_home("stores-home");
+        let explicit = vec![home.join("audit").to_string_lossy().to_string()];
+        for (paths, mode) in [
+            (explicit.clone(), FimMode::Desktop),
+            (explicit.clone(), FimMode::CI),
+            (Vec::new(), FimMode::CI),
+            (Vec::new(), FimMode::Desktop),
+        ] {
+            let roots = resolve_fim_watch_roots(&paths, None, mode);
+            assert!(roots.stores.is_empty(), "{:?} {:?}", paths, mode);
+            assert!(roots.stores_unresolved, "{:?} {:?}", paths, mode);
+            assert!(roots.store_only_roots().is_empty());
+
+            // The same roots, with the stores under a home the caller
+            // resolved: the watch roots are unchanged.
+            let attached = attach_stores(roots.clone(), Some(&home));
+            assert_eq!(attached.stores, store_specs_for_home(&home));
+            assert!(!attached.stores_unresolved);
+            assert_eq!(attached.operator, roots.operator);
+            assert_eq!(attached.defaults, roots.defaults);
+        }
+        // None of the stores lies under a home this process could resolve
+        // for itself.
+        let attached = attach_stores(FimWatchRoots::operator(Vec::new()), None);
+        assert!(attached.stores.is_empty() && attached.stores_unresolved);
         let _ = std::fs::remove_dir_all(&home);
     }
 

@@ -1388,6 +1388,13 @@ fn push_gap<S>(
     counters: &mut CaptureCounters,
 ) {
     counters.gaps += 1;
+    // The reason and the file, never a line of it.
+    tracing::debug!(
+        "transcript reader: gap ({:?}) in a {} transcript, {}",
+        reason,
+        state.agent,
+        state.path
+    );
     state.gaps.push(CaptureGap {
         path: state.path.clone(),
         agent: state.agent.clone(),
@@ -1513,8 +1520,10 @@ pub fn start<E: CallExtractor>(extractor: E, config: CaptureConfig) -> bool {
         .spawn(move || run(Capture::new(extractor, config), generation));
     if spawned.is_err() {
         RUNNING.store(false, Ordering::Release);
+        tracing::warn!("transcript reader: its thread could not be started");
         return false;
     }
+    tracing::info!("transcript reader: started");
     true
 }
 
@@ -1522,8 +1531,11 @@ pub fn start<E: CallExtractor>(extractor: E, config: CaptureConfig) -> bool {
 /// does not run.
 pub fn stop() {
     GENERATION.fetch_add(1, Ordering::AcqRel);
-    RUNNING.store(false, Ordering::Release);
+    let was_running = RUNNING.swap(false, Ordering::AcqRel);
     VIEW.store(Arc::new(CaptureView::stopped()));
+    if was_running {
+        tracing::info!("transcript reader: stopped");
+    }
 }
 
 pub fn is_running() -> bool {
@@ -2561,6 +2573,7 @@ mod tests {
             file_suffixes: vec![".jsonl".to_string()],
             pid_file_roots: Vec::new(),
             pid_file_suffixes: Vec::new(),
+            creation_reorder_ms: 1_000,
         }]);
         assert!(!since("", 0).running);
         assert!(start(WordExtractor, config()));
