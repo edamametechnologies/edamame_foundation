@@ -23,6 +23,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+/// The shell calls read when a transcript grows.
+pub mod capture;
 pub mod claude_code;
 pub mod claude_desktop;
 pub mod codex;
