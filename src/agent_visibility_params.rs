@@ -832,11 +832,12 @@ impl TranscriptStoreRootsJSON {
 /// - `append_only`: the harness only ever appends to a transcript.
 /// - `call_logged_before_spawn`: the harness writes a shell call's line
 ///   before it starts the command.
-/// - `finding_alerting`: a write to the store by another process is reported
-///   at its own grade.
+/// - `finding_mode`: how a write to the store by another process is reported
+///   ([`TranscriptFindingMode`]).
 ///
-/// The three booleans are measured per agent and published; a store the
-/// params do not list answers `false` to each.
+/// The two booleans are measured per agent and published; a store the
+/// params do not list answers `false` to each, and
+/// [`TranscriptFindingMode::Off`].
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct TranscriptStoreJSON {
     pub roots: TranscriptStoreRootsJSON,
@@ -847,15 +848,32 @@ pub struct TranscriptStoreJSON {
     pub writer_images: Vec<String>,
     pub append_only: bool,
     pub call_logged_before_spawn: bool,
-    pub finding_alerting: bool,
+    pub finding_mode: TranscriptFindingMode,
+}
+
+/// How a write to an agent's transcript store by another process is
+/// reported, as published per agent (`off`, `shadow`, `alert`). A value
+/// outside the three does not parse.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum TranscriptFindingMode {
+    /// Counted per class, not reported.
+    Off,
+    /// Reported at the lowest grade, with the grade it would have.
+    Shadow,
+    /// Reported at its own grade.
+    Alert,
 }
 
 /// The bounds of the reader of a growing transcript
 /// (`agent_transcripts::capture`): the longest line it parses, how much it
 /// reads in one pass, how far behind the end of a file it may fall (bytes,
 /// seconds), how far a file's own creation time may differ from the creation
-/// recorded for it, and how long after a line was read a report may still
-/// name the process that wrote it (milliseconds).
+/// recorded for it, how long after a line was read a report may still name
+/// the process that wrote it, and how long after the first report for a file
+/// the report of its creation is still taken as its creation, which the
+/// store-writer record applies (`flodbadd::store_writers::StoreSpec`;
+/// milliseconds, 0: never).
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TranscriptCaptureJSON {
     pub max_line_bytes: u64,
@@ -864,6 +882,7 @@ pub struct TranscriptCaptureJSON {
     pub max_backlog_secs: u64,
     pub creation_time_slack_ms: u64,
     pub late_report_ms: u64,
+    pub creation_reorder_ms: u64,
 }
 
 /// Raw JSON shape of `agent-visibility-params-db.json`. No serde defaults:
@@ -1624,15 +1643,15 @@ pub fn transcript_call_logged_before_spawn(agent_type: &str) -> bool {
         .is_some_and(|store| store.call_logged_before_spawn)
 }
 
-/// Whether a write to `agent_type`'s store by another process is reported at
-/// its own grade, as published. `false` for an agent type the params do not
-/// list.
-pub fn transcript_store_finding_alerting(agent_type: &str) -> bool {
+/// How a write to `agent_type`'s store by another process is reported, as
+/// published. [`TranscriptFindingMode::Off`] for an agent type the params do
+/// not list.
+pub fn transcript_store_finding_mode(agent_type: &str) -> TranscriptFindingMode {
     PARAMS_SNAPSHOT
         .load()
         .transcript_stores
         .get(agent_type)
-        .is_some_and(|store| store.finding_alerting)
+        .map_or(TranscriptFindingMode::Off, |store| store.finding_mode)
 }
 
 /// Tool names of the images that write `agent_type`'s store besides the
@@ -2084,7 +2103,13 @@ mod tests {
             assert!(store.writer_images.is_empty(), "{agent}");
             assert!(!store.append_only, "{agent}");
             assert!(!store.call_logged_before_spawn, "{agent}");
-            assert!(!store.finding_alerting, "{agent}");
+            // No agent ships graded: two are reported at the lowest grade,
+            // the others counted.
+            let expected = match agent {
+                "claude_code" | "codex" => TranscriptFindingMode::Shadow,
+                _ => TranscriptFindingMode::Off,
+            };
+            assert_eq!(store.finding_mode, expected, "{agent}");
         }
         let claude = &params.transcript_stores["claude_code"];
         assert_eq!(claude.pid_file_suffixes, vec![".json".to_string()]);
@@ -2110,7 +2135,7 @@ mod tests {
             "writer_images",
             "append_only",
             "call_logged_before_spawn",
-            "finding_alerting",
+            "finding_mode",
         ] {
             let mut value = complete.clone();
             value["transcript_stores"]["codex"]
@@ -2130,12 +2155,43 @@ mod tests {
                 "params without `{key}` parsed"
             );
         }
-        let mut value = complete;
-        value["transcript_capture"]
-            .as_object_mut()
-            .expect("capture object")
-            .remove("max_line_bytes");
-        assert!(serde_json::from_value::<AgentVisibilityParamsJSON>(value).is_err());
+        for key in ["max_line_bytes", "creation_reorder_ms"] {
+            let mut value = complete.clone();
+            value["transcript_capture"]
+                .as_object_mut()
+                .expect("capture object")
+                .remove(key);
+            assert!(
+                serde_json::from_value::<AgentVisibilityParamsJSON>(value).is_err(),
+                "bounds without `{key}` parsed"
+            );
+        }
+        // The mode is one of three values: the retired boolean and any other
+        // word do not parse.
+        for mode in [
+            serde_json::json!(true),
+            serde_json::json!("on"),
+            serde_json::json!("Alert"),
+            serde_json::json!(""),
+        ] {
+            let mut value = complete.clone();
+            value["transcript_stores"]["codex"]["finding_mode"] = mode.clone();
+            assert!(
+                serde_json::from_value::<AgentVisibilityParamsJSON>(value).is_err(),
+                "finding_mode {mode} parsed"
+            );
+        }
+        for (mode, expected) in [
+            ("off", TranscriptFindingMode::Off),
+            ("shadow", TranscriptFindingMode::Shadow),
+            ("alert", TranscriptFindingMode::Alert),
+        ] {
+            let mut value = complete.clone();
+            value["transcript_stores"]["codex"]["finding_mode"] = serde_json::json!(mode);
+            let parsed = serde_json::from_value::<AgentVisibilityParamsJSON>(value)
+                .expect("a published mode parses");
+            assert_eq!(parsed.transcript_stores["codex"].finding_mode, expected);
+        }
     }
 
     /// The store's compared values load lowercased; an agent type the params
@@ -2149,7 +2205,7 @@ mod tests {
         value["transcript_stores"]["codex"]["path_segment"] = serde_json::json!("Sessions");
         value["transcript_stores"]["codex"]["file_suffixes"] = serde_json::json!([".JSONL"]);
         value["transcript_stores"]["codex"]["writer_images"] = serde_json::json!(["Node"]);
-        value["transcript_stores"]["codex"]["finding_alerting"] = serde_json::json!(true);
+        value["transcript_stores"]["codex"]["finding_mode"] = serde_json::json!("alert");
         let json: AgentVisibilityParamsJSON =
             serde_json::from_value(value).expect("edited snapshot parses");
         let params = AgentVisibilityParams::new_from_json(&json);
@@ -2157,7 +2213,7 @@ mod tests {
         assert_eq!(codex.path_segment, "sessions");
         assert_eq!(codex.file_suffixes, vec![".jsonl".to_string()]);
         assert_eq!(codex.writer_images, vec!["node".to_string()]);
-        assert!(codex.finding_alerting);
+        assert_eq!(codex.finding_mode, TranscriptFindingMode::Alert);
 
         // The shipped snapshot, through the accessors.
         assert!(transcript_store("claude_code").is_some());
@@ -2166,8 +2222,28 @@ mod tests {
         for agent in ["claude_code", "codex", "no_such_agent"] {
             assert!(!transcript_store_append_only(agent));
             assert!(!transcript_call_logged_before_spawn(agent));
-            assert!(!transcript_store_finding_alerting(agent));
             assert!(transcript_store_writer_images(agent).is_empty());
+        }
+        assert_eq!(
+            transcript_store_finding_mode("claude_code"),
+            TranscriptFindingMode::Shadow
+        );
+        assert_eq!(
+            transcript_store_finding_mode("codex"),
+            TranscriptFindingMode::Shadow
+        );
+        for agent in [
+            "cursor",
+            "hermes",
+            "openclaw",
+            "claude_desktop",
+            "no_such_agent",
+        ] {
+            assert_eq!(
+                transcript_store_finding_mode(agent),
+                TranscriptFindingMode::Off,
+                "{agent}"
+            );
         }
         let capture = transcript_capture();
         assert_eq!(capture.max_line_bytes, 4 * 1024 * 1024);
@@ -2176,6 +2252,7 @@ mod tests {
         assert_eq!(capture.max_backlog_secs, 30);
         assert_eq!(capture.creation_time_slack_ms, 2000);
         assert_eq!(capture.late_report_ms, 15_000);
+        assert_eq!(capture.creation_reorder_ms, 1_000);
     }
 
     #[tokio::test]
