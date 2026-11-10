@@ -252,6 +252,17 @@ pub struct CollectedRawSession {
     /// compatibility reason as [`economics_raw_text`].
     #[serde(default)]
     pub agent_launches: Vec<launch::AgentLaunchCall>,
+    /// The shell commands this session's tool calls ran (and its Task
+    /// subagents'), as times and program names: no command text. Core dates
+    /// an observed process tree by them. Set centrally by `collect`
+    /// (adapters leave it empty) for transcripts written recently; see
+    /// [`launch`]. `#[serde(default)]` for the rolling helper/core
+    /// compatibility reason as [`economics_raw_text`]. An empty list is not
+    /// written, so a session without shell calls serializes as it did before
+    /// the field (the observer hashes the serialized payload to skip an
+    /// unchanged one).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shell_calls: Vec<launch::ShellCall>,
 }
 
 /// Derive `derived_scope_any_lineage_paths` for an agent from its

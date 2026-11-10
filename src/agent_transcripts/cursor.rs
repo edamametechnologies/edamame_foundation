@@ -174,6 +174,7 @@ pub fn collect(home: &Path, options: &CollectOptions) -> anyhow::Result<CollectR
                     denylist_bypass_events: Vec::new(),
                     launch_context: Default::default(),
                     agent_launches: Vec::new(),
+                    shell_calls: Vec::new(),
                 }
             },
         ) {

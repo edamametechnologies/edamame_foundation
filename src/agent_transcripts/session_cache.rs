@@ -418,6 +418,7 @@ mod tests {
             denylist_bypass_events: Vec::new(),
             launch_context: Default::default(),
             agent_launches: Vec::new(),
+            shell_calls: Vec::new(),
         }
     }
 

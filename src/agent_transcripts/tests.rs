@@ -287,6 +287,93 @@ fn claude_code_collects_jsonl() {
     assert_declares_model_traffic(session, "claude_code");
 }
 
+/// A collected session carries the shell calls of its transcript and of its
+/// Task subagents' transcripts (which are not sessions of their own), oldest
+/// first, as times and program names, and they cross the helper boundary in
+/// the collected JSON.
+#[test]
+fn claude_code_collects_the_shell_calls_of_a_session_and_its_subagents() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let home = temp.path();
+    let projects = home.join(".claude/projects/sample");
+    let lines = [
+        r#"{"type":"user","timestamp":"2026-11-08T10:00:00.000Z","cwd":"/Users/me/p","entrypoint":"cli","message":{"role":"user","content":[{"type":"text","text":"push the branch"}]}}"#,
+        r#"{"type":"assistant","timestamp":"2026-11-08T10:00:30.500Z","cwd":"/Users/me/p","message":{"role":"assistant","content":[{"type":"text","text":"pushing"},{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"git push origin feature/login"}}]}}"#,
+        r#"{"type":"user","timestamp":"2026-11-08T10:00:33.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"done"}]}}"#,
+    ];
+    write(
+        &projects.join("session-1.jsonl"),
+        &(lines.join("\n") + "\n"),
+    );
+    let subagent = r#"{"type":"assistant","timestamp":"2026-11-08T10:00:10.250Z","cwd":"/Users/me/p","message":{"role":"assistant","content":[{"type":"tool_use","id":"s1","name":"Bash","input":{"command":"cargo test --lib"}}]}}"#;
+    write(
+        &projects.join("session-1/subagents/agent-a1.jsonl"),
+        &format!("{subagent}\n"),
+    );
+
+    let result = collect("claude_code", home, &options()).expect("claude_code collect");
+    assert_eq!(result.payload.sessions.len(), 1);
+    let calls = &result.payload.sessions[0].shell_calls;
+    let summary: Vec<(Vec<&str>, i64, bool)> = calls
+        .iter()
+        .map(|call| {
+            (
+                call.programs.iter().map(String::as_str).collect(),
+                call.at.map(|t| t.timestamp_millis()).unwrap_or(0),
+                call.finished_at.is_some(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        summary,
+        vec![
+            (vec!["cargo"], 1_794_132_010_250, false),
+            (vec!["git"], 1_794_132_030_500, true),
+        ],
+        "{calls:?}"
+    );
+
+    let json = collect_to_json("claude_code", home, &options()).expect("collect_to_json");
+    let value: serde_json::Value = serde_json::from_str(&json).expect("json");
+    let shipped = &value["payload"]["sessions"][0]["shell_calls"];
+    assert_eq!(shipped.as_array().map(Vec::len), Some(2), "{shipped}");
+    assert_eq!(shipped[1]["programs"], serde_json::json!(["git"]));
+    assert!(
+        !shipped.to_string().contains("feature/login"),
+        "no command text: {shipped}"
+    );
+}
+
+/// OpenClaw's `toolCall` blocks are read for the shell calls of a session.
+#[test]
+fn openclaw_collects_shell_calls_from_tool_call_blocks() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let home = temp.path();
+    let sessions = home.join(".openclaw/agents/main/sessions");
+    let lines = [
+        r#"{"type":"message","id":"m0","parentId":null,"timestamp":"2026-11-08T10:00:00.000Z","message":{"role":"user","content":[{"type":"text","text":"check the service"}],"timestamp":1794132000000}}"#,
+        r#"{"type":"message","id":"m1","parentId":"m0","timestamp":"2026-11-08T10:00:02.250Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"call_1","name":"exec","arguments":{"command":"systemctl status web","workdir":"/srv"}}],"timestamp":1794132002250}}"#,
+        r#"{"type":"message","id":"m2","parentId":"m1","timestamp":"2026-11-08T10:00:03.000Z","message":{"role":"toolResult","toolCallId":"call_1","toolName":"exec","content":[{"type":"text","text":"active"}],"isError":false,"timestamp":1794132003000}}"#,
+    ];
+    write(
+        &sessions.join("session-1.jsonl"),
+        &(lines.join("\n") + "\n"),
+    );
+    let result = collect("openclaw", home, &options()).expect("openclaw collect");
+    assert_eq!(result.payload.sessions.len(), 1);
+    let calls = &result.payload.sessions[0].shell_calls;
+    assert_eq!(calls.len(), 1, "{calls:?}");
+    assert_eq!(calls[0].programs, vec!["systemctl".to_string()]);
+    assert_eq!(
+        calls[0].at.map(|t| t.timestamp_millis()),
+        Some(1_794_132_002_250)
+    );
+    assert_eq!(
+        calls[0].finished_at.map(|t| t.timestamp_millis()),
+        Some(1_794_132_003_000)
+    );
+}
+
 /// The agent's own model traffic is declared on every session, verbatim and
 /// in order, from the agent-visibility params (`agent_llm_traffic`): hosts,
 /// shared cloud suffixes and `asn:` owners alike.

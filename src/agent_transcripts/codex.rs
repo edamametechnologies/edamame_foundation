@@ -316,6 +316,7 @@ pub(crate) fn build_payload(
                     denylist_bypass_events: Vec::new(),
                     launch_context: Default::default(),
                     agent_launches: Vec::new(),
+                    shell_calls: Vec::new(),
                 }
             },
         ) {
@@ -851,6 +852,7 @@ fn thread_row_to_session(
         denylist_bypass_events: Vec::new(),
         launch_context: Default::default(),
         agent_launches: Vec::new(),
+        shell_calls: Vec::new(),
     })
 }
 
