@@ -83,6 +83,7 @@ pub fn collect(home: &Path, options: &CollectOptions) -> anyhow::Result<CollectR
 
     if candidates.is_empty() {
         return Ok(CollectResult {
+            shell_call_index: None,
             payload: CollectedPayload {
                 window_start: now,
                 window_end: now,
@@ -181,7 +182,6 @@ pub fn collect(home: &Path, options: &CollectOptions) -> anyhow::Result<CollectR
                     denylist_bypass_events: Vec::new(),
                     launch_context: Default::default(),
                     agent_launches: Vec::new(),
-                    shell_calls: Vec::new(),
                 }
             },
         ) {
@@ -200,6 +200,7 @@ pub fn collect(home: &Path, options: &CollectOptions) -> anyhow::Result<CollectR
     };
 
     Ok(CollectResult {
+        shell_call_index: None,
         payload: CollectedPayload {
             window_start,
             window_end,

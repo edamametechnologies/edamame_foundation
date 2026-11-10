@@ -252,17 +252,6 @@ pub struct CollectedRawSession {
     /// compatibility reason as [`economics_raw_text`].
     #[serde(default)]
     pub agent_launches: Vec<launch::AgentLaunchCall>,
-    /// The shell commands this session's tool calls ran (and its Task
-    /// subagents'), as times and program names: no command text. Core dates
-    /// an observed process tree by them. Set centrally by `collect`
-    /// (adapters leave it empty) for transcripts written recently; see
-    /// [`launch`]. `#[serde(default)]` for the rolling helper/core
-    /// compatibility reason as [`economics_raw_text`]. An empty list is not
-    /// written, so a session without shell calls serializes as it did before
-    /// the field (the observer hashes the serialized payload to skip an
-    /// unchanged one).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub shell_calls: Vec<launch::ShellCall>,
 }
 
 /// Derive `derived_scope_any_lineage_paths` for an agent from its
@@ -337,6 +326,14 @@ pub struct CollectDiagnostics {
 pub struct CollectResult {
     pub payload: CollectedPayload,
     pub diagnostics: CollectDiagnostics,
+    /// The shell tool calls of every transcript of the store that was
+    /// written within the published idle time, as times and program names
+    /// (see [`launch::StoreShellCalls`]). Set centrally by `collect`
+    /// (adapters leave it `None`). It covers more transcripts than
+    /// `payload.sessions`, which holds the few a model is built from.
+    /// `None`: the store's calls were not read (a collector that predates
+    /// the field), which is not the same as a store without calls.
+    pub shell_call_index: Option<launch::StoreShellCalls>,
 }
 
 /// Deterministic per-session "run economics": exact token usage, cache
@@ -681,6 +678,7 @@ pub fn collect(
         "hermes" => hermes::collect(home, options)?,
         "openclaw" => openclaw::collect(home, options)?,
         other => CollectResult {
+            shell_call_index: None,
             payload: empty_payload(other, home),
             diagnostics: CollectDiagnostics {
                 transcripts_root_accessible: false,
@@ -707,6 +705,12 @@ pub fn collect(
     // subagent transcripts change without its own file changing, and the
     // scanner keeps its own incremental per-file state.
     launch::attach_launch_facts(&mut result.payload.sessions, options);
+    // The shell calls of the whole store, read by the same scanner.
+    result.shell_call_index = Some(launch::store_shell_calls(
+        &result.payload.sessions,
+        &result.diagnostics.transcripts_roots,
+        options,
+    ));
 
     // Having ingested a session is itself proof the store is present, so an
     // adapter must never report the agent as absent while returning its

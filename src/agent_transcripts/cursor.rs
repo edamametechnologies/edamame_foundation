@@ -68,6 +68,7 @@ pub fn collect(home: &Path, options: &CollectOptions) -> anyhow::Result<CollectR
     let now = Utc::now();
     if candidates.is_empty() {
         return Ok(CollectResult {
+            shell_call_index: None,
             payload: CollectedPayload {
                 window_start: now,
                 window_end: now,
@@ -174,7 +175,6 @@ pub fn collect(home: &Path, options: &CollectOptions) -> anyhow::Result<CollectR
                     denylist_bypass_events: Vec::new(),
                     launch_context: Default::default(),
                     agent_launches: Vec::new(),
-                    shell_calls: Vec::new(),
                 }
             },
         ) {
@@ -198,6 +198,7 @@ pub fn collect(home: &Path, options: &CollectOptions) -> anyhow::Result<CollectR
     diagnostics.transcripts_root_accessible = projects_root.is_dir();
 
     Ok(CollectResult {
+        shell_call_index: None,
         payload: CollectedPayload {
             window_start,
             window_end,
@@ -235,7 +236,9 @@ fn gather_cursor_transcripts(root: &Path, options: &CollectOptions) -> Vec<Trans
     let mut by_session: std::collections::HashMap<String, TranscriptGroup> =
         std::collections::HashMap::new();
     for path in files {
-        let mtime = mtime_secs(&path);
+        // A modification time later than the read time is read as the read
+        // time.
+        let mtime = mtime_secs(&path).min(now_secs);
         if mtime < active_cutoff {
             continue;
         }

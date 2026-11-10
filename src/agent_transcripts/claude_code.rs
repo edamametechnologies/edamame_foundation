@@ -88,6 +88,7 @@ pub(crate) fn build_payload(
 
     if candidates.is_empty() {
         return Ok(CollectResult {
+            shell_call_index: None,
             payload: CollectedPayload {
                 window_start: now,
                 window_end: now,
@@ -188,7 +189,6 @@ pub(crate) fn build_payload(
                     denylist_bypass_events: Vec::new(),
                     launch_context: Default::default(),
                     agent_launches: Vec::new(),
-                    shell_calls: Vec::new(),
                 }
             },
         ) {
@@ -213,6 +213,7 @@ pub(crate) fn build_payload(
     }
 
     Ok(CollectResult {
+        shell_call_index: None,
         payload: CollectedPayload {
             window_start,
             window_end,
@@ -250,7 +251,9 @@ pub(crate) fn gather_jsonl_transcripts(
     let mut candidates: Vec<GenericTranscriptCandidate> = files
         .into_iter()
         .filter_map(|path| {
-            let mtime = mtime_secs(&path);
+            // A modification time later than the read time is read as the
+            // read time.
+            let mtime = mtime_secs(&path).min(now);
             if mtime < active_cutoff {
                 return None;
             }
