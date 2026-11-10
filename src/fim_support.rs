@@ -1,4 +1,5 @@
 use flodbadd::fim::{self, FimConfig, FimMode, FimWatchRoots};
+use flodbadd::store_writers::StoreSpec;
 use std::path::{Path, PathBuf};
 
 pub fn current_fim_config() -> FimConfig {
@@ -62,19 +63,78 @@ pub fn resolve_fim_watch_paths(
 /// generic application-data trees taking the watcher's early drop. Both FIM
 /// startup paths (standalone core, helper daemon) call this with the same
 /// arguments.
+///
+/// The agent transcript stores ([`store_specs`]) are attached whatever the
+/// other roots are: explicit paths replace the default roots, never the
+/// stores.
 pub fn resolve_fim_watch_roots(
     paths: &[String],
     user_home: Option<&Path>,
     mode: FimMode,
 ) -> FimWatchRoots {
-    if !paths.is_empty() {
-        return FimWatchRoots::operator(paths.iter().map(PathBuf::from).collect());
-    }
+    let roots = if !paths.is_empty() {
+        FimWatchRoots::operator(paths.iter().map(PathBuf::from).collect())
+    } else {
+        match user_home {
+            Some(home) => default_watch_roots_for_home(home),
+            None => fim::default_watch_roots(mode),
+        }
+    };
+    roots.with_stores(store_specs(user_home))
+}
 
-    match user_home {
-        Some(home) => default_watch_roots_for_home(home),
-        None => fim::default_watch_roots(mode),
+/// The agent transcript stores a file monitor started for `user_home`
+/// records the writers of (`flodbadd::store_writers`): the published
+/// `transcript_stores` under that home, or under the home this process
+/// resolves when the caller gave none. Empty while
+/// `transcript_write_trust_enabled` is published false, and when no home is
+/// known: nothing is recorded then.
+pub fn store_specs(user_home: Option<&Path>) -> Vec<StoreSpec> {
+    if !crate::vuln_detector_params::transcript_write_trust_enabled() {
+        return Vec::new();
     }
+    let home = user_home
+        .map(Path::to_path_buf)
+        .or_else(crate::agent_plugin::real_home_dir);
+    match home {
+        Some(home) => store_specs_for_home(&home),
+        None => Vec::new(),
+    }
+}
+
+/// The published `transcript_stores` under `home`, one per agent type with
+/// a root on this platform: the store roots and the pid-file roots joined
+/// onto the home, the path segment and the endings as published.
+pub fn store_specs_for_home(home: &Path) -> Vec<StoreSpec> {
+    // Component by component, so the separators are the platform's.
+    let under_home = |relative: &String| -> PathBuf {
+        relative
+            .split('/')
+            .filter(|part| !part.is_empty())
+            .fold(home.to_path_buf(), |path, part| path.join(part))
+    };
+    crate::agent_visibility_params::transcript_stores()
+        .into_iter()
+        .filter_map(|(agent, store)| {
+            let roots: Vec<PathBuf> = store
+                .roots
+                .for_this_platform()
+                .iter()
+                .map(under_home)
+                .collect();
+            if roots.is_empty() {
+                return None;
+            }
+            Some(StoreSpec {
+                agent,
+                roots,
+                path_segment: store.path_segment,
+                file_suffixes: store.file_suffixes,
+                pid_file_roots: store.pid_file_roots.iter().map(under_home).collect(),
+                pid_file_suffixes: store.pid_file_suffixes,
+            })
+        })
+        .collect()
 }
 
 /// [`default_watch_paths_for_home`] with who chose each root, as in
@@ -219,7 +279,66 @@ mod tests {
 
         let explicit = vec![home.join("project").to_string_lossy().to_string()];
         let roots = resolve_fim_watch_roots(&explicit, Some(&home), FimMode::Desktop);
-        assert_eq!(roots, FimWatchRoots::operator(vec![home.join("project")]));
+        assert_eq!(
+            roots,
+            FimWatchRoots::operator(vec![home.join("project")])
+                .with_stores(store_specs_for_home(&home))
+        );
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// The stores are attached to the default roots and to explicit paths
+    /// alike, under the home the caller gave: every published agent type
+    /// with its roots joined onto it, and the pid-file roots of the agents
+    /// that have them.
+    #[test]
+    fn test_the_transcript_stores_are_attached_whatever_the_roots() {
+        let home = temp_home("stores");
+        let specs = store_specs_for_home(&home);
+        let agents: Vec<&str> = specs.iter().map(|spec| spec.agent.as_str()).collect();
+        assert_eq!(
+            agents,
+            vec![
+                "claude_code",
+                "claude_desktop",
+                "codex",
+                "cursor",
+                "hermes",
+                "openclaw"
+            ]
+        );
+        for spec in &specs {
+            assert!(!spec.roots.is_empty(), "{}", spec.agent);
+            assert!(!spec.file_suffixes.is_empty(), "{}", spec.agent);
+            for root in spec.roots.iter().chain(spec.pid_file_roots.iter()) {
+                assert!(root.starts_with(&home), "{:?} is not under the home", root);
+                assert!(root.is_absolute());
+            }
+        }
+        let claude = &specs[0];
+        assert_eq!(claude.roots, vec![home.join(".claude").join("projects")]);
+        assert_eq!(
+            claude.pid_file_roots,
+            vec![home.join(".claude").join("sessions")]
+        );
+        assert_eq!(claude.pid_file_suffixes, vec![".json".to_string()]);
+        let cursor = specs.iter().find(|spec| spec.agent == "cursor").unwrap();
+        assert_eq!(cursor.path_segment, "agent-transcripts");
+
+        for explicit in [
+            Vec::new(),
+            vec![home.join("audit").to_string_lossy().to_string()],
+        ] {
+            let roots = resolve_fim_watch_roots(&explicit, Some(&home), FimMode::Desktop);
+            assert_eq!(roots.stores, specs, "explicit paths: {:?}", explicit);
+        }
+        // A store root under a watched root is delivered with it; the others
+        // are watched for the record only.
+        std::fs::create_dir_all(home.join(".claude")).unwrap();
+        let roots = resolve_fim_watch_roots(&[], Some(&home), FimMode::Desktop);
+        let only = roots.store_only_roots();
+        assert!(!only.contains(&home.join(".claude").join("projects")));
+        assert!(only.contains(&home.join(".codex").join("sessions")));
         let _ = std::fs::remove_dir_all(&home);
     }
 
