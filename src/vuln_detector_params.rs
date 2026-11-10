@@ -1389,24 +1389,36 @@ pub struct CveDetectionParamsJSON {
     /// observer has not read the turn that produced it yet). Graded as
     /// before once this many seconds pass (Frank, 2026-10-31, FP-DIV-23).
     pub divergence_unexplained_ingest_grace_secs: u64,
-    /// Session binding by tool-call time: when true, a session (or a file
-    /// write) whose process tree was started by one conversation's shell
-    /// tool call is bound to that conversation where no harness pid file
-    /// binds it. While false the binding is computed beside the pid-file
-    /// one and counted, and nothing reads it. Default false.
+    /// Session binding by tool-call time: whether the conversation a
+    /// session's process tree is tied to by the time of a shell tool call is
+    /// the one the session is attributed to where no harness pid file gives
+    /// one. Default false: the result is computed and counted.
     pub session_binding_tool_call_enabled: bool,
     /// Session binding: how far before a tool call's recorded time the
-    /// birth of the process it started may lie, in milliseconds. The harness
-    /// and the sensor stamp the same wall clock; a transcript line can be
-    /// written a moment after its process was spawned.
+    /// creation of the process it started may lie, in milliseconds. The
+    /// harness and the sensor stamp the same wall clock; a transcript line
+    /// can be written a moment after its process was spawned.
     pub session_binding_clock_slack_ms: u64,
     /// Session binding: how long after a tool call's recorded time, while
-    /// its result is not known yet, the process it started may be born, in
-    /// milliseconds.
+    /// its result is not known yet, the process it started may be created,
+    /// in milliseconds.
     pub session_binding_spawn_window_ms: u64,
     /// Session binding: how late the kernel sensor may deliver a process
-    /// birth, in milliseconds (its timestamp is the delivery's).
+    /// creation, in milliseconds (its timestamp is the delivery's).
     pub session_binding_sensor_lag_ms: u64,
+    /// Session binding: the longest window one tool call is read with, in
+    /// milliseconds, from its recorded time. A call whose result came back
+    /// later is read with a window of this length.
+    pub session_binding_max_window_ms: u64,
+    /// Session binding: shell tool calls kept per transcript (the most
+    /// recent ones).
+    pub session_binding_max_calls_per_transcript: u64,
+    /// Session binding: transcripts of one agent's store whose shell tool
+    /// calls are read (the most recently written ones).
+    pub session_binding_max_transcripts_per_store: u64,
+    /// Session binding: a transcript not written for this many seconds has
+    /// its shell tool calls set aside until it is written again.
+    pub session_binding_idle_transcript_secs: u64,
     /// Lowercase `/` path suffixes (or `/dir/` fragments) of the credential
     /// caches a CLI writes when it logs in (`com.vercel.cli/auth.json`,
     /// `~/.azure/msal_token_cache.json`, ...). A write to one by an
@@ -1825,12 +1837,16 @@ pub struct CveDetectionParams {
     /// observer has not read the turn that produced it yet). Graded as
     /// before once this many seconds pass (Frank, 2026-10-31, FP-DIV-23).
     pub divergence_unexplained_ingest_grace_secs: u64,
-    /// Session binding by tool-call time: the switch and its three windows
-    /// (see `CveDetectionParamsJSON`).
+    /// Session binding by tool-call time: the switch, its windows and the
+    /// limits of the shell-call list (see `CveDetectionParamsJSON`).
     pub session_binding_tool_call_enabled: bool,
     pub session_binding_clock_slack_ms: u64,
     pub session_binding_spawn_window_ms: u64,
     pub session_binding_sensor_lag_ms: u64,
+    pub session_binding_max_window_ms: u64,
+    pub session_binding_max_calls_per_transcript: u64,
+    pub session_binding_max_transcripts_per_store: u64,
+    pub session_binding_idle_transcript_secs: u64,
     /// Lowercase `/` path suffixes (or `/dir/` fragments) of the credential
     /// caches a CLI writes when it logs in (`com.vercel.cli/auth.json`,
     /// `~/.azure/msal_token_cache.json`, ...). A write to one by an
@@ -2957,6 +2973,11 @@ impl CveDetectionParams {
             session_binding_clock_slack_ms: json.session_binding_clock_slack_ms,
             session_binding_spawn_window_ms: json.session_binding_spawn_window_ms,
             session_binding_sensor_lag_ms: json.session_binding_sensor_lag_ms,
+            session_binding_max_window_ms: json.session_binding_max_window_ms,
+            session_binding_max_calls_per_transcript: json.session_binding_max_calls_per_transcript,
+            session_binding_max_transcripts_per_store: json
+                .session_binding_max_transcripts_per_store,
+            session_binding_idle_transcript_secs: json.session_binding_idle_transcript_secs,
             cli_credential_cache_path_suffixes: lowercase_token_list(
                 &json.cli_credential_cache_path_suffixes,
             ),
@@ -5425,6 +5446,31 @@ pub fn session_binding_sensor_lag_ms() -> u64 {
     PARAMS_SNAPSHOT.load().session_binding_sensor_lag_ms
 }
 
+/// Session binding: the longest window of one tool call, in milliseconds.
+pub fn session_binding_max_window_ms() -> u64 {
+    PARAMS_SNAPSHOT.load().session_binding_max_window_ms
+}
+
+/// Session binding: shell tool calls kept per transcript.
+pub fn session_binding_max_calls_per_transcript() -> u64 {
+    PARAMS_SNAPSHOT
+        .load()
+        .session_binding_max_calls_per_transcript
+}
+
+/// Session binding: transcripts read per store.
+pub fn session_binding_max_transcripts_per_store() -> u64 {
+    PARAMS_SNAPSHOT
+        .load()
+        .session_binding_max_transcripts_per_store
+}
+
+/// Session binding: seconds without a write after which a transcript's
+/// shell tool calls are set aside.
+pub fn session_binding_idle_transcript_secs() -> u64 {
+    PARAMS_SNAPSHOT.load().session_binding_idle_transcript_secs
+}
+
 pub fn forward_proxy_min_distinct_processes() -> usize {
     PARAMS_SNAPSHOT.load().forward_proxy_min_distinct_processes
 }
@@ -5688,22 +5734,30 @@ mod tests {
         );
     }
 
-    /// The session binding by tool-call time ships switched off, with its
-    /// three windows published; a published file without one of the keys
-    /// does not parse (born complete).
+    /// The session binding by tool-call time is published with its switch
+    /// false, its windows and the limits of the shell-call list; a published
+    /// file without one of the keys does not parse (born complete).
     #[test]
-    fn test_session_binding_params_ship_switched_off() {
+    fn test_session_binding_params_are_published_complete() {
         let json = serde_json::from_str::<CveDetectionParamsJSON>(&CVE_DETECTION_PARAMS_DB)
             .expect("embedded snapshot parses");
         assert!(!json.session_binding_tool_call_enabled);
         assert_eq!(json.session_binding_clock_slack_ms, 1_000);
         assert_eq!(json.session_binding_spawn_window_ms, 5_000);
         assert_eq!(json.session_binding_sensor_lag_ms, 2_000);
+        assert_eq!(json.session_binding_max_window_ms, 600_000);
+        assert_eq!(json.session_binding_max_calls_per_transcript, 64);
+        assert_eq!(json.session_binding_max_transcripts_per_store, 64);
+        assert_eq!(json.session_binding_idle_transcript_secs, 7_200);
         for key in [
             "session_binding_tool_call_enabled",
             "session_binding_clock_slack_ms",
             "session_binding_spawn_window_ms",
             "session_binding_sensor_lag_ms",
+            "session_binding_max_window_ms",
+            "session_binding_max_calls_per_transcript",
+            "session_binding_max_transcripts_per_store",
+            "session_binding_idle_transcript_secs",
         ] {
             let mut value: serde_json::Value =
                 serde_json::from_str(&CVE_DETECTION_PARAMS_DB).expect("valid JSON");
