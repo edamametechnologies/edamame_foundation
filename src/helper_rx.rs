@@ -775,6 +775,7 @@ pub async fn rpc_run(
             "collect_agent_visibility" => utility_collect_agent_visibility(arg1, arg2).await,
             "collect_sensor_coverage" => utility_collect_sensor_coverage(arg1, arg2).await,
             "process_events_since" => utility_process_events_since(arg1).await,
+            "store_writers_since" => utility_store_writers_since(arg1).await,
             "attest_binaries" => utility_attest_binaries(arg1).await,
             "read_instruction_content" => utility_read_instruction_content(arg1, arg2).await,
             "reveal_path_in_file_manager" => utility_reveal_path_in_file_manager(arg1, arg2).await,

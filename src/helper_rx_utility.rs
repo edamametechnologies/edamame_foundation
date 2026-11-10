@@ -966,6 +966,22 @@ pub async fn utility_process_events_since(since_ms: &str) -> Result<String> {
         .map_err(|e| anyhow::anyhow!("Failed to serialize process events: {}", e))
 }
 
+/// The processes recorded per file of the agent transcript stores, and the
+/// shell calls read as transcripts grew, that changed since the cursor in
+/// `arg1` (a `store_writer_relay::StoreWritersCursor` as JSON; empty for
+/// everything). Thin delegate (`store_writer_relay::store_writers_since`);
+/// the standalone core calls the same function in process.
+pub async fn utility_store_writers_since(cursor_json: &str) -> Result<String> {
+    let cursor = match cursor_json.trim() {
+        "" => crate::store_writer_relay::StoreWritersCursor::default(),
+        text => serde_json::from_str(text)
+            .map_err(|e| anyhow::anyhow!("Invalid store-writers cursor: {}", e))?,
+    };
+    let batch = crate::store_writer_relay::store_writers_since(&cursor);
+    serde_json::to_string(&batch)
+        .map_err(|e| anyhow::anyhow!("Failed to serialize store writers: {}", e))
+}
+
 /// Platform signature verdicts for the binaries in `arg1` (a JSON array of
 /// paths): the helper runs the verification outside the app's sandbox
 /// (`publisher_attestation::attest_binaries`). Thin delegate; the standalone

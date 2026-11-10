@@ -71,6 +71,7 @@ pub const UTILITY_ORDER_NAMES: &[&str] = &[
     "start_file_monitor",
     "stop_capture",
     "stop_file_monitor",
+    "store_writers_since",
 ];
 
 /// Utility orders whose response carries secrets: never logged, even at trace.
