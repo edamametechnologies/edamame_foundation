@@ -1399,6 +1399,12 @@ pub struct CveDetectionParamsJSON {
     /// time while the switch is on. Published empty: an agent type is listed
     /// once the way it starts and records its commands has been verified.
     pub session_binding_tool_call_agents: Vec<String>,
+    /// Session binding: the agent types whose process hosts another agent's
+    /// harness (an editor's extension host starting Claude Code or Codex): a
+    /// harness such a process starts directly, with no process between them,
+    /// was not started by one of its conversations' tool calls, and the host
+    /// is no conversation of the chain.
+    pub session_binding_host_agents: Vec<String>,
     /// Session binding: tool names (lower case, without `.exe`) of the
     /// shells a harness runs a command through. A process tree whose first
     /// process is one of them is compared with a tool call by the programs
@@ -1436,6 +1442,9 @@ pub struct CveDetectionParamsJSON {
     /// Session binding: transcript lines a shell tool call waits for its
     /// result before its end is taken as not known.
     pub session_binding_result_wait_lines: u64,
+    /// Session binding: process trees that keep the conversation they were
+    /// tied to by tool-call time (the most recently used ones).
+    pub session_binding_max_remembered_roots: u64,
     /// Lowercase `/` path suffixes (or `/dir/` fragments) of the credential
     /// caches a CLI writes when it logs in (`com.vercel.cli/auth.json`,
     /// `~/.azure/msal_token_cache.json`, ...). A write to one by an
@@ -1858,6 +1867,7 @@ pub struct CveDetectionParams {
     /// limits of the shell-call list (see `CveDetectionParamsJSON`).
     pub session_binding_tool_call_enabled: bool,
     pub session_binding_tool_call_agents: Vec<String>,
+    pub session_binding_host_agents: Vec<String>,
     pub session_binding_shell_programs: Vec<String>,
     pub session_binding_clock_slack_ms: u64,
     pub session_binding_spawn_window_ms: u64,
@@ -1868,6 +1878,7 @@ pub struct CveDetectionParams {
     pub session_binding_idle_transcript_secs: u64,
     pub session_binding_max_conversation_chain: u64,
     pub session_binding_result_wait_lines: u64,
+    pub session_binding_max_remembered_roots: u64,
     /// Lowercase `/` path suffixes (or `/dir/` fragments) of the credential
     /// caches a CLI writes when it logs in (`com.vercel.cli/auth.json`,
     /// `~/.azure/msal_token_cache.json`, ...). A write to one by an
@@ -2997,6 +3008,12 @@ impl CveDetectionParams {
                 .map(|agent| agent.trim().to_ascii_lowercase())
                 .filter(|agent| !agent.is_empty())
                 .collect(),
+            session_binding_host_agents: json
+                .session_binding_host_agents
+                .iter()
+                .map(|agent| agent.trim().to_ascii_lowercase())
+                .filter(|agent| !agent.is_empty())
+                .collect(),
             session_binding_shell_programs: json
                 .session_binding_shell_programs
                 .iter()
@@ -3012,6 +3029,7 @@ impl CveDetectionParams {
             session_binding_idle_transcript_secs: json.session_binding_idle_transcript_secs,
             session_binding_max_conversation_chain: json.session_binding_max_conversation_chain,
             session_binding_result_wait_lines: json.session_binding_result_wait_lines,
+            session_binding_max_remembered_roots: json.session_binding_max_remembered_roots,
             cli_credential_cache_path_suffixes: lowercase_token_list(
                 &json.cli_credential_cache_path_suffixes,
             ),
@@ -5511,10 +5529,25 @@ pub fn session_binding_tool_call_agents() -> Vec<String> {
         .clone()
 }
 
+/// Session binding: the agent types whose process hosts another agent's
+/// harness, lower case (see the field docs).
+pub fn session_binding_host_agents() -> Vec<String> {
+    PARAMS_SNAPSHOT.load().session_binding_host_agents.clone()
+}
+
+/// Session binding: process trees that keep the conversation they were tied
+/// to.
+pub fn session_binding_max_remembered_roots() -> u64 {
+    PARAMS_SNAPSHOT.load().session_binding_max_remembered_roots
+}
+
 /// Session binding: the shells a harness runs a command through, lower
 /// case (see the field docs).
 pub fn session_binding_shell_programs() -> Vec<String> {
-    PARAMS_SNAPSHOT.load().session_binding_shell_programs.clone()
+    PARAMS_SNAPSHOT
+        .load()
+        .session_binding_shell_programs
+        .clone()
 }
 
 /// Session binding: conversations one process tree is tied to at most.
@@ -5801,6 +5834,8 @@ mod tests {
             .expect("embedded snapshot parses");
         assert!(!json.session_binding_tool_call_enabled);
         assert!(json.session_binding_tool_call_agents.is_empty());
+        assert_eq!(json.session_binding_host_agents, vec!["cursor".to_string()]);
+        assert_eq!(json.session_binding_max_remembered_roots, 4_096);
         // The shells of the three desktop platforms.
         for shell in ["sh", "bash", "zsh", "cmd", "powershell", "pwsh"] {
             assert!(
@@ -5822,6 +5857,7 @@ mod tests {
         for key in [
             "session_binding_tool_call_enabled",
             "session_binding_tool_call_agents",
+            "session_binding_host_agents",
             "session_binding_shell_programs",
             "session_binding_clock_slack_ms",
             "session_binding_spawn_window_ms",
@@ -5832,6 +5868,7 @@ mod tests {
             "session_binding_idle_transcript_secs",
             "session_binding_max_conversation_chain",
             "session_binding_result_wait_lines",
+            "session_binding_max_remembered_roots",
         ] {
             let mut value: serde_json::Value =
                 serde_json::from_str(&CVE_DETECTION_PARAMS_DB).expect("valid JSON");

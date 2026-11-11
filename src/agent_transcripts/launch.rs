@@ -448,8 +448,10 @@ impl ShellCallReader {
     /// `session_binding_result_wait_lines`).
     pub fn new() -> Self {
         Self::with_limits(
-            usize::try_from(crate::vuln_detector_params::session_binding_max_calls_per_transcript())
-                .unwrap_or(usize::MAX),
+            usize::try_from(
+                crate::vuln_detector_params::session_binding_max_calls_per_transcript(),
+            )
+            .unwrap_or(usize::MAX),
             crate::vuln_detector_params::session_binding_result_wait_lines(),
         )
     }
@@ -2924,26 +2926,19 @@ mod tests {
         let mut bytes = first.clone();
         bytes.extend_from_slice(&call[..call.len() / 2]);
         std::fs::write(&path, &bytes).unwrap();
-        let scan =
-            scan_file(&path, &p.workspace_attribution, &p.signature).expect("scan");
+        let scan = scan_file(&path, &p.workspace_attribution, &p.signature).expect("scan");
         assert_eq!(scan.offset, first.len() as u64);
         assert!(scan.launches.is_empty());
         // The rest of the line lands: the next scan picks it up from the offset.
         let mut all = first.clone();
         all.extend_from_slice(&call);
         std::fs::write(&path, &all).unwrap();
-        let scan =
-            scan_file(&path, &p.workspace_attribution, &p.signature).expect("scan");
+        let scan = scan_file(&path, &p.workspace_attribution, &p.signature).expect("scan");
         assert_eq!(scan.offset, all.len() as u64);
         assert_eq!(scan.launches.len(), 1);
         assert!(scan.launches[0].1.background);
         // State computed under other params is recomputed, not reused.
-        let rescan = scan_file(
-            &path,
-            &p.workspace_attribution,
-            "another-signature",
-        )
-        .expect("scan");
+        let rescan = scan_file(&path, &p.workspace_attribution, "another-signature").expect("scan");
         assert_eq!(rescan.launches.len(), 1);
         assert_eq!(rescan.params_signature, "another-signature");
     }
@@ -3435,7 +3430,10 @@ mod tests {
         let mut gaps = ShellCallGaps::default();
         gaps.add_unread(Some(at(9)), at(9));
         gaps.add_unread(Some(at(3)), at(9));
-        assert_eq!((gaps.unread_from, gaps.unread_until), (Some(at(3)), Some(at(9))));
+        assert_eq!(
+            (gaps.unread_from, gaps.unread_until),
+            (Some(at(3)), Some(at(9)))
+        );
     }
 
     /// A line that repeats a message of the conversation without being a
@@ -3461,7 +3459,10 @@ mod tests {
         assert_eq!(second.started, vec![1]);
         let third = reader.read_line(&line(logged), now);
         assert_eq!(third, ShellCallLineEvents::default());
-        assert_eq!(reader.calls().map(|(seq, _)| seq).collect::<Vec<_>>(), vec![1]);
+        assert_eq!(
+            reader.calls().map(|(seq, _)| seq).collect::<Vec<_>>(),
+            vec![1]
+        );
     }
 
     /// A call without a time of its own takes no place from a dated one: it
