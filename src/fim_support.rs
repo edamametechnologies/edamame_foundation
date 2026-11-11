@@ -112,8 +112,75 @@ pub fn attach_stores(roots: FimWatchRoots, stores_home: Result<&Path, &str>) -> 
 /// The published `transcript_stores` under `home`, one per agent type with
 /// a root on this platform: the store roots and the pid-file roots joined
 /// onto the home, the path segment and the endings as published, and the
-/// published `transcript_capture.creation_reorder_ms`.
+/// published `transcript_capture.creation_reorder_ms`. A root reached
+/// through a symbolic link is adopted only when the link leads into a
+/// directory the home's owner owns (on Windows, never): the reader reads
+/// what the stores hold.
 pub fn store_specs_for_home(home: &Path) -> Vec<StoreSpec> {
+    let home_owner = path_owner(home);
+    let mut refused = 0usize;
+    let mut adopt = |root: PathBuf| -> Option<PathBuf> {
+        if root_is_adoptable(home, &root, home_owner) {
+            Some(root)
+        } else {
+            refused += 1;
+            None
+        }
+    };
+    let specs = store_specs_under(home, &mut adopt);
+    if refused > 0 {
+        tracing::warn!(
+            "agent stores: {} root(s) refused (reached through a link that leads out of the home owner's directories)",
+            refused
+        );
+    }
+    specs
+}
+
+/// The owner of the file or directory at `path` (its uid, following links),
+/// where accounts have one.
+#[cfg(unix)]
+fn path_owner(path: &Path) -> Option<u32> {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata(path).ok().map(|meta| meta.uid())
+}
+
+#[cfg(not(unix))]
+fn path_owner(_path: &Path) -> Option<u32> {
+    None
+}
+
+/// Whether `root`, below `home`, may be adopted as a store root: every
+/// component between them that exists and is a symbolic link leads into a
+/// directory `home_owner` owns (Unix); on a platform without owners, no
+/// component is a link. A component that does not exist yet ends the walk
+/// (the root is awaited; what is created later at it is matched by the
+/// spelling adopted now).
+fn root_is_adoptable(home: &Path, root: &Path, home_owner: Option<u32>) -> bool {
+    let Ok(below) = root.strip_prefix(home) else {
+        return false;
+    };
+    let mut path = home.to_path_buf();
+    for component in below.components() {
+        path.push(component);
+        let Ok(meta) = std::fs::symlink_metadata(&path) else {
+            return true;
+        };
+        if !meta.file_type().is_symlink() {
+            continue;
+        }
+        match (home_owner, path_owner(&path)) {
+            (Some(owner), Some(target_owner)) if owner == target_owner => {}
+            _ => return false,
+        }
+    }
+    true
+}
+
+fn store_specs_under(
+    home: &Path,
+    adopt: &mut dyn FnMut(PathBuf) -> Option<PathBuf>,
+) -> Vec<StoreSpec> {
     // Component by component, so the separators are the platform's.
     let under_home = |relative: &String| -> PathBuf {
         relative
@@ -131,6 +198,7 @@ pub fn store_specs_for_home(home: &Path) -> Vec<StoreSpec> {
                 .for_this_platform()
                 .iter()
                 .map(under_home)
+                .filter_map(&mut *adopt)
                 .collect();
             if roots.is_empty() {
                 return None;
@@ -141,7 +209,12 @@ pub fn store_specs_for_home(home: &Path) -> Vec<StoreSpec> {
                 path_segment: store.path_segment,
                 excluded_segments: store.excluded_segments,
                 file_suffixes: store.file_suffixes,
-                pid_file_roots: store.pid_file_roots.iter().map(under_home).collect(),
+                pid_file_roots: store
+                    .pid_file_roots
+                    .iter()
+                    .map(under_home)
+                    .filter_map(&mut *adopt)
+                    .collect(),
                 pid_file_suffixes: store.pid_file_suffixes,
                 creation_reorder_ms,
             })
@@ -472,5 +545,32 @@ mod tests {
             crate::vuln_detector_params::fim_hash_size_threshold()
         );
         assert!(cfg.recursive, "default FIM config is recursive");
+    }
+
+    /// A store root reached through a symbolic link is adopted only when the
+    /// link leads into a directory the home's owner owns; a root that does
+    /// not exist yet is awaited.
+    #[cfg(unix)]
+    #[test]
+    fn a_store_root_is_not_adopted_through_a_link_out_of_the_owners_directories() {
+        let home = temp_home("root-links");
+        let mine = path_owner(&home);
+        std::fs::create_dir_all(home.join(".claude").join("projects")).unwrap();
+        std::fs::create_dir_all(home.join("dotfiles").join("codex")).unwrap();
+        std::os::unix::fs::symlink(home.join("dotfiles").join("codex"), home.join(".codex"))
+            .unwrap();
+        let plain = home.join(".claude").join("projects");
+        let linked = home.join(".codex").join("sessions");
+        let missing = home.join(".hermes").join("sessions");
+        assert!(root_is_adoptable(&home, &plain, mine));
+        assert!(root_is_adoptable(&home, &linked, mine));
+        assert!(root_is_adoptable(&home, &missing, mine));
+        // The link's target owned by another account than the home's.
+        let other = mine.map(|uid| uid.wrapping_add(1));
+        assert!(root_is_adoptable(&home, &plain, other));
+        assert!(!root_is_adoptable(&home, &linked, other));
+        // Not below the home: never.
+        assert!(!root_is_adoptable(&home, Path::new("/etc"), mine));
+        let _ = std::fs::remove_dir_all(&home);
     }
 }
