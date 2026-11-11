@@ -477,8 +477,9 @@ struct OpenedTranscript {
 }
 
 /// Open `path` for reading as the reader may: never through a symbolic link
-/// (any component on macOS and on Linux 5.6 and later, the last one
-/// elsewhere), never blocking on the open, and only a regular file.
+/// (`O_NOFOLLOW_ANY` on macOS, `openat2` with `RESOLVE_NO_SYMLINKS` on Linux,
+/// `O_NOFOLLOW` without them; a reparse point is refused on Windows), never
+/// blocking on the open, and only a regular file.
 fn open_transcript(path: &Path) -> Result<OpenedTranscript, OpenRefusal> {
     let file = open_no_follow(path)?;
     let meta = file.metadata().map_err(|_| OpenRefusal::Unreadable)?;
@@ -537,7 +538,7 @@ fn open_no_follow(path: &Path) -> Result<std::fs::File, OpenRefusal> {
     if error.raw_os_error() != Some(libc::ENOSYS) {
         return Err(refusal_of(&error));
     }
-    // A kernel without openat2: the last component only.
+    // A kernel without openat2: `O_NOFOLLOW`.
     std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
@@ -556,7 +557,7 @@ fn open_no_follow(path: &Path) -> Result<std::fs::File, OpenRefusal> {
     };
     match open(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOFOLLOW_ANY) {
         Ok(file) => Ok(file),
-        // A system that does not know the flag: the last component only.
+        // A system that does not know the flag: `O_NOFOLLOW`.
         Err(error) if error.raw_os_error() == Some(libc::EINVAL) => {
             open(libc::O_NOFOLLOW | libc::O_NONBLOCK).map_err(|error| refusal_of(&error))
         }
@@ -876,7 +877,7 @@ impl<E: CallExtractor> Capture<E> {
     }
 
     /// Go on reading the transcripts a wake-up left behind, and take the
-    /// new files whose creation was not reported in time.
+    /// new files whose wait for a creation (`late_report_ms`) is over.
     pub fn continue_reads(&mut self, acked_seq: u64) {
         let now = (self.clock)();
         let behind: Vec<String> = self
@@ -950,8 +951,8 @@ impl<E: CallExtractor> Capture<E> {
         );
     }
 
-    /// The record started a new instance: what happened to the files in
-    /// between was not reported. Each file keeps its position; its next pass
+    /// The record started a new instance: the record holds nothing of the
+    /// files in between. Each file keeps its position; its next pass
     /// names no process for what it reads, and the interval since its last
     /// read is a gap up to that pass. The calls read so far stay.
     fn record_restarted(&mut self, now: u64) {
@@ -1268,11 +1269,10 @@ impl<E: CallExtractor> Capture<E> {
                 && identity.is_some()
                 && creation_time_agrees(&meta, creation.at_ms, self.config.creation_time_slack_ms)
         });
-        // A file new to the reader, with no creation reported yet, that is
-        // younger than the time a report may take (a sensor delivers a
-        // creation after the change is noted, or on another thread than the
-        // first write): it is not taken until the report arrives or that
-        // time has passed. Nothing of it is read meanwhile.
+        // A file new to the reader, with no creation in the record, that is
+        // younger than `late_report_ms`: it is taken when the record holds
+        // its creation or when that bound has passed. Nothing of it is read
+        // meanwhile.
         if kind == PassKind::FirstSight
             && state.latest_creation.is_none()
             && !state.ever_synced
@@ -2566,7 +2566,7 @@ mod tests {
 
         // Rewritten shorter, with another call in it.
         let at = bench.advance(10);
-        std::fs::write(&bench.path, "C k9 forged\n").unwrap();
+        std::fs::write(&bench.path, "C k9 other\n").unwrap();
         let span = bench.span(HARNESS, ops::WRITE, at);
         bench.advance(2);
         bench.take(bench.dirty(Some(creation), vec![span]));
@@ -2583,7 +2583,7 @@ mod tests {
         assert!(!file.since_creation);
         // A rewrite does not contradict the file's recorded creation.
         assert!(!file.creation_contradicted);
-        assert_eq!(file.offset, "C k9 forged\n".len() as u64);
+        assert_eq!(file.offset, "C k9 other\n".len() as u64);
 
         // What is appended afterwards is read again.
         bench.appended_by(HARNESS, creation, "C k3 ls\n");
@@ -2854,7 +2854,8 @@ mod tests {
         assert_eq!(view.calls[0].writer, Some(HARNESS));
         assert!(view.gaps.is_empty());
 
-        // No report in time: the file is taken as one that held content.
+        // No creation within the bound: the file is taken as one that held
+        // content.
         let mut bench = Bench::new(config());
         bench.started_after_the_files();
         bench.append("C k1 curl\n");
@@ -3069,7 +3070,7 @@ mod tests {
         let last_read = bench.file().last_read_ms;
         // Appended while nothing was recorded, then the record comes back.
         bench.advance(1_000);
-        bench.append("C k2 unseen\n");
+        bench.append("C k2 between\n");
         bench.record_instance = "record-2".to_string();
         let at = bench.advance(10);
         bench.append("C k3 nc\n");
@@ -3077,10 +3078,10 @@ mod tests {
         bench.take(bench.dirty(None, vec![bench.span(HARNESS, ops::WRITE, at)]));
         // The position is kept: what arrived in between is read, named by
         // no process, and the interval since the last read is a gap up to
-        // this read (the reviewer's P5: nothing skipped, nothing uncovered).
+        // this read: nothing skipped, nothing uncovered.
         assert_eq!(
             bench.programs(),
-            vec!["curl".to_string(), "unseen".to_string(), "nc".to_string()]
+            vec!["curl".to_string(), "between".to_string(), "nc".to_string()]
         );
         let view = bench.view();
         for call in view.calls.iter().filter(|call| call.id > 1) {
@@ -3311,7 +3312,7 @@ mod tests {
     // -- what the reader opens, what it holds, how it survives ----------------
 
     /// A symbolic link at a store path is not followed: nothing of the file
-    /// it points at is read, and the path is a gap (the reviewer's P2).
+    /// it points at is read, and the path is a gap.
     #[cfg(unix)]
     #[test]
     fn a_symbolic_link_in_the_store_is_not_followed() {
@@ -3348,8 +3349,7 @@ mod tests {
         }
     }
 
-    /// A named pipe at a store path neither blocks the reader nor is read
-    /// (the reviewer's P3).
+    /// A named pipe at a store path neither blocks the reader nor is read.
     #[cfg(unix)]
     #[test]
     fn a_named_pipe_in_the_store_does_not_block_the_reader() {
@@ -3420,7 +3420,7 @@ mod tests {
     }
 
     /// The reader holds a bounded number of files: reports of paths that do
-    /// not exist leave nothing held (the reviewer's P7), and beyond the bound
+    /// not exist leave nothing held, and beyond the bound
     /// the least recently appended file is released with a gap.
     #[test]
     fn the_files_held_are_bounded() {
@@ -3526,7 +3526,7 @@ mod tests {
     }
 
     /// A failing extractor is a gap for its file; the lines after it are
-    /// read (the reviewer's P8, the reader's half).
+    /// read.
     #[test]
     fn an_extractor_that_fails_is_a_gap_and_the_reader_goes_on() {
         let clock = Arc::new(AtomicU64::new(store_writers::now_ms()));
@@ -3602,7 +3602,7 @@ mod tests {
     }
 
     /// A reader whose thread made no progress for too long does not run,
-    /// whatever its view says (the reviewer's P8, the reply's half).
+    /// whatever its view says.
     #[test]
     fn a_stale_heartbeat_is_a_reader_that_does_not_run() {
         let bench = Bench::new(config());
@@ -3618,7 +3618,7 @@ mod tests {
     }
 
     /// A line written through another name of the file is not named as the
-    /// harness's, and the interval is a gap (the reviewer's P1). The name
+    /// harness's, and the interval is a gap. The name
     /// gone, the file is read as before, and it keeps that it had two.
     #[cfg(unix)]
     #[test]
@@ -3632,16 +3632,16 @@ mod tests {
             .append(true)
             .open(&link)
             .unwrap()
-            .write_all(b"C k2 forged\n")
+            .write_all(b"C k2 linked\n")
             .unwrap();
         bench.appended_by(HARNESS, creation, "C k3 git\n");
         let view = bench.view();
-        let forged = view
+        let linked = view
             .calls
             .iter()
-            .find(|call| call.call["programs"][0] == "forged")
+            .find(|call| call.call["programs"][0] == "linked")
             .expect("the line is read");
-        assert_eq!(forged.writer, None);
+        assert_eq!(linked.writer, None);
         assert!(view
             .gaps
             .iter()
@@ -3707,7 +3707,7 @@ mod tests {
     }
 
     /// A file reported and not read yet is pending: never published as
-    /// watched, nothing read through (the reviewer's P4).
+    /// watched, nothing read through.
     #[test]
     fn a_file_waiting_for_its_first_read_is_pending() {
         let mut bench = Bench::new(config());
@@ -3753,7 +3753,7 @@ mod tests {
 
     /// A file removed and created again without a reported creation is a
     /// gap from the read that found it gone up to the read that takes it
-    /// again (the reviewer's P6), and the sweep takes it again without a
+    /// again, and the sweep takes it again without a
     /// report.
     #[test]
     fn a_file_created_again_without_a_reported_creation_is_a_gap_up_to_its_read() {

@@ -860,7 +860,7 @@ pub struct TranscriptStoreJSON {
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum TranscriptFindingMode {
-    /// Counted per class, not reported.
+    /// Counted per class only.
     Off,
     /// Reported at the lowest grade, with the grade it would have.
     Shadow,
