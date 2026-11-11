@@ -139,6 +139,7 @@ pub fn store_specs_for_home(home: &Path) -> Vec<StoreSpec> {
                 agent,
                 roots,
                 path_segment: store.path_segment,
+                excluded_segments: store.excluded_segments,
                 file_suffixes: store.file_suffixes,
                 pid_file_roots: store.pid_file_roots.iter().map(under_home).collect(),
                 pid_file_suffixes: store.pid_file_suffixes,

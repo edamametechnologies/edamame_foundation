@@ -823,6 +823,8 @@ impl TranscriptStoreRootsJSON {
 ///   root (Cursor keeps transcripts in an `agent-transcripts` directory of
 ///   each project), or empty. Lowercased by
 ///   [`AgentVisibilityParams::new_from_json`].
+/// - `excluded_segments`: directory names below the root whose files are not
+///   transcripts, lowercased.
 /// - `file_suffixes`: the endings of a transcript file, lowercased.
 /// - `pid_file_roots` / `pid_file_suffixes`: the directories (relative to a
 ///   home) and endings of the files that name a harness process; the file's
@@ -842,6 +844,7 @@ impl TranscriptStoreRootsJSON {
 pub struct TranscriptStoreJSON {
     pub roots: TranscriptStoreRootsJSON,
     pub path_segment: String,
+    pub excluded_segments: Vec<String>,
     pub file_suffixes: Vec<String>,
     pub pid_file_roots: Vec<String>,
     pub pid_file_suffixes: Vec<String>,
@@ -1341,6 +1344,11 @@ impl AgentVisibilityParams {
                         agent.clone(),
                         TranscriptStoreJSON {
                             path_segment: store.path_segment.to_ascii_lowercase(),
+                            excluded_segments: store
+                                .excluded_segments
+                                .iter()
+                                .map(|name| name.to_ascii_lowercase())
+                                .collect(),
                             file_suffixes: lower(&store.file_suffixes),
                             pid_file_suffixes: lower(&store.pid_file_suffixes),
                             writer_images: lower(&store.writer_images),
@@ -2115,6 +2123,14 @@ mod tests {
         }
         let claude = &params.transcript_stores["claude_code"];
         assert_eq!(claude.pid_file_suffixes, vec![".json".to_string()]);
+        // Claude Code writes transcripts as JSON lines; its tool outputs
+        // beside them are no transcripts.
+        assert_eq!(claude.file_suffixes, vec![".jsonl".to_string()]);
+        assert_eq!(claude.excluded_segments, vec!["tool-results".to_string()]);
+        assert_eq!(
+            params.transcript_stores["cursor"].file_suffixes,
+            vec![".jsonl".to_string(), ".txt".to_string()]
+        );
         assert_eq!(
             params.transcript_stores["cursor"].path_segment,
             "agent-transcripts"
@@ -2131,6 +2147,7 @@ mod tests {
         for key in [
             "roots",
             "path_segment",
+            "excluded_segments",
             "file_suffixes",
             "pid_file_roots",
             "pid_file_suffixes",

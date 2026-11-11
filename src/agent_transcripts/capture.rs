@@ -3251,6 +3251,7 @@ mod tests {
             agent: "claude_code".to_string(),
             roots: vec![root.clone()],
             path_segment: String::new(),
+            excluded_segments: Vec::new(),
             file_suffixes: vec![".jsonl".to_string()],
             pid_file_roots: Vec::new(),
             pid_file_suffixes: Vec::new(),

@@ -98,6 +98,7 @@ mod tests {
             agent: "claude_code".to_string(),
             roots: vec![root.join("projects")],
             path_segment: String::new(),
+            excluded_segments: Vec::new(),
             file_suffixes: vec![".jsonl".to_string()],
             pid_file_roots: vec![root.join("sessions")],
             pid_file_suffixes: vec![".json".to_string()],
