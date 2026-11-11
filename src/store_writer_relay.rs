@@ -101,6 +101,7 @@ mod tests {
             process_path: "/opt/harness/bin/harness",
             at_ms: store_writers::now_ms(),
             size: None,
+            identity: None,
         });
     }
 

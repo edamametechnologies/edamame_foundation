@@ -873,7 +873,8 @@ pub enum TranscriptFindingMode {
 /// the process that wrote it, and how long after the first report for a file
 /// the report of its creation is still taken as its creation, which the
 /// store-writer record applies (`flodbadd::store_writers::StoreSpec`;
-/// milliseconds, 0: never).
+/// milliseconds, 0: never), and how many transcripts the reader holds at
+/// once.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TranscriptCaptureJSON {
     pub max_line_bytes: u64,
@@ -883,6 +884,7 @@ pub struct TranscriptCaptureJSON {
     pub creation_time_slack_ms: u64,
     pub late_report_ms: u64,
     pub creation_reorder_ms: u64,
+    pub max_files_held: u64,
 }
 
 /// Raw JSON shape of `agent-visibility-params-db.json`. No serde defaults:
@@ -2155,7 +2157,7 @@ mod tests {
                 "params without `{key}` parsed"
             );
         }
-        for key in ["max_line_bytes", "creation_reorder_ms"] {
+        for key in ["max_line_bytes", "creation_reorder_ms", "max_files_held"] {
             let mut value = complete.clone();
             value["transcript_capture"]
                 .as_object_mut()
@@ -2253,6 +2255,7 @@ mod tests {
         assert_eq!(capture.creation_time_slack_ms, 2000);
         assert_eq!(capture.late_report_ms, 15_000);
         assert_eq!(capture.creation_reorder_ms, 1_000);
+        assert_eq!(capture.max_files_held, 2_048);
     }
 
     #[tokio::test]

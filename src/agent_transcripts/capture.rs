@@ -19,6 +19,16 @@
 //! ([`since`]) holds no byte of a line: the extractor's result for each
 //! call, times, a process identity, and counts.
 //!
+//! A path is read only when it names a regular file, reached without
+//! following a symbolic link (in any component where the platform allows,
+//! else the last), opened without blocking, and, when the record reported
+//! the identity of the file its latest operation was made on, only when the
+//! file opened is that file. The number of files held is bounded
+//! (`transcript_capture.max_files_held`): beyond it the least recently
+//! appended one is released, with a gap. A panic of the extractor is a gap
+//! for its file; the thread goes on. The thread publishes a heartbeat; a
+//! reply whose heartbeat is stale says the reader does not run.
+//!
 //! The extractor is a parameter ([`CallExtractor`]): this module knows what a
 //! line is and when it arrived, not what a shell call looks like in a given
 //! transcript format.
@@ -32,7 +42,8 @@ use std::time::Duration;
 
 use arc_swap::ArcSwap;
 use flodbadd::store_writers::{
-    self, ops, CreationSeen, DirtyFile, DirtyTake, StoreFileKind, WriterInstance, WriterSpan,
+    self, ops, CreationSeen, DirtyFile, DirtyTake, FileId, StoreFileKind, WriterInstance,
+    WriterSpan,
 };
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
@@ -56,6 +67,8 @@ const MAX_PASSES_PER_WAKE: usize = 8;
 const SWEEP_INTERVAL_MS: u64 = 10_000;
 /// How long the thread waits for a change before it looks at its stop flag.
 const WAIT_SLICE: Duration = Duration::from_millis(500);
+/// A heartbeat older than this is a reader that does not run.
+pub const HEARTBEAT_STALE_MS: u64 = 30_000;
 
 /// What one complete line of a transcript carries, as the extractor reads it.
 #[derive(Debug, Clone, PartialEq)]
@@ -103,6 +116,8 @@ pub struct CaptureConfig {
     pub late_report_ms: u64,
     /// Calls kept per transcript once a reader asked past them.
     pub max_calls_per_file: usize,
+    /// Transcripts held at once.
+    pub max_files_held: usize,
 }
 
 impl CaptureConfig {
@@ -118,6 +133,9 @@ impl CaptureConfig {
             creation_time_slack_ms: params.creation_time_slack_ms,
             late_report_ms: params.late_report_ms,
             max_calls_per_file: max_calls_per_file.max(1),
+            max_files_held: usize::try_from(params.max_files_held)
+                .unwrap_or(usize::MAX)
+                .max(1),
         }
     }
 }
@@ -179,6 +197,34 @@ pub enum CaptureGapReason {
     Unreadable,
     /// Calls left the list to make room.
     CallsDropped,
+    /// The path names something that is not a regular file reached without
+    /// a symbolic link (a link, a pipe, a directory, a device, a reparse
+    /// point): it is not read.
+    NotRegular,
+    /// The file at the path is not the one the record's latest operation
+    /// was made on: it is not read until an operation on it is reported.
+    IdentityMismatch,
+    /// The reader released the file to stay within the number of files it
+    /// holds: nothing of it is read from then on.
+    Released,
+    /// The extractor failed on a line of the interval.
+    ExtractorFailed,
+}
+
+/// What the reader does with a transcript now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CapturedFileStatus {
+    /// Reported, not read yet: nothing of it is watched.
+    Pending,
+    /// Read as it grows.
+    Watched,
+    /// Not read now: the path holds no file, or one the reader does not
+    /// read; the gap that opened says why. It is read again when it comes
+    /// back.
+    Desynced,
+    /// No longer held: nothing of it is read from then on.
+    Released,
 }
 
 /// An interval of a transcript that was not read line by line: calls made
@@ -199,6 +245,7 @@ pub struct CaptureGap {
 pub struct CapturedFile {
     pub path: String,
     pub agent: String,
+    pub status: CapturedFileStatus,
     /// The store-writer record's id for the path when it was last read.
     pub record_id: u64,
     /// Every line the file holds was read as it arrived, from the file's
@@ -236,6 +283,15 @@ pub struct CaptureCounters {
     pub unannounced_reads: u64,
     pub read_errors: u64,
     pub calls_dropped: u64,
+    /// Passes that found the path not to be a regular file, or another file
+    /// than the record reported; files released; extractor failures; times
+    /// the reader started over (held files beyond twice the bound, or a
+    /// failure of its own).
+    pub not_regular: u64,
+    pub identity_mismatches: u64,
+    pub released: u64,
+    pub extractor_panics: u64,
+    pub restarts: u64,
     /// From the first report of a change to the read that found the line:
     /// reads that took at most 1, 2, 5, 10, 20, 50, 100, 250, 500, 1,000 and
     /// 5,000 ms, then the longer ones; and the longest.
@@ -264,6 +320,11 @@ pub struct CaptureBatch {
     /// More changed than one reply carries: ask again from `seq`.
     pub more: bool,
     pub counters: CaptureCounters,
+    /// When the reader's thread last made progress (epoch milliseconds). A
+    /// reply is `running` only while it is recent.
+    pub heartbeat_ms: u64,
+    /// Files held now (released ones not counted).
+    pub files_held: usize,
 }
 
 impl CaptureBatch {
@@ -279,6 +340,8 @@ impl CaptureBatch {
             gaps: Vec::new(),
             more: false,
             counters: CaptureCounters::default(),
+            heartbeat_ms: 0,
+            files_held: 0,
         }
     }
 }
@@ -295,36 +358,224 @@ struct FileIdentity {
     index: u64,
 }
 
+/// The identity of an open file, its number of names, and whether the
+/// handle is something the reader does not read (a reparse point).
 #[cfg(unix)]
-fn file_identity(_file: &std::fs::File, meta: &std::fs::Metadata) -> Option<FileIdentity> {
+fn file_identity(
+    _file: &std::fs::File,
+    meta: &std::fs::Metadata,
+) -> (Option<FileIdentity>, Option<u64>, bool) {
     use std::os::unix::fs::MetadataExt;
-    Some(FileIdentity {
-        volume: meta.dev(),
-        index: meta.ino(),
-    })
+    (
+        Some(FileIdentity {
+            volume: meta.dev(),
+            index: meta.ino(),
+        }),
+        Some(meta.nlink()),
+        false,
+    )
 }
 
 #[cfg(windows)]
-fn file_identity(file: &std::fs::File, _meta: &std::fs::Metadata) -> Option<FileIdentity> {
+fn file_identity(
+    file: &std::fs::File,
+    _meta: &std::fs::Metadata,
+) -> (Option<FileIdentity>, Option<u64>, bool) {
     use std::os::windows::io::AsRawHandle;
     use windows::Win32::Foundation::HANDLE;
     use windows::Win32::Storage::FileSystem::{
         GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
     };
+    const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x0000_0010;
+    const FILE_ATTRIBUTE_DEVICE: u32 = 0x0000_0040;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
     let mut info = BY_HANDLE_FILE_INFORMATION::default();
     // SAFETY: the handle is this open file's and `info` outlives the call.
-    unsafe { GetFileInformationByHandle(HANDLE(file.as_raw_handle() as _), &mut info) }.ok()?;
-    Some(FileIdentity {
-        volume: u64::from(info.dwVolumeSerialNumber),
-        index: (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow),
-    })
+    if unsafe { GetFileInformationByHandle(HANDLE(file.as_raw_handle() as _), &mut info) }.is_err()
+    {
+        return (None, None, false);
+    }
+    let special = info.dwFileAttributes
+        & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_DEVICE | FILE_ATTRIBUTE_REPARSE_POINT)
+        != 0;
+    (
+        Some(FileIdentity {
+            volume: u64::from(info.dwVolumeSerialNumber),
+            index: (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow),
+        }),
+        Some(u64::from(info.nNumberOfLinks)),
+        special,
+    )
 }
 
 #[cfg(not(any(unix, windows)))]
-fn file_identity(_file: &std::fs::File, _meta: &std::fs::Metadata) -> Option<FileIdentity> {
+fn file_identity(
+    _file: &std::fs::File,
+    _meta: &std::fs::Metadata,
+) -> (Option<FileIdentity>, Option<u64>, bool) {
     // No identity is read here: a file is then never taken as the one read
     // before.
-    None
+    (None, None, false)
+}
+
+/// Whether the file the reader opened is the one a sensor reported the
+/// latest operation on. A sensor that reported none leaves nothing to
+/// compare; an opened file whose identity is unknown does not match a
+/// reported one.
+fn identity_matches(opened: Option<FileIdentity>, reported: Option<FileId>) -> bool {
+    match (opened, reported) {
+        (_, None) => true,
+        (Some(opened), Some(reported)) => {
+            opened.volume == reported.device && opened.index == reported.inode
+        }
+        (None, Some(_)) => false,
+    }
+}
+
+/// Why a path was not read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OpenRefusal {
+    /// No file at the path.
+    NotFound,
+    /// A symbolic link (in a component the platform checks), a pipe, a
+    /// directory, a device, a reparse point.
+    NotRegular,
+    /// Anything else (permissions, an I/O error).
+    Unreadable,
+}
+
+/// A transcript opened for reading: the file, its metadata from the handle,
+/// its identity and its number of names when the platform gives them.
+struct OpenedTranscript {
+    file: std::fs::File,
+    meta: std::fs::Metadata,
+    identity: Option<FileIdentity>,
+    links: Option<u64>,
+}
+
+/// Open `path` for reading as the reader may: never through a symbolic link
+/// (any component on macOS and on Linux 5.6 and later, the last one
+/// elsewhere), never blocking on the open, and only a regular file.
+fn open_transcript(path: &Path) -> Result<OpenedTranscript, OpenRefusal> {
+    let file = open_no_follow(path)?;
+    let meta = file.metadata().map_err(|_| OpenRefusal::Unreadable)?;
+    if !meta.file_type().is_file() {
+        return Err(OpenRefusal::NotRegular);
+    }
+    let (identity, links, special) = file_identity(&file, &meta);
+    if special {
+        return Err(OpenRefusal::NotRegular);
+    }
+    Ok(OpenedTranscript {
+        file,
+        meta,
+        identity,
+        links,
+    })
+}
+
+#[cfg(unix)]
+fn refusal_of(error: &std::io::Error) -> OpenRefusal {
+    match error.raw_os_error() {
+        Some(libc::ENOENT) | Some(libc::ENOTDIR) => OpenRefusal::NotFound,
+        Some(libc::ELOOP) | Some(libc::ENXIO) | Some(libc::EISDIR) => OpenRefusal::NotRegular,
+        _ if error.kind() == std::io::ErrorKind::NotFound => OpenRefusal::NotFound,
+        _ => OpenRefusal::Unreadable,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn open_no_follow(path: &Path) -> Result<std::fs::File, OpenRefusal> {
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::OpenOptionsExt;
+    use std::os::unix::io::FromRawFd;
+    let flags = libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC;
+    let c_path =
+        std::ffi::CString::new(path.as_os_str().as_bytes()).map_err(|_| OpenRefusal::NotFound)?;
+    // SAFETY: `open_how` is plain data, zeroed then filled; `c_path` is a
+    // NUL-terminated string that outlives the call.
+    let mut how: libc::open_how = unsafe { std::mem::zeroed() };
+    how.flags = flags as u64;
+    how.resolve = libc::RESOLVE_NO_SYMLINKS;
+    let fd = unsafe {
+        libc::syscall(
+            libc::SYS_openat2,
+            libc::AT_FDCWD,
+            c_path.as_ptr(),
+            &how as *const libc::open_how,
+            std::mem::size_of::<libc::open_how>(),
+        )
+    };
+    if fd >= 0 {
+        // SAFETY: the descriptor was just opened and is owned here.
+        return Ok(unsafe { std::fs::File::from_raw_fd(fd as i32) });
+    }
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() != Some(libc::ENOSYS) {
+        return Err(refusal_of(&error));
+    }
+    // A kernel without openat2: the last component only.
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+        .map_err(|error| refusal_of(&error))
+}
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+fn open_no_follow(path: &Path) -> Result<std::fs::File, OpenRefusal> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let open = |flags: i32| {
+        std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(flags)
+            .open(path)
+    };
+    match open(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOFOLLOW_ANY) {
+        Ok(file) => Ok(file),
+        // A system that does not know the flag: the last component only.
+        Err(error) if error.raw_os_error() == Some(libc::EINVAL) => {
+            open(libc::O_NOFOLLOW | libc::O_NONBLOCK).map_err(|error| refusal_of(&error))
+        }
+        Err(error) => Err(refusal_of(&error)),
+    }
+}
+
+#[cfg(all(
+    unix,
+    not(any(target_os = "linux", target_os = "macos", target_os = "ios"))
+))]
+fn open_no_follow(path: &Path) -> Result<std::fs::File, OpenRefusal> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+        .map_err(|error| refusal_of(&error))
+}
+
+#[cfg(windows)]
+fn open_no_follow(path: &Path) -> Result<std::fs::File, OpenRefusal> {
+    use std::os::windows::fs::OpenOptionsExt;
+    // The reparse point itself, not its target: refused below on the
+    // handle's attributes.
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+        .map_err(|error| match error.kind() {
+            std::io::ErrorKind::NotFound => OpenRefusal::NotFound,
+            _ => OpenRefusal::Unreadable,
+        })
+}
+
+#[cfg(not(any(unix, windows)))]
+fn open_no_follow(path: &Path) -> Result<std::fs::File, OpenRefusal> {
+    std::fs::File::open(path).map_err(|error| match error.kind() {
+        std::io::ErrorKind::NotFound => OpenRefusal::NotFound,
+        _ => OpenRefusal::Unreadable,
+    })
 }
 
 fn system_time_ms(time: std::time::SystemTime) -> Option<u64> {
@@ -398,6 +649,30 @@ struct FileState<S> {
     recent_spans: VecDeque<WriterSpan>,
     rewrites: u64,
     changed_seq: u64,
+    /// The identity the record reported for the latest operation on the
+    /// path (`None`: none reported).
+    reported_identity: Option<FileId>,
+    /// Not read now, why, and since when.
+    desync: Option<(CaptureGapReason, u64)>,
+    /// No longer held: kept only until a reader asked past what it has.
+    released: bool,
+    /// When a pass last took bytes from the file, or when it was first
+    /// reported: the least recent one is released first.
+    last_growth_ms: u64,
+}
+
+impl<S> FileState<S> {
+    fn status(&self) -> CapturedFileStatus {
+        if self.released {
+            CapturedFileStatus::Released
+        } else if self.desync.is_some() {
+            CapturedFileStatus::Desynced
+        } else if !self.ever_synced {
+            CapturedFileStatus::Pending
+        } else {
+            CapturedFileStatus::Watched
+        }
+    }
 }
 
 /// What a pass found the file to be, against what the reader holds.
@@ -428,6 +703,9 @@ pub struct Capture<E: CallExtractor> {
     files: BTreeMap<String, FileState<E::State>>,
     counters: CaptureCounters,
     last_sweep_ms: u64,
+    /// The reader's thread drives this capture: its progress is the
+    /// published heartbeat.
+    publishes_heartbeat: bool,
 }
 
 impl<E: CallExtractor> Capture<E> {
@@ -454,6 +732,64 @@ impl<E: CallExtractor> Capture<E> {
             files: BTreeMap::new(),
             counters: CaptureCounters::default(),
             last_sweep_ms: now,
+            publishes_heartbeat: false,
+        }
+    }
+
+    /// Start over: a new instance, nothing held. A reader of the previous
+    /// instance reads everything again from the start, and whatever it read
+    /// before is a gap from its last read.
+    fn start_over(&mut self) {
+        self.instance = uuid::Uuid::new_v4().simple().to_string();
+        self.started_at_ms = (self.clock)();
+        self.record_instance = None;
+        self.files.clear();
+        self.counters.restarts += 1;
+        self.seq += 1;
+        tracing::info!("transcript reader: started over");
+    }
+
+    /// Files held now (released ones not counted).
+    pub fn files_held(&self) -> usize {
+        self.files.values().filter(|state| !state.released).count()
+    }
+
+    /// Drop the released files a reader asked past, release the least
+    /// recently appended ones beyond `max_files_held`, and start over when
+    /// released files no reader asked past are more than the bound again
+    /// (no reader is reading).
+    fn release_beyond_bound(&mut self, acked_seq: u64) {
+        self.files
+            .retain(|_, state| !(state.released && state.changed_seq <= acked_seq));
+        let now = (self.clock)();
+        while self.files_held() > self.config.max_files_held {
+            let Some(path) = self
+                .files
+                .values()
+                .filter(|state| !state.released)
+                .min_by_key(|state| (state.last_growth_ms, state.path.clone()))
+                .map(|state| state.path.clone())
+            else {
+                break;
+            };
+            let seq = self.bump();
+            if let Some(state) = self.files.get_mut(&path) {
+                let from = state.synced.then_some(state.consumed_bound_ms);
+                push_gap(
+                    state,
+                    from,
+                    now,
+                    CaptureGapReason::Released,
+                    seq,
+                    &mut self.counters,
+                );
+                state.released = true;
+                state.changed_seq = seq;
+                self.counters.released += 1;
+            }
+        }
+        if self.files.len() > self.config.max_files_held.saturating_mul(2) {
+            self.start_over();
         }
     }
 
@@ -481,6 +817,7 @@ impl<E: CallExtractor> Capture<E> {
             self.merge_report(dirty, now);
             self.read_file(&dirty.path, acked_seq);
         }
+        self.release_beyond_bound(acked_seq);
     }
 
     /// Whether a transcript was left with complete lines to read (a wake-up
@@ -498,6 +835,7 @@ impl<E: CallExtractor> Capture<E> {
         let behind: Vec<String> = self
             .files
             .values()
+            .filter(|state| !state.released)
             .filter(|state| {
                 state.behind_since_ms.is_some()
                     || state
@@ -528,9 +866,10 @@ impl<E: CallExtractor> Capture<E> {
         let candidates: Vec<String> = self
             .files
             .values()
+            .filter(|state| !state.released)
             .filter(|state| state.synced)
             .filter(|state| {
-                match std::fs::metadata(&state.path) {
+                match std::fs::symlink_metadata(&state.path) {
                     Ok(meta) => meta.len() != state.size_seen,
                     // Gone: the pass records it.
                     Err(_) => state.size_seen != 0 || state.offset != 0,
@@ -541,6 +880,7 @@ impl<E: CallExtractor> Capture<E> {
         for path in candidates {
             self.read_file(&path, acked_seq);
         }
+        self.release_beyond_bound(acked_seq);
     }
 
     /// The record started a new instance: what happened to the files in
@@ -609,7 +949,21 @@ impl<E: CallExtractor> Capture<E> {
                 recent_spans: VecDeque::new(),
                 rewrites: 0,
                 changed_seq: seq,
+                reported_identity: None,
+                desync: None,
+                released: false,
+                last_growth_ms: now,
             });
+        if state.released {
+            // Reported again after it was released: held again, as new.
+            state.released = false;
+            state.synced = false;
+            state.ever_synced = false;
+            state.identity = None;
+            state.since_creation = false;
+            state.watching_since_ms = now;
+            state.last_growth_ms = now;
+        }
         if state.record_id != dirty.record_id {
             // The path's record left the table and came back: its reports in
             // between are not held.
@@ -633,6 +987,7 @@ impl<E: CallExtractor> Capture<E> {
             }
             state.recent_spans.push_back(*span);
         }
+        state.reported_identity = dirty.identity;
         // What the record says of the creation of the file at the path.
         state.latest_creation = dirty.last_creation;
         state.creation_is_first = dirty.creation.is_some() && dirty.creation == dirty.last_creation;
@@ -710,7 +1065,19 @@ impl<E: CallExtractor> Capture<E> {
         let Some(mut state) = self.files.remove(path) else {
             return false;
         };
+        if state.released {
+            self.files.insert(path.to_string(), state);
+            return false;
+        }
+        if self.publishes_heartbeat {
+            HEARTBEAT_MS.store(store_writers::now_ms(), Ordering::Release);
+        }
         let more = self.read_pass_on(&mut state, t_before);
+        if state.released && !state.ever_synced {
+            // Gone before it was ever read: nothing of it was watched, and a
+            // reader that saw it pending keeps reading it as not watched.
+            return false;
+        }
         self.files.insert(path.to_string(), state);
         more
     }
@@ -718,18 +1085,30 @@ impl<E: CallExtractor> Capture<E> {
     fn read_pass_on(&mut self, state: &mut FileState<E::State>, t_before: u64) -> bool {
         let seq = self.bump();
         state.changed_seq = seq;
-        let mut file = match std::fs::File::open(Path::new(&state.path)) {
-            Ok(file) => file,
-            Err(error) => {
-                let reason = if error.kind() == std::io::ErrorKind::NotFound {
-                    CaptureGapReason::Removed
-                } else {
-                    self.counters.read_errors += 1;
-                    CaptureGapReason::Unreadable
+        let opened = match open_transcript(Path::new(&state.path)) {
+            Ok(opened) => opened,
+            Err(refusal) => {
+                let reason = match refusal {
+                    OpenRefusal::NotFound => CaptureGapReason::Removed,
+                    OpenRefusal::NotRegular => {
+                        self.counters.not_regular += 1;
+                        CaptureGapReason::NotRegular
+                    }
+                    OpenRefusal::Unreadable => {
+                        self.counters.read_errors += 1;
+                        CaptureGapReason::Unreadable
+                    }
                 };
-                if state.synced || reason == CaptureGapReason::Unreadable {
+                if !state.ever_synced && reason == CaptureGapReason::Removed {
+                    // Reported and gone before it was ever read: nothing of
+                    // it was watched (dropped by the caller).
+                    state.released = true;
+                    return false;
+                }
+                if state.desync.is_none() {
                     let from = state.synced.then_some(state.consumed_bound_ms);
                     push_gap(state, from, t_before, reason, seq, &mut self.counters);
+                    state.desync = Some((reason, t_before));
                 }
                 // The next file under the path is new to the reader.
                 state.synced = false;
@@ -750,24 +1129,32 @@ impl<E: CallExtractor> Capture<E> {
                 return false;
             }
         };
-        let meta = match file.metadata() {
-            Ok(meta) => meta,
-            Err(_) => {
-                self.counters.read_errors += 1;
+        let OpenedTranscript {
+            mut file,
+            meta,
+            identity,
+            links: _,
+        } = opened;
+        // The file opened is not the one the record's latest operation was
+        // made on: not read until an operation on it is reported.
+        if !identity_matches(identity, state.reported_identity) {
+            self.counters.identity_mismatches += 1;
+            if state.desync.is_none() {
                 let from = state.synced.then_some(state.consumed_bound_ms);
                 push_gap(
                     state,
                     from,
                     t_before,
-                    CaptureGapReason::Unreadable,
+                    CaptureGapReason::IdentityMismatch,
                     seq,
                     &mut self.counters,
                 );
-                return false;
+                state.desync = Some((CaptureGapReason::IdentityMismatch, t_before));
             }
-        };
+            return false;
+        }
+        state.desync = None;
         let size = meta.len();
-        let identity = file_identity(&file, &meta);
 
         // What the file is against what is held.
         let replacing_reported = state
@@ -973,6 +1360,7 @@ impl<E: CallExtractor> Capture<E> {
         let mut items: Vec<LineItem> = Vec::new();
         let mut consumed = 0usize;
         let mut oversized = false;
+        let mut extractor_failed = false;
         while consumed < buffer.len() {
             let rest = &buffer[consumed..];
             let Some(newline) = rest.iter().position(|byte| *byte == b'\n') else {
@@ -1002,10 +1390,19 @@ impl<E: CallExtractor> Capture<E> {
             }
             let line = line.strip_suffix(b"\r").unwrap_or(line);
             self.counters.lines_read += 1;
-            items.extend(
-                self.extractor
-                    .extract(&mut state.parse_state, &state.agent, line),
-            );
+            let extractor = &self.extractor;
+            let parse_state = &mut state.parse_state;
+            let agent = state.agent.as_str();
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                extractor.extract(parse_state, agent, line)
+            })) {
+                Ok(found) => items.extend(found),
+                Err(_) => {
+                    // The parse state may be anything now: start it over.
+                    state.parse_state = E::State::default();
+                    extractor_failed = true;
+                }
+            }
         }
         // The bytes are not kept past this point.
         drop(buffer);
@@ -1020,6 +1417,21 @@ impl<E: CallExtractor> Capture<E> {
                 seq,
                 &mut self.counters,
             );
+        }
+
+        if extractor_failed {
+            self.counters.extractor_panics += 1;
+            push_gap(
+                state,
+                Some(state.consumed_bound_ms),
+                t_after,
+                CaptureGapReason::ExtractorFailed,
+                seq,
+                &mut self.counters,
+            );
+        }
+        if consumed > 0 {
+            state.last_growth_ms = t_after;
         }
 
         // When and from whom the lines of this pass arrived.
@@ -1256,6 +1668,7 @@ impl<E: CallExtractor> Capture<E> {
             files.push(CapturedFile {
                 path: state.path.clone(),
                 agent: state.agent.clone(),
+                status: state.status(),
                 record_id: state.record_id,
                 since_creation: state.since_creation,
                 creation_contradicted: state.creation_contradicted,
@@ -1281,6 +1694,7 @@ impl<E: CallExtractor> Capture<E> {
             calls,
             gaps,
             counters: self.counters,
+            files_held: self.files_held(),
         }
     }
 }
@@ -1431,6 +1845,7 @@ pub struct CaptureView {
     pub calls: Vec<CapturedCall>,
     pub gaps: Vec<CaptureGap>,
     pub counters: CaptureCounters,
+    pub files_held: usize,
 }
 
 impl CaptureView {
@@ -1444,6 +1859,7 @@ impl CaptureView {
             calls: Vec::new(),
             gaps: Vec::new(),
             counters: CaptureCounters::default(),
+            files_held: 0,
         }
     }
 
@@ -1496,6 +1912,8 @@ impl CaptureView {
                 .collect(),
             more,
             counters: self.counters,
+            heartbeat_ms: 0,
+            files_held: self.files_held,
         }
     }
 }
@@ -1506,6 +1924,8 @@ static RUNNING: AtomicBool = AtomicBool::new(false);
 static GENERATION: AtomicU64 = AtomicU64::new(0);
 /// The sequence number readers asked past, for the running instance.
 static ACKED_SEQ: AtomicU64 = AtomicU64::new(0);
+/// When the thread last made progress (epoch milliseconds).
+static HEARTBEAT_MS: AtomicU64 = AtomicU64::new(0);
 
 /// Start the reader thread with `extractor`. `false` when it already runs
 /// or the thread could not be spawned.
@@ -1546,9 +1966,12 @@ fn run<E: CallExtractor>(mut capture: Capture<E>, generation: u64) {
     let current = |generation: u64| {
         RUNNING.load(Ordering::Acquire) && GENERATION.load(Ordering::Acquire) == generation
     };
+    capture.publishes_heartbeat = true;
+    HEARTBEAT_MS.store(store_writers::now_ms(), Ordering::Release);
     VIEW.store(Arc::new(capture.view()));
     let mut published_seq = capture.seq;
     while current(generation) {
+        HEARTBEAT_MS.store(store_writers::now_ms(), Ordering::Release);
         // Woken by a change or not, the record is asked at every turn: a
         // take it could not give (held) is asked again one slice later. A
         // transcript left behind is read on without waiting.
@@ -1562,11 +1985,18 @@ fn run<E: CallExtractor>(mut capture: Capture<E>, generation: u64) {
             break;
         }
         let acked = ACKED_SEQ.load(Ordering::Acquire);
-        if let Some(take) = store_writers::take_dirty() {
-            capture.handle_take(&take, acked);
+        let turn = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if let Some(take) = store_writers::take_dirty() {
+                capture.handle_take(&take, acked);
+            }
+            capture.continue_reads(acked);
+            capture.sweep_if_due(acked);
+        }));
+        if turn.is_err() {
+            // What the turn left behind may be anything: start over, as a
+            // new instance (a reader reads that as a gap for every file).
+            capture.start_over();
         }
-        capture.continue_reads(acked);
-        capture.sweep_if_due(acked);
         if capture.seq != published_seq && current(generation) {
             VIEW.store(Arc::new(capture.view()));
             published_seq = capture.seq;
@@ -1580,10 +2010,38 @@ fn run<E: CallExtractor>(mut capture: Capture<E>, generation: u64) {
 /// (`running: false`): never an empty list standing for "no call".
 pub fn since(instance: &str, since_seq: u64) -> CaptureBatch {
     let view = VIEW.load_full();
-    if view.running && instance == view.instance {
+    let batch = reply(
+        &view,
+        instance,
+        since_seq,
+        HEARTBEAT_MS.load(Ordering::Acquire),
+        store_writers::now_ms(),
+    );
+    if batch.running && instance == view.instance {
         ACKED_SEQ.fetch_max(since_seq, Ordering::AcqRel);
     }
-    view.batch_since(instance, since_seq)
+    batch
+}
+
+/// The reply of [`since`] from a published view, the thread's heartbeat and
+/// the time now: a reader whose thread made no progress for
+/// [`HEARTBEAT_STALE_MS`] does not run.
+fn reply(
+    view: &CaptureView,
+    instance: &str,
+    since_seq: u64,
+    heartbeat_ms: u64,
+    now_ms: u64,
+) -> CaptureBatch {
+    if view.running && now_ms.saturating_sub(heartbeat_ms) > HEARTBEAT_STALE_MS {
+        let mut stalled = CaptureBatch::not_running();
+        stalled.heartbeat_ms = heartbeat_ms;
+        stalled.counters = view.counters;
+        return stalled;
+    }
+    let mut batch = view.batch_since(instance, since_seq);
+    batch.heartbeat_ms = heartbeat_ms;
+    batch
 }
 
 #[cfg(test)]
@@ -1646,6 +2104,7 @@ mod tests {
             creation_time_slack_ms: 2_000,
             late_report_ms: 15_000,
             max_calls_per_file: 64,
+            max_files_held: 64,
         }
     }
 
@@ -1656,6 +2115,10 @@ mod tests {
         capture: Capture<WordExtractor>,
         clock: Arc<AtomicU64>,
         _dir: tempfile::TempDir,
+        /// The temporary directory, canonical: the reader does not open a
+        /// path through a symbolic link (the system's temporary directory is
+        /// one on some platforms).
+        base: PathBuf,
         path: PathBuf,
         record_instance: String,
         acked: u64,
@@ -1666,7 +2129,8 @@ mod tests {
             let clock = Arc::new(AtomicU64::new(store_writers::now_ms()));
             let reader = Arc::clone(&clock);
             let dir = tempfile::tempdir().expect("temporary directory");
-            let path = dir.path().join("session.jsonl");
+            let base = std::fs::canonicalize(dir.path()).expect("canonical temporary directory");
+            let path = base.join("session.jsonl");
             Self {
                 capture: Capture::with_clock(
                     WordExtractor,
@@ -1675,6 +2139,7 @@ mod tests {
                 ),
                 clock,
                 _dir: dir,
+                base,
                 path,
                 record_instance: "record-1".to_string(),
                 acked: 0,
@@ -1728,6 +2193,7 @@ mod tests {
                 spans,
                 spans_overflowed: false,
                 size_at_close: None,
+                identity: None,
                 lost: false,
                 unlinked: false,
             }
@@ -2494,6 +2960,7 @@ mod tests {
             files: vec![CapturedFile {
                 path: "/t/s.jsonl".to_string(),
                 agent: "claude_code".to_string(),
+                status: CapturedFileStatus::Watched,
                 record_id: 1,
                 since_creation: true,
                 creation_contradicted: false,
@@ -2514,6 +2981,7 @@ mod tests {
                 changed_seq: 3,
             }],
             counters: CaptureCounters::default(),
+            files_held: 1,
         };
         let first = view.batch_since("capture-1", 0);
         assert!(first.running && first.more);
@@ -2562,7 +3030,9 @@ mod tests {
     #[serial_test::serial(store_writers)]
     fn the_thread_reads_what_the_record_reports_and_stops() {
         let dir = tempfile::tempdir().expect("temporary directory");
-        let root = dir.path().join("projects");
+        let root = std::fs::canonicalize(dir.path())
+            .expect("canonical temporary directory")
+            .join("projects");
         std::fs::create_dir_all(root.join("p")).unwrap();
         let path = root.join("p").join("session.jsonl");
         let path_str = path.to_string_lossy().to_string();
@@ -2589,6 +3059,7 @@ mod tests {
                 process_path: "/opt/harness/bin/harness",
                 at_ms: store_writers::now_ms(),
                 size: None,
+                identity: None,
             });
         };
         std::fs::write(&path, "").unwrap();
@@ -2623,5 +3094,311 @@ mod tests {
         assert!(!is_running());
         assert_eq!(since(&batch.instance, 0), CaptureBatch::not_running());
         store_writers::clear();
+    }
+
+    // -- what the reader opens, what it holds, how it survives ----------------
+
+    /// A symbolic link at a store path is not followed: nothing of the file
+    /// it points at is read, and the path is a gap (the reviewer's P2).
+    #[cfg(unix)]
+    #[test]
+    fn a_symbolic_link_in_the_store_is_not_followed() {
+        let mut bench = Bench::new(config());
+        let outside = bench.base.as_path().join("outside-the-store.log");
+        std::fs::write(&outside, "C k1 outsideprog\n").unwrap();
+        std::os::unix::fs::symlink(&outside, &bench.path).unwrap();
+        let creation = CreationSeen {
+            writer: OTHER,
+            at_ms: bench.now(),
+        };
+        let span = bench.span(OTHER, ops::CREATE, creation.at_ms);
+        bench.advance(2);
+        bench.take(bench.dirty(Some(creation), vec![span]));
+        assert!(bench.programs().is_empty());
+        assert_eq!(bench.gap_reasons(), vec![CaptureGapReason::NotRegular]);
+        assert_eq!(bench.file().status, CapturedFileStatus::Desynced);
+        assert_eq!(bench.view().counters.not_regular, 1);
+
+        // A link in a directory component is not followed either where the
+        // platform refuses it in any component.
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        {
+            let real = bench.base.as_path().join("real");
+            std::fs::create_dir_all(&real).unwrap();
+            std::fs::write(real.join("t.jsonl"), "C k1 linkedprog\n").unwrap();
+            let linked = bench.base.as_path().join("linked");
+            std::os::unix::fs::symlink(&real, &linked).unwrap();
+            assert_eq!(
+                open_transcript(&linked.join("t.jsonl")).err(),
+                Some(OpenRefusal::NotRegular)
+            );
+            assert!(open_transcript(&real.join("t.jsonl")).is_ok());
+        }
+    }
+
+    /// A named pipe at a store path neither blocks the reader nor is read
+    /// (the reviewer's P3).
+    #[cfg(unix)]
+    #[test]
+    fn a_named_pipe_in_the_store_does_not_block_the_reader() {
+        let mut bench = Bench::new(config());
+        let status = std::process::Command::new("mkfifo")
+            .arg(&bench.path)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let creation = CreationSeen {
+            writer: OTHER,
+            at_ms: bench.now(),
+        };
+        let span = bench.span(OTHER, ops::CREATE, creation.at_ms);
+        bench.advance(2);
+        let started = std::time::Instant::now();
+        bench.take(bench.dirty(Some(creation), vec![span]));
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert_eq!(bench.gap_reasons(), vec![CaptureGapReason::NotRegular]);
+        // A directory is refused the same way.
+        assert_eq!(
+            open_transcript(bench.base.as_path()).err(),
+            Some(OpenRefusal::NotRegular)
+        );
+    }
+
+    /// The file opened must be the one the record's latest operation was
+    /// made on, when the record reported its identity: another file at the
+    /// path is not read until an operation on it is reported.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_the_record_did_not_report_is_not_read() {
+        use std::os::unix::fs::MetadataExt;
+        let mut bench = Bench::new(config());
+        let creation = bench.created_by_harness();
+        bench.appended_by(HARNESS, creation, "C k1 curl\n");
+        let held = std::fs::metadata(&bench.path).unwrap();
+        let other = FileId {
+            device: held.dev(),
+            inode: held.ino() + 1_000_000,
+        };
+        let at = bench.advance(10);
+        bench.append("C k2 nc\n");
+        let mut dirty = bench.dirty(Some(creation), vec![bench.span(OTHER, ops::WRITE, at)]);
+        dirty.identity = Some(other);
+        bench.advance(2);
+        bench.take(dirty);
+        assert_eq!(bench.programs(), vec!["curl".to_string()]);
+        assert_eq!(
+            bench.gap_reasons(),
+            vec![CaptureGapReason::IdentityMismatch]
+        );
+        assert_eq!(bench.file().status, CapturedFileStatus::Desynced);
+        assert_eq!(bench.view().counters.identity_mismatches, 1);
+
+        // An operation reported on the file at the path: read again.
+        let at = bench.advance(10);
+        bench.append("C k3 git\n");
+        let mut dirty = bench.dirty(Some(creation), vec![bench.span(HARNESS, ops::WRITE, at)]);
+        dirty.identity = Some(FileId {
+            device: held.dev(),
+            inode: held.ino(),
+        });
+        bench.advance(2);
+        bench.take(dirty);
+        assert_eq!(bench.file().status, CapturedFileStatus::Watched);
+        assert!(bench.programs().contains(&"git".to_string()));
+    }
+
+    /// The reader holds a bounded number of files: reports of paths that do
+    /// not exist leave nothing held (the reviewer's P7), and beyond the bound
+    /// the least recently appended file is released with a gap.
+    #[test]
+    fn the_files_held_are_bounded() {
+        let mut bench = Bench::new(config());
+        let files: Vec<DirtyFile> = (0..5_000u64)
+            .map(|i| {
+                let mut dirty = bench.dirty(None, Vec::new());
+                dirty.path = format!("{}/gone-{i}.jsonl", bench.base.as_path().display());
+                dirty.record_id = 100 + i;
+                dirty
+            })
+            .collect();
+        let take = DirtyTake {
+            instance: bench.record_instance.clone(),
+            configured: true,
+            files,
+        };
+        bench.capture.handle_take(&take, 0);
+        assert_eq!(bench.capture.files_held(), 0);
+        // Once a reader asked past them, nothing of them is kept.
+        let acked = bench.capture.seq;
+        bench.capture.release_beyond_bound(acked);
+        assert!(bench.view().files.is_empty());
+
+        // Six transcripts and room for four.
+        let mut bound = config();
+        bound.max_files_held = 4;
+        let mut bench = Bench::new(bound);
+        let dir = bench.base.clone();
+        for i in 0..6u64 {
+            let path = dir.join(format!("t{i}.jsonl"));
+            std::fs::write(&path, "").unwrap();
+            let at = bench.advance(10);
+            let creation = CreationSeen {
+                writer: HARNESS,
+                at_ms: at,
+            };
+            let mut dirty = bench.dirty(Some(creation), vec![bench.span(HARNESS, ops::CREATE, at)]);
+            dirty.path = path.to_string_lossy().to_string();
+            dirty.record_id = 10 + i;
+            bench.advance(2);
+            bench.take(dirty);
+        }
+        assert_eq!(bench.capture.files_held(), 4);
+        assert_eq!(bench.view().counters.released, 2);
+        let released: Vec<String> = bench
+            .view()
+            .files
+            .iter()
+            .filter(|file| file.status == CapturedFileStatus::Released)
+            .map(|file| file.path.clone())
+            .collect();
+        let first_two: Vec<String> = (0..2)
+            .map(|i| {
+                dir.join(format!("t{i}.jsonl"))
+                    .to_string_lossy()
+                    .to_string()
+            })
+            .collect();
+        assert_eq!(released, first_two);
+        assert_eq!(
+            bench
+                .view()
+                .gaps
+                .iter()
+                .filter(|gap| gap.reason == CaptureGapReason::Released)
+                .count(),
+            2
+        );
+        // Nobody reads: beyond twice the bound held, the reader starts over.
+        let instance = bench.view().instance;
+        for i in 6..20u64 {
+            let path = dir.join(format!("t{i}.jsonl"));
+            std::fs::write(&path, "").unwrap();
+            let at = bench.advance(10);
+            let creation = CreationSeen {
+                writer: HARNESS,
+                at_ms: at,
+            };
+            let mut dirty = bench.dirty(Some(creation), vec![bench.span(HARNESS, ops::CREATE, at)]);
+            dirty.path = path.to_string_lossy().to_string();
+            dirty.record_id = 10 + i;
+            bench.advance(2);
+            bench.take(dirty);
+        }
+        assert_ne!(bench.view().instance, instance);
+        assert!(bench.view().counters.restarts >= 1);
+        assert!(bench.capture.files_held() <= 4);
+    }
+
+    struct PanicExtractor;
+
+    impl CallExtractor for PanicExtractor {
+        type State = WordState;
+
+        fn extract(&self, state: &mut WordState, agent: &str, line: &[u8]) -> Vec<LineItem> {
+            if line.starts_with(b"BOOM") {
+                panic!("a test extractor fails");
+            }
+            WordExtractor.extract(state, agent, line)
+        }
+    }
+
+    /// A failing extractor is a gap for its file; the lines after it are
+    /// read (the reviewer's P8, the reader's half).
+    #[test]
+    fn an_extractor_that_fails_is_a_gap_and_the_reader_goes_on() {
+        let clock = Arc::new(AtomicU64::new(store_writers::now_ms()));
+        let reader = Arc::clone(&clock);
+        let dir = tempfile::tempdir().unwrap();
+        let path = std::fs::canonicalize(dir.path())
+            .unwrap()
+            .join("session.jsonl");
+        std::fs::write(&path, "").unwrap();
+        let mut capture = Capture::with_clock(
+            PanicExtractor,
+            config(),
+            Box::new(move || reader.load(Ordering::Acquire)),
+        );
+        let now = clock.load(Ordering::Acquire);
+        let creation = CreationSeen {
+            writer: HARNESS,
+            at_ms: now,
+        };
+        let dirty = |at: u64| DirtyFile {
+            path: path.to_string_lossy().to_string(),
+            agent: "claude_code".to_string(),
+            kind: StoreFileKind::Transcript,
+            record_id: 7,
+            creation: Some(creation),
+            last_creation: Some(creation),
+            dirty_since_ms: at,
+            spans: vec![WriterSpan {
+                writer: HARNESS,
+                first_ms: at,
+                last_ms: at,
+                ops: ops::WRITE,
+            }],
+            spans_overflowed: false,
+            size_at_close: None,
+            identity: None,
+            lost: false,
+            unlinked: false,
+        };
+        let take = |at: u64| DirtyTake {
+            instance: "record-1".to_string(),
+            configured: true,
+            files: vec![dirty(at)],
+        };
+        clock.fetch_add(2, Ordering::AcqRel);
+        capture.handle_take(&take(now), 0);
+        let at = clock.fetch_add(10, Ordering::AcqRel) + 10;
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(b"C k1 curl\nBOOM\nC k2 git\n")
+            .unwrap();
+        clock.fetch_add(2, Ordering::AcqRel);
+        let hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        capture.handle_take(&take(at), 0);
+        std::panic::set_hook(hook);
+        let view = capture.view();
+        let programs: Vec<String> = view
+            .calls
+            .iter()
+            .map(|call| call.call["programs"][0].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(programs, vec!["curl".to_string(), "git".to_string()]);
+        assert_eq!(view.counters.extractor_panics, 1);
+        assert!(view
+            .gaps
+            .iter()
+            .any(|gap| gap.reason == CaptureGapReason::ExtractorFailed));
+    }
+
+    /// A reader whose thread made no progress for too long does not run,
+    /// whatever its view says (the reviewer's P8, the reply's half).
+    #[test]
+    fn a_stale_heartbeat_is_a_reader_that_does_not_run() {
+        let bench = Bench::new(config());
+        let mut view = bench.view();
+        view.running = true;
+        let now = 1_000_000;
+        let fresh = reply(&view, &view.instance, 0, now - 1_000, now);
+        assert!(fresh.running);
+        assert_eq!(fresh.heartbeat_ms, now - 1_000);
+        let stale = reply(&view, &view.instance, 0, now - HEARTBEAT_STALE_MS - 1, now);
+        assert!(!stale.running);
+        assert!(stale.files.is_empty() && stale.calls.is_empty());
     }
 }
