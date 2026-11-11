@@ -65,11 +65,7 @@ impl StoreWriterBatch {
 /// cursor of another instance than the one running is answered from the
 /// start: its sequence numbers were that instance's.
 pub fn store_writers_since(cursor: &StoreWritersCursor) -> StoreWriterBatch {
-    let rows = match store_writers::rows_since(cursor.rows_seq) {
-        Some(rows) if rows.instance == cursor.record_instance => Some(rows),
-        Some(_) => store_writers::rows_since(0),
-        None => None,
-    };
+    let rows = store_writers::rows_since(&cursor.record_instance, cursor.rows_seq);
     StoreWriterBatch {
         rows,
         capture: capture::since(&cursor.capture_instance, cursor.calls_seq),
