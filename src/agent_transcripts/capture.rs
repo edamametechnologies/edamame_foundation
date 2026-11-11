@@ -691,6 +691,12 @@ struct FileState<S> {
     /// The same, confirmed by a sweep that found the size unchanged: not
     /// published per file, it makes the watermark.
     confirmed_through_ms: Option<u64>,
+    /// The earliest report of the file to the reader, or the record's
+    /// opening for it if earlier.
+    first_report_ms: u64,
+    /// A file read from its start without its creation: the lines up to
+    /// this offset name no process.
+    unattributed_until: Option<u64>,
 }
 
 impl<S> FileState<S> {
@@ -1020,7 +1026,13 @@ impl<E: CallExtractor> Capture<E> {
                 multiple_names_seen: false,
                 read_through_ms: None,
                 confirmed_through_ms: None,
+                first_report_ms: dirty.first_seen_ms.min(dirty.dirty_since_ms).min(now),
+                unattributed_until: None,
             });
+        state.first_report_ms = state
+            .first_report_ms
+            .min(dirty.first_seen_ms)
+            .min(dirty.dirty_since_ms);
         if state.released {
             // Reported again after it was released: held again, as new.
             state.released = false;
@@ -1331,11 +1343,33 @@ impl<E: CallExtractor> Capture<E> {
                                 state.creation_contradicted = true;
                             }
                         }
-                        move_to_end(state, &mut file, size);
+                        // A file born after the reader started, small enough
+                        // to read: read from its start, its lines naming no
+                        // process and arriving from the earlier of its birth
+                        // and its first report (a birth time can be set: it
+                        // only widens the interval). Otherwise from its end.
+                        let born_ms = meta.created().ok().and_then(system_time_ms);
+                        let from_start = born_ms
+                            .filter(|born| *born >= self.started_at_ms)
+                            .filter(|_| size <= self.config.max_backlog_bytes);
+                        let lower = from_start.map(|born| born.min(state.first_report_ms));
+                        match lower {
+                            Some(lower) => {
+                                state.offset = 0;
+                                state.prefix_digest = None;
+                                state.discard_until_newline = false;
+                                state.unattributed_until = Some(size);
+                                state.consumed_bound_ms = lower.saturating_sub(1);
+                            }
+                            None => {
+                                move_to_end(state, &mut file, size);
+                                state.consumed_bound_ms = t_before;
+                            }
+                        }
                         if !state.ever_synced {
                             push_gap(
                                 state,
-                                None,
+                                lower,
                                 t_before,
                                 CaptureGapReason::BeforeCapture,
                                 seq,
@@ -1344,7 +1378,6 @@ impl<E: CallExtractor> Capture<E> {
                             // Watched from this read on.
                             state.watching_since_ms = t_before;
                         }
-                        state.consumed_bound_ms = t_before;
                         state.first_announce_ms = None;
                         state.lost_pending = false;
                     }
@@ -1424,7 +1457,11 @@ impl<E: CallExtractor> Capture<E> {
             return false;
         }
 
-        // Read what the pass may read.
+        // Read what the pass may read. A pass that starts in the lines that
+        // name no process names none for any of its lines.
+        let unattributed = state
+            .unattributed_until
+            .is_some_and(|until| state.offset < until);
         let want = pending.min(self.config.max_pass_bytes) as usize;
         let mut buffer = vec![0u8; want];
         let mut filled = 0usize;
@@ -1531,7 +1568,14 @@ impl<E: CallExtractor> Capture<E> {
         let interval_from = state.consumed_bound_ms;
         let spans: Vec<WriterSpan> = state.recent_spans.iter().copied().collect();
         let resolved = resolve_writer(&spans, interval_from, t_after);
-        let lost = state.lost_pending || multiple_names;
+        let lost = state.lost_pending || multiple_names || unattributed;
+        if unattributed
+            && state
+                .unattributed_until
+                .is_some_and(|until| state.offset >= until)
+        {
+            state.unattributed_until = None;
+        }
         if multiple_names {
             push_gap(
                 state,
@@ -1556,7 +1600,7 @@ impl<E: CallExtractor> Capture<E> {
             interval_from
         };
         if consumed > 0 {
-            if lost && !multiple_names {
+            if lost && !multiple_names && !unattributed {
                 push_gap(
                     state,
                     Some(interval_from),
@@ -1565,7 +1609,7 @@ impl<E: CallExtractor> Capture<E> {
                     seq,
                     &mut self.counters,
                 );
-            } else if !announced && !multiple_names {
+            } else if !announced && !multiple_names && !unattributed {
                 self.counters.unannounced_reads += 1;
                 push_gap(
                     state,
@@ -2285,6 +2329,12 @@ mod tests {
             self.clock.load(Ordering::Acquire)
         }
 
+        /// The reader started after the files of the test were born: a file
+        /// it first sees without a creation is taken from its end.
+        fn started_after_the_files(&mut self) {
+            self.capture.started_at_ms = u64::MAX;
+        }
+
         fn advance(&self, ms: u64) -> u64 {
             self.clock.fetch_add(ms, Ordering::AcqRel) + ms
         }
@@ -2322,6 +2372,7 @@ mod tests {
                 agent: "claude_code".to_string(),
                 kind: StoreFileKind::Transcript,
                 record_id: 7,
+                first_seen_ms: dirty_since_ms,
                 creation,
                 last_creation: creation,
                 dirty_since_ms,
@@ -2749,6 +2800,7 @@ mod tests {
     #[test]
     fn a_file_older_than_the_reader_is_read_from_its_end_on() {
         let mut bench = Bench::new(config());
+        bench.started_after_the_files();
         // Content, the last line without its ending, no creation reported,
         // and older than the time a report of its creation could take.
         bench.append("C old rm\nC part");
@@ -2804,6 +2856,7 @@ mod tests {
 
         // No report in time: the file is taken as one that held content.
         let mut bench = Bench::new(config());
+        bench.started_after_the_files();
         bench.append("C k1 curl\n");
         let noted_at = bench.advance(5);
         let mut noted = bench.dirty(None, Vec::new());
@@ -3497,6 +3550,7 @@ mod tests {
             agent: "claude_code".to_string(),
             kind: StoreFileKind::Transcript,
             record_id: 7,
+            first_seen_ms: at,
             creation: Some(creation),
             last_creation: Some(creation),
             dirty_since_ms: at,
@@ -3614,6 +3668,7 @@ mod tests {
     #[test]
     fn a_file_is_read_through_the_start_of_the_pass_that_reached_its_end() {
         let mut bench = Bench::new(config());
+        bench.started_after_the_files();
         // Older than the time a creation report may take, no creation.
         bench.append("C old rm\n");
         let reported = bench.advance(20_000);
@@ -3724,5 +3779,99 @@ mod tests {
                 && gap.until_ms == swept
         }));
         assert_eq!(bench.file().status, CapturedFileStatus::Watched);
+    }
+
+    /// A file born after the reader started whose creation was not
+    /// recorded is read from its start: its lines name no process, arrive
+    /// from the earlier of its birth and its first report, and never make
+    /// the file read since its creation. A file too large is taken from its
+    /// end.
+    #[test]
+    fn a_file_born_after_the_reader_started_is_read_from_its_start() {
+        let mut bench = Bench::new(config());
+        bench.append("C k1 curl\nC k2 ls\n");
+        let born = std::fs::metadata(&bench.path)
+            .unwrap()
+            .created()
+            .ok()
+            .and_then(system_time_ms);
+        let reported = bench.advance(20_000);
+        let read_at = bench.advance(5);
+        bench.take(bench.dirty(None, vec![bench.span(HARNESS, ops::WRITE, reported)]));
+        assert_eq!(bench.programs(), vec!["curl".to_string(), "ls".to_string()]);
+        let view = bench.view();
+        for call in &view.calls {
+            assert_eq!(call.writer, None);
+            assert!(!call.announced);
+            assert_eq!(call.arrived_at_ms, read_at);
+            if let Some(born) = born {
+                assert!(call.arrival_from_ms < born.max(1));
+            }
+        }
+        assert!(!bench.file().since_creation);
+        assert_eq!(bench.file().status, CapturedFileStatus::Watched);
+        assert_eq!(bench.file().watching_since_ms, read_at);
+        assert_eq!(bench.gap_reasons(), vec![CaptureGapReason::BeforeCapture]);
+        assert!(view.gaps[0].from_ms.is_some());
+        // Lines appended from then on name their process.
+        bench.appended_by(
+            HARNESS,
+            CreationSeen {
+                writer: HARNESS,
+                at_ms: 0,
+            },
+            "C k3 git\n",
+        );
+        let view = bench.view();
+        let git = view
+            .calls
+            .iter()
+            .find(|call| call.call["programs"][0] == "git")
+            .unwrap();
+        assert_eq!(git.writer, Some(HARNESS));
+
+        // Too large to read: from its end, as before.
+        let mut small = config();
+        small.max_backlog_bytes = 8;
+        let mut bench = Bench::new(small);
+        bench.append("C k1 curl\nC k2 ls\n");
+        let reported = bench.advance(20_000);
+        bench.advance(5);
+        bench.take(bench.dirty(None, vec![bench.span(HARNESS, ops::WRITE, reported)]));
+        assert!(bench.programs().is_empty());
+        assert_eq!(bench.gap_reasons(), vec![CaptureGapReason::BeforeCapture]);
+        assert_eq!(bench.view().gaps[0].from_ms, None);
+    }
+
+    /// A file created again without a reported creation, after the reader
+    /// started: its content is read, naming no process, and the time it was
+    /// not read is a gap.
+    #[test]
+    fn a_file_created_again_without_its_creation_is_read_and_a_gap() {
+        let mut bench = Bench::new(config());
+        let creation = bench.created_by_harness();
+        bench.appended_by(HARNESS, creation, "C k1 curl\n");
+        let at = bench.advance(10);
+        std::fs::remove_file(&bench.path).unwrap();
+        let mut removed = bench.dirty(Some(creation), vec![bench.span(HARNESS, ops::REMOVE, at)]);
+        removed.unlinked = true;
+        bench.advance(2);
+        bench.take(removed);
+        bench.advance(5_000);
+        bench.append("C k2 wget\n");
+        bench.advance(10_000);
+        bench.capture.sweep(0);
+        let view = bench.view();
+        let wget = view
+            .calls
+            .iter()
+            .find(|call| call.call["programs"][0] == "wget")
+            .expect("read from its start");
+        assert_eq!(wget.writer, None);
+        assert!(view
+            .gaps
+            .iter()
+            .any(|gap| gap.reason == CaptureGapReason::Removed
+                && gap.until_ms >= wget.arrival_from_ms));
     }
 }
