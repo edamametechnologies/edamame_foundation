@@ -353,24 +353,8 @@ pub fn parse_jsonl_transcript(raw_text: &str) -> ParsedTranscript {
         // A message the user sent while the agent was working: Claude Code
         // records it as a `queued_command` attachment, not a user turn.
         if let Some(attachment) = value.get("attachment") {
-            if attachment.get("type").and_then(|v| v.as_str()) == Some("queued_command") {
-                // The harness queues its background-task notifications the
-                // same way (`commandMode: "task-notification"`): not the
-                // human's words either.
-                let notification = attachment.get("commandMode").and_then(|v| v.as_str())
-                    == Some("task-notification");
-                if let Some(prompt) = attachment.get("prompt").filter(|_| !notification) {
-                    let text = content_text(prompt);
-                    if !text.trim().is_empty()
-                        && !text.trim().starts_with("<task-notification>")
-                        && !is_harness_user_text(&text)
-                    {
-                        let human = without_pasted_alerts(&text);
-                        if !human.is_empty() {
-                            user_sections.push(human);
-                        }
-                    }
-                }
+            if let Some(human) = queued_command_text(attachment) {
+                user_sections.push(human);
             }
             continue;
         }
@@ -399,15 +383,7 @@ pub fn parse_jsonl_transcript(raw_text: &str) -> ParsedTranscript {
         if trimmed.is_empty() {
             continue;
         }
-        // Not the human's words, though the harness writes them as user
-        // turns: a compaction summary (the model's own account of the
-        // conversation so far) and a background-task notification. As human
-        // text, the agent's narrative would authorize itself, and one
-        // summary (~24k characters) crowds the human's requests out of the
-        // behavioral-model prompt.
-        let harness_turn = value.get("isCompactSummary").and_then(|v| v.as_bool()) == Some(true)
-            || trimmed.starts_with("<task-notification>")
-            || is_harness_user_text(trimmed);
+        let harness_turn = is_harness_turn(&value, trimmed);
         match role {
             "user" if harness_turn => {}
             "user" => {
@@ -427,6 +403,59 @@ pub fn parse_jsonl_transcript(raw_text: &str) -> ParsedTranscript {
         raw_text: raw_text.to_string(),
         tool_input_text: tool_input_sections.join("\n").trim().to_string(),
     }
+}
+
+/// The human's words of a `queued_command` attachment (a message the user
+/// sent while the agent was working), without the EDAMAME alerts pasted into
+/// it. `None` for any other attachment, and for the harness's background-task
+/// notifications, which it queues the same way
+/// (`commandMode: "task-notification"`).
+fn queued_command_text(attachment: &serde_json::Value) -> Option<String> {
+    if attachment.get("type").and_then(|v| v.as_str()) != Some("queued_command") {
+        return None;
+    }
+    let notification =
+        attachment.get("commandMode").and_then(|v| v.as_str()) == Some("task-notification");
+    let text = content_text(attachment.get("prompt").filter(|_| !notification)?);
+    if text.trim().is_empty()
+        || text.trim().starts_with("<task-notification>")
+        || is_harness_user_text(&text)
+    {
+        return None;
+    }
+    Some(without_pasted_alerts(&text)).filter(|human| !human.is_empty())
+}
+
+/// Not the human's words, though the harness writes them as user turns: a
+/// compaction summary (the model's own account of the conversation so far)
+/// and a background-task notification. As human text, the agent's narrative
+/// would authorize itself, and one summary (~24k characters) crowds the
+/// human's requests out of the behavioral-model prompt.
+fn is_harness_turn(value: &serde_json::Value, trimmed: &str) -> bool {
+    value.get("isCompactSummary").and_then(|v| v.as_bool()) == Some(true)
+        || trimmed.starts_with("<task-notification>")
+        || is_harness_user_text(trimmed)
+}
+
+/// Whether one JSONL transcript line is a user turn: words a person, or the
+/// program that started the session, gave the agent, as
+/// [`parse_jsonl_transcript`] reads them (a user-role message with text that
+/// is not the harness's, or a queued command). Tool results, compaction
+/// summaries and harness notifications are not. The text itself is not kept.
+pub(crate) fn line_is_user_turn(value: &serde_json::Value) -> bool {
+    if let Some(attachment) = value.get("attachment") {
+        return queued_command_text(attachment).is_some();
+    }
+    if jsonl_line_role(value) != "user" {
+        return false;
+    }
+    let text = jsonl_line_content(value)
+        .map(content_text)
+        .unwrap_or_default();
+    let trimmed = text.trim();
+    !trimmed.is_empty()
+        && !is_harness_turn(value, trimmed)
+        && !without_pasted_alerts(trimmed).is_empty()
 }
 
 /// Flatten a `tool_use` input value into plain strings for traffic/host

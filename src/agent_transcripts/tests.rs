@@ -341,6 +341,13 @@ fn a_transcript_modified_later_than_the_read_time_is_collected_with_the_read_tim
         modified_at <= chrono::Utc::now() && modified_at >= before - chrono::Duration::seconds(2),
         "{modified_at}"
     );
+    // Read again later, the clamped time does not move: the transcript does
+    // not read as changed on every collection.
+    let first = super::mtime_secs_not_after(&path, 1_000);
+    assert_eq!(super::mtime_secs_not_after(&path, 1_000 + 3_600), first);
+    // Its own time again once it is no longer in the future.
+    let actual = super::mtime_secs(&path);
+    assert_eq!(super::mtime_secs_not_after(&path, actual + 1), actual);
 }
 
 /// The agent's own model traffic is declared on every session, verbatim and

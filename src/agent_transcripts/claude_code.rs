@@ -9,7 +9,7 @@ use super::parsing::{
     extract_paths, extract_ports, extract_tool_names, extract_traffic, ParsedTranscript,
 };
 use super::{
-    datetime_from_secs, hostname_string, mtime_secs, observer_agent_instance_id,
+    datetime_from_secs, hostname_string, mtime_secs_not_after, observer_agent_instance_id,
     walk_files_with_suffix, CollectDiagnostics, CollectOptions, CollectResult, CollectedPayload,
     CollectedRawSession,
 };
@@ -250,8 +250,8 @@ pub(crate) fn gather_jsonl_transcripts(
         .into_iter()
         .filter_map(|path| {
             // A modification time later than the read time is read as the
-            // read time.
-            let mtime = mtime_secs(&path).min(now);
+            // time it was first read so.
+            let mtime = mtime_secs_not_after(&path, now);
             if mtime < active_cutoff {
                 return None;
             }

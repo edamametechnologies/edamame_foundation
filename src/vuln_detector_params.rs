@@ -1445,6 +1445,25 @@ pub struct CveDetectionParamsJSON {
     /// Session binding: process trees that keep the conversation they were
     /// tied to by tool-call time (the most recently used ones).
     pub session_binding_max_remembered_roots: u64,
+    /// Session binding: how far apart two readings of one process's start
+    /// may be, in milliseconds: at least a second (on Linux the boot time
+    /// the start is derived from is whole seconds and moves with the clock).
+    pub session_binding_process_start_tolerance_ms: u64,
+    /// Session binding: how long after its harness started the interval in
+    /// which a conversation's first user turn arrived must begin for the
+    /// conversation to have been started by a person typing it, in
+    /// milliseconds. A conversation whose prompt arrived sooner, in print or
+    /// headless mode, or not measured, never narrows what its processes
+    /// answer to.
+    pub session_binding_typed_prompt_min_delay_ms: u64,
+    /// Session binding: the agent types that record a command once it has
+    /// run. A binding of theirs is final only once every call that could
+    /// cover the process tree had time to be recorded.
+    pub session_binding_records_after_run_agents: Vec<String>,
+    /// Session binding: how long the notification of a divergence on a
+    /// process tree whose binding is pending waits, in milliseconds (0: it
+    /// does not wait).
+    pub session_binding_settle_ms: u64,
     /// Lowercase `/` path suffixes (or `/dir/` fragments) of the credential
     /// caches a CLI writes when it logs in (`com.vercel.cli/auth.json`,
     /// `~/.azure/msal_token_cache.json`, ...). A write to one by an
@@ -1879,6 +1898,10 @@ pub struct CveDetectionParams {
     pub session_binding_max_conversation_chain: u64,
     pub session_binding_result_wait_lines: u64,
     pub session_binding_max_remembered_roots: u64,
+    pub session_binding_process_start_tolerance_ms: u64,
+    pub session_binding_typed_prompt_min_delay_ms: u64,
+    pub session_binding_records_after_run_agents: Vec<String>,
+    pub session_binding_settle_ms: u64,
     /// Lowercase `/` path suffixes (or `/dir/` fragments) of the credential
     /// caches a CLI writes when it logs in (`com.vercel.cli/auth.json`,
     /// `~/.azure/msal_token_cache.json`, ...). A write to one by an
@@ -3030,6 +3053,17 @@ impl CveDetectionParams {
             session_binding_max_conversation_chain: json.session_binding_max_conversation_chain,
             session_binding_result_wait_lines: json.session_binding_result_wait_lines,
             session_binding_max_remembered_roots: json.session_binding_max_remembered_roots,
+            session_binding_process_start_tolerance_ms: json
+                .session_binding_process_start_tolerance_ms,
+            session_binding_typed_prompt_min_delay_ms: json
+                .session_binding_typed_prompt_min_delay_ms,
+            session_binding_records_after_run_agents: json
+                .session_binding_records_after_run_agents
+                .iter()
+                .map(|agent| agent.trim().to_ascii_lowercase())
+                .filter(|agent| !agent.is_empty())
+                .collect(),
+            session_binding_settle_ms: json.session_binding_settle_ms,
             cli_credential_cache_path_suffixes: lowercase_token_list(
                 &json.cli_credential_cache_path_suffixes,
             ),
@@ -5541,6 +5575,35 @@ pub fn session_binding_max_remembered_roots() -> u64 {
     PARAMS_SNAPSHOT.load().session_binding_max_remembered_roots
 }
 
+/// Session binding: how far apart two readings of one process's start may
+/// be.
+pub fn session_binding_process_start_tolerance_ms() -> u64 {
+    PARAMS_SNAPSHOT
+        .load()
+        .session_binding_process_start_tolerance_ms
+}
+
+/// Session binding: the delay after which a first user turn was typed.
+pub fn session_binding_typed_prompt_min_delay_ms() -> u64 {
+    PARAMS_SNAPSHOT
+        .load()
+        .session_binding_typed_prompt_min_delay_ms
+}
+
+/// Session binding: the agent types that record a command once it has run,
+/// lower case.
+pub fn session_binding_records_after_run_agents() -> Vec<String> {
+    PARAMS_SNAPSHOT
+        .load()
+        .session_binding_records_after_run_agents
+        .clone()
+}
+
+/// Session binding: how long a pending notification waits.
+pub fn session_binding_settle_ms() -> u64 {
+    PARAMS_SNAPSHOT.load().session_binding_settle_ms
+}
+
 /// Session binding: the shells a harness runs a command through, lower
 /// case (see the field docs).
 pub fn session_binding_shell_programs() -> Vec<String> {
@@ -5836,6 +5899,13 @@ mod tests {
         assert!(json.session_binding_tool_call_agents.is_empty());
         assert_eq!(json.session_binding_host_agents, vec!["cursor".to_string()]);
         assert_eq!(json.session_binding_max_remembered_roots, 4_096);
+        assert_eq!(json.session_binding_process_start_tolerance_ms, 2_000);
+        assert_eq!(json.session_binding_typed_prompt_min_delay_ms, 5_000);
+        assert_eq!(
+            json.session_binding_records_after_run_agents,
+            vec!["codex".to_string()]
+        );
+        assert_eq!(json.session_binding_settle_ms, 15_000);
         // The shells of the three desktop platforms.
         for shell in ["sh", "bash", "zsh", "cmd", "powershell", "pwsh"] {
             assert!(
@@ -5869,6 +5939,10 @@ mod tests {
             "session_binding_max_conversation_chain",
             "session_binding_result_wait_lines",
             "session_binding_max_remembered_roots",
+            "session_binding_process_start_tolerance_ms",
+            "session_binding_typed_prompt_min_delay_ms",
+            "session_binding_records_after_run_agents",
+            "session_binding_settle_ms",
         ] {
             let mut value: serde_json::Value =
                 serde_json::from_str(&CVE_DETECTION_PARAMS_DB).expect("valid JSON");

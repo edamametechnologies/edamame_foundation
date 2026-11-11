@@ -349,6 +349,11 @@ struct FileScan {
     shell_finished: Vec<u64>,
     shell_gave_up: Vec<u64>,
     shell_withdrawn: Vec<u64>,
+    /// A user turn of this transcript was read (recorded with the shell
+    /// calls only).
+    user_turn_seen: bool,
+    /// The line being read carries the transcript's first user turn.
+    first_user_turn_line: bool,
     /// The moment this line is read.
     read_at: DateTime<Utc>,
 }
@@ -422,6 +427,11 @@ pub struct ShellCallLineEvents {
     /// that its lines carry one: they were not turn records, and are no
     /// longer in the list.
     pub withdrawn: Vec<u64>,
+    /// The line carries the transcript's first user turn (the words a person,
+    /// or the program that started the session, gave the agent): its arrival
+    /// is when the conversation's first prompt arrived. Read once per reader;
+    /// nothing of the turn is kept.
+    pub first_user_turn: bool,
 }
 
 /// The shell calls of one transcript, read from its lines as they are handed
@@ -482,6 +492,7 @@ impl ShellCallReader {
             finished: std::mem::take(&mut scan.shell_finished),
             gave_up: std::mem::take(&mut scan.shell_gave_up),
             withdrawn: std::mem::take(&mut scan.shell_withdrawn),
+            first_user_turn: std::mem::take(&mut scan.first_user_turn_line),
         }
     }
 
@@ -507,6 +518,12 @@ impl ShellCallReader {
     /// What the list does not hold.
     pub fn gaps(&self) -> &ShellCallGaps {
         &self.scan.shell_gaps
+    }
+
+    /// A user turn was read: the first one was reported by the line that
+    /// carried it ([`ShellCallLineEvents::first_user_turn`]).
+    pub fn user_turn_read(&self) -> bool {
+        self.scan.user_turn_seen
     }
 
     /// A program, not a person, started the session
@@ -727,6 +744,10 @@ const CALL_LINE_MARKERS: &[&str] = &[
 /// shell command only: a scan that records no shell call does not look for
 /// it.
 const SHELL_CALL_ONLY_LINE_MARKER: &str = "\"toolCall\"";
+/// Markers of a line that may carry a user turn: a user role (Claude Code's
+/// `"type":"user"` lines carry `"role":"user"` too, Codex and OpenClaw name
+/// the role in their message) or Claude Code's queued-command attachment.
+const USER_TURN_LINE_MARKERS: &[&str] = &["\"role\":\"user\"", "\"queued_command\""];
 /// Markers of a line carrying a tool result. `toolResult` is the role of an
 /// OpenClaw result message.
 const RESULT_LINE_MARKERS: &[&str] = &[
@@ -785,7 +806,12 @@ fn process_line(line: &[u8], scan: &mut FileScan, vocab: &WorkspaceAttributionJS
                 .any(|id| text.contains(id.as_str())));
     let has_code_mode_item = text.contains(CODE_MODE_LINE_MARKER)
         && CODE_MODE_ITEM_MARKERS.iter().any(|m| text.contains(m));
-    if !wants_context && !has_call && !has_result && !has_code_mode_item {
+    // Until the first user turn was read, a line that may carry one is
+    // parsed (the role or the queued-command attachment names it).
+    let wants_user_turn = scan.record_shell_calls
+        && !scan.user_turn_seen
+        && USER_TURN_LINE_MARKERS.iter().any(|m| text.contains(m));
+    if !wants_context && !has_call && !has_result && !has_code_mode_item && !wants_user_turn {
         return;
     }
     let Ok(value) = serde_json::from_str::<Value>(text) else {
@@ -809,6 +835,11 @@ fn process_line(line: &[u8], scan: &mut FileScan, vocab: &WorkspaceAttributionJS
             }
         }
         scan.line_is_turn_record = line_ts.is_some() || !scan.timed_lines_seen;
+        if wants_user_turn && scan.line_is_turn_record && super::parsing::line_is_user_turn(&value)
+        {
+            scan.user_turn_seen = true;
+            scan.first_user_turn_line = true;
+        }
     }
     if wants_context {
         absorb_context(&value, line_ts, scan, vocab);
@@ -3010,8 +3041,10 @@ mod tests {
             programs_of("python3 - <<'EOF'\nimport os\nprint(os.getcwd())\nEOF"),
             vec!["python3"]
         );
+        // A value written to a file (built here: no key-shaped literal).
+        let value: String = (0..32).map(|i| char::from(b'a' + (i % 6) as u8)).collect();
         assert_eq!(
-            programs_of("cat > token <<EOF\n0123456789abcdef0123456789abcdef\nEOF\nsh install.sh"),
+            programs_of(&format!("cat > token <<EOF\n{value}\nEOF\nsh install.sh")),
             vec!["cat", "sh"]
         );
         assert_eq!(
@@ -3366,6 +3399,56 @@ mod tests {
         assert!(scan.shell_pending.is_empty());
         assert_eq!(scan.next_shell_seq, 0);
         assert_eq!(scan.shell_gaps, ShellCallGaps::default());
+    }
+
+    /// The reader reports the line that carries the first user turn, once:
+    /// not a harness notice, not a tool result, not a compaction summary, not
+    /// a line without a time in a transcript whose lines carry one. Claude
+    /// Code, Codex and OpenClaw lines alike; a collection's scan does not
+    /// look for it.
+    #[test]
+    fn the_reader_reports_the_first_user_turn_once() {
+        let read_at = Utc::now();
+        let mut reader = ShellCallReader::with_limits(8, 64);
+        let mut first_turns = Vec::new();
+        for l in [
+            serde_json::json!({"type":"user","timestamp":"2026-11-11T10:00:00Z","cwd":"/Users/me/p","entrypoint":"cli","message":{"role":"user","content":"<local-command-caveat>x</local-command-caveat>"}}),
+            serde_json::json!({"type":"user","timestamp":"2026-11-11T10:00:01Z","isCompactSummary":true,"message":{"role":"user","content":"summary"}}),
+            serde_json::json!({"type":"user","message":{"role":"user","content":"a logged request"}}),
+            serde_json::json!({"type":"user","timestamp":"2026-11-11T10:00:02Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"a","content":"ok"}]}}),
+            serde_json::json!({"type":"user","timestamp":"2026-11-11T10:00:09Z","message":{"role":"user","content":"update the readme"}}),
+            serde_json::json!({"type":"user","timestamp":"2026-11-11T10:01:00Z","message":{"role":"user","content":"and the changelog"}}),
+        ] {
+            first_turns.push(reader.read_line(&line(l), read_at).first_user_turn);
+        }
+        assert_eq!(first_turns, vec![false, false, false, false, true, false]);
+        assert!(reader.user_turn_read());
+        // A queued command is a user turn too.
+        let mut queued = ShellCallReader::with_limits(8, 64);
+        let l = serde_json::json!({"type":"attachment","timestamp":"2026-11-11T10:00:09Z","attachment":{"type":"queued_command","prompt":"stop"}});
+        assert!(queued.read_line(&line(l), read_at).first_user_turn);
+        // Codex and OpenClaw messages.
+        for l in [
+            serde_json::json!({"timestamp":"2026-11-11T10:00:09Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"fix the build"}]}}),
+            serde_json::json!({"type":"message","timestamp":"2026-11-11T10:00:09Z","message":{"role":"user","content":[{"type":"text","text":"fix the build"}]}}),
+        ] {
+            let mut other = ShellCallReader::with_limits(8, 64);
+            assert!(other.read_line(&line(l), read_at).first_user_turn);
+        }
+        // Nothing yet: no turn read.
+        assert!(!ShellCallReader::with_limits(8, 64).user_turn_read());
+        // A collection's scan does not look for it.
+        let p = vocab();
+        let mut scan = FileScan::default();
+        scan.lines_seen += 1;
+        process_line(
+            &line(
+                serde_json::json!({"type":"user","timestamp":"2026-11-11T10:00:09Z","message":{"role":"user","content":"update the readme"}}),
+            ),
+            &mut scan,
+            &p.workspace_attribution,
+        );
+        assert!(!scan.user_turn_seen && !scan.first_user_turn_line);
     }
 
     /// The reader says what each line changed: the calls it carries, the
