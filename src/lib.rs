@@ -61,6 +61,7 @@ pub mod model_authenticity;
 pub mod open_files_limit;
 pub mod order;
 pub mod order_type;
+pub mod owner_only_fs;
 pub mod peer_ids;
 /// Operator hard kill of a process by pid (standalone + helper order).
 pub mod process_control;
