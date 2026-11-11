@@ -68,7 +68,6 @@ pub fn collect(home: &Path, options: &CollectOptions) -> anyhow::Result<CollectR
     let now = Utc::now();
     if candidates.is_empty() {
         return Ok(CollectResult {
-            shell_call_index: None,
             payload: CollectedPayload {
                 window_start: now,
                 window_end: now,
@@ -198,7 +197,6 @@ pub fn collect(home: &Path, options: &CollectOptions) -> anyhow::Result<CollectR
     diagnostics.transcripts_root_accessible = projects_root.is_dir();
 
     Ok(CollectResult {
-        shell_call_index: None,
         payload: CollectedPayload {
             window_start,
             window_end,

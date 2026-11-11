@@ -71,9 +71,6 @@ pub const MAX_PROGRAM_NAME_CHARS: usize = 64;
 /// How deep the programs of an inline script are read (`bash -lc "sh -c
 /// '...'"`).
 const MAX_INLINE_SCRIPT_DEPTH: usize = 2;
-/// Lines a shell call waits for its result before the scanner stops looking
-/// for it. The call then keeps no result time.
-const MAX_SHELL_CALL_RESULT_LINES: u64 = 2048;
 /// Directories kept per launch call.
 const MAX_DIRS_PER_LAUNCH: usize = 16;
 /// Script basenames remembered per transcript file.
@@ -161,9 +158,19 @@ pub struct ShellCall {
     /// A time the transcript gave for this call was later than `read_at` and
     /// is not kept as given.
     pub time_bounded: bool,
+    /// The line records a command that had already run (a Codex code-mode
+    /// item): the moment the line was written does not date the command's
+    /// start.
+    pub recorded_after_run: bool,
 }
 
 impl ShellCall {
+    /// The call carries a time the harness gave it: its line's, or a start
+    /// the harness measured.
+    pub fn has_own_time(&self) -> bool {
+        self.at.is_some() || self.started_at.is_some()
+    }
+
     /// Where the call sorts among a transcript's calls: its own time, else
     /// the start the harness measured, else its result, else the moment it
     /// was read. Never later than `read_at`.
@@ -250,55 +257,44 @@ pub fn bound_shell_calls(calls: &mut Vec<ShellCall>, gaps: &mut ShellCallGaps, m
                 &b.programs,
             ))
     });
+    // Two readings of one call are one call. A call without a time of its
+    // own is told by its programs and its result alone.
     calls.dedup_by(|b, a| {
-        (a.at, a.started_at, a.finished_at, a.background, &a.programs)
-            == (b.at, b.started_at, b.finished_at, b.background, &b.programs)
-            && (a.at.is_some() || a.started_at.is_some() || a.finished_at.is_some())
+        (a.at, a.started_at, a.background, &a.programs)
+            == (b.at, b.started_at, b.background, &b.programs)
+            && (a.finished_at == b.finished_at || a.has_own_time())
     });
     if calls.len() > max_calls {
-        let drop = calls.len() - max_calls;
-        // Every call left out sorts at or before the first one kept (the
-        // last one left out when none is kept).
-        let boundary = calls.get(drop).or(calls.last()).map(ShellCall::order_time);
-        calls.drain(..drop);
+        let mut excess = calls.len() - max_calls;
+        let mut boundary: Option<DateTime<Utc>> = None;
+        // A call without a time of its own takes no place from a dated one.
+        let mut index = 0;
+        while excess > 0 && index < calls.len() {
+            if calls[index].has_own_time() {
+                index += 1;
+            } else {
+                let gone = calls.remove(index).order_time();
+                boundary = Some(boundary.map_or(gone, |known| known.max(gone)));
+                excess -= 1;
+            }
+        }
+        if excess > 0 {
+            // Every call left out sorts at or before the first one kept (the
+            // last one left out when none is kept).
+            let kept = calls
+                .get(excess)
+                .or(calls.last())
+                .map(ShellCall::order_time);
+            calls.drain(..excess);
+            boundary = match (boundary, kept) {
+                (Some(known), Some(kept)) => Some(known.max(kept)),
+                (known, kept) => known.or(kept),
+            };
+        }
         if let Some(boundary) = boundary {
             gaps.add_calls_before(boundary);
         }
     }
-}
-
-/// The shell calls of one transcript of a store (its own file and its
-/// subagents').
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TranscriptShellCalls {
-    /// The session the transcript belongs to: the key of the collected
-    /// session read from the same file when there is one, else the file's
-    /// name without its extension.
-    pub session_key: String,
-    /// A program, not a person, started the session
-    /// ([`SessionLaunchContext::headless`]).
-    pub headless: bool,
-    /// When the transcript file was last written, never later than the
-    /// moment it was read.
-    pub modified_at: DateTime<Utc>,
-    /// Its shell calls, oldest first.
-    pub calls: Vec<ShellCall>,
-    /// What `calls` does not hold.
-    pub gaps: ShellCallGaps,
-}
-
-/// The shell calls of a store: every transcript written within the published
-/// idle time (`session_binding_idle_transcript_secs`), the most recently
-/// written first, at most the published count
-/// (`session_binding_max_transcripts_per_store`).
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct StoreShellCalls {
-    pub transcripts: Vec<TranscriptShellCalls>,
-    /// Every transcript of the store written within the idle time is in
-    /// `transcripts`. False when there are more than the published count,
-    /// when a transcript could not be read, and when the store holds
-    /// sessions the scanner does not read (a format other than JSONL).
-    pub complete: bool,
 }
 
 /// Incremental scan state of one transcript file.
@@ -335,24 +331,26 @@ struct FileScan {
     /// Shell calls kept for this file (the published
     /// `session_binding_max_calls_per_transcript`).
     max_shell_calls: usize,
-    /// The file has not been written for the published
-    /// `session_binding_idle_transcript_secs`: its shell calls are set aside
-    /// and none is recorded until it is written again.
-    skip_shell_calls: bool,
-    /// The moment this scan reads the file.
+    /// The scan records shell calls. A collection's scan does not: it reads
+    /// the launch facts only.
+    record_shell_calls: bool,
+    /// Lines a shell call waits for its result before the reader stops
+    /// looking for it (the published `session_binding_result_wait_lines`).
+    result_wait_lines: u64,
+    /// A line of this transcript carried a time of its own. In such a
+    /// transcript a line without one is not a turn record.
+    timed_lines_seen: bool,
+    /// The line being read is a turn record: its shell calls are recorded.
+    line_is_turn_record: bool,
+    /// Calls recorded from lines without a time while no line had shown one.
+    untimed_calls: Vec<u64>,
+    /// What the line being read changed: results that came back, calls that
+    /// stopped waiting for one, calls taken back.
+    shell_finished: Vec<u64>,
+    shell_gave_up: Vec<u64>,
+    shell_withdrawn: Vec<u64>,
+    /// The moment this line is read.
     read_at: DateTime<Utc>,
-    /// The moment the previous scan read it. `None` on the first scan.
-    scanned_at: Option<DateTime<Utc>>,
-}
-
-impl FileScan {
-    /// Set the file's shell calls aside, releasing their memory. The calls
-    /// read so far are no longer in the list.
-    fn drop_shell_calls(&mut self) {
-        self.shell_calls = Vec::new();
-        self.shell_pending = HashMap::new();
-        self.shell_gaps.add_calls_before(self.read_at);
-    }
 }
 
 static FILE_SCANS: Lazy<undeadlock::CustomDashMap<String, FileScan>> =
@@ -364,7 +362,6 @@ static FILE_SCANS: Lazy<undeadlock::CustomDashMap<String, FileScan>> =
 pub(crate) fn attach_launch_facts(sessions: &mut [CollectedRawSession], options: &CollectOptions) {
     let params = agent_visibility_params::workspace_attribution();
     let vocab = &params.workspace_attribution;
-    let limits = ShellCallLimits::published();
     let horizon = SystemTime::now()
         .checked_sub(Duration::from_secs(
             options
@@ -377,7 +374,7 @@ pub(crate) fn attach_launch_facts(sessions: &mut [CollectedRawSession], options:
         let Some(main) = jsonl_source(&session.source_path) else {
             continue;
         };
-        let Some(main_scan) = scan_file(&main, vocab, &params.signature, &limits) else {
+        let Some(main_scan) = scan_file(&main, vocab, &params.signature) else {
             continue;
         };
         let mut launches: Vec<AgentLaunchCall> = main_scan
@@ -386,7 +383,7 @@ pub(crate) fn attach_launch_facts(sessions: &mut [CollectedRawSession], options:
             .map(|(_, call)| call.clone())
             .collect();
         for sub in subagent_transcripts(&main, &vocab.subagent_directory, horizon) {
-            if let Some(sub_scan) = scan_file(&sub, vocab, &params.signature, &limits) {
+            if let Some(sub_scan) = scan_file(&sub, vocab, &params.signature) {
                 launches.extend(sub_scan.launches.iter().map(|(_, call)| call.clone()));
             }
         }
@@ -411,152 +408,112 @@ pub(crate) fn attach_launch_facts(sessions: &mut [CollectedRawSession], options:
     }
 }
 
-/// The shell calls of the store `sessions` were collected from: every JSONL
-/// transcript under `roots` written within the published idle time, each
-/// with its subagents' calls. Reads through the scanner's incremental state,
-/// so a transcript that did not change costs a metadata read.
-pub(crate) fn store_shell_calls(
-    sessions: &[CollectedRawSession],
-    roots: &[String],
-    options: &CollectOptions,
-) -> StoreShellCalls {
-    let params = agent_visibility_params::workspace_attribution();
-    let vocab = &params.workspace_attribution;
-    let limits = ShellCallLimits::published();
-    let now = SystemTime::now();
-    let horizon = now
-        .checked_sub(Duration::from_secs(
-            options
-                .active_window_minutes
-                .saturating_mul(60)
-                .saturating_add(vocab.subagent_lookback_margin_secs),
-        ))
-        .unwrap_or(UNIX_EPOCH);
-    // A collected session whose transcript is not a JSONL file is a part of
-    // the store this scanner does not read.
-    let mut complete = sessions
-        .iter()
-        .all(|session| jsonl_source(&session.source_path).is_some());
-    let session_keys: HashMap<PathBuf, &str> = sessions
-        .iter()
-        .filter_map(|session| {
-            Some((
-                jsonl_source(&session.source_path)?,
-                session.session_key.as_str(),
-            ))
-        })
-        .collect();
-    // Subagent transcripts belong to their session and are read with it.
-    let subagent_segment = format!("/{}/", vocab.subagent_directory);
-    let mut files: Vec<(SystemTime, PathBuf)> = Vec::new();
-    for root in roots {
-        for path in super::walk_files_with_suffix(Path::new(root), &[".jsonl"], 4) {
-            let normalized = path.to_string_lossy().replace('\\', "/");
-            if !vocab.subagent_directory.is_empty() && normalized.contains(&subagent_segment) {
-                continue;
-            }
-            let Ok(modified) = std::fs::metadata(&path).and_then(|meta| meta.modified()) else {
-                complete = false;
-                continue;
-            };
-            // A modification time later than the read time is read as the
-            // read time.
-            let modified = modified.min(now);
-            if now.duration_since(modified).unwrap_or(Duration::ZERO) <= limits.idle {
-                files.push((modified, path));
-            }
-        }
-    }
-    // Sessions collected from outside the roots are transcripts of the store
-    // too.
-    for path in session_keys.keys() {
-        if !files.iter().any(|(_, listed)| listed == path) {
-            if let Ok(modified) = std::fs::metadata(path).and_then(|meta| meta.modified()) {
-                files.push((modified.min(now), path.clone()));
-            }
-        }
-    }
-    files.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
-    files.dedup_by(|a, b| a.1 == b.1);
-    if files.len() > limits.max_transcripts {
-        files.truncate(limits.max_transcripts);
-        complete = false;
-    }
-    let mut transcripts = Vec::with_capacity(files.len());
-    for (modified, main) in files {
-        let Some(main_scan) = scan_file(&main, vocab, &params.signature, &limits) else {
-            complete = false;
-            continue;
-        };
-        let mut calls: Vec<ShellCall> = main_scan
-            .shell_calls
-            .iter()
-            .map(|(_, call)| call.clone())
-            .collect();
-        let mut gaps = main_scan.shell_gaps.clone();
-        for sub in subagent_transcripts(&main, &vocab.subagent_directory, horizon) {
-            match scan_file(&sub, vocab, &params.signature, &limits) {
-                Some(sub_scan) => {
-                    calls.extend(sub_scan.shell_calls.iter().map(|(_, call)| call.clone()));
-                    gaps.merge(&sub_scan.shell_gaps);
-                }
-                // A subagent transcript that could not be read is a part of
-                // the session that was not read.
-                None => gaps.add_unread(None, now.into()),
-            }
-        }
-        // One list for the session and its subagents: a call read from two
-        // transcripts (a subagent replays its parent's context) is one call.
-        bound_shell_calls(&mut calls, &mut gaps, limits.max_calls);
-        let session_key = session_keys
-            .get(&main)
-            .map(|key| key.to_string())
-            .or_else(|| {
-                main.file_stem()
-                    .and_then(|stem| stem.to_str())
-                    .map(str::to_string)
-            })
-            .unwrap_or_default();
-        transcripts.push(TranscriptShellCalls {
-            session_key,
-            headless: main_scan.context.headless,
-            modified_at: modified.into(),
-            calls,
-            gaps,
-        });
-    }
-    StoreShellCalls {
-        transcripts,
-        complete,
+/// What reading one line changed in a [`ShellCallReader`]'s list. A number
+/// is the reader's own for a call: one per call, in the order they were read.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ShellCallLineEvents {
+    /// Calls the line carries.
+    pub started: Vec<u64>,
+    /// Calls whose result the line carries.
+    pub finished: Vec<u64>,
+    /// Calls that stopped waiting for their result.
+    pub gave_up: Vec<u64>,
+    /// Calls read from lines without a time before the transcript showed
+    /// that its lines carry one: they were not turn records, and are no
+    /// longer in the list.
+    pub withdrawn: Vec<u64>,
+}
+
+/// The shell calls of one transcript, read from its lines as they are handed
+/// over, oldest first. It is the extractor of the launch scan without the
+/// file: a reader that follows a transcript keeps one per file and hands it
+/// each complete line with the moment it read it. No collection uses it.
+///
+/// It keeps what [`ShellCall`] keeps (times, a background flag, program
+/// names) and nothing else of a line.
+#[derive(Debug, Clone)]
+pub struct ShellCallReader {
+    scan: FileScan,
+}
+
+impl Default for ShellCallReader {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
-/// The published limits of the shell-call lists
-/// (`cve-detection-params`: `session_binding_max_calls_per_transcript`,
-/// `session_binding_max_transcripts_per_store`,
-/// `session_binding_idle_transcript_secs`), read once per collection.
-#[derive(Debug, Clone, Copy)]
-struct ShellCallLimits {
-    max_calls: usize,
-    max_transcripts: usize,
-    idle: Duration,
-}
+impl ShellCallReader {
+    /// A reader under the published limits (`cve-detection-params`:
+    /// `session_binding_max_calls_per_transcript`,
+    /// `session_binding_result_wait_lines`).
+    pub fn new() -> Self {
+        Self::with_limits(
+            usize::try_from(crate::vuln_detector_params::session_binding_max_calls_per_transcript())
+                .unwrap_or(usize::MAX),
+            crate::vuln_detector_params::session_binding_result_wait_lines(),
+        )
+    }
 
-impl ShellCallLimits {
-    fn published() -> Self {
+    /// A reader that keeps `max_calls` calls and lets a call wait
+    /// `result_wait_lines` lines for its result.
+    pub fn with_limits(max_calls: usize, result_wait_lines: u64) -> Self {
         Self {
-            max_calls: usize::try_from(
-                crate::vuln_detector_params::session_binding_max_calls_per_transcript(),
-            )
-            .unwrap_or(usize::MAX),
-            max_transcripts: usize::try_from(
-                crate::vuln_detector_params::session_binding_max_transcripts_per_store(),
-            )
-            .unwrap_or(usize::MAX),
-            idle: Duration::from_secs(
-                crate::vuln_detector_params::session_binding_idle_transcript_secs(),
-            ),
+            scan: FileScan {
+                record_shell_calls: true,
+                max_shell_calls: max_calls,
+                result_wait_lines,
+                ..FileScan::default()
+            },
         }
+    }
+
+    /// Read one complete line, read at `read_at`.
+    pub fn read_line(&mut self, line: &[u8], read_at: DateTime<Utc>) -> ShellCallLineEvents {
+        let params = agent_visibility_params::workspace_attribution();
+        let scan = &mut self.scan;
+        scan.read_at = read_at;
+        scan.lines_seen += 1;
+        let first = scan.next_shell_seq;
+        process_line(line, scan, &params.workspace_attribution);
+        ShellCallLineEvents {
+            started: (first..scan.next_shell_seq).collect(),
+            finished: std::mem::take(&mut scan.shell_finished),
+            gave_up: std::mem::take(&mut scan.shell_gave_up),
+            withdrawn: std::mem::take(&mut scan.shell_withdrawn),
+        }
+    }
+
+    /// A part of the transcript was not handed over (a line longer than the
+    /// reader parses, bytes it skipped): what was written between `from`
+    /// (`None`: any time before) and `until`.
+    pub fn note_unread(&mut self, from: Option<DateTime<Utc>>, until: DateTime<Utc>) {
+        self.scan.shell_gaps.add_unread(from, until);
+    }
+
+    /// The calls kept, oldest first, each with its number.
+    pub fn calls(&self) -> impl Iterator<Item = (u64, &ShellCall)> {
+        self.scan.shell_calls.iter().map(|(seq, call)| (*seq, call))
+    }
+
+    /// The call numbered `number`, while the list keeps it.
+    pub fn call(&self, number: u64) -> Option<&ShellCall> {
+        self.calls()
+            .find(|(seq, _)| *seq == number)
+            .map(|(_, call)| call)
+    }
+
+    /// What the list does not hold.
+    pub fn gaps(&self) -> &ShellCallGaps {
+        &self.scan.shell_gaps
+    }
+
+    /// A program, not a person, started the session
+    /// ([`SessionLaunchContext::headless`]). `None` until the lines that say
+    /// how the session started were read.
+    pub fn headless(&self) -> Option<bool> {
+        self.scan
+            .context_settled
+            .then_some(self.scan.context.headless)
     }
 }
 
@@ -629,57 +586,25 @@ fn mtime_ns(meta: &std::fs::Metadata) -> u128 {
 }
 
 /// Current scan of `path`, read incrementally from the cached state.
-fn scan_file(
-    path: &Path,
-    vocab: &WorkspaceAttributionJSON,
-    signature: &str,
-    limits: &ShellCallLimits,
-) -> Option<FileScan> {
+fn scan_file(path: &Path, vocab: &WorkspaceAttributionJSON, signature: &str) -> Option<FileScan> {
     let key = path.to_string_lossy().to_string();
     let meta = std::fs::metadata(path).ok()?;
     let size = meta.len();
     let mtime = mtime_ns(&meta);
-    let now = SystemTime::now();
-    let read_at: DateTime<Utc> = now.into();
-    // How long the file has not been written. A modification time later than
-    // the read time is read as the read time.
-    let idle_for = meta
-        .modified()
-        .ok()
-        .map(|modified| now.duration_since(modified).unwrap_or(Duration::ZERO));
     let cached = FILE_SCANS.get(&key).map(|entry| (*entry).clone());
     let head = head_fingerprint(path);
-    // A file that grew since the previous scan was written since then,
-    // whatever its modification time says.
-    let grew = cached.as_ref().is_some_and(|scan| size > scan.size);
-    let idle = !grew && idle_for.is_some_and(|age| age > limits.idle);
     let mut scan = match cached {
         // A state computed under other params is recomputed from the start.
         Some(scan) if scan.params_signature != signature => FileScan::default(),
-        Some(mut scan) if scan.size == size && scan.mtime_ns == mtime => {
-            if idle && !scan.skip_shell_calls {
-                scan.read_at = read_at;
-                scan.skip_shell_calls = true;
-                scan.drop_shell_calls();
-                FILE_SCANS.insert(key, scan.clone());
-            }
-            return Some(scan);
-        }
+        Some(scan) if scan.size == size && scan.mtime_ns == mtime => return Some(scan),
         // Appended to: continue from the last complete line.
         Some(scan) if size >= scan.size && head == Some(scan.head_fingerprint) => scan,
         // Truncated or rewritten: start over.
         _ => FileScan::default(),
     };
-    scan.read_at = read_at;
-    scan.max_shell_calls = limits.max_calls;
-    if idle && !scan.skip_shell_calls {
-        scan.drop_shell_calls();
-    }
-    scan.skip_shell_calls = idle;
     if scan_increment(path, &mut scan, size, vocab).is_err() {
         return None;
     }
-    scan.scanned_at = Some(read_at);
     scan.params_signature = signature.to_string();
     scan.size = size;
     scan.mtime_ns = mtime;
@@ -727,11 +652,6 @@ fn scan_increment(
     size: u64,
     vocab: &WorkspaceAttributionJSON,
 ) -> std::io::Result<()> {
-    // Lines past the scan budget are never read: what was written since the
-    // previous scan is not in the list.
-    if size > MAX_SCAN_BYTES_PER_FILE {
-        scan.shell_gaps.add_unread(scan.scanned_at, scan.read_at);
-    }
     if scan.offset >= size || scan.offset >= MAX_SCAN_BYTES_PER_FILE {
         return Ok(());
     }
@@ -749,11 +669,7 @@ fn scan_increment(
         }
         scan.offset += consumed as u64;
         scan.lines_seen += 1;
-        if oversized {
-            // Not parsed: a line written since the previous scan is not in
-            // the list.
-            scan.shell_gaps.add_unread(scan.scanned_at, scan.read_at);
-        } else {
+        if !oversized {
             process_line(&line, scan, vocab);
         }
     }
@@ -799,14 +715,16 @@ fn read_line_capped<R: BufRead>(
 
 /// Markers of a line carrying a tool call (the closing quote keeps
 /// `"tool_use_id"`, `"function_call_output"` and `"toolCallId"` out).
-/// `toolCall` is OpenClaw's block.
 const CALL_LINE_MARKERS: &[&str] = &[
     "\"tool_use\"",
     "\"function_call\"",
     "\"custom_tool_call\"",
     "\"local_shell_call\"",
-    "\"toolCall\"",
 ];
+/// Marker of a line carrying OpenClaw's call block, which is read for its
+/// shell command only: a scan that records no shell call does not look for
+/// it.
+const SHELL_CALL_ONLY_LINE_MARKER: &str = "\"toolCall\"";
 /// Markers of a line carrying a tool result. `toolResult` is the role of an
 /// OpenClaw result message.
 const RESULT_LINE_MARKERS: &[&str] = &[
@@ -828,14 +746,31 @@ fn process_line(line: &[u8], scan: &mut FileScan, vocab: &WorkspaceAttributionJS
         return;
     };
     let wants_context = !scan.context_settled;
-    let has_call = CALL_LINE_MARKERS.iter().any(|m| text.contains(m));
-    // A shell call stops waiting for its result after
-    // `MAX_SHELL_CALL_RESULT_LINES` lines.
+    let has_call = CALL_LINE_MARKERS.iter().any(|m| text.contains(m))
+        || (scan.record_shell_calls && text.contains(SHELL_CALL_ONLY_LINE_MARKER));
+    // A shell call stops waiting for its result after the published number
+    // of lines. Its end is then not known: what the transcript says from its
+    // line on is a part the list does not vouch for.
     if !scan.shell_pending.is_empty() {
-        let lines_seen = scan.lines_seen;
-        scan.shell_pending.retain(|_, (_, read_on_line)| {
-            lines_seen.saturating_sub(*read_on_line) <= MAX_SHELL_CALL_RESULT_LINES
-        });
+        let (lines_seen, wait) = (scan.lines_seen, scan.result_wait_lines);
+        let gave_up: Vec<u64> = scan
+            .shell_pending
+            .values()
+            .filter(|(_, read_on_line)| lines_seen.saturating_sub(*read_on_line) > wait)
+            .map(|(seq, _)| *seq)
+            .collect();
+        if !gave_up.is_empty() {
+            scan.shell_pending
+                .retain(|_, (seq, _)| !gave_up.contains(seq));
+            let since = scan
+                .shell_calls
+                .iter()
+                .filter(|(seq, _)| gave_up.contains(seq))
+                .map(|(_, call)| call.order_time())
+                .min();
+            scan.shell_gaps.add_unread(since, scan.read_at);
+            scan.shell_gave_up.extend(gave_up);
+        }
     }
     // Result lines (often large tool output) are parsed only while a call
     // waits for one: a foreground launch, or a shell call whose id the line
@@ -855,6 +790,24 @@ fn process_line(line: &[u8], scan: &mut FileScan, vocab: &WorkspaceAttributionJS
         return;
     };
     let line_ts = line_timestamp(&value);
+    if scan.record_shell_calls {
+        // A turn record carries a time of its own wherever the transcript's
+        // lines do. A line without one in such a transcript is something
+        // else (a logged request that repeats an earlier message): no shell
+        // call is read from it, and the ones read from such lines before the
+        // transcript showed a time are taken back.
+        if line_ts.is_some() && !scan.timed_lines_seen {
+            scan.timed_lines_seen = true;
+            let untimed = std::mem::take(&mut scan.untimed_calls);
+            if !untimed.is_empty() {
+                scan.shell_calls.retain(|(seq, _)| !untimed.contains(seq));
+                scan.shell_pending
+                    .retain(|_, (seq, _)| !untimed.contains(seq));
+                scan.shell_withdrawn.extend(untimed);
+            }
+        }
+        scan.line_is_turn_record = line_ts.is_some() || !scan.timed_lines_seen;
+    }
     if wants_context {
         absorb_context(&value, line_ts, scan, vocab);
     }
@@ -891,6 +844,7 @@ fn settle_result(id: &str, line_ts: Option<DateTime<Utc>>, scan: &mut FileScan) 
         }
     }
     if let Some((seq, _)) = scan.shell_pending.remove(id) {
+        scan.shell_finished.push(seq);
         let read_at = scan.read_at;
         if let Some((_, call)) = scan.shell_calls.iter_mut().find(|(s, _)| *s == seq) {
             let (finished_at, bounded) = not_after(line_ts, read_at);
@@ -1155,6 +1109,7 @@ fn absorb_tool_call(
             line_at: line_ts,
             measured_start: None,
             finished_at: None,
+            after_run: false,
         },
         scan,
         vocab,
@@ -1169,6 +1124,9 @@ fn absorb_shell_call_block(
     scan: &mut FileScan,
     vocab: &WorkspaceAttributionJSON,
 ) {
+    if !scan.record_shell_calls {
+        return;
+    }
     let Some(args) = call_arguments(block) else {
         return;
     };
@@ -1184,6 +1142,7 @@ fn absorb_shell_call_block(
         line_at: line_ts,
         measured_start: None,
         finished_at: None,
+        after_run: false,
     };
     let lexed = lex_shell(cmd.command);
     let background = runs_in_background(&lexed, cmd.args, vocab);
@@ -1210,6 +1169,9 @@ struct ShellCommand<'a> {
     /// When the command's result is already known: a Codex code-mode item
     /// is recorded once the command has finished.
     finished_at: Option<DateTime<Utc>>,
+    /// The line records a command that had already run (a Codex code-mode
+    /// item).
+    after_run: bool,
 }
 
 /// Record `cmd` as a shell call, and as a launch call when it starts an agent
@@ -1315,7 +1277,7 @@ fn record_shell_call(
     scan: &mut FileScan,
     vocab: &WorkspaceAttributionJSON,
 ) {
-    if scan.skip_shell_calls {
+    if !scan.record_shell_calls || !scan.line_is_turn_record {
         return;
     }
     let mut programs = Vec::new();
@@ -1340,6 +1302,13 @@ fn record_shell_call(
             scan.shell_pending.insert(id, (seq, scan.lines_seen));
         }
     }
+    // A call line without a time, read before the transcript showed one.
+    if cmd.line_at.is_none() && !cmd.after_run && !scan.timed_lines_seen {
+        scan.untimed_calls.push(seq);
+        if scan.untimed_calls.len() > scan.max_shell_calls.max(1) {
+            scan.untimed_calls.remove(0);
+        }
+    }
     scan.shell_calls.push((
         seq,
         ShellCall {
@@ -1350,17 +1319,25 @@ fn record_shell_call(
             programs,
             read_at,
             time_bounded,
+            recorded_after_run: cmd.after_run,
         },
     ));
     if scan.shell_calls.len() > scan.max_shell_calls {
-        let (dropped, _) = scan.shell_calls.remove(0);
+        // A call without a time of its own takes no place from a dated one.
+        let index = scan
+            .shell_calls
+            .iter()
+            .position(|(_, call)| !call.has_own_time())
+            .unwrap_or(0);
+        let (dropped, gone) = scan.shell_calls.remove(index);
         scan.shell_pending.retain(|_, (s, _)| *s != dropped);
-        // The calls left out sort at or before the oldest one kept.
+        // The call left out sorts at or before the oldest one kept.
         let boundary = scan
             .shell_calls
             .first()
             .map(|(_, call)| call.order_time())
-            .unwrap_or(read_at);
+            .unwrap_or(read_at)
+            .max(gone.order_time());
         scan.shell_gaps.add_calls_before(boundary);
     }
 }
@@ -1565,6 +1542,7 @@ fn absorb_code_mode_item(
                     line_at: None,
                     measured_start: started,
                     finished_at: completed.or(line_ts),
+                    after_run: true,
                 },
                 scan,
                 vocab,
@@ -2716,18 +2694,17 @@ mod tests {
         s
     }
 
-    /// The limits the tests scan under (the published defaults).
-    const TEST_LIMITS: ShellCallLimits = ShellCallLimits {
-        max_calls: 64,
-        max_transcripts: 64,
-        idle: Duration::from_secs(2 * 60 * 60),
-    };
+    /// The limits the tests read under (the published defaults).
+    const TEST_MAX_CALLS: usize = 64;
+    const TEST_RESULT_WAIT_LINES: u64 = 2048;
 
     fn feed(scan: &mut FileScan, lines: &[serde_json::Value]) {
         let p = vocab();
         scan.read_at = Utc::now();
+        scan.record_shell_calls = true;
+        scan.result_wait_lines = TEST_RESULT_WAIT_LINES;
         if scan.max_shell_calls == 0 {
-            scan.max_shell_calls = TEST_LIMITS.max_calls;
+            scan.max_shell_calls = TEST_MAX_CALLS;
         }
         for l in lines {
             scan.lines_seen += 1;
@@ -2948,7 +2925,7 @@ mod tests {
         bytes.extend_from_slice(&call[..call.len() / 2]);
         std::fs::write(&path, &bytes).unwrap();
         let scan =
-            scan_file(&path, &p.workspace_attribution, &p.signature, &TEST_LIMITS).expect("scan");
+            scan_file(&path, &p.workspace_attribution, &p.signature).expect("scan");
         assert_eq!(scan.offset, first.len() as u64);
         assert!(scan.launches.is_empty());
         // The rest of the line lands: the next scan picks it up from the offset.
@@ -2956,7 +2933,7 @@ mod tests {
         all.extend_from_slice(&call);
         std::fs::write(&path, &all).unwrap();
         let scan =
-            scan_file(&path, &p.workspace_attribution, &p.signature, &TEST_LIMITS).expect("scan");
+            scan_file(&path, &p.workspace_attribution, &p.signature).expect("scan");
         assert_eq!(scan.offset, all.len() as u64);
         assert_eq!(scan.launches.len(), 1);
         assert!(scan.launches[0].1.background);
@@ -2965,7 +2942,6 @@ mod tests {
             &path,
             &p.workspace_attribution,
             "another-signature",
-            &TEST_LIMITS,
         )
         .expect("scan");
         assert_eq!(rescan.launches.len(), 1);
@@ -3285,11 +3261,18 @@ mod tests {
             ],
         );
         assert!(scan.shell_pending.contains_key("toolu_wait_1"));
-        let filler: Vec<serde_json::Value> = (0..=MAX_SHELL_CALL_RESULT_LINES)
+        let filler: Vec<serde_json::Value> = (0..=TEST_RESULT_WAIT_LINES)
             .map(|_| serde_json::json!({"type":"progress","timestamp":"2026-11-08T10:00:07.000Z"}))
             .collect();
         feed(&mut scan, &filler);
         assert!(scan.shell_pending.is_empty());
+        // The call's end is not known: the list says so.
+        assert_eq!(scan.shell_gave_up, vec![0]);
+        assert_eq!(
+            rfc3339(scan.shell_gaps.unread_from),
+            Some("2026-11-08T10:00:05.000Z".to_string())
+        );
+        assert!(scan.shell_gaps.unread_until.is_some());
         feed(
             &mut scan,
             &[
@@ -3347,158 +3330,172 @@ mod tests {
         ];
         let mut gaps = ShellCallGaps::default();
         bound_shell_calls(&mut merged, &mut gaps, 64);
-        // Two calls without any time are two calls.
+        // Two readings of a call without a time are one call too.
         assert_eq!(
             merged
                 .iter()
                 .map(|c| c.programs[0].as_str())
                 .collect::<Vec<_>>(),
-            vec!["cargo", "git", "npm", "npm"]
+            vec!["cargo", "git", "npm"]
         );
         assert_eq!(gaps, ShellCallGaps::default());
+        // The call without a time is the first to go.
         bound_shell_calls(&mut merged, &mut gaps, 2);
-        assert_eq!(merged.len(), 2);
+        assert_eq!(
+            merged
+                .iter()
+                .map(|c| c.programs[0].as_str())
+                .collect::<Vec<_>>(),
+            vec!["cargo", "git"]
+        );
         assert_eq!(gaps.calls_before, Some(read_at));
     }
 
-    /// A transcript not written for the published idle time has its shell
-    /// calls set aside, and the list says that the calls before that moment
-    /// are not in it. Written again, it records the calls that follow, also
-    /// when its modification time is an old one.
+    /// A collection's scan reads the launch facts and records no shell call:
+    /// nothing waits for a result, nothing is listed.
     #[test]
-    fn an_idle_transcript_sets_its_shell_calls_aside() {
+    fn a_scan_that_does_not_record_shell_calls_reads_the_launch_facts_only() {
         let p = vocab();
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("s.jsonl");
-        // Each line is longer than the head the scanner fingerprints, so a
-        // second line reads as an append (a shorter file that grows is
-        // scanned again from its start, and its calls with it).
-        let filler = "x".repeat(2 * HEAD_FINGERPRINT_BYTES);
-        let call = |id: &str, at: &str| {
-            line(
-                serde_json::json!({"type":"assistant","uuid":filler,"timestamp":at,"cwd":"/Users/me/p","entrypoint":"cli","message":{"content":[{"type":"tool_use","id":id,"name":"Bash","input":{"command":"git status"}}]}}),
-            )
-        };
-        let set_modified = |age: Duration| {
-            std::fs::File::options()
-                .write(true)
-                .open(&path)
-                .unwrap()
-                .set_modified(SystemTime::now() - age)
-                .unwrap();
-        };
-        let first = call("a", "2026-11-08T10:01:00Z");
-        std::fs::write(&path, &first).unwrap();
-        let scan =
-            scan_file(&path, &p.workspace_attribution, &p.signature, &TEST_LIMITS).expect("scan");
-        assert_eq!(scan.shell_calls.len(), 1);
-        assert_eq!(scan.shell_gaps, ShellCallGaps::default());
-
-        // Three hours without a write.
-        set_modified(Duration::from_secs(3 * 60 * 60));
-        let idle =
-            scan_file(&path, &p.workspace_attribution, &p.signature, &TEST_LIMITS).expect("scan");
-        assert!(idle.shell_calls.is_empty());
-        assert!(idle.shell_pending.is_empty());
-        assert_eq!(idle.shell_gaps.calls_before, Some(idle.read_at));
-
-        // Written again, and its modification time set back: the file grew
-        // since the previous scan, so the new call is recorded. The old one
-        // is not read again, and the list still says so.
-        let mut all = first.clone();
-        all.extend_from_slice(&call("b", "2026-11-08T13:30:00Z"));
-        std::fs::write(&path, &all).unwrap();
-        set_modified(Duration::from_secs(3 * 60 * 60));
-        let scan =
-            scan_file(&path, &p.workspace_attribution, &p.signature, &TEST_LIMITS).expect("scan");
-        assert_eq!(scan.shell_calls.len(), 1);
-        assert_eq!(
-            rfc3339(scan.shell_calls[0].1.at),
-            Some("2026-11-08T13:30:00.000Z".to_string())
-        );
-        assert_eq!(scan.shell_gaps.calls_before, idle.shell_gaps.calls_before);
-
-        // A transcript first read when it is already idle: none of its
-        // calls is in the list, up to the moment it was read.
-        let other = dir.path().join("t.jsonl");
-        std::fs::write(&other, &first).unwrap();
-        std::fs::File::options()
-            .write(true)
-            .open(&other)
-            .unwrap()
-            .set_modified(SystemTime::now() - Duration::from_secs(3 * 60 * 60))
-            .unwrap();
-        let scan =
-            scan_file(&other, &p.workspace_attribution, &p.signature, &TEST_LIMITS).expect("scan");
+        let mut scan = FileScan::default();
+        for l in [
+            serde_json::json!({"type":"user","timestamp":"2026-11-08T10:00:00Z","cwd":"/Users/me/p","entrypoint":"cli","message":{"content":"hi"}}),
+            serde_json::json!({"type":"assistant","timestamp":"2026-11-08T10:00:05Z","cwd":"/Users/me/p","message":{"content":[{"type":"tool_use","id":"a","name":"Bash","input":{"command":"claude -p x","run_in_background":true}}]}}),
+            serde_json::json!({"type":"assistant","timestamp":"2026-11-08T10:00:09Z","message":{"content":[{"type":"tool_use","id":"b","name":"Bash","input":{"command":"git status"}}]}}),
+            serde_json::json!({"type":"message","timestamp":"2026-11-08T10:00:12Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"c","name":"exec","arguments":{"command":"git push"}}]}}),
+        ] {
+            scan.lines_seen += 1;
+            process_line(&line(l), &mut scan, &p.workspace_attribution);
+        }
+        assert_eq!(scan.launches.len(), 1);
         assert!(scan.shell_calls.is_empty());
-        assert_eq!(scan.shell_gaps.calls_before, Some(scan.read_at));
-    }
-
-    /// A modification time later than the read time is read as the read
-    /// time: the transcript is not idle, and its calls are read.
-    #[test]
-    fn a_modification_time_later_than_the_read_time_is_read_as_the_read_time() {
-        let p = vocab();
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("s.jsonl");
-        std::fs::write(
-            &path,
-            line(
-                serde_json::json!({"type":"assistant","timestamp":"2026-11-08T10:01:00Z","message":{"content":[{"type":"tool_use","id":"a","name":"Bash","input":{"command":"git status"}}]}}),
-            ),
-        )
-        .unwrap();
-        std::fs::File::options()
-            .write(true)
-            .open(&path)
-            .unwrap()
-            .set_modified(SystemTime::now() + Duration::from_secs(24 * 60 * 60))
-            .unwrap();
-        let scan =
-            scan_file(&path, &p.workspace_attribution, &p.signature, &TEST_LIMITS).expect("scan");
-        assert_eq!(scan.shell_calls.len(), 1);
-        assert!(!scan.skip_shell_calls);
+        assert!(scan.shell_pending.is_empty());
+        assert_eq!(scan.next_shell_seq, 0);
         assert_eq!(scan.shell_gaps, ShellCallGaps::default());
     }
 
-    /// A line longer than the scanner parses is reported as a part of the
-    /// transcript that was not read: from the start of the file on the first
-    /// scan, since the previous scan afterwards.
+    /// The reader says what each line changed: the calls it carries, the
+    /// results that came back, the calls that stopped waiting (with the part
+    /// of the transcript the list then does not vouch for), and what its
+    /// caller did not hand over.
     #[test]
-    fn a_line_that_is_not_parsed_is_reported_as_unread() {
-        let p = vocab();
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("s.jsonl");
-        let call = line(
-            serde_json::json!({"type":"assistant","timestamp":"2026-11-08T10:01:00Z","message":{"content":[{"type":"tool_use","id":"a","name":"Bash","input":{"command":"git status"}}]}}),
+    fn the_reader_reports_what_each_line_changed() {
+        let at = |secs: i64| DateTime::<Utc>::from_timestamp(1_794_132_000 + secs, 0).unwrap();
+        let mut reader = ShellCallReader::with_limits(8, 3);
+        assert_eq!(reader.headless(), None);
+        let read = |reader: &mut ShellCallReader, value: serde_json::Value, secs: i64| {
+            reader.read_line(&line(value), at(secs))
+        };
+        let events = read(
+            &mut reader,
+            serde_json::json!({"type":"user","timestamp":"2026-11-08T10:00:00Z","cwd":"/Users/me/p","entrypoint":"cli","message":{"content":"hi"}}),
+            1,
         );
-        let mut long_line = vec![b'x'; MAX_LINE_BYTES + 1];
-        long_line.push(b'\n');
-        std::fs::write(&path, &call).unwrap();
-        let first =
-            scan_file(&path, &p.workspace_attribution, &p.signature, &TEST_LIMITS).expect("scan");
-        assert_eq!(first.shell_gaps, ShellCallGaps::default());
-
-        let mut grown = call.clone();
-        grown.extend_from_slice(&long_line);
-        std::fs::write(&path, &grown).unwrap();
-        let second =
-            scan_file(&path, &p.workspace_attribution, &p.signature, &TEST_LIMITS).expect("scan");
-        assert_eq!(second.shell_calls.len(), 1);
-        assert_eq!(second.shell_gaps.unread_until, Some(second.read_at));
-        // The call line is shorter than the head the scanner fingerprints,
-        // so the grown file was scanned from its start.
-        assert_eq!(second.shell_gaps.unread_from, None);
-
-        let mut gaps = ShellCallGaps::default();
-        let (early, late) = (first.read_at, second.read_at);
-        gaps.add_unread(Some(late), late);
-        gaps.add_unread(Some(early), late);
+        assert_eq!(events, ShellCallLineEvents::default());
+        let events = read(
+            &mut reader,
+            serde_json::json!({"type":"assistant","timestamp":"2026-11-08T10:00:05Z","message":{"content":[{"type":"tool_use","id":"a","name":"Bash","input":{"command":"git status"}},{"type":"tool_use","id":"b","name":"Bash","input":{"command":"cargo build"}}]}}),
+            6,
+        );
+        assert_eq!(events.started, vec![0, 1]);
+        assert_eq!(reader.call(0).unwrap().read_at, at(6));
+        assert_eq!(reader.call(1).unwrap().programs, vec!["cargo".to_string()]);
+        let events = read(
+            &mut reader,
+            serde_json::json!({"type":"user","timestamp":"2026-11-08T10:00:07Z","message":{"content":[{"type":"tool_result","tool_use_id":"a","content":"ok"}]}}),
+            8,
+        );
+        assert_eq!(events.finished, vec![0]);
+        assert!(reader.call(0).unwrap().finished_at.is_some());
+        assert_eq!(reader.gaps(), &ShellCallGaps::default());
+        // The second call's result does not come within three lines.
+        let mut gave_up = Vec::new();
+        for n in 0..4 {
+            let events = read(
+                &mut reader,
+                serde_json::json!({"type":"progress","timestamp":"2026-11-08T10:00:09Z"}),
+                10 + n,
+            );
+            gave_up.extend(events.gave_up);
+        }
+        assert_eq!(gave_up, vec![1]);
+        assert_eq!(reader.call(1).unwrap().finished_at, None);
         assert_eq!(
-            (gaps.unread_from, gaps.unread_until),
-            (Some(early), Some(late))
+            rfc3339(reader.gaps().unread_from),
+            Some("2026-11-08T10:00:05.000Z".to_string())
         );
-        gaps.add_unread(None, late);
-        assert_eq!(gaps.unread_from, None);
+        assert!(reader.gaps().unread_until.is_some());
+        assert_eq!(reader.calls().count(), 2);
+        // What the caller could not hand over is unread too.
+        let mut other = ShellCallReader::with_limits(8, 3);
+        other.note_unread(None, at(20));
+        assert_eq!(
+            (other.gaps().unread_from, other.gaps().unread_until),
+            (None, Some(at(20)))
+        );
+        let mut gaps = ShellCallGaps::default();
+        gaps.add_unread(Some(at(9)), at(9));
+        gaps.add_unread(Some(at(3)), at(9));
+        assert_eq!((gaps.unread_from, gaps.unread_until), (Some(at(3)), Some(at(9))));
+    }
+
+    /// A line that repeats a message of the conversation without being a
+    /// turn of it (a logged request: no time of its own) yields no call in a
+    /// transcript whose lines carry a time. Read before the transcript showed
+    /// one, its call is taken back when it does.
+    #[test]
+    fn a_line_without_a_time_is_not_a_turn_record_where_lines_carry_one() {
+        let turn = serde_json::json!({"type":"assistant","timestamp":"2026-11-08T10:00:05Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_a","name":"Bash","input":{"command":"git status","description":"d"}}]}});
+        let logged = serde_json::json!({"type":"api-request-blob","sessionId":"s","hash":"h","message":{"role":"assistant","content":[{"type":"thinking","thinking":"","signature":"x"},{"type":"tool_use","id":"toolu_a","name":"Bash","input":{"command":"git status","description":"d"},"caller":{"type":"direct"}}]}});
+        let mut scan = FileScan::default();
+        feed(&mut scan, &[turn.clone(), logged.clone(), logged.clone()]);
+        let calls = shell_calls(&scan);
+        assert_eq!(calls.len(), 1, "{calls:?}");
+        assert!(calls[0].at.is_some());
+
+        let now = Utc::now();
+        let mut reader = ShellCallReader::with_limits(8, 64);
+        let first = reader.read_line(&line(logged.clone()), now);
+        assert_eq!(first.started, vec![0]);
+        let second = reader.read_line(&line(turn), now);
+        assert_eq!(second.withdrawn, vec![0]);
+        assert_eq!(second.started, vec![1]);
+        let third = reader.read_line(&line(logged), now);
+        assert_eq!(third, ShellCallLineEvents::default());
+        assert_eq!(reader.calls().map(|(seq, _)| seq).collect::<Vec<_>>(), vec![1]);
+    }
+
+    /// A call without a time of its own takes no place from a dated one: it
+    /// is the first to leave a full list.
+    #[test]
+    fn a_call_without_a_time_leaves_a_full_list_first() {
+        let mut scan = FileScan {
+            max_shell_calls: 2,
+            ..Default::default()
+        };
+        feed(
+            &mut scan,
+            &[
+                serde_json::json!({"timestamp":"2026-11-08T10:00:00Z","type":"session_meta","payload":{"cwd":"/home/me/app","originator":"codex_exec","source":"exec"}}),
+                serde_json::json!({"timestamp":"2026-11-08T10:00:10.000Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","call_id":"c1","arguments":"{\"cmd\":\"cargo test\"}"}}),
+                // A command recorded once it had run, without a measured start.
+                serde_json::json!({"timestamp":"2026-11-08T10:00:20.000Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"CommandExecution","id":"exec-2","command":["/bin/bash","-lc","git status"],"cwd":"file:///home/me/app","status":"completed","exit_code":0}}}),
+            ],
+        );
+        let calls = shell_calls(&scan);
+        assert_eq!(calls.len(), 2);
+        assert!(calls[1].recorded_after_run && !calls[1].has_own_time());
+        assert!(!calls[0].recorded_after_run);
+        feed(
+            &mut scan,
+            &[
+                serde_json::json!({"timestamp":"2026-11-08T10:00:30.000Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","call_id":"c3","arguments":"{\"cmd\":\"npm test\"}"}}),
+            ],
+        );
+        let calls = shell_calls(&scan);
+        assert_eq!(
+            calls.iter().map(|c| names(c)[0]).collect::<Vec<_>>(),
+            vec!["cargo", "npm"]
+        );
+        assert!(scan.shell_gaps.calls_before.is_some());
     }
 }

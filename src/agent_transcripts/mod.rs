@@ -326,14 +326,6 @@ pub struct CollectDiagnostics {
 pub struct CollectResult {
     pub payload: CollectedPayload,
     pub diagnostics: CollectDiagnostics,
-    /// The shell tool calls of every transcript of the store that was
-    /// written within the published idle time, as times and program names
-    /// (see [`launch::StoreShellCalls`]). Set centrally by `collect`
-    /// (adapters leave it `None`). It covers more transcripts than
-    /// `payload.sessions`, which holds the few a model is built from.
-    /// `None`: the store's calls were not read (a collector that predates
-    /// the field), which is not the same as a store without calls.
-    pub shell_call_index: Option<launch::StoreShellCalls>,
 }
 
 /// Deterministic per-session "run economics": exact token usage, cache
@@ -678,7 +670,6 @@ pub fn collect(
         "hermes" => hermes::collect(home, options)?,
         "openclaw" => openclaw::collect(home, options)?,
         other => CollectResult {
-            shell_call_index: None,
             payload: empty_payload(other, home),
             diagnostics: CollectDiagnostics {
                 transcripts_root_accessible: false,
@@ -705,12 +696,6 @@ pub fn collect(
     // subagent transcripts change without its own file changing, and the
     // scanner keeps its own incremental per-file state.
     launch::attach_launch_facts(&mut result.payload.sessions, options);
-    // The shell calls of the whole store, read by the same scanner.
-    result.shell_call_index = Some(launch::store_shell_calls(
-        &result.payload.sessions,
-        &result.diagnostics.transcripts_roots,
-        options,
-    ));
 
     // Having ingested a session is itself proof the store is present, so an
     // adapter must never report the agent as absent while returning its

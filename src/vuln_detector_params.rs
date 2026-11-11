@@ -1392,8 +1392,19 @@ pub struct CveDetectionParamsJSON {
     /// Session binding by tool-call time: whether the conversation a
     /// session's process tree is tied to by the time of a shell tool call is
     /// the one the session is attributed to where no harness pid file gives
-    /// one. Default false: the result is computed and counted.
+    /// one. Default false: nothing of it is computed.
     pub session_binding_tool_call_enabled: bool,
+    /// Session binding: the agent types (tool names of the harness, lower
+    /// case) whose process trees are tied to a conversation by tool-call
+    /// time while the switch is on. Published empty: an agent type is listed
+    /// once the way it starts and records its commands has been verified.
+    pub session_binding_tool_call_agents: Vec<String>,
+    /// Session binding: tool names (lower case, without `.exe`) of the
+    /// shells a harness runs a command through. A process tree whose first
+    /// process is one of them is compared with a tool call by the programs
+    /// below it; any other first process must itself be a program the call
+    /// names.
+    pub session_binding_shell_programs: Vec<String>,
     /// Session binding: how far before a tool call's recorded time the
     /// creation of the process it started may lie, in milliseconds. The
     /// harness and the sensor stamp the same wall clock; a transcript line
@@ -1413,12 +1424,18 @@ pub struct CveDetectionParamsJSON {
     /// Session binding: shell tool calls kept per transcript (the most
     /// recent ones).
     pub session_binding_max_calls_per_transcript: u64,
-    /// Session binding: transcripts of one agent's store whose shell tool
-    /// calls are read (the most recently written ones).
-    pub session_binding_max_transcripts_per_store: u64,
-    /// Session binding: a transcript not written for this many seconds has
-    /// its shell tool calls set aside until it is written again.
+    /// Session binding: transcripts whose shell tool calls are kept (the
+    /// ones a call was read from most recently).
+    pub session_binding_max_transcripts: u64,
+    /// Session binding: a shell tool call read longer ago than this many
+    /// seconds is let go.
     pub session_binding_idle_transcript_secs: u64,
+    /// Session binding: conversations one process tree is tied to at most
+    /// (the one that started it and the ones that one was started from).
+    pub session_binding_max_conversation_chain: u64,
+    /// Session binding: transcript lines a shell tool call waits for its
+    /// result before its end is taken as not known.
+    pub session_binding_result_wait_lines: u64,
     /// Lowercase `/` path suffixes (or `/dir/` fragments) of the credential
     /// caches a CLI writes when it logs in (`com.vercel.cli/auth.json`,
     /// `~/.azure/msal_token_cache.json`, ...). A write to one by an
@@ -1840,13 +1857,17 @@ pub struct CveDetectionParams {
     /// Session binding by tool-call time: the switch, its windows and the
     /// limits of the shell-call list (see `CveDetectionParamsJSON`).
     pub session_binding_tool_call_enabled: bool,
+    pub session_binding_tool_call_agents: Vec<String>,
+    pub session_binding_shell_programs: Vec<String>,
     pub session_binding_clock_slack_ms: u64,
     pub session_binding_spawn_window_ms: u64,
     pub session_binding_sensor_lag_ms: u64,
     pub session_binding_max_window_ms: u64,
     pub session_binding_max_calls_per_transcript: u64,
-    pub session_binding_max_transcripts_per_store: u64,
+    pub session_binding_max_transcripts: u64,
     pub session_binding_idle_transcript_secs: u64,
+    pub session_binding_max_conversation_chain: u64,
+    pub session_binding_result_wait_lines: u64,
     /// Lowercase `/` path suffixes (or `/dir/` fragments) of the credential
     /// caches a CLI writes when it logs in (`com.vercel.cli/auth.json`,
     /// `~/.azure/msal_token_cache.json`, ...). A write to one by an
@@ -2970,14 +2991,27 @@ impl CveDetectionParams {
             forward_proxy_min_distinct_processes: json.forward_proxy_min_distinct_processes,
             divergence_unexplained_ingest_grace_secs: json.divergence_unexplained_ingest_grace_secs,
             session_binding_tool_call_enabled: json.session_binding_tool_call_enabled,
+            session_binding_tool_call_agents: json
+                .session_binding_tool_call_agents
+                .iter()
+                .map(|agent| agent.trim().to_ascii_lowercase())
+                .filter(|agent| !agent.is_empty())
+                .collect(),
+            session_binding_shell_programs: json
+                .session_binding_shell_programs
+                .iter()
+                .map(|shell| shell.trim().to_ascii_lowercase())
+                .filter(|shell| !shell.is_empty())
+                .collect(),
             session_binding_clock_slack_ms: json.session_binding_clock_slack_ms,
             session_binding_spawn_window_ms: json.session_binding_spawn_window_ms,
             session_binding_sensor_lag_ms: json.session_binding_sensor_lag_ms,
             session_binding_max_window_ms: json.session_binding_max_window_ms,
             session_binding_max_calls_per_transcript: json.session_binding_max_calls_per_transcript,
-            session_binding_max_transcripts_per_store: json
-                .session_binding_max_transcripts_per_store,
+            session_binding_max_transcripts: json.session_binding_max_transcripts,
             session_binding_idle_transcript_secs: json.session_binding_idle_transcript_secs,
+            session_binding_max_conversation_chain: json.session_binding_max_conversation_chain,
+            session_binding_result_wait_lines: json.session_binding_result_wait_lines,
             cli_credential_cache_path_suffixes: lowercase_token_list(
                 &json.cli_credential_cache_path_suffixes,
             ),
@@ -5458,17 +5492,41 @@ pub fn session_binding_max_calls_per_transcript() -> u64 {
         .session_binding_max_calls_per_transcript
 }
 
-/// Session binding: transcripts read per store.
-pub fn session_binding_max_transcripts_per_store() -> u64 {
-    PARAMS_SNAPSHOT
-        .load()
-        .session_binding_max_transcripts_per_store
+/// Session binding: transcripts whose shell tool calls are kept.
+pub fn session_binding_max_transcripts() -> u64 {
+    PARAMS_SNAPSHOT.load().session_binding_max_transcripts
 }
 
-/// Session binding: seconds without a write after which a transcript's
-/// shell tool calls are set aside.
+/// Session binding: seconds after which a shell tool call is let go.
 pub fn session_binding_idle_transcript_secs() -> u64 {
     PARAMS_SNAPSHOT.load().session_binding_idle_transcript_secs
+}
+
+/// Session binding: the agent types tied to a conversation by tool-call
+/// time, lower case (see the field docs).
+pub fn session_binding_tool_call_agents() -> Vec<String> {
+    PARAMS_SNAPSHOT
+        .load()
+        .session_binding_tool_call_agents
+        .clone()
+}
+
+/// Session binding: the shells a harness runs a command through, lower
+/// case (see the field docs).
+pub fn session_binding_shell_programs() -> Vec<String> {
+    PARAMS_SNAPSHOT.load().session_binding_shell_programs.clone()
+}
+
+/// Session binding: conversations one process tree is tied to at most.
+pub fn session_binding_max_conversation_chain() -> u64 {
+    PARAMS_SNAPSHOT
+        .load()
+        .session_binding_max_conversation_chain
+}
+
+/// Session binding: lines a shell tool call waits for its result.
+pub fn session_binding_result_wait_lines() -> u64 {
+    PARAMS_SNAPSHOT.load().session_binding_result_wait_lines
 }
 
 pub fn forward_proxy_min_distinct_processes() -> usize {
@@ -5735,29 +5793,45 @@ mod tests {
     }
 
     /// The session binding by tool-call time is published with its switch
-    /// false, its windows and the limits of the shell-call list; a published
+    /// false, no agent type listed, its windows and its limits; a published
     /// file without one of the keys does not parse (born complete).
     #[test]
     fn test_session_binding_params_are_published_complete() {
         let json = serde_json::from_str::<CveDetectionParamsJSON>(&CVE_DETECTION_PARAMS_DB)
             .expect("embedded snapshot parses");
         assert!(!json.session_binding_tool_call_enabled);
+        assert!(json.session_binding_tool_call_agents.is_empty());
+        // The shells of the three desktop platforms.
+        for shell in ["sh", "bash", "zsh", "cmd", "powershell", "pwsh"] {
+            assert!(
+                json.session_binding_shell_programs
+                    .iter()
+                    .any(|listed| listed == shell),
+                "{shell}"
+            );
+        }
         assert_eq!(json.session_binding_clock_slack_ms, 1_000);
         assert_eq!(json.session_binding_spawn_window_ms, 5_000);
         assert_eq!(json.session_binding_sensor_lag_ms, 2_000);
         assert_eq!(json.session_binding_max_window_ms, 600_000);
         assert_eq!(json.session_binding_max_calls_per_transcript, 64);
-        assert_eq!(json.session_binding_max_transcripts_per_store, 64);
+        assert_eq!(json.session_binding_max_transcripts, 1_024);
         assert_eq!(json.session_binding_idle_transcript_secs, 7_200);
+        assert_eq!(json.session_binding_max_conversation_chain, 4);
+        assert_eq!(json.session_binding_result_wait_lines, 2_048);
         for key in [
             "session_binding_tool_call_enabled",
+            "session_binding_tool_call_agents",
+            "session_binding_shell_programs",
             "session_binding_clock_slack_ms",
             "session_binding_spawn_window_ms",
             "session_binding_sensor_lag_ms",
             "session_binding_max_window_ms",
             "session_binding_max_calls_per_transcript",
-            "session_binding_max_transcripts_per_store",
+            "session_binding_max_transcripts",
             "session_binding_idle_transcript_secs",
+            "session_binding_max_conversation_chain",
+            "session_binding_result_wait_lines",
         ] {
             let mut value: serde_json::Value =
                 serde_json::from_str(&CVE_DETECTION_PARAMS_DB).expect("valid JSON");

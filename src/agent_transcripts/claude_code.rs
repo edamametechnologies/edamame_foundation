@@ -88,7 +88,6 @@ pub(crate) fn build_payload(
 
     if candidates.is_empty() {
         return Ok(CollectResult {
-            shell_call_index: None,
             payload: CollectedPayload {
                 window_start: now,
                 window_end: now,
@@ -213,7 +212,6 @@ pub(crate) fn build_payload(
     }
 
     Ok(CollectResult {
-        shell_call_index: None,
         payload: CollectedPayload {
             window_start,
             window_end,

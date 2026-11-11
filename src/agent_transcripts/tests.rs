@@ -287,16 +287,13 @@ fn claude_code_collects_jsonl() {
     assert_declares_model_traffic(session, "claude_code");
 }
 
-/// A collection carries the shell calls of each transcript of the store and
-/// of its Task subagents' transcripts (which are not sessions of their own),
-/// oldest first, as times and program names, under the key of the session
-/// collected from the same file, and they cross the helper boundary in the
-/// collected JSON.
+/// A collection reads no shell call: its result holds the sessions and the
+/// diagnostics, as before, whatever the transcripts' tool calls.
 #[test]
-fn claude_code_collects_the_shell_calls_of_a_session_and_its_subagents() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let home = temp.path();
-    let projects = home.join(".claude/projects/sample");
+fn a_collection_carries_no_shell_calls() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    let projects = home.join(".claude/projects/-Users-me-p");
     let lines = [
         r#"{"type":"user","timestamp":"2026-11-08T10:00:00.000Z","cwd":"/Users/me/p","entrypoint":"cli","message":{"role":"user","content":[{"type":"text","text":"push the branch"}]}}"#,
         r#"{"type":"assistant","timestamp":"2026-11-08T10:00:30.500Z","cwd":"/Users/me/p","message":{"role":"assistant","content":[{"type":"text","text":"pushing"},{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"git push origin feature/login"}}]}}"#,
@@ -306,166 +303,18 @@ fn claude_code_collects_the_shell_calls_of_a_session_and_its_subagents() {
         &projects.join("session-1.jsonl"),
         &(lines.join("\n") + "\n"),
     );
-    let subagent = r#"{"type":"assistant","timestamp":"2026-11-08T10:00:10.250Z","cwd":"/Users/me/p","message":{"role":"assistant","content":[{"type":"tool_use","id":"s1","name":"Bash","input":{"command":"cargo test --lib"}}]}}"#;
-    write(
-        &projects.join("session-1/subagents/agent-a1.jsonl"),
-        &format!("{subagent}\n"),
-    );
-
     let result = collect("claude_code", home, &options()).expect("claude_code collect");
     assert_eq!(result.payload.sessions.len(), 1);
-    let index = result
-        .shell_call_index
-        .as_ref()
-        .expect("the store was read");
-    assert!(index.complete);
-    assert_eq!(index.transcripts.len(), 1);
-    let transcript = &index.transcripts[0];
-    assert_eq!(
-        transcript.session_key,
-        result.payload.sessions[0].session_key
-    );
-    assert!(!transcript.headless);
-    // Every line of both transcripts was read and every call is kept.
-    assert_eq!(transcript.gaps, super::launch::ShellCallGaps::default());
-    let calls = &transcript.calls;
-    let summary: Vec<(Vec<&str>, i64, bool)> = calls
-        .iter()
-        .map(|call| {
-            (
-                call.programs.iter().map(String::as_str).collect(),
-                call.at.map(|t| t.timestamp_millis()).unwrap_or(0),
-                call.finished_at.is_some(),
-            )
-        })
+    let value = serde_json::to_value(&result).expect("serialize");
+    let mut keys: Vec<&str> = value
+        .as_object()
+        .expect("an object")
+        .keys()
+        .map(String::as_str)
         .collect();
-    assert_eq!(
-        summary,
-        vec![
-            (vec!["cargo"], 1_794_132_010_250, false),
-            (vec!["git"], 1_794_132_030_500, true),
-        ],
-        "{calls:?}"
-    );
-
-    let json = collect_to_json("claude_code", home, &options()).expect("collect_to_json");
-    let value: serde_json::Value = serde_json::from_str(&json).expect("json");
+    keys.sort_unstable();
+    assert_eq!(keys, vec!["diagnostics", "payload"]);
     assert!(value["payload"]["sessions"][0].get("shell_calls").is_none());
-    let shipped = &value["shell_call_index"]["transcripts"][0]["calls"];
-    assert_eq!(shipped.as_array().map(Vec::len), Some(2), "{shipped}");
-    assert_eq!(shipped[1]["programs"], serde_json::json!(["git"]));
-    assert!(
-        !shipped.to_string().contains("feature/login"),
-        "no command text: {shipped}"
-    );
-}
-
-/// OpenClaw's `toolCall` blocks are read for the shell calls of a session.
-#[test]
-fn openclaw_collects_shell_calls_from_tool_call_blocks() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let home = temp.path();
-    let sessions = home.join(".openclaw/agents/main/sessions");
-    let lines = [
-        r#"{"type":"message","id":"m0","parentId":null,"timestamp":"2026-11-08T10:00:00.000Z","message":{"role":"user","content":[{"type":"text","text":"check the service"}],"timestamp":1794132000000}}"#,
-        r#"{"type":"message","id":"m1","parentId":"m0","timestamp":"2026-11-08T10:00:02.250Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"call_1","name":"exec","arguments":{"command":"systemctl status web","workdir":"/srv"}}],"timestamp":1794132002250}}"#,
-        r#"{"type":"message","id":"m2","parentId":"m1","timestamp":"2026-11-08T10:00:03.000Z","message":{"role":"toolResult","toolCallId":"call_1","toolName":"exec","content":[{"type":"text","text":"active"}],"isError":false,"timestamp":1794132003000}}"#,
-    ];
-    write(
-        &sessions.join("session-1.jsonl"),
-        &(lines.join("\n") + "\n"),
-    );
-    let result = collect("openclaw", home, &options()).expect("openclaw collect");
-    assert_eq!(result.payload.sessions.len(), 1);
-    let index = result
-        .shell_call_index
-        .as_ref()
-        .expect("the store was read");
-    assert_eq!(index.transcripts.len(), 1);
-    let calls = &index.transcripts[0].calls;
-    assert_eq!(calls.len(), 1, "{calls:?}");
-    assert_eq!(calls[0].programs, vec!["systemctl".to_string()]);
-    assert_eq!(
-        calls[0].at.map(|t| t.timestamp_millis()),
-        Some(1_794_132_002_250)
-    );
-    assert_eq!(
-        calls[0].finished_at.map(|t| t.timestamp_millis()),
-        Some(1_794_132_003_000)
-    );
-}
-
-/// The store's shell calls cover every transcript written within the idle
-/// time, also those the collection does not turn into sessions (it keeps the
-/// most recent few for the model).
-#[test]
-fn the_shell_call_index_covers_the_transcripts_the_collection_leaves_out() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let home = temp.path();
-    let projects = home.join(".claude/projects/sample");
-    let count = 6;
-    for n in 0..count {
-        let line = format!(
-            r#"{{"type":"assistant","timestamp":"2026-11-08T10:0{n}:00.000Z","cwd":"/Users/me/p","entrypoint":"sdk-cli","message":{{"role":"assistant","content":[{{"type":"tool_use","id":"t{n}","name":"Bash","input":{{"command":"tool{n} --run"}}}}]}}}}"#
-        );
-        write(
-            &projects.join(format!("session-{n}.jsonl")),
-            &format!("{line}\n"),
-        );
-    }
-    let result = collect("claude_code", home, &options()).expect("claude_code collect");
-    let index = result
-        .shell_call_index
-        .as_ref()
-        .expect("the store was read");
-    assert!(index.complete);
-    assert_eq!(index.transcripts.len(), count);
-    assert!(
-        result.payload.sessions.len() < count,
-        "the collection keeps fewer sessions than the store holds: {}",
-        result.payload.sessions.len()
-    );
-    let mut programs: Vec<&str> = index
-        .transcripts
-        .iter()
-        .flat_map(|t| {
-            t.calls
-                .iter()
-                .flat_map(|c| c.programs.iter().map(String::as_str))
-        })
-        .collect();
-    programs.sort_unstable();
-    assert_eq!(
-        programs,
-        vec!["tool0", "tool1", "tool2", "tool3", "tool4", "tool5"]
-    );
-    assert!(index.transcripts.iter().all(|t| t.headless));
-    // A transcript the collection left out is named after its file.
-    assert!(index
-        .transcripts
-        .iter()
-        .any(|t| t.session_key == "session-0"));
-}
-
-/// A store whose sessions the scanner does not read reports its shell calls
-/// as not complete, and a collector result without the field reads as not
-/// read at all.
-#[test]
-fn a_store_the_scanner_does_not_read_is_not_a_store_without_calls() {
-    let empty = super::launch::store_shell_calls(&[], &[], &options());
-    assert!(empty.complete && empty.transcripts.is_empty());
-    let older: super::CollectResult = serde_json::from_value(serde_json::json!({
-        "payload": serde_json::to_value(
-            &collect("claude_code", tempfile::tempdir().unwrap().path(), &options())
-                .expect("collect")
-                .payload
-        )
-        .unwrap(),
-        "diagnostics": {"transcripts_root_accessible": false, "transcripts_roots": [],
-                        "hostname": "host"}
-    }))
-    .expect("a result without the field parses");
-    assert!(older.shell_call_index.is_none());
 }
 
 /// A transcript whose modification time is later than the read time is
