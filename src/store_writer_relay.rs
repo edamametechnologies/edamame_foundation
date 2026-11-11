@@ -65,10 +65,16 @@ impl StoreWriterBatch {
 /// cursor of another instance than the one running is answered from the
 /// start: its sequence numbers were that instance's.
 pub fn store_writers_since(cursor: &StoreWritersCursor) -> StoreWriterBatch {
-    let rows = store_writers::rows_since(&cursor.record_instance, cursor.rows_seq);
+    // The reader's view first, then the rows up to what it took: the rows
+    // and the calls are one cut. A reader that does not run cuts nothing.
+    let capture = capture::since(&cursor.capture_instance, cursor.calls_seq);
+    let cut = capture
+        .running
+        .then(|| (capture.record_instance.as_str(), capture.record_seq));
+    let rows = store_writers::rows_since(&cursor.record_instance, cursor.rows_seq, cut);
     StoreWriterBatch {
         rows,
-        capture: capture::since(&cursor.capture_instance, cursor.calls_seq),
+        capture,
         sensor: store_writers::sensor(),
         served_at_ms: store_writers::now_ms(),
     }

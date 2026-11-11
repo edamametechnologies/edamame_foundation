@@ -257,8 +257,14 @@ pub struct CapturedFile {
     /// time differs from it by more than the published slack: the file was
     /// not taken from that creation.
     pub creation_contradicted: bool,
-    /// When the reader first took the file.
+    /// When the reader took the file: the creation it was read from, or the
+    /// read that took it from its end.
     pub watching_since_ms: u64,
+    /// Every complete line written to the file before this instant was read
+    /// (or lies in a gap). `None` while it was never read through. A file
+    /// that is `Watched` is read through at least the reader's
+    /// `watermark_ms` as well.
+    pub read_through_ms: Option<u64>,
     /// When it last read it, and the offset it holds.
     pub last_read_ms: u64,
     pub offset: u64,
@@ -328,6 +334,15 @@ pub struct CaptureBatch {
     /// When the reader's thread last made progress (epoch milliseconds). A
     /// reply is `running` only while it is recent.
     pub heartbeat_ms: u64,
+    /// Every file `Watched` in this reply was read through this instant:
+    /// set by each sweep of the held files, which stats each of them.
+    /// `None` before the first sweep.
+    pub watermark_ms: Option<u64>,
+    /// The store-writer record's instance and sequence number up to which
+    /// the reader took what the record reported: a consumer joining the
+    /// record's rows with this reply reads the rows up to it.
+    pub record_instance: String,
+    pub record_seq: u64,
     /// Files held now (released ones not counted).
     pub files_held: usize,
 }
@@ -346,6 +361,9 @@ impl CaptureBatch {
             more: false,
             counters: CaptureCounters::default(),
             heartbeat_ms: 0,
+            watermark_ms: None,
+            record_instance: String::new(),
+            record_seq: 0,
             files_held: 0,
         }
     }
@@ -667,6 +685,12 @@ struct FileState<S> {
     /// More than one name at the last read, and at any read.
     multiple_names: bool,
     multiple_names_seen: bool,
+    /// Every complete line written before this instant was read: set by a
+    /// pass that read up to the end, published.
+    read_through_ms: Option<u64>,
+    /// The same, confirmed by a sweep that found the size unchanged: not
+    /// published per file, it makes the watermark.
+    confirmed_through_ms: Option<u64>,
 }
 
 impl<S> FileState<S> {
@@ -714,6 +738,10 @@ pub struct Capture<E: CallExtractor> {
     /// The reader's thread drives this capture: its progress is the
     /// published heartbeat.
     publishes_heartbeat: bool,
+    /// Every watched file was read through this instant (the last sweep).
+    watermark_ms: Option<u64>,
+    /// The record's sequence number at the last take handled.
+    record_seq: u64,
 }
 
 impl<E: CallExtractor> Capture<E> {
@@ -741,6 +769,8 @@ impl<E: CallExtractor> Capture<E> {
             counters: CaptureCounters::default(),
             last_sweep_ms: now,
             publishes_heartbeat: false,
+            watermark_ms: None,
+            record_seq: 0,
         }
     }
 
@@ -752,6 +782,8 @@ impl<E: CallExtractor> Capture<E> {
         self.started_at_ms = (self.clock)();
         self.record_instance = None;
         self.files.clear();
+        self.watermark_ms = None;
+        self.record_seq = 0;
         self.counters.restarts += 1;
         self.seq += 1;
         tracing::info!("transcript reader: started over");
@@ -818,6 +850,7 @@ impl<E: CallExtractor> Capture<E> {
             self.record_restarted(now);
         }
         self.record_instance = Some(take.instance.clone());
+        self.record_seq = take.seq;
         for dirty in &take.files {
             if dirty.kind != StoreFileKind::Transcript {
                 continue;
@@ -868,32 +901,53 @@ impl<E: CallExtractor> Capture<E> {
         self.sweep(acked_seq);
     }
 
-    /// The sweep itself, whatever the time since the last one.
+    /// The sweep itself, whatever the time since the last one. Every held
+    /// file is looked at: a watched one whose size is unchanged is read
+    /// through the sweep's start, any other one is read (a file not read now
+    /// is tried again). Then the watermark is the earliest instant every
+    /// watched file is read through.
     pub fn sweep(&mut self, acked_seq: u64) {
-        self.last_sweep_ms = (self.clock)();
-        let candidates: Vec<String> = self
-            .files
-            .values()
-            .filter(|state| !state.released)
-            .filter(|state| state.synced)
-            .filter(|state| {
-                match std::fs::symlink_metadata(&state.path) {
-                    Ok(meta) => meta.len() != state.size_seen,
-                    // Gone: the pass records it.
-                    Err(_) => state.size_seen != 0 || state.offset != 0,
-                }
-            })
-            .map(|state| state.path.clone())
-            .collect();
+        let started = (self.clock)();
+        self.last_sweep_ms = started;
+        let mut candidates: Vec<String> = Vec::new();
+        for state in self.files.values_mut() {
+            if state.released {
+                continue;
+            }
+            let unchanged = state.synced
+                && state.desync.is_none()
+                && state.behind_since_ms.is_none()
+                && std::fs::symlink_metadata(&state.path)
+                    .is_ok_and(|meta| meta.len() == state.size_seen);
+            if unchanged {
+                state.confirmed_through_ms = Some(
+                    state
+                        .confirmed_through_ms
+                        .map_or(started, |known| known.max(started)),
+                );
+            } else {
+                candidates.push(state.path.clone());
+            }
+        }
         for path in candidates {
             self.read_file(&path, acked_seq);
         }
         self.release_beyond_bound(acked_seq);
+        self.watermark_ms = Some(
+            self.files
+                .values()
+                .filter(|state| state.status() == CapturedFileStatus::Watched)
+                .map(|state| state.confirmed_through_ms.unwrap_or(0))
+                .min()
+                .unwrap_or(started)
+                .min(started),
+        );
     }
 
     /// The record started a new instance: what happened to the files in
-    /// between was not reported. Every transcript is taken as new at its
-    /// next read; the calls read so far stay.
+    /// between was not reported. Each file keeps its position; its next pass
+    /// names no process for what it reads, and the interval since its last
+    /// read is a gap up to that pass. The calls read so far stay.
     fn record_restarted(&mut self, now: u64) {
         let paths: Vec<String> = self.files.keys().cloned().collect();
         for path in paths {
@@ -901,17 +955,18 @@ impl<E: CallExtractor> Capture<E> {
             let Some(state) = self.files.get_mut(&path) else {
                 continue;
             };
-            let from = state.last_read_ms;
-            state.synced = false;
-            state.identity = None;
+            if state.released {
+                continue;
+            }
+            let from = state.synced.then_some(state.consumed_bound_ms);
             state.since_creation = false;
-            state.first_announce_ms = None;
-            state.lost_pending = false;
+            state.lost_pending = true;
             state.recent_spans.clear();
+            state.confirmed_through_ms = state.read_through_ms;
             state.changed_seq = seq;
             push_gap(
                 state,
-                Some(from),
+                from,
                 now,
                 CaptureGapReason::RecordRestarted,
                 seq,
@@ -963,6 +1018,8 @@ impl<E: CallExtractor> Capture<E> {
                 last_growth_ms: now,
                 multiple_names: false,
                 multiple_names_seen: false,
+                read_through_ms: None,
+                confirmed_through_ms: None,
             });
         if state.released {
             // Reported again after it was released: held again, as new.
@@ -1163,7 +1220,7 @@ impl<E: CallExtractor> Capture<E> {
             }
             return false;
         }
-        state.desync = None;
+        let resumed_from = state.desync.take();
         // A file with more than one name: the lines of this pass name no
         // process, and the interval since the last read is a gap.
         let multiple_names = links.is_some_and(|links| links != 1);
@@ -1213,11 +1270,27 @@ impl<E: CallExtractor> Capture<E> {
                 let deadline = born_ms.saturating_add(self.config.late_report_ms);
                 if t_before < deadline {
                     state.first_sight_deadline_ms = Some(deadline);
+                    state.desync = resumed_from;
                     return false;
                 }
             }
         }
         state.first_sight_deadline_ms = None;
+        // A file not read for a while and taken again without the position
+        // it was read at: the interval it was not read in is a gap up to
+        // this read.
+        if let Some((reason, since)) = resumed_from {
+            if matches!(kind, PassKind::FirstSight | PassKind::Replaced) {
+                push_gap(
+                    state,
+                    Some(since),
+                    t_before,
+                    reason,
+                    seq,
+                    &mut self.counters,
+                );
+            }
+        }
 
         let mut in_rewrite = false;
         match kind {
@@ -1268,6 +1341,8 @@ impl<E: CallExtractor> Capture<E> {
                                 seq,
                                 &mut self.counters,
                             );
+                            // Watched from this read on.
+                            state.watching_since_ms = t_before;
                         }
                         state.consumed_bound_ms = t_before;
                         state.first_announce_ms = None;
@@ -1343,6 +1418,9 @@ impl<E: CallExtractor> Capture<E> {
             state.lost_pending = false;
             state.last_read_ms = t_before;
             state.size_seen = size;
+            // What was skipped is the gap: read through from here.
+            state.read_through_ms = Some(t_before);
+            state.confirmed_through_ms = Some(t_before);
             return false;
         }
 
@@ -1574,6 +1652,16 @@ impl<E: CallExtractor> Capture<E> {
         } else {
             None
         };
+        if !more {
+            // Every complete line written before this pass began was read,
+            // or lies in a gap.
+            state.read_through_ms = Some(t_before);
+            state.confirmed_through_ms = Some(
+                state
+                    .confirmed_through_ms
+                    .map_or(t_before, |known| known.max(t_before)),
+            );
+        }
         state.prefix_digest = prefix_digest(&mut file, state.offset);
         state.size_seen = size;
         state.last_read_ms = t_after;
@@ -1698,6 +1786,7 @@ impl<E: CallExtractor> Capture<E> {
                 since_creation: state.since_creation,
                 creation_contradicted: state.creation_contradicted,
                 watching_since_ms: state.watching_since_ms,
+                read_through_ms: state.read_through_ms,
                 last_read_ms: state.last_read_ms,
                 offset: state.offset,
                 rewrites: state.rewrites,
@@ -1722,6 +1811,9 @@ impl<E: CallExtractor> Capture<E> {
             gaps,
             counters: self.counters,
             files_held: self.files_held(),
+            watermark_ms: self.watermark_ms,
+            record_instance: self.record_instance.clone().unwrap_or_default(),
+            record_seq: self.record_seq,
         }
     }
 }
@@ -1873,6 +1965,9 @@ pub struct CaptureView {
     pub gaps: Vec<CaptureGap>,
     pub counters: CaptureCounters,
     pub files_held: usize,
+    pub watermark_ms: Option<u64>,
+    pub record_instance: String,
+    pub record_seq: u64,
 }
 
 impl CaptureView {
@@ -1887,6 +1982,9 @@ impl CaptureView {
             gaps: Vec::new(),
             counters: CaptureCounters::default(),
             files_held: 0,
+            watermark_ms: None,
+            record_instance: String::new(),
+            record_seq: 0,
         }
     }
 
@@ -1940,6 +2038,9 @@ impl CaptureView {
             more,
             counters: self.counters,
             heartbeat_ms: 0,
+            watermark_ms: self.watermark_ms,
+            record_instance: self.record_instance.clone(),
+            record_seq: self.record_seq,
             files_held: self.files_held,
         }
     }
@@ -1997,6 +2098,8 @@ fn run<E: CallExtractor>(mut capture: Capture<E>, generation: u64) {
     HEARTBEAT_MS.store(store_writers::now_ms(), Ordering::Release);
     VIEW.store(Arc::new(capture.view()));
     let mut published_seq = capture.seq;
+    let mut published_watermark = capture.watermark_ms;
+    let mut published_record_seq = capture.record_seq;
     while current(generation) {
         HEARTBEAT_MS.store(store_writers::now_ms(), Ordering::Release);
         // Woken by a change or not, the record is asked at every turn: a
@@ -2024,9 +2127,14 @@ fn run<E: CallExtractor>(mut capture: Capture<E>, generation: u64) {
             // new instance (a reader reads that as a gap for every file).
             capture.start_over();
         }
-        if capture.seq != published_seq && current(generation) {
+        let moved = capture.seq != published_seq
+            || capture.watermark_ms != published_watermark
+            || capture.record_seq != published_record_seq;
+        if moved && current(generation) {
             VIEW.store(Arc::new(capture.view()));
             published_seq = capture.seq;
+            published_watermark = capture.watermark_ms;
+            published_record_seq = capture.record_seq;
         }
     }
 }
@@ -2229,6 +2337,7 @@ mod tests {
         fn take(&mut self, file: DirtyFile) {
             let take = DirtyTake {
                 instance: self.record_instance.clone(),
+                seq: 0,
                 configured: true,
                 files: vec![file],
             };
@@ -2913,17 +3022,33 @@ mod tests {
         bench.append("C k3 nc\n");
         bench.advance(2);
         bench.take(bench.dirty(None, vec![bench.span(HARNESS, ops::WRITE, at)]));
-        // The call read before stays; what arrived in between is not read;
-        // the interval is a gap from the last read.
-        assert_eq!(bench.programs(), vec!["curl".to_string()]);
-        let gaps = bench.view().gaps;
-        assert_eq!(gaps.len(), 1);
-        assert_eq!(gaps[0].reason, CaptureGapReason::RecordRestarted);
-        assert_eq!(gaps[0].from_ms, Some(last_read));
+        // The position is kept: what arrived in between is read, named by
+        // no process, and the interval since the last read is a gap up to
+        // this read (the reviewer's P5: nothing skipped, nothing uncovered).
+        assert_eq!(
+            bench.programs(),
+            vec!["curl".to_string(), "unseen".to_string(), "nc".to_string()]
+        );
+        let view = bench.view();
+        for call in view.calls.iter().filter(|call| call.id > 1) {
+            assert_eq!(call.writer, None);
+            assert!(!call.announced);
+        }
+        let reasons: Vec<CaptureGapReason> = view.gaps.iter().map(|gap| gap.reason).collect();
+        assert!(reasons.contains(&CaptureGapReason::RecordRestarted));
+        assert!(reasons.contains(&CaptureGapReason::EventsLost));
+        assert!(view.gaps.iter().all(|gap| gap.from_ms == Some(last_read)));
+        assert!(view.gaps.iter().any(|gap| gap.until_ms >= at));
         assert!(!bench.file().since_creation);
-        // Appends are read again from here.
+        // Appends are named again from here.
         bench.appended_by(HARNESS, creation, "C k4 ls\n");
-        assert_eq!(bench.programs(), vec!["curl".to_string(), "ls".to_string()]);
+        let view = bench.view();
+        let ls = view
+            .calls
+            .iter()
+            .find(|call| call.call["programs"][0] == "ls")
+            .unwrap();
+        assert_eq!(ls.writer, Some(HARNESS));
     }
 
     #[test]
@@ -2992,6 +3117,7 @@ mod tests {
                 since_creation: true,
                 creation_contradicted: false,
                 watching_since_ms: 1,
+                read_through_ms: Some(2),
                 last_read_ms: 2,
                 offset: 10,
                 rewrites: 0,
@@ -3011,6 +3137,9 @@ mod tests {
             }],
             counters: CaptureCounters::default(),
             files_held: 1,
+            watermark_ms: None,
+            record_instance: String::new(),
+            record_seq: 0,
         };
         let first = view.batch_since("capture-1", 0);
         assert!(first.running && first.more);
@@ -3252,6 +3381,7 @@ mod tests {
             .collect();
         let take = DirtyTake {
             instance: bench.record_instance.clone(),
+            seq: 0,
             configured: true,
             files,
         };
@@ -3384,6 +3514,7 @@ mod tests {
         };
         let take = |at: u64| DirtyTake {
             instance: "record-1".to_string(),
+            seq: 0,
             configured: true,
             files: vec![dirty(at)],
         };
@@ -3473,5 +3604,125 @@ mod tests {
         assert_eq!(after.writer, Some(HARNESS));
         assert!(!bench.file().multiple_names);
         assert!(bench.file().multiple_names_seen);
+    }
+
+    // -- "watched, and no call arrived" ---------------------------------------
+
+    /// Every pass that reads up to the end says until when the file was read
+    /// through; a pass cut by its size does not. A file taken from its end is
+    /// watched from that read, not from its first report.
+    #[test]
+    fn a_file_is_read_through_the_start_of_the_pass_that_reached_its_end() {
+        let mut bench = Bench::new(config());
+        // Older than the time a creation report may take, no creation.
+        bench.append("C old rm\n");
+        let reported = bench.advance(20_000);
+        let read_at = bench.advance(5);
+        bench.take(bench.dirty(None, vec![bench.span(HARNESS, ops::WRITE, reported)]));
+        let file = bench.file();
+        assert_eq!(file.status, CapturedFileStatus::Watched);
+        assert_eq!(file.watching_since_ms, read_at);
+        assert_eq!(file.read_through_ms, Some(read_at));
+
+        // A pass cut by its size: not read through, until a pass reaches
+        // the end.
+        let mut small = config();
+        small.max_pass_bytes = 64;
+        let mut bench = Bench::new(small);
+        let creation = bench.created_by_harness();
+        let created = bench.file().read_through_ms;
+        let mut text = String::new();
+        for i in 0..80 {
+            text.push_str(&format!("C k{i} tool{i}\n"));
+        }
+        let at = bench.advance(10);
+        bench.append(&text);
+        let dirty = bench.dirty(Some(creation), vec![bench.span(HARNESS, ops::WRITE, at)]);
+        bench.advance(2);
+        bench.take(dirty);
+        // A bounded number of passes per wake: not all of it.
+        assert!(bench.programs().len() < 80);
+        assert_eq!(bench.file().read_through_ms, created);
+        let resumed_at = bench.advance(3);
+        bench.capture.continue_reads(0);
+        bench.capture.continue_reads(0);
+        assert_eq!(bench.programs().len(), 80);
+        assert_eq!(bench.file().read_through_ms, Some(resumed_at));
+    }
+
+    /// A file reported and not read yet is pending: never published as
+    /// watched, nothing read through (the reviewer's P4).
+    #[test]
+    fn a_file_waiting_for_its_first_read_is_pending() {
+        let mut bench = Bench::new(config());
+        bench.append("C k1 curl\n");
+        let span = bench.span(HARNESS, ops::WRITE, bench.now());
+        bench.advance(2);
+        bench.take(bench.dirty(None, vec![span]));
+        let file = bench.file();
+        assert_eq!(file.status, CapturedFileStatus::Pending);
+        assert_eq!(file.read_through_ms, None);
+        assert!(bench.view().calls.is_empty());
+    }
+
+    /// Each sweep sets the watermark: every watched file was read through
+    /// its start, also when nothing changed; a file not read now does not
+    /// hold it back, its status says it is not watched.
+    #[test]
+    fn the_watermark_moves_at_every_sweep() {
+        let mut bench = Bench::new(config());
+        let creation = bench.created_by_harness();
+        bench.appended_by(HARNESS, creation, "C k1 curl\n");
+        assert_eq!(bench.view().watermark_ms, None);
+        let first = bench.advance(10_000);
+        bench.capture.sweep(0);
+        assert_eq!(bench.view().watermark_ms, Some(first));
+        // Nothing changed: it moves anyway.
+        let second = bench.advance(10_000);
+        bench.capture.sweep(0);
+        assert_eq!(bench.view().watermark_ms, Some(second));
+        // Growth nobody reported: read by the sweep, the watermark moves.
+        bench.append("C k2 nc\n");
+        let third = bench.advance(10_000);
+        bench.capture.sweep(0);
+        assert!(bench.programs().contains(&"nc".to_string()));
+        assert_eq!(bench.view().watermark_ms, Some(third));
+        // Removed: desynced, and the watermark is the sweep's start.
+        std::fs::remove_file(&bench.path).unwrap();
+        let fourth = bench.advance(10_000);
+        bench.capture.sweep(0);
+        assert_eq!(bench.file().status, CapturedFileStatus::Desynced);
+        assert_eq!(bench.view().watermark_ms, Some(fourth));
+    }
+
+    /// A file removed and created again without a reported creation is a
+    /// gap from the read that found it gone up to the read that takes it
+    /// again (the reviewer's P6), and the sweep takes it again without a
+    /// report.
+    #[test]
+    fn a_file_created_again_without_a_reported_creation_is_a_gap_up_to_its_read() {
+        let mut bench = Bench::new(config());
+        let creation = bench.created_by_harness();
+        bench.appended_by(HARNESS, creation, "C k1 curl\n");
+        let at = bench.advance(10);
+        std::fs::remove_file(&bench.path).unwrap();
+        let mut removed = bench.dirty(Some(creation), vec![bench.span(HARNESS, ops::REMOVE, at)]);
+        removed.unlinked = true;
+        bench.advance(2);
+        bench.take(removed);
+        assert_eq!(bench.file().status, CapturedFileStatus::Desynced);
+        let again_at = bench.advance(5_000);
+        bench.append("C k2 wget\n");
+        // No report: the sweep finds it.
+        let swept = bench.advance(10_000);
+        bench.capture.sweep(0);
+        let view = bench.view();
+        assert!(view.gaps.iter().any(|gap| {
+            gap.reason == CaptureGapReason::Removed
+                && gap.from_ms.is_some_and(|from| from <= again_at)
+                && gap.until_ms >= again_at
+                && gap.until_ms == swept
+        }));
+        assert_eq!(bench.file().status, CapturedFileStatus::Watched);
     }
 }
