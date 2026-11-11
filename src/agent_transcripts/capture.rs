@@ -65,6 +65,9 @@ const PREFIX_DIGEST_BYTES: u64 = 4_096;
 const MAX_PASSES_PER_WAKE: usize = 8;
 /// How often every held transcript's size is compared with what was read.
 const SWEEP_INTERVAL_MS: u64 = 10_000;
+/// Bytes read across every file in one wake-up: the files left are read at
+/// the next one.
+const WAKE_BYTE_BUDGET: u64 = 32 << 20;
 /// How long the thread waits for a change before it looks at its stop flag.
 const WAIT_SLICE: Duration = Duration::from_millis(500);
 /// A heartbeat older than this is a reader that does not run.
@@ -118,12 +121,20 @@ pub struct CaptureConfig {
     pub max_calls_per_file: usize,
     /// Transcripts held at once.
     pub max_files_held: usize,
+    /// The account that owns the stores' home (its uid, on Unix): a file
+    /// owned by another account is not read. `None` where accounts have no
+    /// uid (Windows).
+    pub owner_uid: Option<u32>,
+    /// Bytes one wake-up reads across every file; the files left are read
+    /// at the next one.
+    pub wake_byte_budget: u64,
 }
 
 impl CaptureConfig {
     /// The published bounds (`transcript_capture`), with the number of calls
-    /// kept per transcript the caller reads from its own parameters.
-    pub fn from_params(max_calls_per_file: usize) -> Self {
+    /// kept per transcript the caller reads from its own parameters and the
+    /// account that owns the stores' home.
+    pub fn from_params(max_calls_per_file: usize, owner_uid: Option<u32>) -> Self {
         let params = crate::agent_visibility_params::transcript_capture();
         Self {
             max_line_bytes: params.max_line_bytes,
@@ -136,6 +147,8 @@ impl CaptureConfig {
             max_files_held: usize::try_from(params.max_files_held)
                 .unwrap_or(usize::MAX)
                 .max(1),
+            owner_uid,
+            wake_byte_budget: WAKE_BYTE_BUDGET,
         }
     }
 }
@@ -162,6 +175,12 @@ pub struct CapturedCall {
     /// was reported for it, or when more than one was (`writers_differ`).
     pub writer: Option<WriterInstance>,
     pub writers_differ: bool,
+    /// `writer` and `writers_differ` are final: the time a report may take
+    /// after the read (`late_report_ms`) has passed, and every report that
+    /// arrived in it was applied. Until then they may still change; a
+    /// report that arrives later for the line's interval leaves it with no
+    /// writer.
+    pub writer_final: bool,
     /// The line was read from a file that replaced the transcript, not
     /// appended to it.
     pub in_rewrite: bool,
@@ -211,6 +230,9 @@ pub enum CaptureGapReason {
     ExtractorFailed,
     /// The file had more than one name when it was read.
     MultipleNames,
+    /// The file is owned by another account than the stores' home: it is
+    /// not read.
+    ForeignOwner,
 }
 
 /// What the reader does with a transcript now.
@@ -239,6 +261,12 @@ pub struct CaptureGap {
     pub from_ms: Option<u64>,
     pub until_ms: u64,
     pub reason: CaptureGapReason,
+    /// For a `Rewrite` or a `Replaced`: the one process the record reported
+    /// an operation of for the interval that sets a file's content or puts
+    /// a file at the path (a creation, a truncation, a move onto the path, a
+    /// clone, an exchange). `None` when none was reported, or more than one
+    /// process: nothing recorded explains the change.
+    pub replaced_by: Option<WriterInstance>,
     pub changed_seq: u64,
 }
 
@@ -296,13 +324,20 @@ pub struct CaptureCounters {
     pub calls_dropped: u64,
     /// Passes that found the path not to be a regular file, or another file
     /// than the record reported; files released; extractor failures; times
-    /// the reader started over (held files beyond twice the bound, or a
-    /// failure of its own).
+    /// the reader started a new instance.
     pub not_regular: u64,
     pub identity_mismatches: u64,
     pub released: u64,
     pub extractor_panics: u64,
     pub restarts: u64,
+    /// Passes that began before the previous one (the clock moved back):
+    /// each is read as a restart of the record. Files owned by another
+    /// account. Wake-ups that stopped at the byte budget. Reports that
+    /// arrived for a call whose writer was final.
+    pub clock_steps: u64,
+    pub foreign_owner: u64,
+    pub wake_budget_cuts: u64,
+    pub late_after_final: u64,
     /// From the first report of a change to the read that found the line:
     /// reads that took at most 1, 2, 5, 10, 20, 50, 100, 250, 500, 1,000 and
     /// 5,000 ms, then the longer ones; and the longest.
@@ -343,6 +378,9 @@ pub struct CaptureBatch {
     /// record's rows with this reply reads the rows up to it.
     pub record_instance: String,
     pub record_seq: u64,
+    /// When the reader made that take (epoch milliseconds, the reader's
+    /// clock): the instant the record's rows up to `record_seq` stand for.
+    pub record_taken_at_ms: u64,
     /// Files held now (released ones not counted).
     pub files_held: usize,
 }
@@ -364,6 +402,7 @@ impl CaptureBatch {
             watermark_ms: None,
             record_instance: String::new(),
             record_seq: 0,
+            record_taken_at_ms: 0,
             files_held: 0,
         }
     }
@@ -702,6 +741,11 @@ struct FileState<S> {
     /// A file read from its start without its creation: the lines up to
     /// this offset name no process.
     unattributed_until: Option<u64>,
+    /// The creation a reader already read the file from, as the record
+    /// keeps it (`DirtyFile::creation_read_at_ms`): one this state did not
+    /// take itself was not followed since, and is not read "since its
+    /// creation" again.
+    creation_read_at_ms: Option<u64>,
 }
 
 impl<S> FileState<S> {
@@ -751,8 +795,18 @@ pub struct Capture<E: CallExtractor> {
     publishes_heartbeat: bool,
     /// Every watched file was read through this instant (the last sweep).
     watermark_ms: Option<u64>,
-    /// The record's sequence number at the last take handled.
+    /// The record's sequence number at the last take handled, and when it
+    /// was handled.
     record_seq: u64,
+    record_taken_at_ms: u64,
+    /// When the last pass began: a pass that begins before it means the
+    /// clock moved back.
+    last_pass_start_ms: u64,
+    /// Bytes this wake-up may still read across files.
+    wake_bytes_left: u64,
+    /// What to give back to the store-writer record
+    /// ([`store_writers::note_reader_facts`]): path, record id, facts.
+    facts_out: Vec<(String, u64, store_writers::ReaderFacts)>,
 }
 
 impl<E: CallExtractor> Capture<E> {
@@ -767,6 +821,7 @@ impl<E: CallExtractor> Capture<E> {
         clock: Box<dyn Fn() -> u64 + Send>,
     ) -> Self {
         let now = clock();
+        let wake_bytes_left = config.wake_byte_budget.max(1);
         Self {
             extractor,
             config,
@@ -782,7 +837,51 @@ impl<E: CallExtractor> Capture<E> {
             publishes_heartbeat: false,
             watermark_ms: None,
             record_seq: 0,
+            record_taken_at_ms: 0,
+            last_pass_start_ms: now,
+            wake_bytes_left,
+            facts_out: Vec::new(),
         }
+    }
+
+    /// What the reader found since the last call, to give back to the
+    /// store-writer record, where it outlives this reader's state.
+    pub fn take_reader_facts(&mut self) -> Vec<(String, u64, store_writers::ReaderFacts)> {
+        std::mem::take(&mut self.facts_out)
+    }
+
+    /// Give a writer to no call that did not get it as final: each call
+    /// whose writer is still open is made final once the time a report may
+    /// take has passed since its read (the reports that arrived meanwhile
+    /// were applied when they arrived).
+    pub fn finalize_writers(&mut self) {
+        let now = (self.clock)();
+        let late_window = self.config.late_report_ms;
+        let mut changed: Vec<(String, usize)> = Vec::new();
+        for state in self.files.values_mut() {
+            for (index, held) in state.calls.iter_mut().enumerate() {
+                if !held.entry.writer_final
+                    && (held.lost || now.saturating_sub(held.entry.arrived_at_ms) >= late_window)
+                {
+                    held.entry.writer_final = true;
+                    changed.push((state.path.clone(), index));
+                }
+            }
+        }
+        for (path, index) in changed {
+            let seq = self.bump();
+            if let Some(state) = self.files.get_mut(&path) {
+                if let Some(held) = state.calls.get_mut(index) {
+                    held.entry.changed_seq = seq;
+                }
+                state.changed_seq = seq;
+            }
+        }
+    }
+
+    /// Start a wake-up: the bytes it may read across files.
+    fn begin_wake(&mut self) {
+        self.wake_bytes_left = self.config.wake_byte_budget.max(1);
     }
 
     /// Start over: a new instance, nothing held. A reader of the previous
@@ -806,9 +905,8 @@ impl<E: CallExtractor> Capture<E> {
     }
 
     /// Drop the released files a reader asked past, release the least
-    /// recently appended ones beyond `max_files_held`, and start over when
-    /// released files no reader asked past are more than the bound again
-    /// (no reader is reading).
+    /// recently appended ones beyond `max_files_held`, and start a new
+    /// instance while released files wait for a reader past the bound.
     fn release_beyond_bound(&mut self, acked_seq: u64) {
         self.files
             .retain(|_, state| !(state.released && state.changed_seq <= acked_seq));
@@ -862,6 +960,8 @@ impl<E: CallExtractor> Capture<E> {
         }
         self.record_instance = Some(take.instance.clone());
         self.record_seq = take.seq;
+        self.record_taken_at_ms = now;
+        self.begin_wake();
         for dirty in &take.files {
             if dirty.kind != StoreFileKind::Transcript {
                 continue;
@@ -884,6 +984,7 @@ impl<E: CallExtractor> Capture<E> {
     /// new files whose wait for a creation (`late_report_ms`) is over.
     pub fn continue_reads(&mut self, acked_seq: u64) {
         let now = (self.clock)();
+        self.begin_wake();
         let behind: Vec<String> = self
             .files
             .values()
@@ -920,16 +1021,22 @@ impl<E: CallExtractor> Capture<E> {
     pub fn sweep(&mut self, acked_seq: u64) {
         let started = (self.clock)();
         self.last_sweep_ms = started;
+        self.begin_wake();
         let mut candidates: Vec<String> = Vec::new();
         for state in self.files.values_mut() {
             if state.released {
                 continue;
             }
+            // Another file under the path at the same size is a change: the
+            // size and, where the metadata carries it, the identity.
             let unchanged = state.synced
                 && state.desync.is_none()
                 && state.behind_since_ms.is_none()
-                && std::fs::symlink_metadata(&state.path)
-                    .is_ok_and(|meta| meta.len() == state.size_seen);
+                && std::fs::symlink_metadata(&state.path).is_ok_and(|meta| {
+                    meta.len() == state.size_seen
+                        && metadata_identity(&meta)
+                            .map_or(true, |found| Some(found) == state.identity)
+                });
             if unchanged {
                 state.confirmed_through_ms = Some(
                     state
@@ -1033,6 +1140,7 @@ impl<E: CallExtractor> Capture<E> {
                 confirmed_through_ms: None,
                 first_report_ms: dirty.first_seen_ms.min(dirty.dirty_since_ms).min(now),
                 unattributed_until: None,
+                creation_read_at_ms: None,
             });
         state.first_report_ms = state
             .first_report_ms
@@ -1072,24 +1180,48 @@ impl<E: CallExtractor> Capture<E> {
             state.recent_spans.push_back(*span);
         }
         state.reported_identity = dirty.identity;
+        state.creation_read_at_ms = dirty.creation_read_at_ms;
         // What the record says of the creation of the file at the path.
         state.latest_creation = dirty.last_creation;
         state.creation_is_first = dirty.creation.is_some() && dirty.creation == dirty.last_creation;
-        self.apply_late_reports(&dirty.path, now);
+        self.apply_late_reports(&dirty.path, &dirty.spans, now);
     }
 
     /// Name the process of the calls read a moment ago from the reports
     /// that arrived since (a sensor may deliver its report after the read).
-    fn apply_late_reports(&mut self, path: &str, now: u64) {
+    fn apply_late_reports(&mut self, path: &str, new_spans: &[WriterSpan], now: u64) {
         let late_window = self.config.late_report_ms;
         let mut changed: Vec<usize> = Vec::new();
+        let mut late_after_final = 0;
         {
             let Some(state) = self.files.get_mut(path) else {
                 return;
             };
             let spans: Vec<WriterSpan> = state.recent_spans.iter().copied().collect();
             for (index, held) in state.calls.iter_mut().enumerate() {
-                if held.lost || now.saturating_sub(held.entry.arrived_at_ms) > late_window {
+                if held.lost {
+                    continue;
+                }
+                if held.entry.writer_final
+                    || now.saturating_sub(held.entry.arrived_at_ms) > late_window
+                {
+                    // Too late to name a writer: a report that arrives now
+                    // for the line's interval and names another process
+                    // leaves the line with none.
+                    let late =
+                        resolve_writer(new_spans, held.interval_from_ms, held.entry.arrived_at_ms);
+                    let disagrees = held.entry.writer.is_some()
+                        && (late.differ
+                            || late
+                                .writer
+                                .is_some_and(|late| Some(late) != held.entry.writer));
+                    if disagrees {
+                        held.entry.writer = None;
+                        held.entry.writers_differ = true;
+                        held.entry.writer_final = true;
+                        changed.push(index);
+                        late_after_final += 1;
+                    }
                     continue;
                 }
                 let resolved =
@@ -1119,6 +1251,7 @@ impl<E: CallExtractor> Capture<E> {
                 }
             }
         }
+        self.counters.late_after_final += late_after_final;
         for index in changed {
             let seq = self.bump();
             if let Some(state) = self.files.get_mut(path) {
@@ -1135,7 +1268,22 @@ impl<E: CallExtractor> Capture<E> {
     /// `max_pass_bytes`.
     fn read_file(&mut self, path: &str, acked_seq: u64) {
         for _ in 0..MAX_PASSES_PER_WAKE {
-            if !self.read_pass(path) {
+            if self.wake_bytes_left == 0 {
+                // Left for the next wake-up: a file behind is read on.
+                self.counters.wake_budget_cuts += 1;
+                let now = (self.clock)();
+                if let Some(state) = self.files.get_mut(path) {
+                    if state.ever_synced && !state.released && state.desync.is_none() {
+                        state.behind_since_ms.get_or_insert(now);
+                    }
+                }
+                break;
+            }
+            let read_before = self.counters.bytes_read;
+            let more = self.read_pass(path);
+            let read = self.counters.bytes_read.saturating_sub(read_before);
+            self.wake_bytes_left = self.wake_bytes_left.saturating_sub(read);
+            if !more {
                 break;
             }
         }
@@ -1145,6 +1293,14 @@ impl<E: CallExtractor> Capture<E> {
     /// One pass. `true` when complete lines are still to be read.
     fn read_pass(&mut self, path: &str) -> bool {
         let t_before = (self.clock)();
+        if t_before < self.last_pass_start_ms {
+            // The clock moved back: the times held may lie ahead of the
+            // passes to come. Read as a restart of the record: a gap on
+            // every file, each read on from where it stands.
+            self.counters.clock_steps += 1;
+            self.record_restarted(t_before);
+        }
+        self.last_pass_start_ms = t_before;
         self.counters.passes += 1;
         let Some(mut state) = self.files.remove(path) else {
             return false;
@@ -1219,6 +1375,26 @@ impl<E: CallExtractor> Capture<E> {
             identity,
             links,
         } = opened;
+        // A file another account owns is not read (the reader may run with
+        // more rights than the home's owner).
+        if let Some(owner) = self.config.owner_uid {
+            if metadata_owner(&meta) != Some(owner) {
+                self.counters.foreign_owner += 1;
+                if state.desync.is_none() {
+                    let from = state.synced.then_some(state.consumed_bound_ms);
+                    push_gap(
+                        state,
+                        from,
+                        t_before,
+                        CaptureGapReason::ForeignOwner,
+                        seq,
+                        &mut self.counters,
+                    );
+                    state.desync = Some((CaptureGapReason::ForeignOwner, t_before));
+                }
+                return false;
+            }
+        }
         // The file opened is not the one the record's latest operation was
         // made on: not read until an operation on it is reported.
         if !identity_matches(identity, state.reported_identity) {
@@ -1243,6 +1419,16 @@ impl<E: CallExtractor> Capture<E> {
         // A number of names that was not read is not one name.
         let multiple_names = links.is_none() || links.is_some_and(|links| links != 1);
         state.multiple_names = multiple_names;
+        if multiple_names && !state.multiple_names_seen {
+            self.facts_out.push((
+                state.path.clone(),
+                state.record_id,
+                store_writers::ReaderFacts {
+                    multiple_names: true,
+                    ..Default::default()
+                },
+            ));
+        }
         state.multiple_names_seen |= multiple_names;
         let size = meta.len();
 
@@ -1270,6 +1456,7 @@ impl<E: CallExtractor> Capture<E> {
         // agrees with it.
         let fresh_creation = state.latest_creation.filter(|creation| {
             Some(*creation) != state.creation_taken
+                && state.creation_read_at_ms != Some(creation.at_ms)
                 && !state.lost_pending
                 && identity.is_some()
                 && creation_time_agrees(&meta, creation.at_ms, self.config.creation_time_slack_ms)
@@ -1323,6 +1510,15 @@ impl<E: CallExtractor> Capture<E> {
                         state.prefix_digest = None;
                         state.discard_until_newline = false;
                         state.creation_taken = Some(creation);
+                        state.creation_read_at_ms = Some(creation.at_ms);
+                        self.facts_out.push((
+                            state.path.clone(),
+                            state.record_id,
+                            store_writers::ReaderFacts {
+                                creation_read_at_ms: Some(creation.at_ms),
+                                ..Default::default()
+                            },
+                        ));
                         // The first file the record saw at the path is read
                         // since its creation; a file created there after
                         // another one was unlinked replaced it.
@@ -1345,6 +1541,16 @@ impl<E: CallExtractor> Capture<E> {
                                     self.config.creation_time_slack_ms,
                                 )
                             {
+                                if !state.creation_contradicted {
+                                    self.facts_out.push((
+                                        state.path.clone(),
+                                        state.record_id,
+                                        store_writers::ReaderFacts {
+                                            creation_contradicted: true,
+                                            ..Default::default()
+                                        },
+                                    ));
+                                }
                                 state.creation_contradicted = true;
                             }
                         }
@@ -1400,6 +1606,7 @@ impl<E: CallExtractor> Capture<E> {
                 } else {
                     CaptureGapReason::Rewrite
                 };
+                let replaced_by = replacing_writer(&state.recent_spans, state.consumed_bound_ms);
                 push_gap(
                     state,
                     Some(state.consumed_bound_ms),
@@ -1408,6 +1615,9 @@ impl<E: CallExtractor> Capture<E> {
                     seq,
                     &mut self.counters,
                 );
+                if let Some(gap) = state.gaps.last_mut() {
+                    gap.replaced_by = replaced_by;
+                }
                 state.parse_state = E::State::default();
                 state.pending_results.clear();
                 state.identity = identity;
@@ -1420,6 +1630,15 @@ impl<E: CallExtractor> Capture<E> {
                         state.prefix_digest = None;
                         state.discard_until_newline = false;
                         state.creation_taken = Some(creation);
+                        state.creation_read_at_ms = Some(creation.at_ms);
+                        self.facts_out.push((
+                            state.path.clone(),
+                            state.record_id,
+                            store_writers::ReaderFacts {
+                                creation_read_at_ms: Some(creation.at_ms),
+                                ..Default::default()
+                            },
+                        ));
                         state.consumed_bound_ms = creation.at_ms.saturating_sub(1);
                         in_rewrite = true;
                     }
@@ -1651,6 +1870,7 @@ impl<E: CallExtractor> Capture<E> {
                             result_arrived_at_ms: None,
                             writer: if lost { None } else { resolved.writer },
                             writers_differ: !lost && resolved.differ,
+                            writer_final: lost,
                             in_rewrite,
                             call,
                             changed_seq: seq,
@@ -1863,8 +2083,58 @@ impl<E: CallExtractor> Capture<E> {
             watermark_ms: self.watermark_ms,
             record_instance: self.record_instance.clone().unwrap_or_default(),
             record_seq: self.record_seq,
+            record_taken_at_ms: self.record_taken_at_ms,
         }
     }
+}
+
+/// The one process the spans report an operation of since `since_ms` that
+/// sets a file's content or puts a file at the path; `None` for none, or
+/// for more than one.
+fn replacing_writer(spans: &VecDeque<WriterSpan>, since_ms: u64) -> Option<WriterInstance> {
+    let explaining = ops::CREATE | ops::TRUNCATE | ops::RENAME_TO | ops::CLONE | ops::EXCHANGE;
+    let mut found: Option<WriterInstance> = None;
+    for span in spans
+        .iter()
+        .filter(|span| span.ops & explaining != 0 && span.last_ms >= since_ms)
+    {
+        match found {
+            None => found = Some(span.writer),
+            Some(known) if known != span.writer => return None,
+            Some(_) => {}
+        }
+    }
+    found
+}
+
+/// A file's identity from its metadata, where the metadata carries it.
+#[cfg(unix)]
+fn metadata_identity(meta: &std::fs::Metadata) -> Option<FileIdentity> {
+    use std::os::unix::fs::MetadataExt;
+    Some(FileIdentity {
+        volume: meta.dev(),
+        index: meta.ino(),
+    })
+}
+
+/// A file's identity from its metadata, where the metadata carries it (not
+/// here: the sweep compares the size only).
+#[cfg(not(unix))]
+fn metadata_identity(_meta: &std::fs::Metadata) -> Option<FileIdentity> {
+    None
+}
+
+/// The account that owns a file (its uid).
+#[cfg(unix)]
+fn metadata_owner(meta: &std::fs::Metadata) -> Option<u32> {
+    use std::os::unix::fs::MetadataExt;
+    Some(meta.uid())
+}
+
+/// The account that owns a file: no uid here.
+#[cfg(not(unix))]
+fn metadata_owner(_meta: &std::fs::Metadata) -> Option<u32> {
+    None
 }
 
 /// Which process the reports name for the interval `(from_ms, until_ms]`.
@@ -1970,12 +2240,11 @@ fn push_gap<S>(
     counters: &mut CaptureCounters,
 ) {
     counters.gaps += 1;
-    // The reason and the file, never a line of it.
+    // The reason and the agent: never the path, never a line.
     tracing::debug!(
-        "transcript reader: gap ({:?}) in a {} transcript, {}",
+        "transcript reader: gap ({:?}) in a {} transcript",
         reason,
-        state.agent,
-        state.path
+        state.agent
     );
     state.gaps.push(CaptureGap {
         path: state.path.clone(),
@@ -1983,6 +2252,7 @@ fn push_gap<S>(
         from_ms,
         until_ms: until_ms.max(from_ms.unwrap_or(0)),
         reason,
+        replaced_by: None,
         changed_seq: seq,
     });
     // Bounded: the two oldest merge into one that covers both.
@@ -1994,6 +2264,9 @@ fn push_gap<S>(
             _ => None,
         };
         first.until_ms = first.until_ms.max(second.until_ms);
+        if first.replaced_by != second.replaced_by {
+            first.replaced_by = None;
+        }
         first.changed_seq = seq;
     }
 }
@@ -2017,6 +2290,7 @@ pub struct CaptureView {
     pub watermark_ms: Option<u64>,
     pub record_instance: String,
     pub record_seq: u64,
+    pub record_taken_at_ms: u64,
 }
 
 impl CaptureView {
@@ -2034,12 +2308,18 @@ impl CaptureView {
             watermark_ms: None,
             record_instance: String::new(),
             record_seq: 0,
+            record_taken_at_ms: 0,
         }
     }
 
     /// What changed after `since_seq` for a reader that last read
     /// `instance` (anything else: everything), at most
-    /// [`MAX_CALLS_PER_REPLY`] calls.
+    /// [`MAX_CALLS_PER_REPLY`] calls, cut between two sequence numbers
+    /// only: the calls one pass read share one, and a group larger than the
+    /// bound is served whole. A reply that holds calls back says until when
+    /// what it carries covers: its watermark, and the read-through of each
+    /// file with calls held back, end before the earliest arrival of a call
+    /// held back.
     pub fn batch_since(&self, instance: &str, since_seq: u64) -> CaptureBatch {
         if !self.running {
             return CaptureBatch::not_running();
@@ -2049,34 +2329,65 @@ impl CaptureView {
         } else {
             0
         };
+        // The view holds its calls in order of their sequence number.
         let changed_calls: Vec<&CapturedCall> = self
             .calls
             .iter()
             .filter(|call| call.changed_seq > since_seq)
             .collect();
-        let more = changed_calls.len() > MAX_CALLS_PER_REPLY;
-        // When the reply is cut, it ends at its last call's sequence number
-        // and carries the files and gaps up to there.
+        let mut end = changed_calls.len();
+        if end > MAX_CALLS_PER_REPLY {
+            let boundary = changed_calls[MAX_CALLS_PER_REPLY].changed_seq;
+            end = changed_calls[..MAX_CALLS_PER_REPLY]
+                .iter()
+                .take_while(|call| call.changed_seq < boundary)
+                .count();
+            if end == 0 {
+                let first = changed_calls[0].changed_seq;
+                end = changed_calls
+                    .iter()
+                    .take_while(|call| call.changed_seq == first)
+                    .count();
+            }
+        }
+        let held_back = &changed_calls[end..];
+        let more = !held_back.is_empty();
         let seq = if more {
-            changed_calls[MAX_CALLS_PER_REPLY - 1].changed_seq
+            changed_calls[end - 1].changed_seq
         } else {
             self.seq
         };
+        // What the calls held back could have arrived from: what this reply
+        // carries covers up to just before it, no further.
+        let held_from = held_back.iter().map(|call| call.arrival_from_ms).min();
+        let cut = |through: Option<u64>, from: Option<u64>| match (through, from) {
+            (Some(through), Some(from)) => Some(through.min(from.saturating_sub(1))),
+            (through, _) => through,
+        };
+        let files = self
+            .files
+            .iter()
+            .filter(|file| file.changed_seq > since_seq && file.changed_seq <= seq)
+            .map(|file| {
+                let mut file = file.clone();
+                let file_held_from = held_back
+                    .iter()
+                    .filter(|call| call.path == file.path)
+                    .map(|call| call.arrival_from_ms)
+                    .min();
+                file.read_through_ms = cut(file.read_through_ms, file_held_from);
+                file
+            })
+            .collect();
         CaptureBatch {
             instance: self.instance.clone(),
             running: true,
             started_at_ms: self.started_at_ms,
             seq,
-            files: self
-                .files
+            files,
+            calls: changed_calls[..end]
                 .iter()
-                .filter(|file| file.changed_seq > since_seq && file.changed_seq <= seq)
-                .cloned()
-                .collect(),
-            calls: changed_calls
-                .into_iter()
-                .take(MAX_CALLS_PER_REPLY)
-                .cloned()
+                .map(|call| (*call).clone())
                 .collect(),
             gaps: self
                 .gaps
@@ -2087,9 +2398,10 @@ impl CaptureView {
             more,
             counters: self.counters,
             heartbeat_ms: 0,
-            watermark_ms: self.watermark_ms,
+            watermark_ms: cut(self.watermark_ms, held_from),
             record_instance: self.record_instance.clone(),
             record_seq: self.record_seq,
+            record_taken_at_ms: self.record_taken_at_ms,
             files_held: self.files_held,
         }
     }
@@ -2170,12 +2482,20 @@ fn run<E: CallExtractor>(mut capture: Capture<E>, generation: u64) {
             }
             capture.continue_reads(acked);
             capture.sweep_if_due(acked);
+            capture.finalize_writers();
         }));
         if turn.is_err() {
             // What the turn left behind may be anything: start over, as a
             // new instance (a reader reads that as a gap for every file).
             capture.start_over();
         }
+        // What the reader found goes back to the record, where it outlives
+        // this reader's state; the sensor's state is polled (a break in
+        // what it delivers is recorded as dropped events).
+        for (path, record_id, facts) in capture.take_reader_facts() {
+            store_writers::note_reader_facts(&path, record_id, facts);
+        }
+        let _ = store_writers::sensor();
         let moved = capture.seq != published_seq
             || capture.watermark_ms != published_watermark
             || capture.record_seq != published_record_seq;
@@ -2289,6 +2609,8 @@ mod tests {
             late_report_ms: 15_000,
             max_calls_per_file: 64,
             max_files_held: 64,
+            owner_uid: None,
+            wake_byte_budget: 1 << 20,
         }
     }
 
@@ -2306,6 +2628,11 @@ mod tests {
         path: PathBuf,
         record_instance: String,
         acked: u64,
+        /// What the record keeps of the creation a reader read the file
+        /// from (`note_reader_facts`), given with each report.
+        creation_read: Option<u64>,
+        /// Everything the reader gave back, in order.
+        given_back: Vec<store_writers::ReaderFacts>,
     }
 
     impl Bench {
@@ -2327,6 +2654,8 @@ mod tests {
                 path,
                 record_instance: "record-1".to_string(),
                 acked: 0,
+                creation_read: None,
+                given_back: Vec::new(),
             }
         }
 
@@ -2387,6 +2716,7 @@ mod tests {
                 identity: None,
                 lost: false,
                 unlinked: false,
+                creation_read_at_ms: self.creation_read,
             }
         }
 
@@ -2398,6 +2728,17 @@ mod tests {
                 files: vec![file],
             };
             self.capture.handle_take(&take, self.acked);
+            self.give_back();
+        }
+
+        /// What the reader gave back, kept as the record keeps it.
+        fn give_back(&mut self) {
+            for (_, _, facts) in self.capture.take_reader_facts() {
+                if let Some(at_ms) = facts.creation_read_at_ms {
+                    self.creation_read = Some(at_ms);
+                }
+                self.given_back.push(facts);
+            }
         }
 
         /// Create the transcript, report its creation by the harness, and
@@ -3030,6 +3371,7 @@ mod tests {
                 "path",
                 "result_arrived_at_ms",
                 "writer",
+                "writer_final",
                 "writers_differ",
             ]
         );
@@ -3159,6 +3501,7 @@ mod tests {
             result_arrived_at_ms: None,
             writer: Some(HARNESS),
             writers_differ: false,
+            writer_final: true,
             in_rewrite: false,
             call: json!({"programs": ["ls"]}),
             changed_seq: id,
@@ -3193,6 +3536,7 @@ mod tests {
                 from_ms: Some(1),
                 until_ms: 2,
                 reason: CaptureGapReason::Unannounced,
+                replaced_by: None,
                 changed_seq: 3,
             }],
             counters: CaptureCounters::default(),
@@ -3200,6 +3544,7 @@ mod tests {
             watermark_ms: None,
             record_instance: String::new(),
             record_seq: 0,
+            record_taken_at_ms: 0,
         };
         let first = view.batch_since("capture-1", 0);
         assert!(first.running && first.more);
@@ -3229,7 +3574,8 @@ mod tests {
 
     #[test]
     fn the_published_bounds_are_read_with_the_callers_call_count() {
-        let from_params = CaptureConfig::from_params(64);
+        let from_params = CaptureConfig::from_params(64, Some(501));
+        assert_eq!(from_params.owner_uid, Some(501));
         assert_eq!(from_params.max_line_bytes, 4 * 1024 * 1024);
         assert_eq!(from_params.max_pass_bytes, 8 * 1024 * 1024);
         assert_eq!(from_params.max_backlog_bytes, 64 * 1024 * 1024);
@@ -3237,7 +3583,7 @@ mod tests {
         assert_eq!(from_params.creation_time_slack_ms, 2_000);
         assert_eq!(from_params.late_report_ms, 15_000);
         assert_eq!(from_params.max_calls_per_file, 64);
-        assert_eq!(CaptureConfig::from_params(0).max_calls_per_file, 1);
+        assert_eq!(CaptureConfig::from_params(0, None).max_calls_per_file, 1);
     }
 
     /// The thread, on the process-wide store-writer record: a store is
@@ -3505,7 +3851,7 @@ mod tests {
                 .count(),
             2
         );
-        // Nobody reads: beyond twice the bound held, the reader starts over.
+        // Released files wait for a reader: a new instance.
         let instance = bench.view().instance;
         for i in 6..20u64 {
             let path = dir.join(format!("t{i}.jsonl"));
@@ -3580,6 +3926,7 @@ mod tests {
             identity: None,
             lost: false,
             unlinked: false,
+            creation_read_at_ms: None,
         };
         let take = |at: u64| DirtyTake {
             instance: "record-1".to_string(),
@@ -3766,6 +4113,7 @@ mod tests {
                 identity: None,
                 lost: false,
                 unlinked: false,
+                creation_read_at_ms: None,
             }],
         };
         capture.handle_take(&take(now), 0);
@@ -3953,5 +4301,517 @@ mod tests {
             .iter()
             .any(|gap| gap.reason == CaptureGapReason::Removed
                 && gap.until_ms >= wget.arrival_from_ms));
+    }
+
+    // -- round 4: what nothing recorded explains, re-reads, cuts, finality ---
+
+    /// A reported truncation names its process in the rewrite gap; a
+    /// rewrite nothing reported names none.
+    #[test]
+    fn a_rewrite_gap_names_the_one_process_whose_report_explains_it() {
+        let mut bench = Bench::new(config());
+        let creation = bench.created_by_harness();
+        bench.appended_by(HARNESS, creation, "C k1 curl\n");
+        let at = bench.advance(10);
+        std::fs::write(&bench.path, "C k1 curl\nC k2 nc\n").unwrap();
+        let span = bench.span(HARNESS, ops::TRUNCATE | ops::WRITE, at);
+        bench.advance(2);
+        bench.take(bench.dirty(Some(creation), vec![span]));
+        let gap = bench.view().gaps.pop().expect("a rewrite gap");
+        assert_eq!(gap.reason, CaptureGapReason::Rewrite);
+        assert_eq!(gap.replaced_by, Some(HARNESS));
+
+        // Rewritten shorter with nothing reported but a write by another.
+        bench.advance(10);
+        let at = bench.advance(10);
+        std::fs::write(&bench.path, "C k9 x\n").unwrap();
+        bench.advance(2);
+        bench.take(bench.dirty(Some(creation), vec![bench.span(OTHER, ops::WRITE, at)]));
+        let gap = bench.view().gaps.pop().expect("a second rewrite gap");
+        assert_eq!(gap.reason, CaptureGapReason::Rewrite);
+        assert_eq!(gap.replaced_by, None);
+    }
+
+    /// The `mv` of a prepared directory holding a forged transcript into a
+    /// store: no operation on the file is reported, the forged file has the
+    /// size of the one it replaces, and the sweep finds another file under
+    /// the path by its identity. Nothing of the forged file is read and the
+    /// replacement names no process.
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_moved_into_a_store_is_another_file_for_the_sweep() {
+        let mut bench = Bench::new(config());
+        let store = bench.base.join("projects").join("p");
+        std::fs::create_dir_all(&store).unwrap();
+        bench.path = store.join("k.jsonl");
+        let creation = bench.created_by_harness();
+        bench.appended_by(HARNESS, creation, "C k1 curl\n");
+        assert_eq!(bench.programs(), vec!["curl".to_string()]);
+        // Prepared elsewhere: the same size, a forged call.
+        let prepared = bench.base.join("x").join("p");
+        std::fs::create_dir_all(&prepared).unwrap();
+        std::fs::write(prepared.join("k.jsonl"), "C k1 sudo\n").unwrap();
+        std::fs::rename(&store, bench.base.join("x").join("p.old")).unwrap();
+        std::fs::rename(&prepared, &store).unwrap();
+        bench.advance(SWEEP_INTERVAL_MS);
+        bench.capture.sweep(0);
+        let view = bench.view();
+        assert_eq!(bench.programs(), vec!["curl".to_string()]);
+        let replaced = view
+            .gaps
+            .iter()
+            .find(|gap| gap.reason == CaptureGapReason::Replaced)
+            .expect("the sweep finds another file");
+        assert_eq!(replaced.replaced_by, None);
+        assert!(!bench.file().since_creation);
+    }
+
+    /// A reader that starts a new instance (a failing turn does the same)
+    /// holds nothing, and the record keeps the creation it read the file
+    /// from: the
+    /// file is not read "since its creation" again, no old line is served as
+    /// arriving now or by the harness, and a gap covers what came before.
+    #[test]
+    fn a_reader_that_starts_over_serves_no_old_line_as_new() {
+        let mut bench = Bench::new(config());
+        let creation = bench.created_by_harness();
+        bench.appended_by(HARNESS, creation, "C k1 curl\n");
+        assert_eq!(bench.creation_read, Some(creation.at_ms));
+        bench.capture.start_over();
+        let restarted_at = bench.advance(600_000);
+        bench.appended_by(HARNESS, creation, "C k2 git\n");
+        let view = bench.view();
+        assert!(view
+            .calls
+            .iter()
+            .all(|call| call.call["programs"][0] != "curl"));
+        let file = bench.file();
+        assert!(!file.since_creation);
+        assert!(view.gaps.iter().any(
+            |gap| gap.reason == CaptureGapReason::BeforeCapture && gap.until_ms >= restarted_at
+        ));
+        // What is appended afterwards is read as it arrives.
+        bench.appended_by(HARNESS, creation, "C k3 ls\n");
+        let ls = bench
+            .view()
+            .calls
+            .into_iter()
+            .find(|call| call.call["programs"][0] == "ls")
+            .expect("read");
+        assert_eq!(ls.writer, Some(HARNESS));
+    }
+
+    /// Files beyond the bound, about 4,100: the reader releases files and
+    /// starts a new instance. The harness's transcript, reported again, is
+    /// not read "since its creation" and none of its old lines is served
+    /// again by the harness.
+    #[test]
+    fn a_flood_of_files_is_no_lever_on_old_lines() {
+        let mut flood_config = config();
+        flood_config.max_files_held = 2_048;
+        let mut bench = Bench::new(flood_config);
+        let creation = bench.created_by_harness();
+        bench.appended_by(HARNESS, creation, "C k1 curl\n");
+        let restarts = bench.view().counters.restarts;
+        let flood_dir = bench.base.join("flood");
+        std::fs::create_dir_all(&flood_dir).unwrap();
+        let at = bench.advance(10);
+        let mut files = Vec::new();
+        for index in 0..4_100 {
+            let path = flood_dir.join(format!("f{index}.jsonl"));
+            std::fs::write(&path, "").unwrap();
+            let mut dirty = bench.dirty(None, vec![bench.span(OTHER, ops::CREATE, at)]);
+            dirty.path = path.to_string_lossy().to_string();
+            dirty.record_id = 100 + index;
+            dirty.creation_read_at_ms = None;
+            files.push(dirty);
+        }
+        bench.advance(2);
+        let take = DirtyTake {
+            instance: bench.record_instance.clone(),
+            seq: 0,
+            configured: true,
+            files,
+        };
+        bench.capture.handle_take(&take, 0);
+        bench.give_back();
+        assert!(bench.view().counters.restarts > restarts);
+        bench.appended_by(HARNESS, creation, "C k2 git\n");
+        let harness_calls: Vec<CapturedCall> = bench
+            .view()
+            .calls
+            .into_iter()
+            .filter(|call| call.path == bench.path_str())
+            .collect();
+        assert!(harness_calls
+            .iter()
+            .all(|call| call.call["programs"][0] != "curl"));
+        let file = bench
+            .view()
+            .files
+            .into_iter()
+            .find(|file| file.path == bench.path_str())
+            .expect("held again");
+        assert!(!file.since_creation);
+    }
+
+    /// A file released, dropped and reported again is read from its start
+    /// with every old line naming no process, its arrival from the file's
+    /// birth, and a gap over that interval.
+    #[test]
+    fn a_released_file_taken_again_names_no_process_for_its_old_lines() {
+        let mut small = config();
+        small.max_files_held = 1;
+        let mut bench = Bench::new(small);
+        let creation = bench.created_by_harness();
+        bench.appended_by(HARNESS, creation, "C k1 curl\n");
+        // Another file takes the only place: the transcript is released,
+        // then dropped once a reader asked past it.
+        let other = bench.base.join("other.jsonl");
+        std::fs::write(&other, "").unwrap();
+        let at = bench.advance(10);
+        let mut dirty = bench.dirty(None, vec![bench.span(OTHER, ops::CREATE, at)]);
+        dirty.path = other.to_string_lossy().to_string();
+        dirty.record_id = 9;
+        bench.advance(2);
+        bench.take(dirty);
+        bench.acked = bench.view().seq;
+        let at = bench.advance(10);
+        let mut again = bench.dirty(None, vec![bench.span(OTHER, ops::WRITE, at)]);
+        again.path = other.to_string_lossy().to_string();
+        again.record_id = 9;
+        bench.take(again);
+        // Reported again: read from its start, no process named.
+        let reported_at = bench.advance(10);
+        bench.append("C k2 git\n");
+        bench.take(bench.dirty(
+            Some(creation),
+            vec![bench.span(HARNESS, ops::WRITE, reported_at)],
+        ));
+        let calls: Vec<CapturedCall> = bench
+            .view()
+            .calls
+            .into_iter()
+            .filter(|call| call.path == bench.path_str())
+            .collect();
+        let curl = calls
+            .iter()
+            .find(|call| call.call["programs"][0] == "curl")
+            .expect("read again from the start");
+        assert_eq!(curl.writer, None);
+        assert!(!curl.announced);
+        assert!(curl.arrival_from_ms < reported_at);
+        let file = bench
+            .view()
+            .files
+            .into_iter()
+            .find(|file| file.path == bench.path_str())
+            .unwrap();
+        assert!(!file.since_creation);
+    }
+
+    /// A reply is cut between two passes' calls, never inside one pass's,
+    /// and a pass's calls beyond the bound are served whole; with calls held
+    /// back, the watermark and the read-through end before the earliest of
+    /// them.
+    #[test]
+    fn a_reply_is_cut_between_passes_and_covers_only_what_it_carries() {
+        let call = |id: u64, seq: u64, from: u64| CapturedCall {
+            id,
+            path: "/t/s.jsonl".to_string(),
+            agent: "claude_code".to_string(),
+            arrival_from_ms: from,
+            announced: true,
+            arrived_at_ms: from + 1,
+            result_arrived_at_ms: None,
+            writer: Some(HARNESS),
+            writers_differ: false,
+            writer_final: true,
+            in_rewrite: false,
+            call: json!({"programs": ["ls"]}),
+            changed_seq: seq,
+        };
+        let file = CapturedFile {
+            path: "/t/s.jsonl".to_string(),
+            agent: "claude_code".to_string(),
+            status: CapturedFileStatus::Watched,
+            record_id: 1,
+            since_creation: true,
+            creation_contradicted: false,
+            watching_since_ms: 1,
+            read_through_ms: Some(5_000),
+            last_read_ms: 5_000,
+            offset: 10,
+            rewrites: 0,
+            multiple_names: false,
+            multiple_names_seen: false,
+            calls_before_ms: None,
+            changed_seq: 2,
+        };
+        // 500 calls of a first pass (seq 1, arrived from 1,000), 100 of a
+        // second (seq 2, from 3,000).
+        let mut calls: Vec<CapturedCall> = (1..=500).map(|id| call(id, 1, 1_000)).collect();
+        calls.extend((501..=600).map(|id| call(id, 2, 3_000)));
+        let view = CaptureView {
+            instance: "capture-1".to_string(),
+            running: true,
+            started_at_ms: 1,
+            seq: 2,
+            files: vec![CapturedFile {
+                changed_seq: 1,
+                ..file.clone()
+            }],
+            calls,
+            gaps: Vec::new(),
+            counters: CaptureCounters::default(),
+            files_held: 1,
+            watermark_ms: Some(5_000),
+            record_instance: String::new(),
+            record_seq: 0,
+            record_taken_at_ms: 0,
+        };
+        let first = view.batch_since("capture-1", 0);
+        assert!(first.more);
+        assert_eq!(first.calls.len(), 500);
+        assert_eq!(first.seq, 1);
+        assert_eq!(first.watermark_ms, Some(2_999));
+        assert_eq!(first.files[0].read_through_ms, Some(2_999));
+        let second = view.batch_since("capture-1", first.seq);
+        assert!(!second.more);
+        assert_eq!(second.calls.len(), 100);
+        assert_eq!(second.watermark_ms, Some(5_000));
+        // One pass of 600 calls: served whole, nothing lost.
+        let one_pass = CaptureView {
+            calls: (1..=600).map(|id| call(id, 1, 1_000)).collect(),
+            ..view.clone()
+        };
+        let whole = one_pass.batch_since("capture-1", 0);
+        assert_eq!(whole.calls.len(), 600);
+        assert!(!whole.more);
+        assert!(one_pass
+            .batch_since("capture-1", whole.seq)
+            .calls
+            .is_empty());
+    }
+
+    /// The watermark is the earliest read-through of the watched files: a
+    /// file left behind by the bound of its passes keeps it back, whatever
+    /// time the sweep ran.
+    #[test]
+    fn the_watermark_is_held_back_by_a_file_left_behind() {
+        let mut small = config();
+        small.max_pass_bytes = 64;
+        let mut bench = Bench::new(small);
+        let creation = bench.created_by_harness();
+        let through = bench
+            .file()
+            .read_through_ms
+            .expect("read through its creation");
+        let mut text = String::new();
+        for index in 0..400 {
+            text.push_str(&format!("C k{index} tool{index}\n"));
+        }
+        let at = bench.advance(10);
+        bench.append(&text);
+        bench.advance(2);
+        bench.take(bench.dirty(Some(creation), vec![bench.span(HARNESS, ops::WRITE, at)]));
+        let swept_at = bench.advance(SWEEP_INTERVAL_MS);
+        bench.capture.sweep(0);
+        let watermark = bench.view().watermark_ms.expect("a sweep ran");
+        assert!(watermark < swept_at);
+        assert_eq!(watermark, through);
+    }
+
+    /// A call's writer stays open until the time a report may take has
+    /// passed; then it is final. A report that arrives afterwards for the
+    /// line's interval and names another process leaves it with none.
+    #[test]
+    fn a_writer_is_final_after_the_late_report_bound_and_no_writer_after_it() {
+        let mut bench = Bench::new(config());
+        let creation = bench.created_by_harness();
+        let wrote_at = bench.appended_by(HARNESS, creation, "C k1 ls\n");
+        let call = bench.view().calls.pop().unwrap();
+        assert_eq!(call.writer, Some(HARNESS));
+        assert!(!call.writer_final);
+        bench.capture.finalize_writers();
+        assert!(!bench.view().calls.pop().unwrap().writer_final);
+        bench.advance(config().late_report_ms);
+        bench.capture.finalize_writers();
+        let call = bench.view().calls.pop().unwrap();
+        assert!(call.writer_final);
+        assert_eq!(call.writer, Some(HARNESS));
+        // Another process's write in the line's interval, reported now.
+        bench.take(bench.dirty(
+            Some(creation),
+            vec![bench.span(OTHER, ops::WRITE, wrote_at)],
+        ));
+        let call = bench.view().calls.pop().unwrap();
+        assert_eq!(call.writer, None);
+        assert!(call.writers_differ);
+        assert!(call.writer_final);
+        assert_eq!(bench.view().counters.late_after_final, 1);
+    }
+
+    /// A line read before the report of its write: its writer is the
+    /// harness's for now, not final; the report arrives within the bound and
+    /// the line has no writer, final once the bound has passed.
+    #[test]
+    fn a_line_read_before_its_report_is_not_final_until_the_report() {
+        let mut bench = Bench::new(config());
+        let creation = bench.created_by_harness();
+        let harness_at = bench.advance(10);
+        bench.append("C k1 ls\n");
+        let other_at = bench.advance(1);
+        bench.append("C k2 sudo\n");
+        bench.advance(2);
+        // Only the harness's write was reported at the read.
+        bench.take(bench.dirty(
+            Some(creation),
+            vec![bench.span(HARNESS, ops::WRITE, harness_at)],
+        ));
+        let sudo = |bench: &Bench| {
+            bench
+                .view()
+                .calls
+                .into_iter()
+                .find(|call| call.call["programs"][0] == "sudo")
+                .unwrap()
+        };
+        assert_eq!(sudo(&bench).writer, Some(HARNESS));
+        assert!(!sudo(&bench).writer_final);
+        bench.advance(100);
+        bench.take(bench.dirty(
+            Some(creation),
+            vec![bench.span(OTHER, ops::WRITE, other_at)],
+        ));
+        assert_eq!(sudo(&bench).writer, None);
+        bench.advance(config().late_report_ms);
+        bench.capture.finalize_writers();
+        assert!(sudo(&bench).writer_final);
+        assert_eq!(sudo(&bench).writer, None);
+    }
+
+    /// A pass that begins before the previous one (the clock moved back) is
+    /// a restart of the record for the reader: a gap on every file, and the
+    /// lines read next name no process.
+    #[test]
+    fn a_clock_that_moves_back_is_a_restart_for_the_reader() {
+        let mut bench = Bench::new(config());
+        let creation = bench.created_by_harness();
+        bench.appended_by(HARNESS, creation, "C k1 ls\n");
+        bench.clock.fetch_sub(60_000, Ordering::AcqRel);
+        bench.appended_by(HARNESS, creation, "C k2 git\n");
+        let view = bench.view();
+        assert_eq!(view.counters.clock_steps, 1);
+        assert!(view
+            .gaps
+            .iter()
+            .any(|gap| gap.reason == CaptureGapReason::RecordRestarted));
+        let git = view
+            .calls
+            .iter()
+            .find(|call| call.call["programs"][0] == "git")
+            .unwrap();
+        assert_eq!(git.writer, None);
+    }
+
+    /// A file owned by another account than the stores' home is not read.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_another_account_owns_is_not_read() {
+        use std::os::unix::fs::MetadataExt;
+        let probe = tempfile::tempdir().unwrap();
+        let mine = std::fs::metadata(probe.path()).unwrap().uid();
+        let mut foreign = config();
+        foreign.owner_uid = Some(mine.wrapping_add(1));
+        let mut bench = Bench::new(foreign);
+        let creation = bench.created_by_harness();
+        bench.appended_by(HARNESS, creation, "C k1 ls\n");
+        assert!(bench.programs().is_empty());
+        assert_eq!(bench.gap_reasons(), vec![CaptureGapReason::ForeignOwner]);
+        assert_eq!(bench.file().status, CapturedFileStatus::Desynced);
+        assert!(bench.view().counters.foreign_owner >= 1);
+
+        let mut own = config();
+        own.owner_uid = Some(mine);
+        let mut bench = Bench::new(own);
+        let creation = bench.created_by_harness();
+        bench.appended_by(HARNESS, creation, "C k1 ls\n");
+        assert_eq!(bench.programs(), vec!["ls".to_string()]);
+    }
+
+    /// One wake-up reads at most its byte budget across files; a file left
+    /// is read on at the next one.
+    #[test]
+    fn a_wake_up_reads_a_bounded_number_of_bytes_across_files() {
+        let mut budget = config();
+        budget.wake_byte_budget = 64;
+        let mut bench = Bench::new(budget);
+        let creation = bench.created_by_harness();
+        let second = bench.base.join("second.jsonl");
+        std::fs::write(&second, "").unwrap();
+        let second_creation = CreationSeen {
+            writer: HARNESS,
+            at_ms: bench.now(),
+        };
+        let mut created = bench.dirty(
+            Some(second_creation),
+            vec![bench.span(HARNESS, ops::CREATE, second_creation.at_ms)],
+        );
+        created.path = second.to_string_lossy().to_string();
+        created.record_id = 8;
+        created.creation_read_at_ms = None;
+        bench.advance(2);
+        bench.take(created);
+        // Both files grow by more than the budget in one wake-up.
+        let at = bench.advance(10);
+        let mut text = String::new();
+        for index in 0..10 {
+            text.push_str(&format!("C k{index} tool{index}\n"));
+        }
+        bench.append(&text);
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&second)
+            .unwrap()
+            .write_all(text.as_bytes())
+            .unwrap();
+        let first = bench.dirty(Some(creation), vec![bench.span(HARNESS, ops::WRITE, at)]);
+        let mut other = bench.dirty(
+            Some(second_creation),
+            vec![bench.span(HARNESS, ops::WRITE, at)],
+        );
+        other.path = second.to_string_lossy().to_string();
+        other.record_id = 8;
+        bench.advance(2);
+        let take = DirtyTake {
+            instance: bench.record_instance.clone(),
+            seq: 0,
+            configured: true,
+            files: vec![first, other],
+        };
+        bench.capture.handle_take(&take, 0);
+        assert!(bench.view().counters.wake_budget_cuts >= 1);
+        assert!(bench.programs().len() < 20);
+        for _ in 0..10 {
+            bench.capture.continue_reads(0);
+        }
+        assert_eq!(bench.programs().len(), 20);
+    }
+
+    /// What the reader finds of a file is given back to the record: the
+    /// creation it read the file from, and a second name.
+    #[cfg(unix)]
+    #[test]
+    fn the_reader_gives_its_facts_back_to_the_record() {
+        let mut bench = Bench::new(config());
+        let creation = bench.created_by_harness();
+        assert!(bench
+            .given_back
+            .iter()
+            .any(|facts| facts.creation_read_at_ms == Some(creation.at_ms)));
+        std::fs::hard_link(&bench.path, bench.base.join("second-name")).unwrap();
+        bench.appended_by(HARNESS, creation, "C k1 ls\n");
+        assert!(bench.given_back.iter().any(|facts| facts.multiple_names));
     }
 }
