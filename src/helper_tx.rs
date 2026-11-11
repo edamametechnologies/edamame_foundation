@@ -77,6 +77,11 @@ pub const UTILITY_ORDER_NAMES: &[&str] = &[
 /// Utility orders whose response carries secrets: never logged, even at trace.
 pub const SECRET_BEARING_UTILITY_ORDERS: &[&str] = &["get_managed_secrets"];
 
+/// Utility orders whose response the client traces by its size only: it is
+/// large, and what an extractor kept of transcript lines is not trace
+/// material.
+pub const SIZE_ONLY_TRACE_UTILITY_ORDERS: &[&str] = &["store_writers_since"];
+
 /// `arg2` a caller sends with `scan_secret_content` or `attest_dev_trees` to
 /// get the budgeted reply -- `SecretContentScan` / `DevTreeAttestationBatch`,
 /// the results plus a `truncated` flag -- instead of the bare result array.
@@ -379,7 +384,9 @@ async fn helper_run_with_channel(
         }
     };
     let output = response.into_inner().output;
-    if SECRET_BEARING_UTILITY_ORDERS.contains(&subordertype) {
+    if SECRET_BEARING_UTILITY_ORDERS.contains(&subordertype)
+        || SIZE_ONLY_TRACE_UTILITY_ORDERS.contains(&subordertype)
+    {
         trace!("Helper response: <{} bytes, redacted>", output.len());
     } else {
         trace!("Helper response: {:?}", output);

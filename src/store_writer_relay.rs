@@ -29,7 +29,13 @@ pub struct StoreWritersCursor {
 
 /// Reply of [`store_writers_since`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// The version of [`StoreWriterBatch`]: a consumer reads a reply of another
+/// version as a failed relay, never as a partial one.
+pub const STORE_WRITER_BATCH_VERSION: u32 = 1;
+
 pub struct StoreWriterBatch {
+    /// [`STORE_WRITER_BATCH_VERSION`] of the side that answered.
+    pub version: u32,
     /// The rows that changed since the cursor. `None` when the record was
     /// held: nothing was read, ask again with the same cursor. Never an
     /// empty reply standing for "no rows".
@@ -73,6 +79,7 @@ pub fn store_writers_since(cursor: &StoreWritersCursor) -> StoreWriterBatch {
         .then(|| (capture.record_instance.as_str(), capture.record_seq));
     let rows = store_writers::rows_since(&cursor.record_instance, cursor.rows_seq, cut);
     StoreWriterBatch {
+        version: STORE_WRITER_BATCH_VERSION,
         rows,
         capture,
         sensor: store_writers::sensor(),
