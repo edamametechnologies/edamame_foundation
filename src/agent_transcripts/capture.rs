@@ -557,7 +557,9 @@ fn open_no_follow(path: &Path) -> Result<std::fs::File, OpenRefusal> {
             .custom_flags(flags)
             .open(path)
     };
-    match open(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOFOLLOW_ANY) {
+    // `O_NOFOLLOW_ANY` covers the last component too, and is refused in
+    // combination with `O_NOFOLLOW`.
+    match open(libc::O_NONBLOCK | libc::O_NOFOLLOW_ANY) {
         Ok(file) => Ok(file),
         // A system that does not know the flag: `O_NOFOLLOW`.
         Err(error) if error.raw_os_error() == Some(libc::EINVAL) => {
@@ -3043,6 +3045,7 @@ mod tests {
     #[test]
     fn a_recorded_creation_the_files_own_time_contradicts_is_not_taken() {
         let mut bench = Bench::new(config());
+        bench.started_after_the_files();
         bench.append("C k0 planted\n");
         // The record names a creation ten minutes after the file was made.
         let creation = CreationSeen {
@@ -3308,7 +3311,15 @@ mod tests {
 
         stop();
         assert!(!is_running());
-        assert_eq!(since(&batch.instance, 0), CaptureBatch::not_running());
+        // Not running; the reply keeps the thread's last heartbeat.
+        let stopped = since(&batch.instance, 0);
+        assert_eq!(
+            CaptureBatch {
+                heartbeat_ms: 0,
+                ..stopped
+            },
+            CaptureBatch::not_running()
+        );
         store_writers::clear();
     }
 
