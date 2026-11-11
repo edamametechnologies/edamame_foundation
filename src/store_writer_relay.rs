@@ -27,12 +27,12 @@ pub struct StoreWritersCursor {
     pub calls_seq: u64,
 }
 
-/// Reply of [`store_writers_since`].
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 /// The version of [`StoreWriterBatch`]: a consumer reads a reply of another
 /// version as a failed relay, never as a partial one.
 pub const STORE_WRITER_BATCH_VERSION: u32 = 1;
 
+/// Reply of [`store_writers_since`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StoreWriterBatch {
     /// [`STORE_WRITER_BATCH_VERSION`] of the side that answered.
     pub version: u32,
