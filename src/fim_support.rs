@@ -80,28 +80,32 @@ pub fn resolve_fim_watch_roots(
             None => fim::default_watch_roots(mode),
         }
     };
-    attach_stores(roots, user_home)
+    attach_stores(roots, user_home.ok_or(NO_HOME))
 }
+
+/// Why no home was resolved for the stores: the caller gave none.
+pub const NO_HOME: &str = "no_home";
 
 /// `roots` with the agent transcript stores a file monitor started for
 /// `stores_home` records the writers of (`flodbadd::store_writers`): the
 /// published `transcript_stores` under that home.
 ///
 /// The home is the caller's to give: none is resolved here. A caller that
-/// gives none gets roots that say the stores were not resolved
-/// ([`FimWatchRoots::with_unresolved_stores`]), which the file monitor
-/// publishes as such. While `transcript_write_trust_enabled` is published
-/// false there is no store to resolve, with or without a home.
+/// has none gives why (a word the status shows) and gets roots that say the
+/// stores were not resolved ([`FimWatchRoots::with_unresolved_stores`]),
+/// which the file monitor publishes as such. While
+/// `transcript_write_trust_enabled` is published false there is no store to
+/// resolve, with or without a home.
 ///
 /// A caller whose roots need no home (explicit paths, the CI roots) passes
 /// the home it resolved for the stores here.
-pub fn attach_stores(roots: FimWatchRoots, stores_home: Option<&Path>) -> FimWatchRoots {
+pub fn attach_stores(roots: FimWatchRoots, stores_home: Result<&Path, &str>) -> FimWatchRoots {
     if !crate::vuln_detector_params::transcript_write_trust_enabled() {
         return roots.with_stores(Vec::new());
     }
     match stores_home {
-        Some(home) => roots.with_stores(store_specs_for_home(home)),
-        None => roots.with_unresolved_stores(),
+        Ok(home) => roots.with_stores(store_specs_for_home(home)),
+        Err(reason) => roots.with_unresolved_stores(reason),
     }
 }
 
@@ -342,7 +346,7 @@ mod tests {
         ] {
             let roots = resolve_fim_watch_roots(&explicit, Some(&home), FimMode::Desktop);
             assert_eq!(roots.stores, specs, "explicit paths: {:?}", explicit);
-            assert!(!roots.stores_unresolved);
+            assert!(roots.stores_unresolved.is_none());
         }
         // A store root under a watched root is delivered with it; the others
         // are watched for the record only.
@@ -371,21 +375,34 @@ mod tests {
         ] {
             let roots = resolve_fim_watch_roots(&paths, None, mode);
             assert!(roots.stores.is_empty(), "{:?} {:?}", paths, mode);
-            assert!(roots.stores_unresolved, "{:?} {:?}", paths, mode);
+            assert_eq!(
+                roots.stores_unresolved.as_deref(),
+                Some(NO_HOME),
+                "{:?} {:?}",
+                paths,
+                mode
+            );
             assert!(roots.store_only_roots().is_empty());
 
             // The same roots, with the stores under a home the caller
             // resolved: the watch roots are unchanged.
-            let attached = attach_stores(roots.clone(), Some(&home));
+            let attached = attach_stores(roots.clone(), Ok(&home));
             assert_eq!(attached.stores, store_specs_for_home(&home));
-            assert!(!attached.stores_unresolved);
+            assert!(attached.stores_unresolved.is_none());
             assert_eq!(attached.operator, roots.operator);
             assert_eq!(attached.defaults, roots.defaults);
         }
         // None of the stores lies under a home this process could resolve
         // for itself.
-        let attached = attach_stores(FimWatchRoots::operator(Vec::new()), None);
-        assert!(attached.stores.is_empty() && attached.stores_unresolved);
+        let attached = attach_stores(
+            FimWatchRoots::operator(Vec::new()),
+            Err("privileged_account"),
+        );
+        assert!(attached.stores.is_empty());
+        assert_eq!(
+            attached.stores_unresolved.as_deref(),
+            Some("privileged_account")
+        );
         let _ = std::fs::remove_dir_all(&home);
     }
 
