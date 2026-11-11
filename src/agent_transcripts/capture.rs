@@ -414,9 +414,11 @@ fn file_identity(
     const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
     let mut info = BY_HANDLE_FILE_INFORMATION::default();
     // SAFETY: the handle is this open file's and `info` outlives the call.
+    // Without the handle's information the file is not known to be a
+    // regular one: not read.
     if unsafe { GetFileInformationByHandle(HANDLE(file.as_raw_handle() as _), &mut info) }.is_err()
     {
-        return (None, None, false);
+        return (None, None, true);
     }
     let special = info.dwFileAttributes
         & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_DEVICE | FILE_ATTRIBUTE_REPARSE_POINT)
@@ -1236,7 +1238,8 @@ impl<E: CallExtractor> Capture<E> {
         let resumed_from = state.desync.take();
         // A file with more than one name: the lines of this pass name no
         // process, and the interval since the last read is a gap.
-        let multiple_names = links.is_some_and(|links| links != 1);
+        // A number of names that was not read is not one name.
+        let multiple_names = links.is_none() || links.is_some_and(|links| links != 1);
         state.multiple_names = multiple_names;
         state.multiple_names_seen |= multiple_names;
         let size = meta.len();
