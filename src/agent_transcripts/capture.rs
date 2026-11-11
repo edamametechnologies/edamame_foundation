@@ -209,6 +209,8 @@ pub enum CaptureGapReason {
     Released,
     /// The extractor failed on a line of the interval.
     ExtractorFailed,
+    /// The file had more than one name when it was read.
+    MultipleNames,
 }
 
 /// What the reader does with a transcript now.
@@ -262,6 +264,9 @@ pub struct CapturedFile {
     pub offset: u64,
     /// Times the file was found rewritten or replaced.
     pub rewrites: u64,
+    /// The file had more than one name at its last read, and at any read.
+    pub multiple_names: bool,
+    pub multiple_names_seen: bool,
     /// Calls read before this instant are no longer in the list.
     pub calls_before_ms: Option<u64>,
     pub changed_seq: u64,
@@ -659,6 +664,9 @@ struct FileState<S> {
     /// When a pass last took bytes from the file, or when it was first
     /// reported: the least recent one is released first.
     last_growth_ms: u64,
+    /// More than one name at the last read, and at any read.
+    multiple_names: bool,
+    multiple_names_seen: bool,
 }
 
 impl<S> FileState<S> {
@@ -953,6 +961,8 @@ impl<E: CallExtractor> Capture<E> {
                 desync: None,
                 released: false,
                 last_growth_ms: now,
+                multiple_names: false,
+                multiple_names_seen: false,
             });
         if state.released {
             // Reported again after it was released: held again, as new.
@@ -1133,7 +1143,7 @@ impl<E: CallExtractor> Capture<E> {
             mut file,
             meta,
             identity,
-            links: _,
+            links,
         } = opened;
         // The file opened is not the one the record's latest operation was
         // made on: not read until an operation on it is reported.
@@ -1154,6 +1164,11 @@ impl<E: CallExtractor> Capture<E> {
             return false;
         }
         state.desync = None;
+        // A file with more than one name: the lines of this pass name no
+        // process, and the interval since the last read is a gap.
+        let multiple_names = links.is_some_and(|links| links != 1);
+        state.multiple_names = multiple_names;
+        state.multiple_names_seen |= multiple_names;
         let size = meta.len();
 
         // What the file is against what is held.
@@ -1438,7 +1453,17 @@ impl<E: CallExtractor> Capture<E> {
         let interval_from = state.consumed_bound_ms;
         let spans: Vec<WriterSpan> = state.recent_spans.iter().copied().collect();
         let resolved = resolve_writer(&spans, interval_from, t_after);
-        let lost = state.lost_pending;
+        let lost = state.lost_pending || multiple_names;
+        if multiple_names {
+            push_gap(
+                state,
+                Some(interval_from),
+                t_after,
+                CaptureGapReason::MultipleNames,
+                seq,
+                &mut self.counters,
+            );
+        }
         // The first report of a change in the interval: the record's mark
         // or the first operation, whichever is earlier.
         let announce = match (state.first_announce_ms, resolved.first_ms) {
@@ -1453,7 +1478,7 @@ impl<E: CallExtractor> Capture<E> {
             interval_from
         };
         if consumed > 0 {
-            if lost {
+            if lost && !multiple_names {
                 push_gap(
                     state,
                     Some(interval_from),
@@ -1462,7 +1487,7 @@ impl<E: CallExtractor> Capture<E> {
                     seq,
                     &mut self.counters,
                 );
-            } else if !announced {
+            } else if !announced && !multiple_names {
                 self.counters.unannounced_reads += 1;
                 push_gap(
                     state,
@@ -1676,6 +1701,8 @@ impl<E: CallExtractor> Capture<E> {
                 last_read_ms: state.last_read_ms,
                 offset: state.offset,
                 rewrites: state.rewrites,
+                multiple_names: state.multiple_names,
+                multiple_names_seen: state.multiple_names_seen,
                 calls_before_ms: state.calls_before_ms,
                 changed_seq: state.changed_seq,
             });
@@ -2968,6 +2995,8 @@ mod tests {
                 last_read_ms: 2,
                 offset: 10,
                 rewrites: 0,
+                multiple_names: false,
+                multiple_names_seen: false,
                 calls_before_ms: None,
                 changed_seq: total + 5,
             }],
@@ -3400,5 +3429,49 @@ mod tests {
         let stale = reply(&view, &view.instance, 0, now - HEARTBEAT_STALE_MS - 1, now);
         assert!(!stale.running);
         assert!(stale.files.is_empty() && stale.calls.is_empty());
+    }
+
+    /// A line written through another name of the file is not named as the
+    /// harness's, and the interval is a gap (the reviewer's P1). The name
+    /// gone, the file is read as before, and it keeps that it had two.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_with_another_name_names_no_writer_for_what_was_read() {
+        let mut bench = Bench::new(config());
+        let creation = bench.created_by_harness();
+        bench.appended_by(HARNESS, creation, "C k1 ls\n");
+        let link = bench.base.join("elsewhere.bin");
+        std::fs::hard_link(&bench.path, &link).unwrap();
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&link)
+            .unwrap()
+            .write_all(b"C k2 forged\n")
+            .unwrap();
+        bench.appended_by(HARNESS, creation, "C k3 git\n");
+        let view = bench.view();
+        let forged = view
+            .calls
+            .iter()
+            .find(|call| call.call["programs"][0] == "forged")
+            .expect("the line is read");
+        assert_eq!(forged.writer, None);
+        assert!(view
+            .gaps
+            .iter()
+            .any(|gap| gap.reason == CaptureGapReason::MultipleNames));
+        assert!(bench.file().multiple_names && bench.file().multiple_names_seen);
+
+        std::fs::remove_file(&link).unwrap();
+        bench.appended_by(HARNESS, creation, "C k4 make\n");
+        let view = bench.view();
+        let after = view
+            .calls
+            .iter()
+            .find(|call| call.call["programs"][0] == "make")
+            .unwrap();
+        assert_eq!(after.writer, Some(HARNESS));
+        assert!(!bench.file().multiple_names);
+        assert!(bench.file().multiple_names_seen);
     }
 }
