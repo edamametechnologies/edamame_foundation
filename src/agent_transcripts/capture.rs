@@ -3720,6 +3720,71 @@ mod tests {
         assert_eq!(bench.file().read_through_ms, Some(resumed_at));
     }
 
+    /// Read through the start of a pass, not its end: a line written while
+    /// the pass ran may lie after what it read. With a clock that moves at
+    /// every reading, the pass that found a line began before it ended.
+    #[test]
+    fn read_through_is_the_time_a_pass_began() {
+        let clock = Arc::new(AtomicU64::new(store_writers::now_ms()));
+        let reader = Arc::clone(&clock);
+        let dir = tempfile::tempdir().unwrap();
+        let path = std::fs::canonicalize(dir.path())
+            .unwrap()
+            .join("session.jsonl");
+        std::fs::write(&path, "").unwrap();
+        let mut capture = Capture::with_clock(
+            WordExtractor,
+            config(),
+            Box::new(move || reader.fetch_add(1, Ordering::AcqRel) + 1),
+        );
+        let now = clock.load(Ordering::Acquire);
+        let creation = CreationSeen {
+            writer: HARNESS,
+            at_ms: now,
+        };
+        let take = |at: u64| DirtyTake {
+            instance: "record-1".to_string(),
+            seq: 0,
+            configured: true,
+            files: vec![DirtyFile {
+                path: path.to_string_lossy().to_string(),
+                agent: "claude_code".to_string(),
+                kind: StoreFileKind::Transcript,
+                record_id: 7,
+                first_seen_ms: now,
+                creation: Some(creation),
+                last_creation: Some(creation),
+                dirty_since_ms: at,
+                spans: vec![WriterSpan {
+                    writer: HARNESS,
+                    first_ms: at,
+                    last_ms: at,
+                    ops: ops::WRITE,
+                }],
+                spans_overflowed: false,
+                size_at_close: None,
+                identity: None,
+                lost: false,
+                unlinked: false,
+            }],
+        };
+        capture.handle_take(&take(now), 0);
+        let at = clock.fetch_add(10, Ordering::AcqRel) + 10;
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(b"C k1 curl\n")
+            .unwrap();
+        capture.handle_take(&take(at), 0);
+        let view = capture.view();
+        assert_eq!(view.calls.len(), 1);
+        let file = &view.files[0];
+        let read_through = file.read_through_ms.expect("read through");
+        assert!(read_through < view.calls[0].arrived_at_ms);
+        assert!(read_through > at);
+    }
+
     /// A file reported and not read yet is pending: never published as
     /// watched, nothing read through.
     #[test]
