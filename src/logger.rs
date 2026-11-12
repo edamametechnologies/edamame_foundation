@@ -1,8 +1,10 @@
 use arc_swap::{ArcSwap, ArcSwapOption};
+use chrono::{DateTime, Utc};
 use fmt::MakeWriter;
 use lazy_static::lazy_static;
 use regex::Regex;
 use sentry_tracing::EventFilter;
+use serde::Serialize;
 use std::{
     collections::HashMap,
     env::{current_exe, var},
@@ -107,20 +109,74 @@ static LOGGER: OnceLock<Arc<Logger>> = OnceLock::new();
 static PANIC_HOOK_INIT: Once = Once::new();
 static EXECUTABLE_TYPE: OnceLock<String> = OnceLock::new();
 
-/// The in-memory log ring the `get_*_logs` calls read: the last
-/// `MAX_LOG_LINES` lines, newest first.
+/// One line of the in-memory log ring: one tracing event.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct LogEntry {
+    /// When it was logged: RFC 3339, UTC, microseconds
+    /// (`2026-11-12T10:00:00.123456Z`).
+    pub ts: String,
+    /// `ERROR`, `WARN`, `INFO`, `DEBUG` or `TRACE`.
+    pub level: String,
+    /// The tracing target (`edamame_core::core_manager`; for a `log` crate
+    /// record, the record's own target).
+    pub target: String,
+    /// The message and the event's other fields (`message key=value`), after
+    /// the span context when there is one (`span{field=1}: message`).
+    /// Redacted. May hold newlines: one event is one entry.
+    pub message: String,
+}
+
+impl LogEntry {
+    /// The line as the tracing formatter writes it without colours
+    /// (`<ts> <LEVEL> <target>: <message>`, the level right-aligned on five
+    /// characters): the text form of `get_all_logs` and `get_new_logs`.
+    pub fn to_line(&self) -> String {
+        format!(
+            "{} {:>5} {}: {}",
+            self.ts, self.level, self.target, self.message
+        )
+    }
+}
+
+/// What `get_logs_since` returns.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct LogBatch {
+    /// The cursor to pass on the next call: the index after the last entry
+    /// returned or counted in `dropped` (the cursor passed in when nothing
+    /// was logged since; the end of the ring for a cursor from a previous
+    /// process).
+    pub cursor: u64,
+    /// The entries at or after the cursor passed in, oldest first.
+    pub entries: Vec<LogEntry>,
+    /// Entries at or after the cursor passed in that the ring no longer
+    /// holds: overwritten (more than `MAX_LOG_LINES` were logged since that
+    /// cursor) or flushed by a second `init_logger`.
+    pub dropped: u64,
+}
+
+/// A ring slot: the entry and the index it was logged at.
+struct RingSlot {
+    index: usize,
+    entry: LogEntry,
+}
+
+/// The in-memory log ring: the last `MAX_LOG_LINES` entries of this process.
 ///
-/// A line claims the next index with one `fetch_add` and publishes itself in
-/// its slot with one `ArcSwap` store. A reader that races a writer wrapping
-/// the ring can read, for an index, the line one lap newer (or the one it
-/// replaces, while the store is in flight), never a torn line.
+/// An entry claims the next index with one `fetch_add` and publishes itself
+/// in its slot with one `ArcSwap` store, the slot carrying the index. A
+/// reader that races a writer can find, for an index, a slot not stored yet
+/// (empty, or the line one lap older) or already overwritten (one lap
+/// newer), never a torn entry; the index tells which. Cursor reads stop at
+/// the first slot not stored yet, so a line being written is served by the
+/// next read instead of being skipped.
 pub struct MemoryWriterData {
-    slots: Box<[ArcSwapOption<String>]>,
-    /// Lines ever written: the index the next line takes.
+    slots: Box<[ArcSwapOption<RingSlot>]>,
+    /// Entries ever logged: the index the next entry takes.
     next: AtomicUsize,
-    /// Lines below this index were flushed.
+    /// Entries below this index were flushed.
     floor: AtomicUsize,
-    /// Lines below this index were returned by `get_new_logs`.
+    /// Entries below this index were returned by `get_new_logs` (the one
+    /// process-wide cursor of the legacy call).
     taken: AtomicUsize,
 }
 
@@ -134,43 +190,97 @@ impl MemoryWriterData {
         }
     }
 
-    fn push(&self, line: String) {
+    fn push(&self, entry: LogEntry) {
+        // Allocate before claiming the index: the window in which the claimed
+        // slot is not stored yet is the store alone.
+        let mut slot = Arc::new(RingSlot { index: 0, entry });
         let index = self.next.fetch_add(1, Ordering::AcqRel);
-        self.slots[index % MAX_LOG_LINES].store(Some(Arc::new(line)));
+        if let Some(slot) = Arc::get_mut(&mut slot) {
+            slot.index = index;
+        }
+        self.slots[index % MAX_LOG_LINES].store(Some(slot));
     }
 
-    /// Lines `[from, end)` still in the ring, newest first.
-    fn lines_since(&self, from: usize, end: usize) -> Vec<String> {
-        let start = from
-            .max(self.floor.load(Ordering::Acquire))
-            .max(end.saturating_sub(MAX_LOG_LINES));
-        (start..end)
+    /// The oldest index the ring may still hold when `end` entries were
+    /// logged.
+    fn oldest(&self, end: usize) -> usize {
+        self.floor
+            .load(Ordering::Acquire)
+            .max(end.saturating_sub(MAX_LOG_LINES))
+    }
+
+    /// The entries from `cursor` on, oldest first: see [`LogBatch`]. A cursor
+    /// past the end comes from another process (the daemon restarted under
+    /// a client that kept its cursor): it reads from the oldest entry.
+    fn since(&self, cursor: usize) -> (usize, Vec<LogEntry>, usize) {
+        let end = self.next.load(Ordering::Acquire);
+        let from = if cursor > end { 0 } else { cursor };
+        // A flush racing this read can put the floor past `end`.
+        let start = from.max(self.oldest(end)).min(end);
+        let mut dropped = start - from;
+        let mut next_cursor = start;
+        let mut entries = Vec::with_capacity(end - start);
+        for index in start..end {
+            match self.slots[index % MAX_LOG_LINES].load_full() {
+                Some(slot) if slot.index == index => entries.push(slot.entry.clone()),
+                // Overwritten since `end` was read: lost to this reader.
+                Some(slot) if slot.index > index => dropped += 1,
+                // Claimed and not stored yet: the next read serves it.
+                _ => break,
+            }
+            next_cursor = index + 1;
+        }
+        (next_cursor, entries, dropped)
+    }
+
+    /// Every entry the ring holds, newest first (an entry not stored yet is
+    /// left out).
+    fn all(&self) -> Vec<LogEntry> {
+        let end = self.next.load(Ordering::Acquire);
+        (self.oldest(end)..end)
             .rev()
-            .filter_map(|index| self.slots[index % MAX_LOG_LINES].load_full())
-            .map(|line| (*line).clone())
+            .filter_map(|index| {
+                self.slots[index % MAX_LOG_LINES]
+                    .load_full()
+                    .filter(|slot| slot.index == index)
+                    .map(|slot| slot.entry.clone())
+            })
             .collect()
     }
 
-    /// Every line in the ring, newest first.
-    fn all(&self) -> Vec<String> {
-        self.lines_since(0, self.next.load(Ordering::Acquire))
+    /// The entries logged since the previous call by any caller, newest
+    /// first (at most the ring's size). Two concurrent callers get disjoint
+    /// batches.
+    fn take_new(&self) -> Vec<LogEntry> {
+        let mut from = self.taken.load(Ordering::Acquire);
+        loop {
+            let (next_cursor, mut entries, _) = self.since(from);
+            match self.taken.compare_exchange(
+                from,
+                next_cursor,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    entries.reverse();
+                    return entries;
+                }
+                Err(current) => from = current,
+            }
+        }
     }
 
-    /// The lines written since the previous call, newest first (at most the
-    /// ring's size).
-    fn take_new(&self) -> Vec<String> {
-        let end = self.next.load(Ordering::Acquire);
-        let from = self.taken.swap(end, Ordering::AcqRel);
-        self.lines_since(from, end)
-    }
-
-    /// Forget every line written so far and free them.
+    /// Forget every entry logged so far and free them.
     fn flush(&self) {
         let end = self.next.load(Ordering::Acquire);
         self.floor.fetch_max(end, Ordering::AcqRel);
         self.taken.fetch_max(end, Ordering::AcqRel);
         for slot in self.slots.iter() {
-            slot.store(None);
+            // An entry logged meanwhile stays.
+            slot.rcu(|current| match current {
+                Some(held) if held.index >= end => Some(Arc::clone(held)),
+                _ => None,
+            });
         }
     }
 
@@ -180,57 +290,118 @@ impl MemoryWriterData {
     }
 }
 
+/// The tracing layer that feeds the in-memory ring. Each event becomes one
+/// [`LogEntry`], built from the event itself (never painted with ANSI codes)
+/// and redacted in every build, debug included: the ring is what the in-app
+/// viewer shows, what its Copy copies and what feedback reports attach.
 #[derive(Clone)]
-pub struct MemoryWriter {
+pub struct MemoryLayer {
     data: Arc<MemoryWriterData>,
 }
 
-impl MemoryWriter {
-    pub fn new() -> Self {
-        Self {
-            data: Arc::new(MemoryWriterData::new()),
+/// A span's fields as the ring shows them, kept in the span's extensions.
+struct MemorySpanFields(String);
+
+/// The `log.target` of a `log` crate record bridged into tracing (its
+/// metadata names the bridge, `log`, as the target).
+struct LogTargetVisitor(Option<String>);
+
+impl tracing::field::Visit for LogTargetVisitor {
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        if field.name() == "log.target" {
+            self.0 = Some(value.to_string());
         }
     }
 
-    fn handle_log(&self, log_line: &str) -> io::Result<()> {
-        // Sanitize the log line (not in debug mode) through the shared
-        // redaction module (secret shapes, secret-named fields, privacy keys).
-        let log_line_sanitized = if cfg!(debug_assertions) {
-            log_line.to_string()
+    fn record_debug(&mut self, _field: &tracing::field::Field, _value: &dyn std::fmt::Debug) {}
+}
+
+fn format_fields_plain<R: tracing_subscriber::field::RecordFields>(fields: R) -> String {
+    use tracing_subscriber::fmt::{format::Writer, FormatFields};
+    let mut out = String::new();
+    // `Writer::new`: no ANSI painting, control characters in a message
+    // escaped.
+    let _ = fmt::format::DefaultFields::new().format_fields(Writer::new(&mut out), fields);
+    out
+}
+
+impl MemoryLayer {
+    fn entry_for(event: &tracing::Event<'_>, span_context: String, ts: DateTime<Utc>) -> LogEntry {
+        let meta = event.metadata();
+        let target = if meta.target() == "log" {
+            let mut visitor = LogTargetVisitor(None);
+            event.record(&mut visitor);
+            visitor.0.unwrap_or_else(|| meta.target().to_string())
         } else {
-            sanitize_keywords(log_line, &[])
+            meta.target().to_string()
         };
-        // Remove all escape codes (x1b\[[0-9;]*m) from the log line before storing it in the log buffer x1b\[[0-9;]*m
-        let log_line_formatted = ANSI_ESCAPE_REGEX.replace_all(&log_line_sanitized, "");
-        let log_line_formatted = log_line_formatted.trim().to_string();
-
-        self.data.push(log_line_formatted);
-
-        Ok(())
+        let mut message = span_context;
+        message.push_str(&format_fields_plain(event));
+        LogEntry {
+            ts: ts.format("%Y-%m-%dT%H:%M:%S%.6fZ").to_string(),
+            level: meta.level().as_str().to_string(),
+            target,
+            message: sanitize_keywords(message.trim_end(), &[]),
+        }
     }
 }
 
-impl<'a> MakeWriter<'a> for MemoryWriter {
-    type Writer = MemoryWriterGuard<'a>;
-
-    fn make_writer(&'a self) -> Self::Writer {
-        MemoryWriterGuard { writer: self }
-    }
-}
-
-pub struct MemoryWriterGuard<'a> {
-    writer: &'a MemoryWriter,
-}
-
-impl<'a> Write for MemoryWriterGuard<'a> {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let log = String::from_utf8_lossy(buf).to_string();
-        self.writer.handle_log(&log)?;
-        Ok(buf.len())
+impl<S> tracing_subscriber::Layer<S> for MemoryLayer
+where
+    S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
+{
+    fn on_new_span(
+        &self,
+        attrs: &tracing::span::Attributes<'_>,
+        id: &tracing::span::Id,
+        ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        if let Some(span) = ctx.span(id) {
+            span.extensions_mut()
+                .insert(MemorySpanFields(format_fields_plain(attrs)));
+        }
     }
 
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
+    fn on_record(
+        &self,
+        id: &tracing::span::Id,
+        values: &tracing::span::Record<'_>,
+        ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        if let Some(span) = ctx.span(id) {
+            let recorded = format_fields_plain(values);
+            if recorded.is_empty() {
+                return;
+            }
+            let mut extensions = span.extensions_mut();
+            match extensions.get_mut::<MemorySpanFields>() {
+                Some(fields) if !fields.0.is_empty() => {
+                    fields.0.push(' ');
+                    fields.0.push_str(&recorded);
+                }
+                Some(fields) => fields.0 = recorded,
+                None => extensions.insert(MemorySpanFields(recorded)),
+            }
+        }
+    }
+
+    fn on_event(&self, event: &tracing::Event<'_>, ctx: tracing_subscriber::layer::Context<'_, S>) {
+        let mut span_context = String::new();
+        if let Some(scope) = ctx.event_scope(event) {
+            for span in scope.from_root() {
+                span_context.push_str(span.name());
+                if let Some(fields) = span.extensions().get::<MemorySpanFields>() {
+                    if !fields.0.is_empty() {
+                        span_context.push('{');
+                        span_context.push_str(&fields.0);
+                        span_context.push('}');
+                    }
+                }
+                span_context.push_str(": ");
+            }
+        }
+        self.data
+            .push(Self::entry_for(event, span_context, Utc::now()));
     }
 }
 
@@ -270,8 +441,7 @@ where
         if cfg!(debug_assertions) {
             self.inner.write(buf)
         } else {
-            let log = String::from_utf8_lossy(buf);
-            let sanitized = sanitize_keywords(&log, &[]);
+            let sanitized = sanitize_painted_line(&String::from_utf8_lossy(buf));
             self.inner.write_all(sanitized.as_bytes())?;
             Ok(buf.len())
         }
@@ -288,43 +458,62 @@ fn sanitize_keywords(input: &str, _keywords: &[&str]) -> String {
     crate::redaction::redact_log_line(input)
 }
 
-fn build_log_output(logs: &[String]) -> String {
-    if logs.is_empty() {
-        return String::new();
-    }
-    let mut capacity = 0;
-    for line in logs {
-        capacity += line.len() + 1;
-    }
-    let mut output = String::with_capacity(capacity);
-    for line in logs {
+/// A line of the file or stdout log, colours removed, then redacted. The
+/// colours go first: tracing paints a structured field's name and its `=`
+/// separately, and a painted `pin=` is not a field the redaction can see.
+fn sanitize_painted_line(line: &str) -> String {
+    sanitize_keywords(&ANSI_ESCAPE_REGEX.replace_all(line, ""), &[])
+}
+
+/// The text form of the legacy calls: each entry's line, newest first, each
+/// prefixed by a newline (callers have always received that shape).
+fn build_log_output(entries: &[LogEntry]) -> String {
+    let mut output = String::new();
+    for entry in entries {
         output.push('\n');
-        output.push_str(line);
+        output.push_str(&entry.to_line());
     }
     output
 }
 
 pub struct Logger {
-    memory_writer: MemoryWriter,
+    data: Arc<MemoryWriterData>,
 }
 
 impl Logger {
     pub fn new() -> Self {
         Self {
-            memory_writer: MemoryWriter::new(),
+            data: Arc::new(MemoryWriterData::new()),
+        }
+    }
+
+    /// The layer that feeds this logger's ring.
+    pub fn memory_layer(&self) -> MemoryLayer {
+        MemoryLayer {
+            data: Arc::clone(&self.data),
         }
     }
 
     pub fn get_new_logs(&self) -> String {
-        build_log_output(&self.memory_writer.data.take_new())
+        build_log_output(&self.data.take_new())
     }
 
     pub fn get_all_logs(&self) -> String {
-        build_log_output(&self.memory_writer.data.all())
+        build_log_output(&self.data.all())
+    }
+
+    pub fn get_logs_since(&self, cursor: u64) -> LogBatch {
+        let cursor = usize::try_from(cursor).unwrap_or(usize::MAX);
+        let (next_cursor, entries, dropped) = self.data.since(cursor);
+        LogBatch {
+            cursor: next_cursor as u64,
+            entries,
+            dropped: dropped as u64,
+        }
     }
 
     pub fn flush_logs(&self) {
-        self.memory_writer.data.flush();
+        self.data.flush();
     }
 }
 
@@ -953,7 +1142,7 @@ fn init_logger_once(
                     match tracing_subscriber::registry()
                         .with(filter_layer)
                         .with(fmt::layer().with_writer(file_make_writer.clone()))
-                        .with(fmt::layer().with_writer(logger.memory_writer.clone()))
+                        .with(logger.memory_layer())
                         .with(sentry_layer)
                         // Must be here when using sentry
                         .with(fmt::layer().with_writer(stdout_make_writer.clone()))
@@ -967,7 +1156,7 @@ fn init_logger_once(
                     match tracing_subscriber::registry()
                         .with(filter_layer)
                         .with(fmt::layer().with_writer(file_make_writer.clone()))
-                        .with(fmt::layer().with_writer(logger.memory_writer.clone()))
+                        .with(logger.memory_layer())
                         .with(sentry_layer)
                         // Must be here when using sentry
                         .with(fmt::layer().with_writer(stdout_make_writer.clone()))
@@ -982,7 +1171,7 @@ fn init_logger_once(
                     match tracing_subscriber::registry()
                         .with(filter_layer)
                         .with(fmt::layer().with_writer(file_make_writer.clone()))
-                        .with(fmt::layer().with_writer(logger.memory_writer.clone()))
+                        .with(logger.memory_layer())
                         .with(sentry_layer)
                         // Must be here when using sentry
                         .with(fmt::layer().with_writer(stdout_make_writer.clone()))
@@ -999,7 +1188,7 @@ fn init_logger_once(
                     match tracing_subscriber::registry()
                         .with(filter_layer)
                         .with(fmt::layer().with_writer(file_make_writer.clone()))
-                        .with(fmt::layer().with_writer(logger.memory_writer.clone()))
+                        .with(logger.memory_layer())
                         .with(sentry_layer)
                         // Must be here when using sentry
                         .with(fmt::layer().with_writer(stdout_make_writer.clone()))
@@ -1018,7 +1207,7 @@ fn init_logger_once(
                 match tracing_subscriber::registry()
                     .with(filter_layer)
                     .with(fmt::layer().with_writer(stdout_make_writer.clone()))
-                    .with(fmt::layer().with_writer(logger.memory_writer.clone()))
+                    .with(logger.memory_layer())
                     .with(sentry_layer)
                     .with(android_layer)
                     .try_init()
@@ -1032,7 +1221,7 @@ fn init_logger_once(
             match tracing_subscriber::registry()
                 .with(filter_layer)
                 .with(fmt::layer().with_writer(file_make_writer.clone()))
-                .with(fmt::layer().with_writer(logger.memory_writer.clone()))
+                .with(logger.memory_layer())
                 .with(sentry_layer)
                 // Must be here when using sentry
                 .with(fmt::layer().with_writer(stdout_make_writer.clone()))
@@ -1046,7 +1235,7 @@ fn init_logger_once(
             match tracing_subscriber::registry()
                 .with(filter_layer)
                 .with(fmt::layer().with_writer(file_make_writer.clone()))
-                .with(fmt::layer().with_writer(logger.memory_writer.clone()))
+                .with(logger.memory_layer())
                 .with(sentry_layer)
                 // Must be here when using sentry
                 .with(fmt::layer().with_writer(stdout_make_writer.clone()))
@@ -1066,7 +1255,7 @@ fn init_logger_once(
                         .with(filter_layer)
                         .with(fmt::layer().with_writer(stdout_make_writer.clone()))
                         .with(fmt::layer().with_writer(file_make_writer.clone()))
-                        .with(fmt::layer().with_writer(logger.memory_writer.clone()))
+                        .with(logger.memory_layer())
                         .try_init()
                     {
                         Ok(_) => {}
@@ -1077,7 +1266,7 @@ fn init_logger_once(
                         .with(filter_layer)
                         .with(fmt::layer().with_writer(stdout_make_writer.clone()))
                         .with(fmt::layer().with_writer(file_make_writer.clone()))
-                        .with(fmt::layer().with_writer(logger.memory_writer.clone()))
+                        .with(logger.memory_layer())
                         .try_init()
                     {
                         Ok(_) => {}
@@ -1093,7 +1282,7 @@ fn init_logger_once(
                 match tracing_subscriber::registry()
                     .with(filter_layer)
                     .with(fmt::layer().with_writer(stdout_make_writer.clone()))
-                    .with(fmt::layer().with_writer(logger.memory_writer.clone()))
+                    .with(logger.memory_layer())
                     .with(android_layer)
                     .try_init()
                 {
@@ -1107,7 +1296,7 @@ fn init_logger_once(
                 .with(filter_layer)
                 .with(fmt::layer().with_writer(stdout_make_writer.clone()))
                 .with(fmt::layer().with_writer(file_make_writer.clone()))
-                .with(fmt::layer().with_writer(logger.memory_writer.clone()))
+                .with(logger.memory_layer())
                 .try_init()
             {
                 Ok(_) => {}
@@ -1119,7 +1308,7 @@ fn init_logger_once(
                 .with(filter_layer)
                 .with(fmt::layer().with_writer(stdout_make_writer.clone()))
                 .with(fmt::layer().with_writer(file_make_writer.clone()))
-                .with(fmt::layer().with_writer(logger.memory_writer.clone()))
+                .with(logger.memory_layer())
                 .try_init()
             {
                 Ok(_) => {}
@@ -1144,6 +1333,22 @@ pub fn get_all_logs() -> String {
         .get()
         .map(|logger| logger.get_all_logs())
         .unwrap_or_default()
+}
+
+/// The ring's entries from `cursor` on, oldest first, and the cursor to pass
+/// next time (see [`LogBatch`]). The cursor is the caller's: two callers
+/// never take lines from each other, and asking again with the same cursor
+/// returns the same lines (plus any logged since). Pass 0 for everything the
+/// ring holds. Without a logger: nothing, the cursor unchanged.
+pub fn get_logs_since(cursor: u64) -> LogBatch {
+    LOGGER
+        .get()
+        .map(|logger| logger.get_logs_since(cursor))
+        .unwrap_or(LogBatch {
+            cursor,
+            entries: Vec::new(),
+            dropped: 0,
+        })
 }
 
 #[cfg(test)]
@@ -1310,53 +1515,223 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    fn entry(message: &str) -> LogEntry {
+        LogEntry {
+            ts: "2026-11-12T10:00:00.000001Z".to_string(),
+            level: "INFO".to_string(),
+            target: "edamame_test".to_string(),
+            message: message.to_string(),
+        }
+    }
+
+    fn messages(entries: &[LogEntry]) -> Vec<&str> {
+        entries.iter().map(|e| e.message.as_str()).collect()
+    }
+
     #[test]
     fn test_logger_functionality() {
-        // Initialize logger
         init_logger("cli", "", "", "", &[]);
 
-        // Test MemoryWriter initialization
-        let writer = MemoryWriter::new();
-        assert!(writer.data.is_empty());
-
-        // Test log storage in memory writer
-        {
-            let logger = LOGGER.get().expect("logger initialized");
-
-            let log_line = "This is a test log";
-            logger.memory_writer.handle_log(log_line).unwrap();
-
-            let lines = logger.memory_writer.data.all();
-            assert!(lines.iter().any(|line| line.contains("This is a test log")));
-        }
-
-        // Test get_new_logs
+        let start = get_logs_since(u64::MAX).cursor;
         info!("New log entry");
+        let new_logs = get_new_logs();
+        assert!(new_logs.contains("New log entry"));
 
-        let log_data = get_new_logs();
-        assert!(!log_data.is_empty());
-        assert!(log_data.contains("New log entry"));
-
-        // Step 6: Test get_all_logs
         info!("First log entry");
         info!("Second log entry");
+        let all = get_all_logs();
+        assert!(all.starts_with('\n'));
+        let first = all.find("First log entry").unwrap();
+        let second = all.find("Second log entry").unwrap();
+        assert!(second < first, "the text form is newest first");
+        assert!(all.contains(" INFO edamame_foundation::logger::tests: Second log entry"));
 
-        let log_data = get_all_logs();
-        assert!(log_data.contains("First log entry"));
-        assert!(log_data.contains("Second log entry"));
-
-        // Step 7: Test log levels
         info!("This is an info log");
         error!("This is an error log");
         warn!("This is a warn log");
         debug!("This is a debug log");
         trace!("This is a trace log");
+        let batch = get_logs_since(0);
+        let since_start: Vec<_> = batch
+            .entries
+            .iter()
+            .filter(|e| e.target == "edamame_foundation::logger::tests")
+            .map(|e| (e.level.as_str(), e.message.as_str()))
+            .collect();
+        for expected in [
+            ("INFO", "This is an info log"),
+            ("ERROR", "This is an error log"),
+            ("WARN", "This is a warn log"),
+        ] {
+            assert!(since_start.contains(&expected), "{since_start:?}");
+        }
+        assert!(batch.cursor > start);
+        // The legacy cursor does not move the caller's.
+        let again = get_logs_since(start);
+        assert!(again.entries.iter().any(|e| e.message == "First log entry"));
+    }
 
-        let log_data = get_all_logs();
-        assert!(log_data.contains("This is an info log"));
-        assert!(log_data.contains("This is an error log"));
-        assert!(log_data.contains("This is a warn log"));
-        // Note: Depending on the log level set, debug and trace logs may not be captured
+    #[test]
+    fn a_cursor_is_the_callers_own() {
+        let ring = MemoryWriterData::new();
+        ring.push(entry("one"));
+        ring.push(entry("two"));
+        let (cursor, entries, dropped) = ring.since(0);
+        assert_eq!(
+            (cursor, messages(&entries), dropped),
+            (2, vec!["one", "two"], 0)
+        );
+        // Asking again is harmless: same lines, then only the new ones.
+        assert_eq!(messages(&ring.since(0).1), vec!["one", "two"]);
+        ring.push(entry("three"));
+        let (cursor, entries, _) = ring.since(cursor);
+        assert_eq!((cursor, messages(&entries)), (3, vec!["three"]));
+        assert!(ring.since(cursor).1.is_empty());
+        // The legacy call takes from its own cursor and leaves this one be.
+        assert_eq!(messages(&ring.take_new()), vec!["three", "two", "one"]);
+        assert!(ring.take_new().is_empty());
+        assert_eq!(messages(&ring.since(1).1), vec!["two", "three"]);
+    }
+
+    #[test]
+    fn an_overflow_is_counted_not_silent() {
+        let ring = MemoryWriterData::new();
+        for i in 0..MAX_LOG_LINES + 5 {
+            ring.push(entry(&i.to_string()));
+        }
+        let (cursor, entries, dropped) = ring.since(0);
+        assert_eq!(cursor, MAX_LOG_LINES + 5);
+        assert_eq!(entries.len(), MAX_LOG_LINES);
+        assert_eq!(entries[0].message, "5");
+        assert_eq!(dropped, 5);
+        let (_, entries, dropped) = ring.since(3);
+        assert_eq!((entries.len(), dropped), (MAX_LOG_LINES, 2));
+        assert_eq!(ring.all().len(), MAX_LOG_LINES);
+    }
+
+    #[test]
+    fn a_line_being_written_is_served_by_the_next_read_not_skipped() {
+        let ring = MemoryWriterData::new();
+        ring.push(entry("before"));
+        // A writer claimed index 1 and has not stored it yet.
+        let claimed = ring.next.fetch_add(1, Ordering::AcqRel);
+        ring.push(entry("after"));
+        let (cursor, entries, dropped) = ring.since(0);
+        assert_eq!(
+            (cursor, messages(&entries), dropped),
+            (1, vec!["before"], 0)
+        );
+        // The legacy cursor stops there too.
+        assert_eq!(messages(&ring.take_new()), vec!["before"]);
+        ring.slots[claimed % MAX_LOG_LINES].store(Some(Arc::new(RingSlot {
+            index: claimed,
+            entry: entry("late"),
+        })));
+        let (cursor, entries, _) = ring.since(cursor);
+        assert_eq!((cursor, messages(&entries)), (3, vec!["late", "after"]));
+        assert_eq!(messages(&ring.take_new()), vec!["after", "late"]);
+    }
+
+    #[test]
+    fn a_slot_still_holding_the_previous_lap_is_not_served_as_the_new_line() {
+        let ring = MemoryWriterData::new();
+        for i in 0..MAX_LOG_LINES {
+            ring.push(entry(&i.to_string()));
+        }
+        // Index MAX_LOG_LINES is claimed; its slot still holds index 0.
+        ring.next.fetch_add(1, Ordering::AcqRel);
+        let (cursor, entries, _) = ring.since(MAX_LOG_LINES - 1);
+        assert_eq!((cursor, messages(&entries)), (MAX_LOG_LINES, vec!["19999"]));
+        assert!(!ring.all().iter().any(|e| e.message == "0"));
+    }
+
+    #[test]
+    fn a_cursor_from_a_previous_process_reads_from_the_oldest_line() {
+        let ring = MemoryWriterData::new();
+        ring.push(entry("fresh"));
+        let (cursor, entries, dropped) = ring.since(5_000);
+        assert_eq!((cursor, messages(&entries), dropped), (1, vec!["fresh"], 0));
+    }
+
+    #[test]
+    fn a_flush_forgets_the_lines_before_it() {
+        let ring = MemoryWriterData::new();
+        ring.push(entry("old"));
+        ring.flush();
+        assert!(ring.is_empty());
+        ring.push(entry("new"));
+        let (cursor, entries, dropped) = ring.since(0);
+        assert_eq!((cursor, messages(&entries), dropped), (2, vec!["new"], 1));
+        assert!(messages(&ring.take_new()) == vec!["new"]);
+    }
+
+    /// Emits through a subscriber whose only layer is a ring's.
+    fn logged(emit: impl FnOnce()) -> Vec<LogEntry> {
+        let logger = Logger::new();
+        let subscriber = tracing_subscriber::registry().with(logger.memory_layer());
+        tracing::subscriber::with_default(subscriber, emit);
+        logger.get_logs_since(0).entries
+    }
+
+    #[test]
+    fn the_ring_keeps_level_target_and_the_whole_message() {
+        let entries = logged(|| {
+            warn!(target: "edamame_core::x", "first line\nsecond line");
+            info!(count = 3, "with a field");
+        });
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].level, "WARN");
+        assert_eq!(entries[0].target, "edamame_core::x");
+        assert_eq!(entries[0].message, "first line\nsecond line");
+        assert_eq!(entries[1].message, "with a field count=3");
+        assert!(entries[1].ts.ends_with('Z') && entries[1].ts.len() == 27);
+        assert_eq!(
+            entries[0].to_line(),
+            format!(
+                "{}  WARN edamame_core::x: first line\nsecond line",
+                entries[0].ts
+            )
+        );
+    }
+
+    #[test]
+    fn the_ring_shows_the_span_context() {
+        let entries = logged(|| {
+            let span = tracing::info_span!("probe", host = "h1");
+            let _guard = span.enter();
+            info!("inside");
+        });
+        assert_eq!(entries[0].message, "probe{host=\"h1\"}: inside");
+    }
+
+    #[test]
+    fn the_ring_is_redacted_in_every_build_and_never_painted() {
+        // Tests are a debug build: until 2.3.3 the ring kept raw lines there.
+        let token = format!("{}:AA{}", "4".repeat(9), "q".repeat(16) + &"Z".repeat(17));
+        let entries = logged(|| {
+            warn!(
+                "Telegram polling failed: error sending request for url (https://api.telegram.org/bot{token}/getUpdates)"
+            );
+            info!(pin = "482913", "connected");
+            info!("escape \x1b[31m in a message");
+        });
+        let text: Vec<String> = entries.iter().map(LogEntry::to_line).collect();
+        let joined = text.join("\n");
+        assert!(!joined.contains(&token), "{joined}");
+        assert!(joined.contains("/bot[REDACTED]/getUpdates"), "{joined}");
+        // A structured field is redacted: no colour code splits its name
+        // from its value.
+        assert!(!joined.contains("482913"), "{joined}");
+        assert!(!joined.contains('\x1b'), "{joined}");
+    }
+
+    #[test]
+    fn a_painted_file_line_loses_its_colours_before_redaction() {
+        // What tracing's ANSI formatter writes for `info!(pin = "482913", ...)`.
+        let painted = "\x1b[2m2026-11-12T10:00:00.000001Z\x1b[0m \x1b[32m INFO\x1b[0m \x1b[2medamame\x1b[0m\x1b[2m:\x1b[0m connected \x1b[3mpin\x1b[0m\x1b[2m=\x1b[0m\"482913\"";
+        let out = sanitize_painted_line(painted);
+        assert!(!out.contains("482913"), "{out}");
+        assert!(!out.contains('\x1b'), "{out}");
     }
 
     #[test]
