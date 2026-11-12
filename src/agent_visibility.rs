@@ -3521,13 +3521,17 @@ fn build_endpoint(
     } else {
         None
     };
+    // The launch command and its arguments are stored, shown and served over
+    // MCP: a token passed on the server's command line is masked here, after
+    // the classification above read the raw values.
+    let (command, args) = redact_endpoint_launch(server.command.as_deref(), &server.args);
     McpEndpoint {
         id,
         agent_type: agent_type.to_string(),
         server_name: server.name,
         transport,
-        command: server.command,
-        args: server.args,
+        command,
+        args,
         url: redacted_url,
         bind_host,
         exposure_scope,
@@ -3538,6 +3542,45 @@ fn build_endpoint(
         config_path: config_path.to_string(),
         env_keys: server.env_keys,
     }
+}
+
+/// An MCP server's launch command and arguments as they may be stored: the
+/// arguments through the command-line redaction as one argv with the command
+/// in front (so a client's own credential options are read as that client's),
+/// the command alone through the one-string form when it carries arguments.
+fn redact_endpoint_launch(command: Option<&str>, args: &[String]) -> (Option<String>, Vec<String>) {
+    let redacted_command = command.map(crate::redaction::redact_command_text);
+    if args.is_empty() {
+        return (redacted_command, Vec::new());
+    }
+    let mut argv: Vec<&str> = Vec::with_capacity(args.len() + 1);
+    if let Some(command) = command {
+        argv.push(command);
+    }
+    argv.extend(args.iter().map(String::as_str));
+    let mut redacted = crate::redaction::redact_command_line(&argv);
+    if command.is_some() && !redacted.is_empty() {
+        redacted.remove(0);
+    }
+    (redacted_command, redacted)
+}
+
+/// Redact the launch command and arguments of the endpoints of an MCP
+/// inventory an older build stored before [`redact_endpoint_launch`] ran on
+/// them (a persisted snapshot read back after an upgrade). The stored
+/// arguments are already the parsed argv. Applying it twice changes nothing.
+/// Returns how many endpoints changed.
+pub fn redact_inventory_endpoint_launch(inventory: &mut McpInventory) -> usize {
+    let mut changed = 0;
+    for endpoint in inventory.endpoints.iter_mut() {
+        let (command, args) = redact_endpoint_launch(endpoint.command.as_deref(), &endpoint.args);
+        if command != endpoint.command || args != endpoint.args {
+            endpoint.command = command;
+            endpoint.args = args;
+            changed += 1;
+        }
+    }
+    changed
 }
 
 /// Dispatch config parsing on file extension. JSON is authoritative; TOML and
@@ -8851,6 +8894,68 @@ malformed
         assert!(!findings
             .iter()
             .any(|f| f.rule_id == "mcp_remote_saas_endpoint"));
+    }
+
+    /// A token-shaped value built at run time, so no literal credential sits
+    /// in the source.
+    fn fake_token(prefix: &str, body_len: usize) -> String {
+        let alphabet = b"AbCdEfGhIjKlMnOpQrStUvWxYz0123456789";
+        let body: String = (0..body_len)
+            .map(|i| alphabet[i % alphabet.len()] as char)
+            .collect();
+        format!("{prefix}{body}")
+    }
+
+    #[test]
+    fn endpoint_launch_arguments_are_redacted() {
+        let token = fake_token("ghp_", 36);
+        let bearer = fake_token("", 40);
+        let entry = serde_json::json!({
+            "command": "npx",
+            "args": [
+                "-y",
+                "mcp-remote",
+                "https://mcp.example.com/sse",
+                "--header",
+                format!("Authorization: Bearer {bearer}"),
+                format!("--token={token}"),
+                format!("GITHUB_TOKEN={token}"),
+            ],
+        });
+        let ep = endpoint_from_json("cursor", "remote", &entry.to_string());
+        assert_eq!(ep.command.as_deref(), Some("npx"));
+        assert_eq!(ep.args.len(), 7, "the argv keeps its shape");
+        assert_eq!(ep.args[0], "-y");
+        assert_eq!(ep.args[2], "https://mcp.example.com/sse");
+        let joined = ep.args.join(" ");
+        assert!(!joined.contains(&token), "token kept: {joined}");
+        assert!(!joined.contains(&bearer), "bearer kept: {joined}");
+
+        // A command that carries its arguments in one string.
+        let one_string = serde_json::json!({
+            "command": format!("docker run -e GITHUB_TOKEN={token} ghcr.io/github/github-mcp-server"),
+        });
+        let ep = endpoint_from_json("cursor", "gh", &one_string.to_string());
+        let command = ep.command.expect("command kept");
+        assert!(!command.contains(&token), "token kept: {command}");
+        assert!(command.starts_with("docker run"));
+
+        // An inventory stored before the redaction is redacted once, and a
+        // second pass changes nothing.
+        let mut stored = McpInventory {
+            generated_at: chrono::Utc::now(),
+            endpoints: vec![McpEndpoint {
+                command: Some(format!("node server.js --api-key {token}")),
+                args: vec!["--auth".to_string(), format!("Bearer {bearer}")],
+                ..endpoint_from_json("cursor", "fs", r#"{"command":"npx"}"#)
+            }],
+            findings: Vec::new(),
+        };
+        assert_eq!(redact_inventory_endpoint_launch(&mut stored), 1);
+        let ep = &stored.endpoints[0];
+        assert!(!ep.command.as_deref().unwrap_or("").contains(&token));
+        assert!(!ep.args.join(" ").contains(&bearer));
+        assert_eq!(redact_inventory_endpoint_launch(&mut stored), 0);
     }
 
     #[test]

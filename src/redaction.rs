@@ -1857,7 +1857,7 @@ pub fn redact_command_lines_in_json_text(text: &str) -> String {
 
 fn cap_argument(arg: String) -> String {
     let total = arg.chars().count();
-    if total <= COMMAND_LINE_ARG_MAX_CHARS {
+    if total <= COMMAND_LINE_ARG_MAX_CHARS || is_capped_argument(&arg) {
         return arg;
     }
     let head: String = arg.chars().take(COMMAND_LINE_ARG_MAX_CHARS).collect();
@@ -1865,6 +1865,21 @@ fn cap_argument(arg: String) -> String {
         "{head}...[{} more chars]",
         total - COMMAND_LINE_ARG_MAX_CHARS
     )
+}
+
+/// An argument [`cap_argument`] already capped: its head and the
+/// `...[N more chars]` count. Capping it again would replace the count of the
+/// original's characters with the count of the marker's, so a stored value
+/// redacted a second time (a record read back, a document served twice)
+/// keeps the first count.
+fn is_capped_argument(arg: &str) -> bool {
+    let Some((head_end, _)) = arg.char_indices().nth(COMMAND_LINE_ARG_MAX_CHARS) else {
+        return false;
+    };
+    arg[head_end..]
+        .strip_prefix("...[")
+        .and_then(|rest| rest.strip_suffix(" more chars]"))
+        .is_some_and(|count| !count.is_empty() && count.bytes().all(|b| b.is_ascii_digit()))
 }
 
 // ---------------------------------------------------------------------------
@@ -2704,6 +2719,10 @@ mod tests {
         assert!(out
             .iter()
             .all(|a| !a.contains("MIIJQgIBADANBgkqhkiG9w0BAQEFAASCCSww")));
+        // A redacted command line redacted again is unchanged: the capped
+        // blob keeps the count of the original's characters.
+        assert_eq!(redact_command_line(&out), out);
+        assert_eq!(redact_command_text(&out[15]), out[15]);
     }
 
     #[test]
