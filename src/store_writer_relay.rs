@@ -12,7 +12,8 @@
 //!
 //! Reading is not destructive: a consumer that lost its copy asks again
 //! from an empty cursor.
-use crate::agent_transcripts::capture::{self, CaptureBatch};
+use crate::agent_transcripts::capture::{self, CaptureReply};
+use crate::agent_transcripts::capture_wire;
 use flodbadd::store_writers::{self, StoreWriterRows, StoreWriterSensor};
 use serde::{Deserialize, Serialize};
 
@@ -29,7 +30,7 @@ pub struct StoreWritersCursor {
 
 /// The version of [`StoreWriterBatch`]: a consumer reads a reply of another
 /// version as a failed relay, never as a partial one.
-pub const STORE_WRITER_BATCH_VERSION: u32 = 1;
+pub const STORE_WRITER_BATCH_VERSION: u32 = 2;
 
 /// Reply of [`store_writers_since`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -40,14 +41,18 @@ pub struct StoreWriterBatch {
     /// held: nothing was read, ask again with the same cursor. Never an
     /// empty reply standing for "no rows".
     pub rows: Option<StoreWriterRows>,
-    /// The calls, gaps and files of the transcript reader that changed
-    /// since the cursor. `running: false` while it does not run.
-    pub capture: CaptureBatch,
+    /// The transcript reader's reply since the cursor, with what changed
+    /// in the wire type the session binding reads (`capture.batch`, whose
+    /// `served_at_ms` is the reader's watermark), and what each store
+    /// vouches for (`capture.batch.stores`). `running: false` while it does
+    /// not run.
+    pub capture: CaptureReply,
     /// The sensor that feeds the record in the serving process.
     pub sensor: StoreWriterSensor,
-    /// When the reply was built (epoch milliseconds, the serving process's
-    /// clock: the clock of every time in the reply).
-    pub served_at_ms: u64,
+    /// When the relay built the reply (epoch milliseconds, the serving
+    /// process's clock: the clock of every time in the reply). Not a
+    /// watermark: nothing is vouched for up to it.
+    pub built_at_ms: u64,
 }
 
 impl StoreWriterBatch {
@@ -78,13 +83,43 @@ pub fn store_writers_since(cursor: &StoreWritersCursor) -> StoreWriterBatch {
         .running
         .then(|| (capture.record_instance.as_str(), capture.record_seq));
     let rows = store_writers::rows_since(&cursor.record_instance, cursor.rows_seq, cut);
+    let mut capture = capture;
+    let built_at_ms = store_writers::now_ms();
+    if capture.running {
+        capture.batch.stores = store_coverage(&capture, built_at_ms);
+    }
     StoreWriterBatch {
         version: STORE_WRITER_BATCH_VERSION,
         rows,
         capture,
         sensor: store_writers::sensor(),
-        served_at_ms: store_writers::now_ms(),
+        built_at_ms,
     }
+}
+
+/// What each published store vouches for: since the later of the reader's
+/// start and the record's, with the record's gaps (dropped events, a
+/// directory moved in, the window before a new directory's watch, a
+/// directory left without one).
+fn store_coverage(capture: &CaptureReply, now_ms: u64) -> Vec<capture_wire::CaptureStore> {
+    store_writers::store_coverage(now_ms)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|store| capture_wire::CaptureStore {
+            agent_type: store.agent,
+            watched_since_ms: store.recorded_since_ms.max(capture.started_at_ms),
+            gaps: store
+                .gaps
+                .into_iter()
+                .map(|gap| capture_wire::CaptureGap {
+                    from_ms: gap.from_ms,
+                    until_ms: gap.until_ms,
+                    reason: gap.reason,
+                    replaced_by: None,
+                })
+                .collect(),
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -149,7 +184,7 @@ mod tests {
         assert_eq!(rows.files_recorded, 2);
         // The reader was not started here: the reply says so.
         assert!(!first.capture.running);
-        assert!(first.served_at_ms > 0);
+        assert!(first.built_at_ms > 0);
         let json = serde_json::to_string(&first).unwrap();
         let back: StoreWriterBatch = serde_json::from_str(&json).unwrap();
         assert_eq!(back, first);

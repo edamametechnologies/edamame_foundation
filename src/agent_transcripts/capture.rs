@@ -49,6 +49,9 @@ use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use super::capture_wire::{self as wire, CaptureArrival, ProcessIdentity};
+use super::launch::{ShellCall, ShellCallReader};
+
 /// Calls one reply of [`since`] carries.
 pub const MAX_CALLS_PER_REPLY: usize = 512;
 /// Calls held that no reader asked past yet; the oldest leaves beyond it.
@@ -63,8 +66,10 @@ const MAX_RECENT_SPANS: usize = 64;
 const PREFIX_DIGEST_BYTES: u64 = 4_096;
 /// Passes over one file per wake-up before the others get their turn.
 const MAX_PASSES_PER_WAKE: usize = 8;
-/// How often every held transcript's size is compared with what was read.
-const SWEEP_INTERVAL_MS: u64 = 10_000;
+/// How often every held transcript's size is compared with what was read:
+/// the watermark (`served_at_ms`) moves at each sweep. One metadata read per
+/// held file.
+const SWEEP_INTERVAL_MS: u64 = 2_000;
 /// Bytes read across every file in one wake-up: the files left are read at
 /// the next one.
 const WAKE_BYTE_BUDGET: u64 = 32 << 20;
@@ -81,14 +86,21 @@ pub enum LineItem {
     /// kept of the call.
     Call {
         key: Option<String>,
-        call: serde_json::Value,
+        call: ShellCall,
     },
     /// The result of the call `key`. `call`, when given, replaces what is
     /// kept of that call.
     Result {
         key: String,
-        call: Option<serde_json::Value>,
+        call: Option<ShellCall>,
     },
+    /// The call `key` is no longer one (the extractor withdrew it).
+    Withdrawn { key: String },
+    /// The line carries the conversation's first user turn.
+    FirstUserTurn,
+    /// How the session started is known: by a program (`true`) or by a
+    /// person.
+    Headless(bool),
 }
 
 /// Reads the shell calls of a transcript line.
@@ -98,7 +110,92 @@ pub trait CallExtractor: Send + 'static {
 
     /// The calls and results `line` carries (a complete line, without its
     /// line ending), for a transcript of `agent`.
-    fn extract(&self, state: &mut Self::State, agent: &str, line: &[u8]) -> Vec<LineItem>;
+    fn extract(
+        &self,
+        state: &mut Self::State,
+        agent: &str,
+        line: &[u8],
+        read_at_ms: u64,
+    ) -> Vec<LineItem>;
+}
+
+/// The extractor of the transcripts: the shell calls, the first user turn
+/// and how the session started, as the launch scan reads them
+/// ([`ShellCallReader`], one per file), under the published limits.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ShellCallExtractor;
+
+impl CallExtractor for ShellCallExtractor {
+    type State = ShellCallReader;
+
+    fn extract(
+        &self,
+        reader: &mut ShellCallReader,
+        _agent: &str,
+        line: &[u8],
+        read_at_ms: u64,
+    ) -> Vec<LineItem> {
+        let read_at = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(
+            i64::try_from(read_at_ms).unwrap_or(i64::MAX),
+        )
+        .unwrap_or_default();
+        let headless_before = reader.headless();
+        let events = reader.read_line(line, read_at);
+        let mut items = Vec::new();
+        for number in events.withdrawn {
+            items.push(LineItem::Withdrawn {
+                key: number.to_string(),
+            });
+        }
+        for number in events.started {
+            if let Some(call) = reader.call(number) {
+                items.push(LineItem::Call {
+                    key: Some(number.to_string()),
+                    call: call.clone(),
+                });
+            }
+        }
+        for number in events.finished {
+            items.push(LineItem::Result {
+                key: number.to_string(),
+                call: reader.call(number).cloned(),
+            });
+        }
+        if events.first_user_turn {
+            items.push(LineItem::FirstUserTurn);
+        }
+        let headless = reader.headless();
+        if headless != headless_before {
+            if let Some(headless) = headless {
+                items.push(LineItem::Headless(headless));
+            }
+        }
+        items
+    }
+}
+
+/// The conversation a transcript file belongs to, as the collectors key it
+/// (the file's name without its ending), and, for a subagent's file (one in
+/// a `subagents` directory), the main conversation's key (the directory
+/// above it).
+pub fn transcript_session_keys(path: &str) -> (String, Option<String>) {
+    let parts: Vec<&str> = path
+        .split(['/', '\\'])
+        .filter(|part| !part.is_empty())
+        .collect();
+    let name = parts.last().copied().unwrap_or_default();
+    let key = name
+        .strip_suffix(".jsonl")
+        .or_else(|| name.strip_suffix(".txt"))
+        .unwrap_or(name)
+        .to_string();
+    let parent = parts
+        .iter()
+        .rposition(|part| *part == "subagents")
+        .and_then(|index| index.checked_sub(1))
+        .map(|index| parts[index].to_string())
+        .filter(|parent| !parent.is_empty() && *parent != key);
+    (key, parent)
 }
 
 /// The reader's bounds.
@@ -185,7 +282,7 @@ pub struct CapturedCall {
     /// appended to it.
     pub in_rewrite: bool,
     /// What the extractor kept of the call.
-    pub call: serde_json::Value,
+    pub call: ShellCall,
     /// The capture's sequence number when this entry last changed.
     pub changed_seq: u64,
 }
@@ -303,6 +400,12 @@ pub struct CapturedFile {
     pub multiple_names_seen: bool,
     /// Calls read before this instant are no longer in the list.
     pub calls_before_ms: Option<u64>,
+    /// When the conversation's first user turn arrived, read once as it was
+    /// appended to a file read since its creation; `None` otherwise (before
+    /// the reader, in a gap, read again from the start).
+    pub first_user_turn: Option<CaptureArrival>,
+    /// How the session started, once the extractor read it.
+    pub headless: Option<bool>,
     pub changed_seq: u64,
 }
 
@@ -347,9 +450,10 @@ pub struct CaptureCounters {
 
 const LATENCY_BUCKET_LIMITS_MS: [u64; 11] = [1, 2, 5, 10, 20, 50, 100, 250, 500, 1_000, 5_000];
 
-/// Reply of [`since`].
+/// Reply of [`since`]: the reader's state for the relay, and what changed,
+/// in the wire type the session binding reads ([`wire::CaptureBatch`]).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct CaptureBatch {
+pub struct CaptureReply {
     /// Identifies the reader: it changes each time it starts. Empty while it
     /// does not run.
     pub instance: String,
@@ -358,34 +462,27 @@ pub struct CaptureBatch {
     pub started_at_ms: u64,
     /// The sequence number to ask from next.
     pub seq: u64,
-    /// The transcripts, calls and gaps that changed after the asked
-    /// sequence number, oldest change first.
-    pub files: Vec<CapturedFile>,
-    pub calls: Vec<CapturedCall>,
-    pub gaps: Vec<CaptureGap>,
     /// More changed than one reply carries: ask again from `seq`.
     pub more: bool,
     pub counters: CaptureCounters,
     /// When the reader's thread last made progress (epoch milliseconds). A
     /// reply is `running` only while it is recent.
     pub heartbeat_ms: u64,
-    /// Every file `Watched` in this reply was read through this instant:
-    /// set by each sweep of the held files, which stats each of them.
-    /// `None` before the first sweep.
-    pub watermark_ms: Option<u64>,
     /// The store-writer record's instance and sequence number up to which
-    /// the reader took what the record reported: a consumer joining the
-    /// record's rows with this reply reads the rows up to it.
+    /// the reader took what the record reported, and when: a consumer
+    /// joining the record's rows with this reply reads the rows up to it.
     pub record_instance: String,
     pub record_seq: u64,
-    /// When the reader made that take (epoch milliseconds, the reader's
-    /// clock): the instant the record's rows up to `record_seq` stand for.
     pub record_taken_at_ms: u64,
     /// Files held now (released ones not counted).
     pub files_held: usize,
+    /// What changed: the transcripts, the calls whose writer is final, the
+    /// gaps; `served_at_ms` the watermark, cut before every call held back
+    /// or whose writer is not final yet.
+    pub batch: wire::CaptureBatch,
 }
 
-impl CaptureBatch {
+impl CaptureReply {
     /// The reply while the reader does not run.
     pub fn not_running() -> Self {
         Self {
@@ -393,17 +490,91 @@ impl CaptureBatch {
             running: false,
             started_at_ms: 0,
             seq: 0,
-            files: Vec::new(),
-            calls: Vec::new(),
-            gaps: Vec::new(),
             more: false,
             counters: CaptureCounters::default(),
             heartbeat_ms: 0,
-            watermark_ms: None,
             record_instance: String::new(),
             record_seq: 0,
             record_taken_at_ms: 0,
             files_held: 0,
+            batch: wire::CaptureBatch {
+                capture_instance: String::new(),
+                served_at_ms: 0,
+                stores: Vec::new(),
+                transcripts: Vec::new(),
+                calls: Vec::new(),
+            },
+        }
+    }
+}
+
+/// A process as the wire names it.
+fn wire_identity(writer: WriterInstance) -> ProcessIdentity {
+    ProcessIdentity {
+        pid: writer.pid,
+        start_ms: writer.started_at_ms,
+    }
+}
+
+/// A gap's reason as the wire spells it.
+fn reason_name(reason: CaptureGapReason) -> String {
+    serde_json::to_value(reason)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_string))
+        .unwrap_or_default()
+}
+
+impl CaptureGap {
+    fn to_wire(&self) -> wire::CaptureGap {
+        wire::CaptureGap {
+            from_ms: self.from_ms,
+            until_ms: self.until_ms,
+            reason: reason_name(self.reason),
+            replaced_by: self.replaced_by.map(wire_identity),
+        }
+    }
+}
+
+impl CapturedCall {
+    fn to_wire(&self) -> wire::CaptureCall {
+        let (session_key, _) = transcript_session_keys(&self.path);
+        wire::CaptureCall {
+            transcript_path: self.path.clone(),
+            session_key,
+            agent_type: self.agent.clone(),
+            seq: self.id,
+            call: self.call.clone(),
+            arrival_from_ms: self.arrival_from_ms,
+            arrived_at_ms: self.arrived_at_ms,
+            result_arrived_at_ms: self.result_arrived_at_ms,
+            writer: self.writer.map(wire_identity),
+            in_rewrite: self.in_rewrite,
+            writers_differ: self.writers_differ,
+            writer_final: Some(self.writer_final),
+        }
+    }
+}
+
+impl CapturedFile {
+    fn to_wire(&self, gaps: Vec<wire::CaptureGap>) -> wire::CaptureTranscript {
+        let (session_key, parent_session_key) = transcript_session_keys(&self.path);
+        wire::CaptureTranscript {
+            transcript_path: self.path.clone(),
+            session_key,
+            parent_session_key,
+            agent_type: self.agent.clone(),
+            watched_since_ms: self.watching_since_ms,
+            watched_from_creation: self.since_creation,
+            headless: self.headless,
+            first_user_turn: self.first_user_turn,
+            coverage: match self.status {
+                CapturedFileStatus::Pending => wire::CaptureCoverage::Pending,
+                CapturedFileStatus::Watched => wire::CaptureCoverage::Watched,
+                CapturedFileStatus::Desynced => wire::CaptureCoverage::Desynced,
+                CapturedFileStatus::Released => wire::CaptureCoverage::Released,
+            },
+            read_through_ms: self.read_through_ms,
+            gaps,
         }
     }
 }
@@ -746,6 +917,12 @@ struct FileState<S> {
     /// take itself was not followed since, and is not read "since its
     /// creation" again.
     creation_read_at_ms: Option<u64>,
+    /// The first user turn: when it arrived (measured once), whether its
+    /// line was read at all (it is never stamped again), and how the
+    /// session started.
+    first_user_turn: Option<CaptureArrival>,
+    first_user_turn_seen: bool,
+    headless: Option<bool>,
 }
 
 impl<S> FileState<S> {
@@ -1141,6 +1318,9 @@ impl<E: CallExtractor> Capture<E> {
                 first_report_ms: dirty.first_seen_ms.min(dirty.dirty_since_ms).min(now),
                 unattributed_until: None,
                 creation_read_at_ms: None,
+                first_user_turn: None,
+                first_user_turn_seen: false,
+                headless: None,
             });
         state.first_report_ms = state
             .first_report_ms
@@ -1748,7 +1928,7 @@ impl<E: CallExtractor> Capture<E> {
             let parse_state = &mut state.parse_state;
             let agent = state.agent.as_str();
             match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                extractor.extract(parse_state, agent, line)
+                extractor.extract(parse_state, agent, line, t_after)
             })) {
                 Ok(found) => items.extend(found),
                 Err(_) => {
@@ -1899,6 +2079,42 @@ impl<E: CallExtractor> Capture<E> {
                         held.entry.changed_seq = seq;
                         self.counters.results_paired += 1;
                     }
+                }
+                LineItem::Withdrawn { key } => {
+                    let hash = key_hash(&key);
+                    let Some(position) = state
+                        .pending_results
+                        .iter()
+                        .position(|(pending, _)| *pending == hash)
+                    else {
+                        continue;
+                    };
+                    if let Some((_, id)) = state.pending_results.remove(position) {
+                        state.calls.retain(|held| held.entry.id != id);
+                    }
+                }
+                LineItem::FirstUserTurn => {
+                    // Stamped once, and only when its arrival is measured:
+                    // read as appended to a file read since its creation,
+                    // naming a process, outside any gap.
+                    if !state.first_user_turn_seen {
+                        state.first_user_turn_seen = true;
+                        if announced
+                            && !lost
+                            && !unattributed
+                            && !multiple_names
+                            && !in_rewrite
+                            && state.since_creation
+                        {
+                            state.first_user_turn = Some(CaptureArrival {
+                                arrival_from_ms: arrival_from,
+                                arrived_at_ms: t_after,
+                            });
+                        }
+                    }
+                }
+                LineItem::Headless(headless) => {
+                    state.headless = Some(headless);
                 }
             }
         }
@@ -2062,6 +2278,8 @@ impl<E: CallExtractor> Capture<E> {
                 multiple_names: state.multiple_names,
                 multiple_names_seen: state.multiple_names_seen,
                 calls_before_ms: state.calls_before_ms,
+                first_user_turn: state.first_user_turn,
+                headless: state.headless,
                 changed_seq: state.changed_seq,
             });
             calls.extend(state.calls.iter().map(|held| held.entry.clone()));
@@ -2316,13 +2534,13 @@ impl CaptureView {
     /// `instance` (anything else: everything), at most
     /// [`MAX_CALLS_PER_REPLY`] calls, cut between two sequence numbers
     /// only: the calls one pass read share one, and a group larger than the
-    /// bound is served whole. A reply that holds calls back says until when
-    /// what it carries covers: its watermark, and the read-through of each
-    /// file with calls held back, end before the earliest arrival of a call
-    /// held back.
-    pub fn batch_since(&self, instance: &str, since_seq: u64) -> CaptureBatch {
+    /// bound is served whole. The calls whose writer is not final yet are
+    /// not served: they come with the reply after they are. The watermark
+    /// (`served_at_ms`), and the read-through of each file, end before the
+    /// earliest arrival of a call held back or not final yet.
+    pub fn batch_since(&self, instance: &str, since_seq: u64) -> CaptureReply {
         if !self.running {
-            return CaptureBatch::not_running();
+            return CaptureReply::not_running();
         }
         let since_seq = if instance == self.instance {
             since_seq
@@ -2357,52 +2575,62 @@ impl CaptureView {
         } else {
             self.seq
         };
-        // What the calls held back could have arrived from: what this reply
-        // carries covers up to just before it, no further.
-        let held_from = held_back.iter().map(|call| call.arrival_from_ms).min();
+        // What the calls held back, and those whose writer is not final,
+        // could have arrived from: what this reply covers ends just before.
+        let not_final = || self.calls.iter().filter(|call| !call.writer_final);
+        let open_from = |path: Option<&str>| {
+            held_back
+                .iter()
+                .copied()
+                .chain(not_final())
+                .filter(|call| path.is_none_or(|path| call.path == path))
+                .map(|call| call.arrival_from_ms)
+                .min()
+        };
         let cut = |through: Option<u64>, from: Option<u64>| match (through, from) {
             (Some(through), Some(from)) => Some(through.min(from.saturating_sub(1))),
             (through, _) => through,
         };
-        let files = self
+        let transcripts = self
             .files
             .iter()
             .filter(|file| file.changed_seq > since_seq && file.changed_seq <= seq)
             .map(|file| {
                 let mut file = file.clone();
-                let file_held_from = held_back
+                file.read_through_ms = cut(file.read_through_ms, open_from(Some(&file.path)));
+                let gaps = self
+                    .gaps
                     .iter()
-                    .filter(|call| call.path == file.path)
-                    .map(|call| call.arrival_from_ms)
-                    .min();
-                file.read_through_ms = cut(file.read_through_ms, file_held_from);
-                file
+                    .filter(|gap| gap.path == file.path)
+                    .map(CaptureGap::to_wire)
+                    .collect();
+                file.to_wire(gaps)
             })
             .collect();
-        CaptureBatch {
+        let calls = changed_calls[..end]
+            .iter()
+            .filter(|call| call.writer_final)
+            .map(|call| call.to_wire())
+            .collect();
+        CaptureReply {
             instance: self.instance.clone(),
             running: true,
             started_at_ms: self.started_at_ms,
             seq,
-            files,
-            calls: changed_calls[..end]
-                .iter()
-                .map(|call| (*call).clone())
-                .collect(),
-            gaps: self
-                .gaps
-                .iter()
-                .filter(|gap| gap.changed_seq > since_seq && gap.changed_seq <= seq)
-                .cloned()
-                .collect(),
             more,
             counters: self.counters,
             heartbeat_ms: 0,
-            watermark_ms: cut(self.watermark_ms, held_from),
             record_instance: self.record_instance.clone(),
             record_seq: self.record_seq,
             record_taken_at_ms: self.record_taken_at_ms,
             files_held: self.files_held,
+            batch: wire::CaptureBatch {
+                capture_instance: self.instance.clone(),
+                served_at_ms: cut(self.watermark_ms, open_from(None)).unwrap_or(0),
+                stores: Vec::new(),
+                transcripts,
+                calls,
+            },
         }
     }
 }
@@ -2512,7 +2740,7 @@ fn run<E: CallExtractor>(mut capture: Capture<E>, generation: u64) {
 /// that last read `instance` (pass an empty one, or another, to read
 /// everything). While the reader does not run the reply says so
 /// (`running: false`): never an empty list standing for "no call".
-pub fn since(instance: &str, since_seq: u64) -> CaptureBatch {
+pub fn since(instance: &str, since_seq: u64) -> CaptureReply {
     let view = VIEW.load_full();
     let batch = reply(
         &view,
@@ -2536,9 +2764,9 @@ fn reply(
     since_seq: u64,
     heartbeat_ms: u64,
     now_ms: u64,
-) -> CaptureBatch {
+) -> CaptureReply {
     if view.running && now_ms.saturating_sub(heartbeat_ms) > HEARTBEAT_STALE_MS {
-        let mut stalled = CaptureBatch::not_running();
+        let mut stalled = CaptureReply::not_running();
         stalled.heartbeat_ms = heartbeat_ms;
         stalled.counters = view.counters;
         return stalled;
@@ -2551,7 +2779,6 @@ fn reply(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
     use std::io::Write;
     use std::path::PathBuf;
 
@@ -2568,23 +2795,33 @@ mod tests {
     impl CallExtractor for WordExtractor {
         type State = WordState;
 
-        fn extract(&self, state: &mut WordState, agent: &str, line: &[u8]) -> Vec<LineItem> {
+        fn extract(
+            &self,
+            state: &mut WordState,
+            _agent: &str,
+            line: &[u8],
+            read_at_ms: u64,
+        ) -> Vec<LineItem> {
             state.lines += 1;
             let text = String::from_utf8_lossy(line);
             let mut words = text.split(' ');
+            let read_at = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(read_at_ms as i64)
+                .unwrap_or_default();
             match (words.next(), words.next(), words.next()) {
                 (Some("C"), Some(key), Some(program)) => vec![LineItem::Call {
                     key: Some(key.to_string()),
-                    call: json!({
-                        "agent": agent,
-                        "programs": [program.to_ascii_lowercase()],
-                        "line": state.lines,
-                    }),
+                    call: ShellCall {
+                        programs: vec![program.to_ascii_lowercase()],
+                        read_at,
+                        ..Default::default()
+                    },
                 }],
                 (Some("R"), Some(key), _) => vec![LineItem::Result {
                     key: key.to_string(),
                     call: None,
                 }],
+                (Some("U"), _, _) => vec![LineItem::FirstUserTurn],
+                (Some("H"), _, _) => vec![LineItem::Headless(true)],
                 _ => Vec::new(),
             }
         }
@@ -2780,7 +3017,7 @@ mod tests {
             calls.sort_by_key(|call| call.id);
             calls
                 .iter()
-                .map(|call| call.call["programs"][0].as_str().unwrap_or("").to_string())
+                .map(|call| call.call.programs.first().cloned().unwrap_or_default())
                 .collect()
         }
 
@@ -2817,7 +3054,7 @@ mod tests {
         assert_eq!(call.writer, Some(HARNESS));
         assert!(!call.writers_differ && !call.in_rewrite);
         assert_eq!(call.result_arrived_at_ms, None);
-        assert_eq!(call.call["programs"], json!(["curl"]));
+        assert_eq!(call.call.programs, vec!["curl".to_string()]);
         assert!(view.gaps.is_empty());
         assert_eq!(view.counters.lines_read, 2);
         assert_eq!(view.counters.calls_captured, 1);
@@ -2876,7 +3113,7 @@ mod tests {
         bench.appended_by(OTHER, creation, "t\n");
         let view = bench.view();
         let second = view.calls.iter().find(|call| call.id == 2).unwrap();
-        assert_eq!(second.call["programs"], json!(["git"]));
+        assert_eq!(second.call.programs, vec!["git".to_string()]);
         assert_eq!(second.writer, None);
         assert!(second.writers_differ);
     }
@@ -3334,10 +3571,13 @@ mod tests {
             creation,
             "C KEYID77 curl AuthBearer:SECRET_TOKEN_VALUE /private/path\nSECRET_PLAIN_LINE\nR KEYID77 SECRET_RESULT\n",
         );
+        // Served once its writer is final.
+        bench.advance(config().late_report_ms);
+        bench.capture.finalize_writers();
         let view = bench.view();
         assert_eq!(view.calls.len(), 1);
-        let batch = view.batch_since("", 0);
-        let wire = serde_json::to_string(&batch).unwrap();
+        let reply = view.batch_since("", 0);
+        let wire = serde_json::to_string(&reply).unwrap();
         for leaked in [
             "SECRET_TOKEN_VALUE",
             "AuthBearer",
@@ -3348,8 +3588,8 @@ mod tests {
         ] {
             assert!(!wire.contains(leaked), "{leaked} is in the batch");
         }
-        // A call is the extractor's value in the wrapper's fields.
-        let call = serde_json::to_value(&batch.calls[0]).unwrap();
+        // A call is the extractor's value in the wire's fields.
+        let call = serde_json::to_value(&reply.batch.calls[0]).unwrap();
         let mut keys: Vec<&str> = call
             .as_object()
             .unwrap()
@@ -3360,28 +3600,24 @@ mod tests {
         assert_eq!(
             keys,
             vec![
-                "agent",
-                "announced",
+                "agent_type",
                 "arrival_from_ms",
                 "arrived_at_ms",
                 "call",
-                "changed_seq",
-                "id",
                 "in_rewrite",
-                "path",
                 "result_arrived_at_ms",
+                "seq",
+                "session_key",
+                "transcript_path",
                 "writer",
                 "writer_final",
                 "writers_differ",
             ]
         );
-        assert_eq!(
-            call["call"],
-            json!({"agent": "claude_code", "programs": ["curl"], "line": 1})
-        );
-        // The batch round-trips on the wire.
-        let back: CaptureBatch = serde_json::from_str(&wire).unwrap();
-        assert_eq!(back, batch);
+        assert_eq!(reply.batch.calls[0].call.programs, vec!["curl".to_string()]);
+        // The reply round-trips on the wire.
+        let back: CaptureReply = serde_json::from_str(&wire).unwrap();
+        assert_eq!(back, reply);
     }
 
     #[test]
@@ -3448,7 +3684,7 @@ mod tests {
         let ls = view
             .calls
             .iter()
-            .find(|call| call.call["programs"][0] == "ls")
+            .find(|call| call.call.programs[0] == "ls")
             .unwrap();
         assert_eq!(ls.writer, Some(HARNESS));
     }
@@ -3503,7 +3739,10 @@ mod tests {
             writers_differ: false,
             writer_final: true,
             in_rewrite: false,
-            call: json!({"programs": ["ls"]}),
+            call: ShellCall {
+                programs: vec!["ls".to_string()],
+                ..Default::default()
+            },
             changed_seq: id,
         };
         let total = MAX_CALLS_PER_REPLY as u64 + 88;
@@ -3527,6 +3766,8 @@ mod tests {
                 multiple_names: false,
                 multiple_names_seen: false,
                 calls_before_ms: None,
+                first_user_turn: None,
+                headless: None,
                 changed_seq: total + 5,
             }],
             calls: (1..=total).map(call).collect(),
@@ -3548,27 +3789,32 @@ mod tests {
         };
         let first = view.batch_since("capture-1", 0);
         assert!(first.running && first.more);
-        assert_eq!(first.calls.len(), MAX_CALLS_PER_REPLY);
+        assert_eq!(first.batch.calls.len(), MAX_CALLS_PER_REPLY);
         assert_eq!(first.seq, MAX_CALLS_PER_REPLY as u64);
-        // The gap changed within the part sent; the file after it.
-        assert_eq!(first.gaps.len(), 1);
-        assert!(first.files.is_empty());
+        // The file changed after the part sent: it comes, with its gap,
+        // in the next reply.
+        assert!(first.batch.transcripts.is_empty());
         let second = view.batch_since("capture-1", first.seq);
         assert!(!second.more);
-        assert_eq!(second.calls.len(), 88);
-        assert_eq!(second.calls[0].id, MAX_CALLS_PER_REPLY as u64 + 1);
+        assert_eq!(second.batch.calls.len(), 88);
+        assert_eq!(second.batch.calls[0].seq, MAX_CALLS_PER_REPLY as u64 + 1);
         assert_eq!(second.seq, total + 5);
-        assert_eq!(second.files.len(), 1);
-        assert!(second.gaps.is_empty());
-        assert!(view.batch_since("capture-1", second.seq).calls.is_empty());
+        assert_eq!(second.batch.transcripts.len(), 1);
+        assert_eq!(second.batch.transcripts[0].gaps.len(), 1);
+        assert_eq!(second.batch.transcripts[0].gaps[0].reason, "unannounced");
+        assert!(view
+            .batch_since("capture-1", second.seq)
+            .batch
+            .calls
+            .is_empty());
         // A reader of another instance is sent everything again.
         assert_eq!(
-            view.batch_since("capture-0", total).calls.len(),
+            view.batch_since("capture-0", total).batch.calls.len(),
             MAX_CALLS_PER_REPLY
         );
         // A reader that does not run says so, whatever is asked.
         let stopped = CaptureView::stopped().batch_since("capture-1", 0);
-        assert_eq!(stopped, CaptureBatch::not_running());
+        assert_eq!(stopped, CaptureReply::not_running());
         assert!(!stopped.running);
     }
 
@@ -3611,7 +3857,12 @@ mod tests {
             creation_reorder_ms: 1_000,
         }]);
         assert!(!since("", 0).running);
-        assert!(start(WordExtractor, config()));
+        // Writers final soon after their read: the reply serves final calls.
+        let quick = CaptureConfig {
+            late_report_ms: 50,
+            ..config()
+        };
+        assert!(start(WordExtractor, quick));
         assert!(!start(WordExtractor, config()), "one reader at a time");
         assert!(is_running());
 
@@ -3640,31 +3891,31 @@ mod tests {
 
         let mut batch = since("", 0);
         for _ in 0..100 {
-            if !batch.calls.is_empty() {
+            if !batch.batch.calls.is_empty() {
                 break;
             }
             std::thread::sleep(Duration::from_millis(50));
             batch = since("", 0);
         }
         assert!(batch.running);
-        assert_eq!(batch.calls.len(), 1, "the appended call is read");
-        assert_eq!(batch.calls[0].writer, Some(HARNESS));
-        assert_eq!(batch.calls[0].path, path_str);
-        assert!(batch.files.iter().any(|file| file.since_creation));
+        assert_eq!(batch.batch.calls.len(), 1, "the appended call is read");
+        assert_eq!(batch.batch.calls[0].writer, Some(wire_identity(HARNESS)));
+        assert_eq!(batch.batch.calls[0].writer_final, Some(true));
+        assert_eq!(batch.batch.calls[0].transcript_path, path_str);
         // Asked again from the reply's sequence number: nothing new.
         let again = since(&batch.instance, batch.seq);
-        assert!(again.running && again.calls.is_empty());
+        assert!(again.running && again.batch.calls.is_empty());
 
         stop();
         assert!(!is_running());
         // Not running; the reply keeps the thread's last heartbeat.
         let stopped = since(&batch.instance, 0);
         assert_eq!(
-            CaptureBatch {
+            CaptureReply {
                 heartbeat_ms: 0,
                 ..stopped
             },
-            CaptureBatch::not_running()
+            CaptureReply::not_running()
         );
         store_writers::clear();
     }
@@ -3877,11 +4128,17 @@ mod tests {
     impl CallExtractor for PanicExtractor {
         type State = WordState;
 
-        fn extract(&self, state: &mut WordState, agent: &str, line: &[u8]) -> Vec<LineItem> {
+        fn extract(
+            &self,
+            state: &mut WordState,
+            agent: &str,
+            line: &[u8],
+            read_at_ms: u64,
+        ) -> Vec<LineItem> {
             if line.starts_with(b"BOOM") {
                 panic!("a test extractor fails");
             }
-            WordExtractor.extract(state, agent, line)
+            WordExtractor.extract(state, agent, line, read_at_ms)
         }
     }
 
@@ -3952,7 +4209,7 @@ mod tests {
         let programs: Vec<String> = view
             .calls
             .iter()
-            .map(|call| call.call["programs"][0].as_str().unwrap().to_string())
+            .map(|call| call.call.programs[0].clone())
             .collect();
         assert_eq!(programs, vec!["curl".to_string(), "git".to_string()]);
         assert_eq!(view.counters.extractor_panics, 1);
@@ -3975,7 +4232,7 @@ mod tests {
         assert_eq!(fresh.heartbeat_ms, now - 1_000);
         let stale = reply(&view, &view.instance, 0, now - HEARTBEAT_STALE_MS - 1, now);
         assert!(!stale.running);
-        assert!(stale.files.is_empty() && stale.calls.is_empty());
+        assert!(stale.batch.transcripts.is_empty() && stale.batch.calls.is_empty());
     }
 
     /// A line written through another name of the file is not named as the
@@ -4000,7 +4257,7 @@ mod tests {
         let linked = view
             .calls
             .iter()
-            .find(|call| call.call["programs"][0] == "linked")
+            .find(|call| call.call.programs[0] == "linked")
             .expect("the line is read");
         assert_eq!(linked.writer, None);
         assert!(view
@@ -4015,7 +4272,7 @@ mod tests {
         let after = view
             .calls
             .iter()
-            .find(|call| call.call["programs"][0] == "make")
+            .find(|call| call.call.programs[0] == "make")
             .unwrap();
         assert_eq!(after.writer, Some(HARNESS));
         assert!(!bench.file().multiple_names);
@@ -4254,7 +4511,7 @@ mod tests {
         let git = view
             .calls
             .iter()
-            .find(|call| call.call["programs"][0] == "git")
+            .find(|call| call.call.programs[0] == "git")
             .unwrap();
         assert_eq!(git.writer, Some(HARNESS));
 
@@ -4293,7 +4550,7 @@ mod tests {
         let wget = view
             .calls
             .iter()
-            .find(|call| call.call["programs"][0] == "wget")
+            .find(|call| call.call.programs[0] == "wget")
             .expect("read from its start");
         assert_eq!(wget.writer, None);
         assert!(view
@@ -4384,7 +4641,7 @@ mod tests {
         assert!(view
             .calls
             .iter()
-            .all(|call| call.call["programs"][0] != "curl"));
+            .all(|call| call.call.programs.first().map(String::as_str) != Some("curl")));
         let file = bench.file();
         assert!(!file.since_creation);
         assert!(view.gaps.iter().any(
@@ -4396,7 +4653,7 @@ mod tests {
             .view()
             .calls
             .into_iter()
-            .find(|call| call.call["programs"][0] == "ls")
+            .find(|call| call.call.programs[0] == "ls")
             .expect("read");
         assert_eq!(ls.writer, Some(HARNESS));
     }
@@ -4445,7 +4702,7 @@ mod tests {
             .collect();
         assert!(harness_calls
             .iter()
-            .all(|call| call.call["programs"][0] != "curl"));
+            .all(|call| call.call.programs.first().map(String::as_str) != Some("curl")));
         let file = bench
             .view()
             .files
@@ -4496,7 +4753,7 @@ mod tests {
             .collect();
         let curl = calls
             .iter()
-            .find(|call| call.call["programs"][0] == "curl")
+            .find(|call| call.call.programs[0] == "curl")
             .expect("read again from the start");
         assert_eq!(curl.writer, None);
         assert!(!curl.announced);
@@ -4528,7 +4785,10 @@ mod tests {
             writers_differ: false,
             writer_final: true,
             in_rewrite: false,
-            call: json!({"programs": ["ls"]}),
+            call: ShellCall {
+                programs: vec!["ls".to_string()],
+                ..Default::default()
+            },
             changed_seq: seq,
         };
         let file = CapturedFile {
@@ -4546,6 +4806,8 @@ mod tests {
             multiple_names: false,
             multiple_names_seen: false,
             calls_before_ms: None,
+            first_user_turn: None,
+            headless: None,
             changed_seq: 2,
         };
         // 500 calls of a first pass (seq 1, arrived from 1,000), 100 of a
@@ -4572,24 +4834,32 @@ mod tests {
         };
         let first = view.batch_since("capture-1", 0);
         assert!(first.more);
-        assert_eq!(first.calls.len(), 500);
+        assert_eq!(first.batch.calls.len(), 500);
         assert_eq!(first.seq, 1);
-        assert_eq!(first.watermark_ms, Some(2_999));
-        assert_eq!(first.files[0].read_through_ms, Some(2_999));
+        assert_eq!(first.batch.served_at_ms, 2_999);
+        assert_eq!(first.batch.transcripts[0].read_through_ms, Some(2_999));
         let second = view.batch_since("capture-1", first.seq);
         assert!(!second.more);
-        assert_eq!(second.calls.len(), 100);
-        assert_eq!(second.watermark_ms, Some(5_000));
+        assert_eq!(second.batch.calls.len(), 100);
+        assert_eq!(second.batch.served_at_ms, 5_000);
+        // A call whose writer is not final is not served, and the watermark
+        // stays before it.
+        let mut open = view.clone();
+        open.calls[550].writer_final = false;
+        let held = open.batch_since("capture-1", first.seq);
+        assert_eq!(held.batch.calls.len(), 99);
+        assert_eq!(held.batch.served_at_ms, 2_999);
         // One pass of 600 calls: served whole, nothing lost.
         let one_pass = CaptureView {
             calls: (1..=600).map(|id| call(id, 1, 1_000)).collect(),
             ..view.clone()
         };
         let whole = one_pass.batch_since("capture-1", 0);
-        assert_eq!(whole.calls.len(), 600);
+        assert_eq!(whole.batch.calls.len(), 600);
         assert!(!whole.more);
         assert!(one_pass
             .batch_since("capture-1", whole.seq)
+            .batch
             .calls
             .is_empty());
     }
@@ -4674,7 +4944,7 @@ mod tests {
                 .view()
                 .calls
                 .into_iter()
-                .find(|call| call.call["programs"][0] == "sudo")
+                .find(|call| call.call.programs[0] == "sudo")
                 .unwrap()
         };
         assert_eq!(sudo(&bench).writer, Some(HARNESS));
@@ -4710,7 +4980,7 @@ mod tests {
         let git = view
             .calls
             .iter()
-            .find(|call| call.call["programs"][0] == "git")
+            .find(|call| call.call.programs[0] == "git")
             .unwrap();
         assert_eq!(git.writer, None);
     }
@@ -4813,5 +5083,89 @@ mod tests {
         std::fs::hard_link(&bench.path, bench.base.join("second-name")).unwrap();
         bench.appended_by(HARNESS, creation, "C k1 ls\n");
         assert!(bench.given_back.iter().any(|facts| facts.multiple_names));
+    }
+
+    // -- round 5: the wire ------------------------------------------------------
+
+    /// The first user turn is stamped once, when its arrival is measured
+    /// (read as appended to a file read since its creation); a turn read
+    /// again from the start of a file taken again is never stamped.
+    #[test]
+    fn the_first_user_turn_is_stamped_once_and_only_when_measured() {
+        let mut bench = Bench::new(config());
+        let creation = bench.created_by_harness();
+        let at = bench.appended_by(HARNESS, creation, "U hello\n");
+        let turn = bench.file().first_user_turn.expect("measured");
+        assert!(turn.arrival_from_ms <= at && turn.arrived_at_ms >= at);
+        bench.appended_by(HARNESS, creation, "U again\n");
+        assert_eq!(bench.file().first_user_turn, Some(turn));
+        // How the session started, once read.
+        bench.appended_by(HARNESS, creation, "H\n");
+        assert_eq!(bench.file().headless, Some(true));
+        // A reader that starts a new instance reads the file again from its
+        // start or its end: the turn is not stamped again.
+        bench.capture.start_over();
+        bench.advance(600_000);
+        bench.appended_by(HARNESS, creation, "C k1 ls\n");
+        assert_eq!(bench.file().first_user_turn, None);
+
+        // A file older than the reader: its first turn came before.
+        let mut bench = Bench::new(config());
+        bench.started_after_the_files();
+        bench.append("U before\n");
+        let at = bench.advance(10);
+        bench.append("C k1 ls\n");
+        bench.advance(2);
+        bench.take(bench.dirty(None, vec![bench.span(HARNESS, ops::WRITE, at)]));
+        // A later turn of the same file, reported with no creation (the
+        // record has none for a file older than the sensor).
+        let later = bench.advance(10);
+        bench.append("U later\n");
+        bench.advance(2);
+        bench.take(bench.dirty(None, vec![bench.span(HARNESS, ops::WRITE, later)]));
+        assert_eq!(bench.file().first_user_turn, None);
+    }
+
+    /// A transcript's conversation is keyed by its file name, as the
+    /// collectors key it; a subagent's file names its main conversation too.
+    #[test]
+    fn a_transcript_names_its_conversation_and_a_subagents_its_parent() {
+        assert_eq!(
+            transcript_session_keys("/h/.claude/projects/p/1234-abcd.jsonl"),
+            ("1234-abcd".to_string(), None)
+        );
+        assert_eq!(
+            transcript_session_keys("/h/.claude/projects/p/1234-abcd/subagents/agent-9.jsonl"),
+            ("agent-9".to_string(), Some("1234-abcd".to_string()))
+        );
+        assert_eq!(
+            transcript_session_keys(r"C:\Users\u\.cursor\projects\x\agent-transcripts\s1.txt"),
+            ("s1".to_string(), None)
+        );
+    }
+
+    /// The reply's wire batch: transcripts with their keys, coverage and
+    /// gaps; final calls with their writer as a process identity.
+    #[test]
+    fn the_reply_serves_the_wire_batch() {
+        let mut bench = Bench::new(config());
+        let creation = bench.created_by_harness();
+        bench.appended_by(HARNESS, creation, "C k1 curl\n");
+        let reply = bench.view().batch_since("", 0);
+        // Not final yet: not served, and the watermark stays before it.
+        assert!(reply.batch.calls.is_empty());
+        bench.advance(config().late_report_ms);
+        bench.capture.finalize_writers();
+        bench.capture.sweep(0);
+        let reply = bench.view().batch_since("", 0);
+        assert_eq!(reply.batch.capture_instance, reply.instance);
+        let call = &reply.batch.calls[0];
+        assert_eq!(call.writer, Some(wire_identity(HARNESS)));
+        assert_eq!(call.session_key, "session");
+        let transcript = &reply.batch.transcripts[0];
+        assert_eq!(transcript.session_key, "session");
+        assert_eq!(transcript.coverage, wire::CaptureCoverage::Watched);
+        assert!(transcript.watched_from_creation);
+        assert!(reply.batch.served_at_ms >= call.arrived_at_ms);
     }
 }
