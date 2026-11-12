@@ -32,9 +32,12 @@ pub struct ProcessEventBatch {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ListedProcess {
     pub pid: u32,
-    /// The process's start as the operating system reports it, in Unix
-    /// seconds; `None` when it could not be read.
-    pub start_secs: Option<u64>,
+    /// The process's start as the kernel records it, in milliseconds since
+    /// the Unix epoch, read as the sensors read it for their events
+    /// (`flodbadd::process_events::process_start_ms`), so the consumer
+    /// compares it with the start its records carry
+    /// (`ProcessEvent::process_start_ms`); `None` when it could not be read.
+    pub start_ms: Option<u64>,
 }
 
 /// Which of a set of pids hold a running process now. A pid in neither list
@@ -76,9 +79,9 @@ pub fn process_listing(pids: &[u32]) -> ProcessListing {
         let mut listing = ProcessListing::default();
         for pid in pids {
             match system.process(Pid::from_u32(pid)) {
-                Some(process) => listing.running.push(ListedProcess {
+                Some(_) => listing.running.push(ListedProcess {
                     pid,
-                    start_secs: Some(process.start_time()).filter(|secs| *secs > 0),
+                    start_ms: process_events::process_start_ms(pid),
                 }),
                 // Not in the table this process could read: another user's
                 // process is running all the same, so the pid is absent only
@@ -86,7 +89,7 @@ pub fn process_listing(pids: &[u32]) -> ProcessListing {
                 None if crate::process_control::process_is_alive(pid) => {
                     listing.running.push(ListedProcess {
                         pid,
-                        start_secs: None,
+                        start_ms: None,
                     })
                 }
                 None => listing.absent.push(pid),
@@ -157,16 +160,20 @@ mod tests {
             .iter()
             .find(|process| process.pid == own)
             .expect("this process is running");
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        let start = me.start_secs.expect("its own start is readable");
-        assert!(start <= now && now - start < 24 * 60 * 60, "{start} {now}");
+        let now = process_events::now_ms();
+        let start = me.start_ms.expect("its own start is readable");
+        // In milliseconds (on Linux the boot time it derives from is whole
+        // seconds: a second of slack).
+        assert!(
+            start <= now + 1_000 && now - start.min(now) < 24 * 60 * 60 * 1_000,
+            "{start} {now}"
+        );
+        // The start the sensors put on this process's events.
+        assert_eq!(Some(start), process_events::process_start_ms(own));
         assert_eq!(listing.absent, vec![free]);
         assert_eq!(listing.running.len(), 1);
         // The same answer when asked again: a start time does not move.
-        assert_eq!(process_listing(&[own]).running[0].start_secs, Some(start));
+        assert_eq!(process_listing(&[own]).running[0].start_ms, Some(start));
         assert_eq!(process_listing(&[]), ProcessListing::default());
     }
 }
