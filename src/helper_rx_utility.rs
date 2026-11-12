@@ -952,16 +952,23 @@ pub async fn utility_collect_sensor_coverage(_arg1: &str, _arg2: &str) -> Result
 
 /// The kernel process events this helper's sensors delivered at or after
 /// `arg1` (epoch milliseconds; empty or 0 for the whole ring), for the app's
-/// lineage table (`process_event_relay::process_events_since`). Thin
+/// lineage table (`process_event_relay::process_events_since`), with the
+/// listing of the pids in `arg2` (a JSON array; empty for none). Thin
 /// delegate; the standalone core drains the ring in process.
-pub async fn utility_process_events_since(since_ms: &str) -> Result<String> {
+pub async fn utility_process_events_since(since_ms: &str, listed_pids: &str) -> Result<String> {
     let since_ms = match since_ms.trim() {
         "" => 0,
         text => text
             .parse::<u64>()
             .map_err(|e| anyhow::anyhow!("Invalid since timestamp: {}", e))?,
     };
-    let batch = crate::process_event_relay::process_events_since(since_ms);
+    let listed_pids: Vec<u32> = match listed_pids.trim() {
+        "" => Vec::new(),
+        text => {
+            serde_json::from_str(text).map_err(|e| anyhow::anyhow!("Invalid pid list: {}", e))?
+        }
+    };
+    let batch = crate::process_event_relay::process_events_since(since_ms, &listed_pids);
     serde_json::to_string(&batch)
         .map_err(|e| anyhow::anyhow!("Failed to serialize process events: {}", e))
 }
