@@ -470,20 +470,6 @@ jobs:
           dump_vulnerability_findings: true
           exit_on_vulnerability_findings: true
 
-      # The tests step is continue-on-error, so its failure surfaces only in
-      # these two steps. `!cancelled()` replaces the implicit `success()`:
-      # with it, a failing vulnerability gate above skipped both, and the run
-      # listed the gate as its only failure, which release_all.sh
-      # --ignore-dump soft-passes: a test failure read as a gate-only failure.
-      - name: Slack alerts
-        if: ${{ !cancelled() && steps.tests.outcome != 'success' }}
-        uses: slackapi/slack-github-action@v1.26.0
-        with:
-          channel-id: 'C072J0U9TH7'
-          slack-message: "Tests ran in ${{ github.workflow }} for ${{ github.repository }} for ${{ runner.os }} on branch ${{ github.ref }} failed: see https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-        env:
-          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-
       - name: Fail job if tests failed
         if: ${{ !cancelled() && steps.tests.outcome != 'success' }}
         shell: bash
@@ -837,23 +823,6 @@ jobs:
           dump_vulnerability_findings: true
           exit_on_vulnerability_findings: true
 
-      # See the native job: `!cancelled()`, so a failing gate cannot skip
-      # these two steps and turn a test failure into a gate-only failure.
-      - name: Slack alerts
-        # Won't work on 18.04 because of glibc version
-        # Won't work on ARM64 Alpine because of JavaScript support
-        if: ${{ !cancelled() && steps.tests.outcome != 'success' && !contains(matrix.container_name, '18.04') && !contains(matrix.container_name, 'aarch64-musl') }}
-        uses: slackapi/slack-github-action@v1.26.0
-        with:
-          channel-id: 'C072J0U9TH7'
-          slack-message: |
-            *Container Test Results for ${{ github.repository }} (${{ matrix.container_name }})*:
-            - Tests: ${{ steps.tests.outcome == 'success' && '✅ Success' || '❌ Failed' }}
-            Branch: ${{ github.ref }}
-            More details: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        env:
-          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-
       - name: Fail job if tests failed
         if: ${{ !cancelled() && steps.tests.outcome != 'success' }}
         shell: bash
@@ -863,4 +832,13 @@ jobs:
           echo ""
           echo "Forcing container job to fail because tests did not succeed."
           exit 1
+
+  notify:
+    name: Slack alert
+    needs: [test-native, test-container]
+    if: always() && github.event_name != 'pull_request'
+    uses: edamametechnologies/.github/.github/workflows/slack-notify.yml@main
+    with:
+      results: ${{ toJSON(needs) }}
+    secrets: inherit
 
