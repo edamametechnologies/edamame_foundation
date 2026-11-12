@@ -6,8 +6,7 @@
 //! (the helper's start, shared by every platform's helper binary) puts the
 //! model's catalog, the embedded one at start, in force before it builds
 //! the server, so before any order can start the file monitor or the
-//! capture. Until 2.3.3 nothing did in the helper's process, and it
-//! classified under the fallback for its whole life.
+//! capture.
 //!
 //! This file is a test binary of its own, so a process of its own: nothing
 //! refreshed the snapshots before the test, as at a real start.
