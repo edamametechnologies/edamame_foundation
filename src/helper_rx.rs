@@ -273,6 +273,14 @@ impl ServerControl {
         server: &str,
         branch: &str,
     ) -> Result<()> {
+        // The sensitive-path catalog the file monitor and the capture classify
+        // under (the `is_sensitive` flag of every file event, the sessions'
+        // sensitive open files), put in force before any order can start
+        // either: the snapshots start as flodbadd's compile-time fallback, a
+        // small subset of the catalog, and the helper used to keep it for its
+        // whole life.
+        flodbadd::sensitive_paths::refresh_catalog_snapshots().await;
+
         // Store branch name
         {
             let mut branch_lock = BRANCH.lock().await;
@@ -345,6 +353,8 @@ impl ServerControl {
             }
         };
 
+        // Kept current for as long as the server serves: ended with it.
+        let _catalog_upkeep = spawn_catalog_upkeep(branch.to_string());
         serve_until_stopped(server_future, &self.stop).await
     }
 
@@ -352,6 +362,60 @@ impl ServerControl {
         self.stop.notify_one();
         Ok(())
     }
+}
+
+/// How often the helper updates the sensitive-path catalog, in seconds: the
+/// core's model update period.
+pub const HELPER_CATALOG_UPDATE_SECS: u64 = 600;
+
+/// A task aborted when this is dropped.
+struct AbortOnDrop(tokio::task::JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// Run `update` at once, then every `period` (a late run delays the next
+/// rather than bunching them), until the returned guard is dropped.
+fn spawn_periodic<F, Fut>(period: std::time::Duration, mut update: F) -> AbortOnDrop
+where
+    F: FnMut() -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = ()> + Send + 'static,
+{
+    AbortOnDrop(tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(period);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            ticker.tick().await;
+            update().await;
+        }
+    }))
+}
+
+/// Keep the helper's sensitive-path catalog current: nothing else updates it
+/// in the helper's process (the core's model updates run in the core's), so
+/// a catalog published after the helper's build would never reach its file
+/// monitor or capture. The update is the core's, on the helper's branch:
+/// verified like every model download, it refreshes the snapshots whatever
+/// its outcome, and a failed download leaves the catalog in force.
+fn spawn_catalog_upkeep(branch: String) -> AbortOnDrop {
+    spawn_periodic(
+        std::time::Duration::from_secs(HELPER_CATALOG_UPDATE_SECS),
+        move || {
+            let branch = branch.clone();
+            async move {
+                match flodbadd::sensitive_paths::update(&branch, false).await {
+                    Ok(status) => debug!("Sensitive-path catalog update: {:?}", status),
+                    Err(e) => info!(
+                        "Sensitive-path catalog update failed, the catalog in force stays: {}",
+                        e
+                    ),
+                }
+            }
+        },
+    )
 }
 
 /// Drive the server future until it ends or `stop` is notified.
@@ -805,6 +869,67 @@ mod tests {
     use tokio::time::{sleep, timeout, Duration};
     use tonic::transport::Channel;
     use tonic::transport::{Certificate, ClientTlsConfig, Identity};
+
+    /// The catalog upkeep's schedule: a run at once, then one a period, and
+    /// none once its guard is dropped (the server stopped).
+    #[tokio::test]
+    async fn the_catalog_upkeep_runs_at_once_then_every_period_until_dropped() {
+        let runs = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = runs.clone();
+        let upkeep = spawn_periodic(Duration::from_secs(1), move || {
+            let counted = counted.clone();
+            async move {
+                counted.fetch_add(1, Ordering::SeqCst);
+            }
+        });
+        sleep(Duration::from_millis(100)).await;
+        assert_eq!(runs.load(Ordering::SeqCst), 1, "the first run is at once");
+        let waited = timeout(Duration::from_secs(20), async {
+            while runs.load(Ordering::SeqCst) < 3 {
+                sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await;
+        assert!(waited.is_ok(), "{} runs", runs.load(Ordering::SeqCst));
+        drop(upkeep);
+        let stopped_at = runs.load(Ordering::SeqCst);
+        sleep(Duration::from_millis(2_500)).await;
+        assert_eq!(
+            runs.load(Ordering::SeqCst),
+            stopped_at,
+            "no run after the drop"
+        );
+    }
+
+    /// The helper's start puts the catalog in force before anything can
+    /// serve an order, and keeps the upkeep for as long as it serves (a guard
+    /// bound to `_` would be dropped, and the task aborted, at once). Read
+    /// from `start_server` in this file's source; what the first call does is
+    /// `tests/helper_catalog_at_start.rs`.
+    #[test]
+    fn the_server_puts_the_catalog_in_force_then_keeps_it_current() {
+        let source = include_str!("helper_rx.rs");
+        let start = source
+            .find("pub async fn start_server(")
+            .expect("ServerControl::start_server");
+        let end = start
+            + source[start..]
+                .find("pub async fn stop_server(")
+                .expect("ServerControl::stop_server");
+        let body = &source[start..end];
+        let at = |needle: &str| {
+            body.find(needle)
+                .unwrap_or_else(|| panic!("`{needle}` not found in start_server"))
+        };
+        let seed = at("flodbadd::sensitive_paths::refresh_catalog_snapshots().await;");
+        let upkeep = at("let _catalog_upkeep = spawn_catalog_upkeep(branch.to_string());");
+        let serve = at("serve_until_stopped(server_future, &self.stop).await");
+        assert!(
+            seed < at("Server::builder()"),
+            "the seed comes before the server"
+        );
+        assert!(upkeep < serve, "the upkeep starts before the server serves");
+    }
 
     // The Windows service's Stop control must reach a server that is serving:
     // the serving call keeps `&self`, the stop takes no lock.
