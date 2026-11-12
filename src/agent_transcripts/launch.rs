@@ -10,7 +10,7 @@
 //! [`crate::agent_workspaces::attribute_session_workspaces`] file the child
 //! under the workspace of the session that launched it.
 //!
-//! Two kinds of fact, read from the transcript files on the collection side
+//! Three kinds of fact, read from the transcript files on the collection side
 //! (the standalone core, or the helper on the sandboxed app path), so the core
 //! never needs the transcript text:
 //!
@@ -25,6 +25,12 @@
 //!   body starts one, with the call's timestamp, the time its result came
 //!   back when it ran in the foreground, and the absolute directories the
 //!   command names.
+//! - [`ShellCall`]: every tool call that ran a shell command, with the time
+//!   of the call, the time its result came back, and the names of the
+//!   programs in command position. The command text is not kept. With the
+//!   list goes [`ShellCallGaps`], which says what the list does not hold.
+//!   Core reads both to tell which conversation's call started an observed
+//!   process tree.
 //!
 //! What counts as an agent CLI, a shell, a wrapper, a working-directory
 //! argument or a programmatic start is data: it comes from the
@@ -58,6 +64,13 @@ use crate::agent_visibility_params::{self, ProgramOptionsJSON, WorkspaceAttribut
 
 /// Launch calls kept per session (the most recent ones win).
 const MAX_LAUNCHES_PER_SESSION: usize = 64;
+/// Program names kept per shell call.
+pub const MAX_PROGRAMS_PER_CALL: usize = 16;
+/// Characters kept of one program name.
+pub const MAX_PROGRAM_NAME_CHARS: usize = 64;
+/// How deep the programs of an inline script are read (`bash -lc "sh -c
+/// '...'"`).
+const MAX_INLINE_SCRIPT_DEPTH: usize = 2;
 /// Directories kept per launch call.
 const MAX_DIRS_PER_LAUNCH: usize = 16;
 /// Script basenames remembered per transcript file.
@@ -112,6 +125,178 @@ pub struct AgentLaunchCall {
     pub dirs: Vec<String>,
 }
 
+/// A tool call that ran a shell command: when, and which programs. The
+/// command itself is not kept.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShellCall {
+    /// Timestamp of the line that carries the call. `None` when the line has
+    /// none (Cursor), when the line records a command that already ran (a
+    /// Codex code-mode item: see `started_at`), and when the timestamp is
+    /// later than `read_at`.
+    pub at: Option<DateTime<Utc>>,
+    /// When the command started, as the harness measured it (Codex code
+    /// mode's `started_at_ms`). `None` where the harness records no start,
+    /// and when the value is later than `read_at`.
+    pub started_at: Option<DateTime<Utc>>,
+    /// When the call's result came back (the measured completion in Codex
+    /// code mode), never later than `read_at`. `None` until a result is
+    /// read.
+    pub finished_at: Option<DateTime<Utc>>,
+    /// The call returned before its work finished (`&`, a background flag, a
+    /// detaching program).
+    pub background: bool,
+    /// Lower-cased names of the programs in command position, in order of
+    /// first appearance: of every simple command, the wrappers it goes
+    /// through and the program they run, the programs of a script handed to
+    /// a shell inline, and the programs of a heredoc a shell reads as its
+    /// input. The shell of a wrapper argv (`["bash", "-lc", "<script>"]`) is
+    /// the harness's own and is not one of them. Empty when the command has
+    /// no name in command position.
+    pub programs: Vec<String>,
+    /// When the scanner read the call's line.
+    pub read_at: DateTime<Utc>,
+    /// A time the transcript gave for this call was later than `read_at` and
+    /// is not kept as given.
+    pub time_bounded: bool,
+    /// The line records a command that had already run (a Codex code-mode
+    /// item): the moment the line was written does not date the command's
+    /// start.
+    pub recorded_after_run: bool,
+}
+
+impl ShellCall {
+    /// The call carries a time the harness gave it: its line's, or a start
+    /// the harness measured.
+    pub fn has_own_time(&self) -> bool {
+        self.at.is_some() || self.started_at.is_some()
+    }
+
+    /// Where the call sorts among a transcript's calls: its own time, else
+    /// the start the harness measured, else its result, else the moment it
+    /// was read. Never later than `read_at`.
+    pub fn order_time(&self) -> DateTime<Utc> {
+        self.at
+            .or(self.started_at)
+            .or(self.finished_at)
+            .unwrap_or(self.read_at)
+            .min(self.read_at)
+    }
+}
+
+/// What a session's list of shell calls does not hold. A reader that asks
+/// whether the session made a call at some instant reads these before it
+/// reads the list.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShellCallGaps {
+    /// Calls that sort before this instant ([`ShellCall::order_time`]) are
+    /// not in the list: the session made more calls than are kept, or its
+    /// calls were set aside while its transcript was not being written.
+    /// `None`: no call was left out for either reason.
+    pub calls_before: Option<DateTime<Utc>>,
+    /// Part of the transcript was not read (a line longer than the scanner
+    /// parses, a file larger than it reads, a subagent transcript it could
+    /// not open): the lines written from `unread_from` (`None`: from the
+    /// start of the file) to `unread_until`. `unread_until` is `None` when
+    /// every line was read.
+    pub unread_from: Option<DateTime<Utc>>,
+    pub unread_until: Option<DateTime<Utc>>,
+}
+
+impl ShellCallGaps {
+    /// Lines written between `from` (`None`: any time before) and `until`
+    /// were not read.
+    pub fn add_unread(&mut self, from: Option<DateTime<Utc>>, until: DateTime<Utc>) {
+        self.unread_from = match (self.unread_until, self.unread_from, from) {
+            // The first unread part sets the start; a later one can only
+            // move it back.
+            (None, _, from) => from,
+            (Some(_), Some(known), Some(from)) => Some(known.min(from)),
+            (Some(_), _, _) => None,
+        };
+        self.unread_until = Some(self.unread_until.map_or(until, |known| known.max(until)));
+    }
+
+    /// Calls that sort before `instant` were left out of the list.
+    pub fn add_calls_before(&mut self, instant: DateTime<Utc>) {
+        self.calls_before = Some(
+            self.calls_before
+                .map_or(instant, |known| known.max(instant)),
+        );
+    }
+
+    /// What `other` does not hold is not held here either.
+    pub fn merge(&mut self, other: &ShellCallGaps) {
+        if let Some(instant) = other.calls_before {
+            self.add_calls_before(instant);
+        }
+        if let Some(until) = other.unread_until {
+            self.add_unread(other.unread_from, until);
+        }
+    }
+}
+
+/// Keep the `max_calls` calls that sort last, oldest first, a call that
+/// appears twice once. When calls are left out, `gaps` says from which
+/// instant the list is whole.
+pub fn bound_shell_calls(calls: &mut Vec<ShellCall>, gaps: &mut ShellCallGaps, max_calls: usize) {
+    calls.sort_by(|a, b| {
+        (
+            a.order_time(),
+            a.at,
+            a.started_at,
+            a.finished_at,
+            a.background,
+            &a.programs,
+        )
+            .cmp(&(
+                b.order_time(),
+                b.at,
+                b.started_at,
+                b.finished_at,
+                b.background,
+                &b.programs,
+            ))
+    });
+    // Two readings of one call are one call. A call without a time of its
+    // own is told by its programs and its result alone.
+    calls.dedup_by(|b, a| {
+        (a.at, a.started_at, a.background, &a.programs)
+            == (b.at, b.started_at, b.background, &b.programs)
+            && (a.finished_at == b.finished_at || a.has_own_time())
+    });
+    if calls.len() > max_calls {
+        let mut excess = calls.len() - max_calls;
+        let mut boundary: Option<DateTime<Utc>> = None;
+        // A call without a time of its own takes no place from a dated one.
+        let mut index = 0;
+        while excess > 0 && index < calls.len() {
+            if calls[index].has_own_time() {
+                index += 1;
+            } else {
+                let gone = calls.remove(index).order_time();
+                boundary = Some(boundary.map_or(gone, |known| known.max(gone)));
+                excess -= 1;
+            }
+        }
+        if excess > 0 {
+            // Every call left out sorts at or before the first one kept (the
+            // last one left out when none is kept).
+            let kept = calls
+                .get(excess)
+                .or(calls.last())
+                .map(ShellCall::order_time);
+            calls.drain(..excess);
+            boundary = match (boundary, kept) {
+                (Some(known), Some(kept)) => Some(known.max(kept)),
+                (known, kept) => known.or(kept),
+            };
+        }
+        if let Some(boundary) = boundary {
+            gaps.add_calls_before(boundary);
+        }
+    }
+}
+
 /// Incremental scan state of one transcript file.
 #[derive(Debug, Clone, Default)]
 struct FileScan {
@@ -135,6 +320,42 @@ struct FileScan {
     /// Hash of the first [`HEAD_FINGERPRINT_BYTES`] bytes: a file whose head
     /// changed was rewritten, not appended to, and is scanned again.
     head_fingerprint: u64,
+    /// The file's shell calls, most recent last, at most `max_shell_calls`.
+    shell_calls: Vec<(u64, ShellCall)>,
+    next_shell_seq: u64,
+    /// Shell calls waiting for their result: tool id -> (seq, the line
+    /// count when the call was read).
+    shell_pending: HashMap<String, (u64, u64)>,
+    /// What `shell_calls` does not hold.
+    shell_gaps: ShellCallGaps,
+    /// Shell calls kept for this file (the published
+    /// `session_binding_max_calls_per_transcript`).
+    max_shell_calls: usize,
+    /// The scan records shell calls. A collection's scan does not: it reads
+    /// the launch facts only.
+    record_shell_calls: bool,
+    /// Lines a shell call waits for its result before the reader stops
+    /// looking for it (the published `session_binding_result_wait_lines`).
+    result_wait_lines: u64,
+    /// A line of this transcript carried a time of its own. In such a
+    /// transcript a line without one is not a turn record.
+    timed_lines_seen: bool,
+    /// The line being read is a turn record: its shell calls are recorded.
+    line_is_turn_record: bool,
+    /// Calls recorded from lines without a time while no line had shown one.
+    untimed_calls: Vec<u64>,
+    /// What the line being read changed: results that came back, calls that
+    /// stopped waiting for one, calls taken back.
+    shell_finished: Vec<u64>,
+    shell_gave_up: Vec<u64>,
+    shell_withdrawn: Vec<u64>,
+    /// A user turn of this transcript was read (recorded with the shell
+    /// calls only).
+    user_turn_seen: bool,
+    /// The line being read carries the transcript's first user turn.
+    first_user_turn_line: bool,
+    /// The moment this line is read.
+    read_at: DateTime<Utc>,
 }
 
 static FILE_SCANS: Lazy<undeadlock::CustomDashMap<String, FileScan>> =
@@ -189,6 +410,129 @@ pub(crate) fn attach_launch_facts(sessions: &mut [CollectedRawSession], options:
         }
         session.launch_context = main_scan.context.clone();
         session.agent_launches = launches;
+    }
+}
+
+/// What reading one line changed in a [`ShellCallReader`]'s list. A number
+/// is the reader's own for a call: one per call, in the order they were read.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ShellCallLineEvents {
+    /// Calls the line carries.
+    pub started: Vec<u64>,
+    /// Calls whose result the line carries.
+    pub finished: Vec<u64>,
+    /// Calls that stopped waiting for their result.
+    pub gave_up: Vec<u64>,
+    /// Calls read from lines without a time before the transcript showed
+    /// that its lines carry one: they were not turn records, and are no
+    /// longer in the list.
+    pub withdrawn: Vec<u64>,
+    /// The line carries the transcript's first user turn (the words a person,
+    /// or the program that started the session, gave the agent): its arrival
+    /// is when the conversation's first prompt arrived. Read once per reader;
+    /// nothing of the turn is kept.
+    pub first_user_turn: bool,
+}
+
+/// The shell calls of one transcript, read from its lines as they are handed
+/// over, oldest first. It is the extractor of the launch scan without the
+/// file: a reader that follows a transcript keeps one per file and hands it
+/// each complete line with the moment it read it. No collection uses it.
+///
+/// It keeps what [`ShellCall`] keeps (times, a background flag, program
+/// names) and nothing else of a line.
+#[derive(Debug, Clone)]
+pub struct ShellCallReader {
+    scan: FileScan,
+}
+
+impl Default for ShellCallReader {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ShellCallReader {
+    /// A reader under the published limits (`cve-detection-params`:
+    /// `session_binding_max_calls_per_transcript`,
+    /// `session_binding_result_wait_lines`).
+    pub fn new() -> Self {
+        Self::with_limits(
+            usize::try_from(
+                crate::vuln_detector_params::session_binding_max_calls_per_transcript(),
+            )
+            .unwrap_or(usize::MAX),
+            crate::vuln_detector_params::session_binding_result_wait_lines(),
+        )
+    }
+
+    /// A reader that keeps `max_calls` calls and lets a call wait
+    /// `result_wait_lines` lines for its result.
+    pub fn with_limits(max_calls: usize, result_wait_lines: u64) -> Self {
+        Self {
+            scan: FileScan {
+                record_shell_calls: true,
+                max_shell_calls: max_calls,
+                result_wait_lines,
+                ..FileScan::default()
+            },
+        }
+    }
+
+    /// Read one complete line, read at `read_at`.
+    pub fn read_line(&mut self, line: &[u8], read_at: DateTime<Utc>) -> ShellCallLineEvents {
+        let params = agent_visibility_params::workspace_attribution();
+        let scan = &mut self.scan;
+        scan.read_at = read_at;
+        scan.lines_seen += 1;
+        let first = scan.next_shell_seq;
+        process_line(line, scan, &params.workspace_attribution);
+        ShellCallLineEvents {
+            started: (first..scan.next_shell_seq).collect(),
+            finished: std::mem::take(&mut scan.shell_finished),
+            gave_up: std::mem::take(&mut scan.shell_gave_up),
+            withdrawn: std::mem::take(&mut scan.shell_withdrawn),
+            first_user_turn: std::mem::take(&mut scan.first_user_turn_line),
+        }
+    }
+
+    /// A part of the transcript was not handed over (a line longer than the
+    /// reader parses, bytes it skipped): what was written between `from`
+    /// (`None`: any time before) and `until`.
+    pub fn note_unread(&mut self, from: Option<DateTime<Utc>>, until: DateTime<Utc>) {
+        self.scan.shell_gaps.add_unread(from, until);
+    }
+
+    /// The calls kept, oldest first, each with its number.
+    pub fn calls(&self) -> impl Iterator<Item = (u64, &ShellCall)> {
+        self.scan.shell_calls.iter().map(|(seq, call)| (*seq, call))
+    }
+
+    /// The call numbered `number`, while the list keeps it.
+    pub fn call(&self, number: u64) -> Option<&ShellCall> {
+        self.calls()
+            .find(|(seq, _)| *seq == number)
+            .map(|(_, call)| call)
+    }
+
+    /// What the list does not hold.
+    pub fn gaps(&self) -> &ShellCallGaps {
+        &self.scan.shell_gaps
+    }
+
+    /// A user turn was read: the first one was reported by the line that
+    /// carried it ([`ShellCallLineEvents::first_user_turn`]).
+    pub fn user_turn_read(&self) -> bool {
+        self.scan.user_turn_seen
+    }
+
+    /// A program, not a person, started the session
+    /// ([`SessionLaunchContext::headless`]). `None` until the lines that say
+    /// how the session started were read.
+    pub fn headless(&self) -> Option<bool> {
+        self.scan
+            .context_settled
+            .then_some(self.scan.context.headless)
     }
 }
 
@@ -389,18 +733,28 @@ fn read_line_capped<R: BufRead>(
 // formats, not attribution data).
 
 /// Markers of a line carrying a tool call (the closing quote keeps
-/// `"tool_use_id"` and `"function_call_output"` out).
+/// `"tool_use_id"`, `"function_call_output"` and `"toolCallId"` out).
 const CALL_LINE_MARKERS: &[&str] = &[
     "\"tool_use\"",
     "\"function_call\"",
     "\"custom_tool_call\"",
     "\"local_shell_call\"",
 ];
-/// Markers of a line carrying a tool result.
+/// Marker of a line carrying OpenClaw's call block, which is read for its
+/// shell command only: a scan that records no shell call does not look for
+/// it.
+const SHELL_CALL_ONLY_LINE_MARKER: &str = "\"toolCall\"";
+/// Markers of a line that may carry a user turn: a user role (Claude Code's
+/// `"type":"user"` lines carry `"role":"user"` too, Codex and OpenClaw name
+/// the role in their message) or Claude Code's queued-command attachment.
+const USER_TURN_LINE_MARKERS: &[&str] = &["\"role\":\"user\"", "\"queued_command\""];
+/// Markers of a line carrying a tool result. `toolResult` is the role of an
+/// OpenClaw result message.
 const RESULT_LINE_MARKERS: &[&str] = &[
     "\"tool_result\"",
     "\"function_call_output\"",
     "\"custom_tool_call_output\"",
+    "\"toolResult\"",
 ];
 /// Marker of a Codex code-mode line recording what the model's script ran
 /// (`event_msg` / `item_completed`, see [`super::parsing::codex_completed_item`]).
@@ -415,20 +769,78 @@ fn process_line(line: &[u8], scan: &mut FileScan, vocab: &WorkspaceAttributionJS
         return;
     };
     let wants_context = !scan.context_settled;
-    let has_call = CALL_LINE_MARKERS.iter().any(|m| text.contains(m));
-    // Result lines (often large tool output) are parsed only while a
-    // foreground launch waits for one.
-    let has_result =
-        !scan.pending.is_empty() && RESULT_LINE_MARKERS.iter().any(|m| text.contains(m));
+    let has_call = CALL_LINE_MARKERS.iter().any(|m| text.contains(m))
+        || (scan.record_shell_calls && text.contains(SHELL_CALL_ONLY_LINE_MARKER));
+    // A shell call stops waiting for its result after the published number
+    // of lines. Its end is then not known: what the transcript says from its
+    // line on is a part the list does not vouch for.
+    if !scan.shell_pending.is_empty() {
+        let (lines_seen, wait) = (scan.lines_seen, scan.result_wait_lines);
+        let gave_up: Vec<u64> = scan
+            .shell_pending
+            .values()
+            .filter(|(_, read_on_line)| lines_seen.saturating_sub(*read_on_line) > wait)
+            .map(|(seq, _)| *seq)
+            .collect();
+        if !gave_up.is_empty() {
+            scan.shell_pending
+                .retain(|_, (seq, _)| !gave_up.contains(seq));
+            let since = scan
+                .shell_calls
+                .iter()
+                .filter(|(seq, _)| gave_up.contains(seq))
+                .map(|(_, call)| call.order_time())
+                .min();
+            scan.shell_gaps.add_unread(since, scan.read_at);
+            scan.shell_gave_up.extend(gave_up);
+        }
+    }
+    // Result lines (often large tool output) are parsed only while a call
+    // waits for one: a foreground launch, or a shell call whose id the line
+    // carries.
+    let has_result = RESULT_LINE_MARKERS.iter().any(|m| text.contains(m))
+        && (!scan.pending.is_empty()
+            || scan
+                .shell_pending
+                .keys()
+                .any(|id| text.contains(id.as_str())));
     let has_code_mode_item = text.contains(CODE_MODE_LINE_MARKER)
         && CODE_MODE_ITEM_MARKERS.iter().any(|m| text.contains(m));
-    if !wants_context && !has_call && !has_result && !has_code_mode_item {
+    // Until the first user turn was read, a line that may carry one is
+    // parsed (the role or the queued-command attachment names it).
+    let wants_user_turn = scan.record_shell_calls
+        && !scan.user_turn_seen
+        && USER_TURN_LINE_MARKERS.iter().any(|m| text.contains(m));
+    if !wants_context && !has_call && !has_result && !has_code_mode_item && !wants_user_turn {
         return;
     }
     let Ok(value) = serde_json::from_str::<Value>(text) else {
         return;
     };
     let line_ts = line_timestamp(&value);
+    if scan.record_shell_calls {
+        // A turn record carries a time of its own wherever the transcript's
+        // lines do. A line without one in such a transcript is something
+        // else (a logged request that repeats an earlier message): no shell
+        // call is read from it, and the ones read from such lines before the
+        // transcript showed a time are taken back.
+        if line_ts.is_some() && !scan.timed_lines_seen {
+            scan.timed_lines_seen = true;
+            let untimed = std::mem::take(&mut scan.untimed_calls);
+            if !untimed.is_empty() {
+                scan.shell_calls.retain(|(seq, _)| !untimed.contains(seq));
+                scan.shell_pending
+                    .retain(|_, (seq, _)| !untimed.contains(seq));
+                scan.shell_withdrawn.extend(untimed);
+            }
+        }
+        scan.line_is_turn_record = line_ts.is_some() || !scan.timed_lines_seen;
+        if wants_user_turn && scan.line_is_turn_record && super::parsing::line_is_user_turn(&value)
+        {
+            scan.user_turn_seen = true;
+            scan.first_user_turn_line = true;
+        }
+    }
     if wants_context {
         absorb_context(&value, line_ts, scan, vocab);
     }
@@ -437,21 +849,65 @@ fn process_line(line: &[u8], scan: &mut FileScan, vocab: &WorkspaceAttributionJS
             absorb_code_mode_item(item, &value, line_ts, scan, vocab);
         }
     }
+    if has_result {
+        if let Some(id) = message_result_id(&value) {
+            settle_result(&id, line_ts, scan);
+        }
+    }
     for block in structured_blocks(&value) {
         match block_kind(block) {
             BlockKind::Call => absorb_tool_call(block, &value, line_ts, scan, vocab),
+            BlockKind::ShellCallOnly => absorb_shell_call_block(block, line_ts, scan, vocab),
             BlockKind::Result => {
                 if let Some(id) = result_id(block) {
-                    if let Some(seq) = scan.pending.remove(&id) {
-                        if let Some((_, call)) = scan.launches.iter_mut().find(|(s, _)| *s == seq) {
-                            call.finished_at = line_ts.or(call.at);
-                        }
-                    }
+                    settle_result(&id, line_ts, scan);
                 }
             }
             BlockKind::Other => {}
         }
     }
+}
+
+/// The result of call `id` came back on a line stamped `line_ts`: the launch
+/// and the shell call waiting for it are finished.
+fn settle_result(id: &str, line_ts: Option<DateTime<Utc>>, scan: &mut FileScan) {
+    if let Some(seq) = scan.pending.remove(id) {
+        if let Some((_, call)) = scan.launches.iter_mut().find(|(s, _)| *s == seq) {
+            call.finished_at = line_ts.or(call.at);
+        }
+    }
+    if let Some((seq, _)) = scan.shell_pending.remove(id) {
+        scan.shell_finished.push(seq);
+        let read_at = scan.read_at;
+        if let Some((_, call)) = scan.shell_calls.iter_mut().find(|(s, _)| *s == seq) {
+            let (finished_at, bounded) = not_after(line_ts, read_at);
+            call.finished_at = finished_at.or(call.at);
+            call.time_bounded |= bounded;
+        }
+    }
+}
+
+/// `time`, or the read time when `time` is later than it, and whether it was.
+fn not_after(time: Option<DateTime<Utc>>, read_at: DateTime<Utc>) -> (Option<DateTime<Utc>>, bool) {
+    match time {
+        Some(time) if time > read_at => (Some(read_at), true),
+        other => (other, false),
+    }
+}
+
+/// The call a result line answers when the result is a message of its own
+/// rather than a block (OpenClaw: `message.role == "toolResult"`, the call's
+/// id in `message.toolCallId`).
+fn message_result_id(value: &Value) -> Option<String> {
+    let message = value.get("message")?;
+    if message.get("role").and_then(|v| v.as_str()) != Some("toolResult") {
+        return None;
+    }
+    message
+        .get("toolCallId")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
 }
 
 fn line_timestamp(value: &Value) -> Option<DateTime<Utc>> {
@@ -549,12 +1005,15 @@ fn absorb_context(
 
 enum BlockKind {
     Call,
+    /// A call read for its shell command only (OpenClaw's `toolCall`).
+    ShellCallOnly,
     Result,
     Other,
 }
 
-/// The structured blocks of a line: Anthropic `message.content[]` (Claude
-/// Code, Cursor), a Codex `payload`, or the line itself (older rollouts).
+/// The structured blocks of a line: `message.content[]` (Anthropic blocks for
+/// Claude Code and Cursor, OpenClaw's `toolCall` blocks), a Codex `payload`,
+/// or the line itself (older rollouts).
 fn structured_blocks(value: &Value) -> Vec<&Value> {
     if let Some(items) = value
         .get("message")
@@ -573,6 +1032,7 @@ fn structured_blocks(value: &Value) -> Vec<&Value> {
 fn block_kind(block: &Value) -> BlockKind {
     match block.get("type").and_then(|v| v.as_str()).unwrap_or("") {
         "tool_use" | "function_call" | "custom_tool_call" | "local_shell_call" => BlockKind::Call,
+        "toolCall" => BlockKind::ShellCallOnly,
         "tool_result" | "function_call_output" | "custom_tool_call_output" => BlockKind::Result,
         _ => BlockKind::Other,
     }
@@ -595,7 +1055,8 @@ fn result_id(block: &Value) -> Option<String> {
 }
 
 /// The call's arguments as an object: Anthropic `input`, Codex `arguments`
-/// (a JSON string) or `action` (`local_shell_call`).
+/// (a JSON string), OpenClaw `arguments` (an object) or `action`
+/// (`local_shell_call`).
 fn call_arguments(block: &Value) -> Option<Value> {
     if let Some(input) = block.get("input") {
         if input.is_object() {
@@ -678,11 +1139,47 @@ fn absorb_tool_call(
             args: &args,
             id: block_id(block),
             at: line_ts,
+            line_at: line_ts,
+            measured_start: None,
             finished_at: None,
+            after_run: false,
         },
         scan,
         vocab,
     );
+}
+
+/// A call block read for its shell command only: the times and program names
+/// of a [`ShellCall`]. It is not read as a launch and writes no script.
+fn absorb_shell_call_block(
+    block: &Value,
+    line_ts: Option<DateTime<Utc>>,
+    scan: &mut FileScan,
+    vocab: &WorkspaceAttributionJSON,
+) {
+    if !scan.record_shell_calls {
+        return;
+    }
+    let Some(args) = call_arguments(block) else {
+        return;
+    };
+    let Some(command) = command_text(&args, vocab) else {
+        return;
+    };
+    let cmd = ShellCommand {
+        command: &command,
+        shell_cwd: "",
+        args: &args,
+        id: block_id(block),
+        at: line_ts,
+        line_at: line_ts,
+        measured_start: None,
+        finished_at: None,
+        after_run: false,
+    };
+    let lexed = lex_shell(cmd.command);
+    let background = runs_in_background(&lexed, cmd.args, vocab);
+    record_shell_call(&lexed, &cmd, background, scan, vocab);
 }
 
 /// One shell command a tool call ran, with what is known about its run.
@@ -694,21 +1191,32 @@ struct ShellCommand<'a> {
     args: &'a Value,
     /// The call's id, to match the result of a foreground call.
     id: Option<String>,
+    /// When the call was made, as a launch reads it: the line's timestamp,
+    /// or the measured start of a Codex code-mode command.
     at: Option<DateTime<Utc>>,
+    /// Timestamp of the line that carries the call. `None` when the line
+    /// records a command that already ran (Codex code mode).
+    line_at: Option<DateTime<Utc>>,
+    /// The command's start as the harness measured it (Codex code mode).
+    measured_start: Option<DateTime<Utc>>,
     /// When the command's result is already known: a Codex code-mode item
     /// is recorded once the command has finished.
     finished_at: Option<DateTime<Utc>>,
+    /// The line records a command that had already run (a Codex code-mode
+    /// item).
+    after_run: bool,
 }
 
-/// Record `cmd` as a launch call when it starts an agent CLI, directly or
-/// through a script this transcript wrote.
+/// Record `cmd` as a shell call, and as a launch call when it starts an agent
+/// CLI, directly or through a script this transcript wrote.
 fn absorb_shell_command(
     cmd: ShellCommand<'_>,
     scan: &mut FileScan,
     vocab: &WorkspaceAttributionJSON,
 ) {
-    let args = cmd.args;
     let lexed = lex_shell(cmd.command);
+    let background = runs_in_background(&lexed, cmd.args, vocab);
+    record_shell_call(&lexed, &cmd, background, scan, vocab);
     let mut direct = lexed
         .commands
         .iter()
@@ -750,16 +1258,6 @@ fn absorb_shell_command(
     if !direct && !via_script {
         return;
     }
-    let background = lexed.background
-        || lexed.commands.iter().any(|words| detaches(words, vocab))
-        || vocab
-            .background_flag_keys
-            .iter()
-            .any(|k| args.get(k.as_str()).and_then(|v| v.as_bool()) == Some(true))
-        || vocab
-            .background_wait_keys
-            .iter()
-            .any(|k| args.get(k.as_str()).and_then(|v| v.as_u64()) == Some(0));
     // A background call's result says nothing about when the agent it
     // started finished.
     let finished_at = if background { None } else { cmd.finished_at };
@@ -783,6 +1281,207 @@ fn absorb_shell_command(
         let (dropped, _) = scan.launches.remove(0);
         scan.pending.retain(|_, s| *s != dropped);
     }
+}
+
+/// The call returns before its work finishes: a trailing `&`, a detaching
+/// program, a background flag or a zero wait among its arguments.
+fn runs_in_background(lexed: &Lexed, args: &Value, vocab: &WorkspaceAttributionJSON) -> bool {
+    lexed.background
+        || lexed.commands.iter().any(|words| detaches(words, vocab))
+        || vocab
+            .background_flag_keys
+            .iter()
+            .any(|k| args.get(k.as_str()).and_then(|v| v.as_bool()) == Some(true))
+        || vocab
+            .background_wait_keys
+            .iter()
+            .any(|k| args.get(k.as_str()).and_then(|v| v.as_u64()) == Some(0))
+}
+
+/// Record the shell call `cmd` made: its times and the names of the programs
+/// it runs. Every call is recorded, also one whose command has no name in
+/// command position (its `programs` is then empty). A time later than the
+/// read time is not kept as given: the call's own time and measured start
+/// are dropped, its result time becomes the read time.
+fn record_shell_call(
+    lexed: &Lexed,
+    cmd: &ShellCommand<'_>,
+    background: bool,
+    scan: &mut FileScan,
+    vocab: &WorkspaceAttributionJSON,
+) {
+    if !scan.record_shell_calls || !scan.line_is_turn_record {
+        return;
+    }
+    let mut programs = Vec::new();
+    collect_command_programs(lexed, vocab, 0, &mut programs);
+    let read_at = scan.read_at;
+    let mut time_bounded = false;
+    let mut earlier = |time: Option<DateTime<Utc>>| match time {
+        Some(time) if time > read_at => {
+            time_bounded = true;
+            None
+        }
+        other => other,
+    };
+    let at = earlier(cmd.line_at);
+    let started_at = earlier(cmd.measured_start);
+    let (finished_at, bounded) = not_after(cmd.finished_at, read_at);
+    time_bounded |= bounded;
+    let seq = scan.next_shell_seq;
+    scan.next_shell_seq += 1;
+    if finished_at.is_none() {
+        if let Some(id) = cmd.id.clone() {
+            scan.shell_pending.insert(id, (seq, scan.lines_seen));
+        }
+    }
+    // A call line without a time, read before the transcript showed one.
+    if cmd.line_at.is_none() && !cmd.after_run && !scan.timed_lines_seen {
+        scan.untimed_calls.push(seq);
+        if scan.untimed_calls.len() > scan.max_shell_calls.max(1) {
+            scan.untimed_calls.remove(0);
+        }
+    }
+    scan.shell_calls.push((
+        seq,
+        ShellCall {
+            at,
+            started_at,
+            finished_at,
+            background,
+            programs,
+            read_at,
+            time_bounded,
+            recorded_after_run: cmd.after_run,
+        },
+    ));
+    if scan.shell_calls.len() > scan.max_shell_calls {
+        // A call without a time of its own takes no place from a dated one.
+        let index = scan
+            .shell_calls
+            .iter()
+            .position(|(_, call)| !call.has_own_time())
+            .unwrap_or(0);
+        let (dropped, gone) = scan.shell_calls.remove(index);
+        scan.shell_pending.retain(|_, (s, _)| *s != dropped);
+        // The call left out sorts at or before the oldest one kept.
+        let boundary = scan
+            .shell_calls
+            .first()
+            .map(|(_, call)| call.order_time())
+            .unwrap_or(read_at)
+            .max(gone.order_time());
+        scan.shell_gaps.add_calls_before(boundary);
+    }
+}
+
+/// A program name as a shell call keeps it: a plain file name. A word that
+/// is not one (a variable, a substitution, a quoted sentence) names no
+/// program the kernel could report.
+fn plain_program_name(name: &str) -> Option<String> {
+    let plain = !name.is_empty()
+        && name.chars().count() <= MAX_PROGRAM_NAME_CHARS
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '+' | '-'))
+        && name.chars().any(|c| c.is_ascii_alphanumeric());
+    plain.then(|| name.to_string())
+}
+
+/// The names of the programs `lexed` runs, appended to `out` in order of
+/// first appearance: for each simple command the wrappers it goes through
+/// and the program they run (`sudo -u x git push`: `sudo`, `git`), the
+/// programs of a script handed to a shell inline (`bash -lc '<script>'`,
+/// `pwsh -Command '<script>'`), and the programs of a heredoc that is the
+/// input of a shell reading its commands from it (`bash <<EOF`,
+/// `sh -s <<EOF`). A heredoc that is the input of any other command is that
+/// command's data and gives no name. Names are basenames, lower-cased,
+/// without a launcher extension.
+fn collect_command_programs(
+    lexed: &Lexed,
+    vocab: &WorkspaceAttributionJSON,
+    depth: usize,
+    out: &mut Vec<String>,
+) {
+    let push = |name: &str, out: &mut Vec<String>| {
+        if let Some(name) = plain_program_name(name) {
+            if !out.contains(&name) && out.len() < MAX_PROGRAMS_PER_CALL {
+                out.push(name);
+            }
+        }
+    };
+    for (position, words) in lexed.commands.iter().enumerate() {
+        let Some(index) = command_word_index(words, vocab) else {
+            continue;
+        };
+        for word in &words[..index] {
+            let name = exe_basename(word, vocab);
+            if vocab.wrapper_programs.contains(&name) {
+                push(&name, out);
+            }
+        }
+        let name = exe_basename(&words[index], vocab);
+        push(&name, out);
+        if !is_shell(&name, vocab) || depth >= MAX_INLINE_SCRIPT_DEPTH {
+            continue;
+        }
+        let rest = &words[index + 1..];
+        if let Some(script) = shell_inline_script(&name, rest, vocab) {
+            collect_command_programs(&lex_shell(script), vocab, depth + 1, out);
+        } else if shell_reads_commands_from_input(rest) {
+            for (body, command) in lexed.heredocs.iter().zip(&lexed.heredoc_commands) {
+                if *command == Some(position) {
+                    collect_command_programs(&lex_shell(body), vocab, depth + 1, out);
+                }
+            }
+        }
+    }
+}
+
+/// A shell given these words after its name reads its commands from its
+/// input: it is given no script file. `-s` says so explicitly, and what
+/// follows it are the script's arguments.
+fn shell_reads_commands_from_input(rest: &[String]) -> bool {
+    for word in rest {
+        if !word.starts_with('-') || word == "-" {
+            return word == "-";
+        }
+        if !word.starts_with("--") && word[1..].contains('s') {
+            return true;
+        }
+    }
+    true
+}
+
+/// The script a shell is handed inline: the word after `-c` (a POSIX
+/// short-option cluster carrying `c`) or after one of PowerShell's script
+/// options. `rest` are the words after the shell `name`. `None` when the
+/// shell runs a file or reads its input.
+fn shell_inline_script<'a>(
+    name: &str,
+    rest: &'a [String],
+    vocab: &WorkspaceAttributionJSON,
+) -> Option<&'a String> {
+    let powershell = vocab.powershell_programs.iter().any(|p| p == name);
+    let mut k = 0;
+    while k < rest.len() {
+        let w = &rest[k];
+        if !w.starts_with('-') {
+            break;
+        }
+        let lower = w.to_ascii_lowercase();
+        let takes_script = if powershell {
+            vocab.powershell_script_options.contains(&lower)
+        } else {
+            // POSIX shells: a short option cluster carrying `c`.
+            !lower.starts_with("--") && lower[1..].contains('c')
+        };
+        if takes_script {
+            return rest.get(k + 1);
+        }
+        k += 1;
+    }
+    None
 }
 
 fn remember_script(path: &str, scan: &mut FileScan, vocab: &WorkspaceAttributionJSON) {
@@ -871,7 +1570,12 @@ fn absorb_code_mode_item(
                     args: item,
                     id: None,
                     at: started.or(line_ts),
+                    // The item is recorded once the command has finished:
+                    // its line is the completion, not the call.
+                    line_at: None,
+                    measured_start: started,
                     finished_at: completed.or(line_ts),
+                    after_run: true,
                 },
                 scan,
                 vocab,
@@ -1101,6 +1805,9 @@ struct Lexed {
     /// data (a script being written, a program fed to an interpreter), not
     /// commands of this shell.
     heredocs: Vec<String>,
+    /// For each heredoc, the index in `commands` of the simple command whose
+    /// input it is. `None` when that command has no word.
+    heredoc_commands: Vec<Option<usize>>,
 }
 
 /// Split a shell command (POSIX shells; PowerShell's `&` call operator and
@@ -1122,8 +1829,9 @@ fn lex_shell(input: &str) -> Lexed {
         statement_start: bool,
         /// `Some(strip_tabs)` while the next word is a heredoc delimiter.
         heredoc_word: Option<bool>,
-        /// Heredocs opened on the current line: (delimiter, strip tabs).
-        heredocs_open: Vec<(String, bool)>,
+        /// Heredocs opened on the current line: (delimiter, strip tabs, the
+        /// index its command takes in `commands`).
+        heredocs_open: Vec<(String, bool, usize)>,
     }
     impl Lexer {
         fn end_word(&mut self) {
@@ -1135,7 +1843,10 @@ fn lex_shell(input: &str) -> Lexed {
                 1 => self.out.redirect_targets.push(word),
                 2 => {
                     if let Some(strip_tabs) = self.heredoc_word.take() {
-                        self.heredocs_open.push((word, strip_tabs));
+                        // The command the redirection belongs to is the one
+                        // being read: it is pushed when it ends.
+                        let command = self.out.commands.len();
+                        self.heredocs_open.push((word, strip_tabs, command));
                     }
                 }
                 _ => self.words.push(word),
@@ -1235,7 +1946,7 @@ fn lex_shell(input: &str) -> Lexed {
                 lx.end_command(true);
                 i += 1;
                 // The bodies of the heredocs this line opened follow it.
-                for (delimiter, strip_tabs) in std::mem::take(&mut lx.heredocs_open) {
+                for (delimiter, strip_tabs, command) in std::mem::take(&mut lx.heredocs_open) {
                     let mut body = String::new();
                     while i < len {
                         let end = chars[i..]
@@ -1257,6 +1968,11 @@ fn lex_shell(input: &str) -> Lexed {
                         body.push('\n');
                     }
                     lx.out.heredocs.push(body);
+                    // The line has ended, so the command is in `commands`
+                    // unless it had no word.
+                    lx.out
+                        .heredoc_commands
+                        .push((command < lx.out.commands.len()).then_some(command));
                 }
             }
             ';' | '(' | '{' | '`' => {
@@ -1503,33 +2219,14 @@ fn starts_agent_cli(words: &[String], vocab: &WorkspaceAttributionJSON) -> bool 
     }
     if is_shell(&name, vocab) {
         // `bash -lc '<script>'`, `pwsh -Command '<script>'`.
-        let powershell = vocab.powershell_programs.contains(&name);
-        let mut k = 0;
-        while k < rest.len() {
-            let w = &rest[k];
-            if !w.starts_with('-') {
-                break;
-            }
-            let lower = w.to_ascii_lowercase();
-            let takes_script = if powershell {
-                vocab.powershell_script_options.contains(&lower)
-            } else {
-                // POSIX shells: a short option cluster carrying `c`.
-                !lower.starts_with("--") && lower[1..].contains('c')
-            };
-            if takes_script {
-                return rest
-                    .get(k + 1)
-                    .map(|script| {
-                        lex_shell(script)
-                            .commands
-                            .iter()
-                            .any(|c| starts_agent_cli(c, vocab))
-                    })
-                    .unwrap_or(false);
-            }
-            k += 1;
-        }
+        return shell_inline_script(&name, rest, vocab)
+            .map(|script| {
+                lex_shell(script)
+                    .commands
+                    .iter()
+                    .any(|c| starts_agent_cli(c, vocab))
+            })
+            .unwrap_or(false);
     }
     false
 }
@@ -2030,8 +2727,18 @@ mod tests {
         s
     }
 
+    /// The limits the tests read under (the published defaults).
+    const TEST_MAX_CALLS: usize = 64;
+    const TEST_RESULT_WAIT_LINES: u64 = 2048;
+
     fn feed(scan: &mut FileScan, lines: &[serde_json::Value]) {
         let p = vocab();
+        scan.read_at = Utc::now();
+        scan.record_shell_calls = true;
+        scan.result_wait_lines = TEST_RESULT_WAIT_LINES;
+        if scan.max_shell_calls == 0 {
+            scan.max_shell_calls = TEST_MAX_CALLS;
+        }
         for l in lines {
             scan.lines_seen += 1;
             process_line(&line(l.clone()), scan, &p.workspace_attribution);
@@ -2265,5 +2972,614 @@ mod tests {
         let rescan = scan_file(&path, &p.workspace_attribution, "another-signature").expect("scan");
         assert_eq!(rescan.launches.len(), 1);
         assert_eq!(rescan.params_signature, "another-signature");
+    }
+
+    fn shell_calls(scan: &FileScan) -> Vec<&ShellCall> {
+        scan.shell_calls.iter().map(|(_, call)| call).collect()
+    }
+
+    fn rfc3339(at: Option<DateTime<Utc>>) -> Option<String> {
+        at.map(|t| t.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
+    }
+
+    fn names(call: &ShellCall) -> Vec<&str> {
+        call.programs.iter().map(String::as_str).collect()
+    }
+
+    fn programs_of(command: &str) -> Vec<String> {
+        let p = vocab();
+        let mut out = Vec::new();
+        collect_command_programs(&lex_shell(command), &p.workspace_attribution, 0, &mut out);
+        out
+    }
+
+    /// The programs of a command are the names in command position: the
+    /// wrappers a command goes through, the program they run, and the
+    /// programs of a script handed to a shell. Arguments, options, paths,
+    /// assignments and variables are not names.
+    #[test]
+    fn shell_call_programs_are_the_names_in_command_position() {
+        assert_eq!(
+            programs_of("cd /srv/app && TOKEN=abc123 git push origin main 2>&1 | tail -3"),
+            vec!["cd", "git", "tail"]
+        );
+        assert_eq!(
+            programs_of("sudo -u deploy /usr/local/bin/kubectl apply -f x.yaml"),
+            vec!["sudo", "kubectl"]
+        );
+        assert_eq!(
+            programs_of("timeout 900 env FOO=1 cargo build"),
+            vec!["timeout", "env", "cargo"]
+        );
+        assert_eq!(
+            programs_of(r#"bash -lc "cd /tmp/y && npm test""#),
+            vec!["bash", "cd", "npm"]
+        );
+        assert_eq!(
+            programs_of(r#"pwsh -NoProfile -Command "Invoke-RestMethod https://example.org""#),
+            vec!["pwsh", "invoke-restmethod"]
+        );
+        assert_eq!(
+            programs_of(r"C:\Users\me\venv\Scripts\python.exe -m pip install requests"),
+            vec!["python"]
+        );
+        assert_eq!(programs_of("cmd /c dir C:\\Users"), vec!["cmd", "dir"]);
+        // A heredoc is read as a script when it is the input of a shell that
+        // reads its commands from it.
+        assert_eq!(
+            programs_of("bash <<'EOF'\ncurl -s https://example.org\nEOF"),
+            vec!["bash", "curl"]
+        );
+        assert_eq!(
+            programs_of("sh -s -- stable <<'EOF'\ntar xzf pkg.tgz\nEOF"),
+            vec!["sh", "tar"]
+        );
+        // The input of any other command is that command's data: of an
+        // interpreter, of a program writing a file, of a program a shell
+        // reads through a pipe, of a shell that runs a script file.
+        assert_eq!(
+            programs_of("python3 - <<'EOF'\nimport os\nprint(os.getcwd())\nEOF"),
+            vec!["python3"]
+        );
+        // A value written to a file (built here: no key-shaped literal).
+        let value: String = (0..32).map(|i| char::from(b'a' + (i % 6) as u8)).collect();
+        assert_eq!(
+            programs_of(&format!("cat > token <<EOF\n{value}\nEOF\nsh install.sh")),
+            vec!["cat", "sh"]
+        );
+        assert_eq!(
+            programs_of("cat <<EOF | sh\nmake install\nEOF"),
+            vec!["cat", "sh"]
+        );
+        assert_eq!(
+            programs_of("bash deploy.sh <<EOF\nproduction\nEOF"),
+            vec!["bash"]
+        );
+        // No program: assignments only, a lookup, a variable as the command.
+        assert!(programs_of("FOO=1 BAR=2").is_empty());
+        assert!(programs_of("command -v claude").is_empty());
+        assert!(programs_of("\"$TOOL\" --version").is_empty());
+    }
+
+    /// Claude Code: every Bash call is a shell call dated by its line, its
+    /// result read by id; a tool that runs no command is not one. Only names
+    /// are kept.
+    #[test]
+    fn claude_code_shell_calls_keep_times_and_program_names_only() {
+        let mut scan = FileScan::default();
+        feed(
+            &mut scan,
+            &[
+                serde_json::json!({"type":"user","timestamp":"2026-11-08T10:00:00.000Z","cwd":"/Users/me/p","entrypoint":"cli","message":{"content":"ship it"}}),
+                serde_json::json!({"type":"assistant","timestamp":"2026-11-08T10:00:05.120Z","cwd":"/Users/me/p","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"cd /Users/me/p && TOKEN=abc123 git push origin main 2>&1 | tail -3"}}]}}),
+                serde_json::json!({"type":"user","timestamp":"2026-11-08T10:00:09.480Z","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"Everything up-to-date"}]}}),
+                serde_json::json!({"type":"assistant","timestamp":"2026-11-08T10:00:12.000Z","cwd":"/Users/me/p","message":{"content":[{"type":"tool_use","id":"t2","name":"Read","input":{"file_path":"/Users/me/p/Cargo.toml"}}]}}),
+                serde_json::json!({"type":"user","timestamp":"2026-11-08T10:00:12.100Z","message":{"content":[{"type":"tool_result","tool_use_id":"t2","content":"[package]"}]}}),
+                serde_json::json!({"type":"assistant","timestamp":"2026-11-08T10:00:20.000Z","cwd":"/Users/me/p","message":{"content":[{"type":"tool_use","id":"t3","name":"Bash","input":{"command":"./server --port 8080","run_in_background":true}}]}}),
+                serde_json::json!({"type":"user","timestamp":"2026-11-08T10:00:20.300Z","message":{"content":[{"type":"tool_result","tool_use_id":"t3","content":"Command running in background"}]}}),
+            ],
+        );
+        let calls = shell_calls(&scan);
+        assert_eq!(calls.len(), 2, "{calls:?}");
+        assert_eq!(names(calls[0]), vec!["cd", "git", "tail"]);
+        assert_eq!(
+            rfc3339(calls[0].at),
+            Some("2026-11-08T10:00:05.120Z".to_string())
+        );
+        assert_eq!(
+            rfc3339(calls[0].finished_at),
+            Some("2026-11-08T10:00:09.480Z".to_string())
+        );
+        assert_eq!(calls[0].started_at, None);
+        assert!(!calls[0].background);
+        // A background call's result still bounds when its process started.
+        assert_eq!(names(calls[1]), vec!["server"]);
+        assert!(calls[1].background);
+        assert_eq!(
+            rfc3339(calls[1].finished_at),
+            Some("2026-11-08T10:00:20.300Z".to_string())
+        );
+        assert!(scan.shell_pending.is_empty());
+        // Neither is a launch.
+        assert!(scan.launches.is_empty());
+        let stored = serde_json::to_string(&calls).unwrap();
+        for text in ["abc123", "origin", "8080", "/Users/me", "TOKEN"] {
+            assert!(!stored.contains(text), "{text} in {stored}");
+        }
+    }
+
+    /// A command with no name in command position is a shell call too, with
+    /// no program.
+    #[test]
+    fn a_command_without_a_program_name_is_recorded_with_none() {
+        let mut scan = FileScan::default();
+        feed(
+            &mut scan,
+            &[
+                serde_json::json!({"type":"assistant","timestamp":"2026-11-08T10:00:05.000Z","cwd":"/Users/me/p","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"\"$TOOL\" --version"}}]}}),
+                serde_json::json!({"type":"assistant","timestamp":"2026-11-08T10:00:06.000Z","cwd":"/Users/me/p","message":{"content":[{"type":"tool_use","id":"t2","name":"Bash","input":{"command":"FOO=1 BAR=2"}}]}}),
+            ],
+        );
+        let calls = shell_calls(&scan);
+        assert_eq!(calls.len(), 2, "{calls:?}");
+        assert!(calls.iter().all(|call| call.programs.is_empty()));
+        assert_eq!(
+            rfc3339(calls[0].at),
+            Some("2026-11-08T10:00:05.000Z".to_string())
+        );
+    }
+
+    /// Codex: a function call carries the time of its line and the time of
+    /// its output; the shell of a wrapper argv is not one of its programs. A
+    /// code-mode command is recorded once it has finished: it carries the
+    /// start the harness measured when there is one, and no time of its own.
+    #[test]
+    fn codex_shell_calls_carry_the_line_time_or_the_measured_start() {
+        let mut calls_mode = FileScan::default();
+        feed(
+            &mut calls_mode,
+            &[
+                serde_json::json!({"timestamp":"2026-11-08T10:00:00Z","type":"session_meta","payload":{"cwd":"/home/me/app","originator":"codex_cli_rs"}}),
+                serde_json::json!({"timestamp":"2026-11-08T10:01:00.250Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","call_id":"c1","arguments":"{\"cmd\":\"cargo test -p core\",\"workdir\":\"/home/me/app\"}"}}),
+                serde_json::json!({"timestamp":"2026-11-08T10:01:42.000Z","type":"response_item","payload":{"type":"function_call_output","call_id":"c1","output":"ok"}}),
+                serde_json::json!({"timestamp":"2026-11-08T10:02:00.000Z","type":"response_item","payload":{"type":"function_call","name":"shell","call_id":"c2","arguments":"{\"command\":[\"bash\",\"-lc\",\"npm test && node scripts/report.js\"]}"}}),
+            ],
+        );
+        let calls = shell_calls(&calls_mode);
+        assert_eq!(calls.len(), 2, "{calls:?}");
+        assert_eq!(names(calls[0]), vec!["cargo"]);
+        assert_eq!(
+            rfc3339(calls[0].at),
+            Some("2026-11-08T10:01:00.250Z".to_string())
+        );
+        assert_eq!(
+            rfc3339(calls[0].finished_at),
+            Some("2026-11-08T10:01:42.000Z".to_string())
+        );
+        assert_eq!(names(calls[1]), vec!["npm", "node"]);
+        assert_eq!(calls[1].finished_at, None);
+        assert_eq!(calls_mode.shell_pending.len(), 1);
+
+        let mut code_mode = FileScan::default();
+        feed(
+            &mut code_mode,
+            &[
+                serde_json::json!({"timestamp":"2026-10-06T00:01:26Z","type":"session_meta","payload":{"cwd":"/Users/runner/ws","originator":"codex_exec","source":"exec"}}),
+                // The script the model wrote is not what ran.
+                serde_json::json!({"timestamp":"2026-10-06T00:01:34.420Z","type":"response_item","payload":{"type":"custom_tool_call","call_id":"call_1","name":"exec","input":"text(await tools.exec_command({cmd:\"python3 -m unittest discover -s tests\"}));\n"}}),
+                serde_json::json!({"timestamp":"2026-10-06T00:01:34.672Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"CommandExecution","id":"exec-8a98f9cf","process_id":"26973","command":["/bin/bash","-lc","python3 -m unittest discover -s tests"],"cwd":"file:///Users/runner/ws","status":"completed","exit_code":0},"started_at_ms":1_791_244_894_594_i64,"completed_at_ms":1_791_244_894_672_i64}}),
+                // No measured start on the line: only the completion is known.
+                serde_json::json!({"timestamp":"2026-10-06T00:02:00.000Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"CommandExecution","id":"exec-2","command":["/bin/bash","-lc","git status"],"cwd":"file:///Users/runner/ws","status":"completed","exit_code":0}}}),
+            ],
+        );
+        let calls = shell_calls(&code_mode);
+        assert_eq!(calls.len(), 2, "{calls:?}");
+        assert_eq!(names(calls[0]), vec!["python3"]);
+        assert_eq!(calls[0].at, None);
+        assert_eq!(
+            calls[0].started_at.map(|t| t.timestamp_millis()),
+            Some(1_791_244_894_594)
+        );
+        assert_eq!(
+            calls[0].finished_at.map(|t| t.timestamp_millis()),
+            Some(1_791_244_894_672)
+        );
+        assert_eq!(names(calls[1]), vec!["git"]);
+        assert_eq!((calls[1].at, calls[1].started_at), (None, None));
+        assert_eq!(
+            rfc3339(calls[1].finished_at),
+            Some("2026-10-06T00:02:00.000Z".to_string())
+        );
+        assert!(code_mode.shell_pending.is_empty());
+        // The launch recognizer reads the same items as before.
+        assert!(code_mode.launches.is_empty());
+    }
+
+    /// OpenClaw writes `toolCall` blocks with the arguments as an object,
+    /// and a result as a message of its own that names the call. The blocks
+    /// are read for their shell calls; the launch facts of such a transcript
+    /// are what they were.
+    #[test]
+    fn openclaw_tool_call_blocks_are_shell_calls() {
+        let mut scan = FileScan::default();
+        feed(
+            &mut scan,
+            &[
+                serde_json::json!({"type":"message","id":"m1","parentId":null,"timestamp":"2026-11-08T10:00:00.250Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"call_1","name":"exec","arguments":{"command":"git -C /srv/app status","workdir":"/srv/app","timeout":30,"yieldMs":10000}}],"timestamp":1_794_132_000_250_i64}}),
+                serde_json::json!({"type":"message","id":"m2","parentId":"m1","timestamp":"2026-11-08T10:00:01.900Z","message":{"role":"toolResult","toolCallId":"call_1","toolName":"exec","content":[{"type":"text","text":"On branch main"}],"isError":false,"timestamp":1_794_132_001_900_i64}}),
+                serde_json::json!({"type":"message","id":"m3","parentId":"m2","timestamp":"2026-11-08T10:00:03.000Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"call_2","name":"read","arguments":{"path":"/srv/app/README.md"}}],"timestamp":1_794_132_003_000_i64}}),
+                serde_json::json!({"type":"message","id":"m4","parentId":"m3","timestamp":"2026-11-08T10:00:05.000Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"call_3","name":"exec","arguments":{"command":"claude -p 'summarize the diff'","workdir":"/srv/app"}}],"timestamp":1_794_132_005_000_i64}}),
+            ],
+        );
+        let calls = shell_calls(&scan);
+        assert_eq!(calls.len(), 2, "{calls:?}");
+        assert_eq!(names(calls[0]), vec!["git"]);
+        assert_eq!(
+            rfc3339(calls[0].at),
+            Some("2026-11-08T10:00:00.250Z".to_string())
+        );
+        assert_eq!(
+            rfc3339(calls[0].finished_at),
+            Some("2026-11-08T10:00:01.900Z".to_string())
+        );
+        assert_eq!(names(calls[1]), vec!["claude"]);
+        assert!(scan.launches.is_empty(), "{:?}", scan.launches);
+        assert!(scan.agent_scripts.is_empty());
+    }
+
+    /// A line without a time gives a call without one (Cursor).
+    #[test]
+    fn shell_calls_of_lines_without_a_time_carry_none() {
+        let mut scan = FileScan::default();
+        feed(
+            &mut scan,
+            &[
+                serde_json::json!({"role":"assistant","message":{"content":[{"type":"tool_use","name":"Shell","input":{"command":"npm run build","working_directory":"/w"}}]}}),
+                serde_json::json!({"role":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"path":"/w/package.json"}}]}}),
+            ],
+        );
+        let calls = shell_calls(&scan);
+        assert_eq!(calls.len(), 1, "{calls:?}");
+        assert_eq!(names(calls[0]), vec!["npm"]);
+        assert_eq!(
+            (calls[0].at, calls[0].started_at, calls[0].finished_at),
+            (None, None, None)
+        );
+        assert_eq!(calls[0].order_time(), calls[0].read_at);
+        assert!(!calls[0].time_bounded);
+    }
+
+    /// A time later than the moment the line is read is not kept as given:
+    /// the call's own time is dropped, the result time becomes the read
+    /// time, and the call says so.
+    #[test]
+    fn times_later_than_the_read_time_are_not_kept_as_given() {
+        let mut scan = FileScan::default();
+        feed(
+            &mut scan,
+            &[
+                serde_json::json!({"type":"assistant","timestamp":"2099-01-01T00:00:00.000Z","cwd":"/Users/me/p","message":{"content":[{"type":"tool_use","id":"late-call","name":"Bash","input":{"command":"git status"}}]}}),
+                serde_json::json!({"type":"assistant","timestamp":"2026-11-08T10:00:05.000Z","cwd":"/Users/me/p","message":{"content":[{"type":"tool_use","id":"late-result","name":"Bash","input":{"command":"git log"}}]}}),
+                serde_json::json!({"type":"user","timestamp":"2099-01-01T00:00:09.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"late-result","content":"ok"}]}}),
+            ],
+        );
+        let calls = shell_calls(&scan);
+        assert_eq!(calls.len(), 2, "{calls:?}");
+        assert_eq!(calls[0].at, None);
+        assert!(calls[0].time_bounded);
+        assert_eq!(calls[0].order_time(), calls[0].read_at);
+        assert_eq!(
+            rfc3339(calls[1].at),
+            Some("2026-11-08T10:00:05.000Z".to_string())
+        );
+        assert_eq!(calls[1].finished_at, Some(calls[1].read_at));
+        assert!(calls[1].time_bounded);
+    }
+
+    /// A call waits for its result by its id, for a bounded number of lines.
+    #[test]
+    fn a_result_is_looked_for_by_its_id_for_a_bounded_number_of_lines() {
+        let mut scan = FileScan::default();
+        feed(
+            &mut scan,
+            &[
+                serde_json::json!({"type":"assistant","timestamp":"2026-11-08T10:00:05.000Z","message":{"content":[{"type":"tool_use","id":"toolu_wait_1","name":"Bash","input":{"command":"git status"}}]}}),
+                // Another call's result leaves this one waiting.
+                serde_json::json!({"type":"user","timestamp":"2026-11-08T10:00:06.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_other","content":"ok"}]}}),
+            ],
+        );
+        assert!(scan.shell_pending.contains_key("toolu_wait_1"));
+        let filler: Vec<serde_json::Value> = (0..=TEST_RESULT_WAIT_LINES)
+            .map(|_| serde_json::json!({"type":"progress","timestamp":"2026-11-08T10:00:07.000Z"}))
+            .collect();
+        feed(&mut scan, &filler);
+        assert!(scan.shell_pending.is_empty());
+        // The call's end is not known: the list says so.
+        assert_eq!(scan.shell_gave_up, vec![0]);
+        assert_eq!(
+            rfc3339(scan.shell_gaps.unread_from),
+            Some("2026-11-08T10:00:05.000Z".to_string())
+        );
+        assert!(scan.shell_gaps.unread_until.is_some());
+        feed(
+            &mut scan,
+            &[
+                serde_json::json!({"type":"user","timestamp":"2026-11-08T10:30:00.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_wait_1","content":"ok"}]}}),
+            ],
+        );
+        assert_eq!(shell_calls(&scan)[0].finished_at, None);
+    }
+
+    /// The list keeps the most recent calls and says from when it is whole;
+    /// a session's list is its own calls and its subagents', oldest first,
+    /// each once.
+    #[test]
+    fn the_list_keeps_the_most_recent_calls_and_says_what_it_left_out() {
+        let mut scan = FileScan {
+            max_shell_calls: 4,
+            ..Default::default()
+        };
+        let lines: Vec<serde_json::Value> = (0..6)
+            .map(|i| {
+                serde_json::json!({"type":"assistant","timestamp":format!("2026-11-08T10:00:{:02}.000Z", 10 * i),"message":{"content":[{"type":"tool_use","id":format!("call-{i}"),"name":"Bash","input":{"command":format!("tool{i} --run")}}]}})
+            })
+            .collect();
+        feed(&mut scan, &lines[..4]);
+        assert_eq!(scan.shell_gaps, ShellCallGaps::default());
+        feed(&mut scan, &lines[4..]);
+        assert_eq!(scan.shell_calls.len(), 4);
+        assert_eq!(scan.shell_calls[0].1.programs, vec!["tool2".to_string()]);
+        assert_eq!(
+            rfc3339(scan.shell_gaps.calls_before),
+            Some("2026-11-08T10:00:20.000Z".to_string())
+        );
+        // The calls that left the list no longer wait for a result.
+        assert_eq!(scan.shell_pending.len(), 4);
+        assert!(!scan.shell_pending.contains_key("call-1"));
+
+        let at = |secs: i64| DateTime::<Utc>::from_timestamp(1_794_132_000 + secs, 0);
+        let read_at = at(600).unwrap();
+        let call = |secs: Option<i64>, program: &str| ShellCall {
+            at: secs.and_then(at),
+            programs: vec![program.to_string()],
+            read_at,
+            ..Default::default()
+        };
+        let mut merged = vec![
+            call(Some(30), "git"),
+            call(None, "npm"),
+            call(Some(10), "cargo"),
+            // The same call read from a second transcript, a moment later.
+            ShellCall {
+                read_at: at(601).unwrap(),
+                ..call(Some(30), "git")
+            },
+            call(None, "npm"),
+        ];
+        let mut gaps = ShellCallGaps::default();
+        bound_shell_calls(&mut merged, &mut gaps, 64);
+        // Two readings of a call without a time are one call too.
+        assert_eq!(
+            merged
+                .iter()
+                .map(|c| c.programs[0].as_str())
+                .collect::<Vec<_>>(),
+            vec!["cargo", "git", "npm"]
+        );
+        assert_eq!(gaps, ShellCallGaps::default());
+        // The call without a time is the first to go.
+        bound_shell_calls(&mut merged, &mut gaps, 2);
+        assert_eq!(
+            merged
+                .iter()
+                .map(|c| c.programs[0].as_str())
+                .collect::<Vec<_>>(),
+            vec!["cargo", "git"]
+        );
+        assert_eq!(gaps.calls_before, Some(read_at));
+    }
+
+    /// A collection's scan reads the launch facts and records no shell call:
+    /// nothing waits for a result, nothing is listed.
+    #[test]
+    fn a_scan_that_does_not_record_shell_calls_reads_the_launch_facts_only() {
+        let p = vocab();
+        let mut scan = FileScan::default();
+        for l in [
+            serde_json::json!({"type":"user","timestamp":"2026-11-08T10:00:00Z","cwd":"/Users/me/p","entrypoint":"cli","message":{"content":"hi"}}),
+            serde_json::json!({"type":"assistant","timestamp":"2026-11-08T10:00:05Z","cwd":"/Users/me/p","message":{"content":[{"type":"tool_use","id":"a","name":"Bash","input":{"command":"claude -p x","run_in_background":true}}]}}),
+            serde_json::json!({"type":"assistant","timestamp":"2026-11-08T10:00:09Z","message":{"content":[{"type":"tool_use","id":"b","name":"Bash","input":{"command":"git status"}}]}}),
+            serde_json::json!({"type":"message","timestamp":"2026-11-08T10:00:12Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"c","name":"exec","arguments":{"command":"git push"}}]}}),
+        ] {
+            scan.lines_seen += 1;
+            process_line(&line(l), &mut scan, &p.workspace_attribution);
+        }
+        assert_eq!(scan.launches.len(), 1);
+        assert!(scan.shell_calls.is_empty());
+        assert!(scan.shell_pending.is_empty());
+        assert_eq!(scan.next_shell_seq, 0);
+        assert_eq!(scan.shell_gaps, ShellCallGaps::default());
+    }
+
+    /// The reader reports the line that carries the first user turn, once:
+    /// not a harness notice, not a tool result, not a compaction summary, not
+    /// a line without a time in a transcript whose lines carry one. Claude
+    /// Code, Codex and OpenClaw lines alike; a collection's scan does not
+    /// look for it.
+    #[test]
+    fn the_reader_reports_the_first_user_turn_once() {
+        let read_at = Utc::now();
+        let mut reader = ShellCallReader::with_limits(8, 64);
+        let mut first_turns = Vec::new();
+        for l in [
+            serde_json::json!({"type":"user","timestamp":"2026-11-11T10:00:00Z","cwd":"/Users/me/p","entrypoint":"cli","message":{"role":"user","content":"<local-command-caveat>x</local-command-caveat>"}}),
+            serde_json::json!({"type":"user","timestamp":"2026-11-11T10:00:01Z","isCompactSummary":true,"message":{"role":"user","content":"summary"}}),
+            serde_json::json!({"type":"user","message":{"role":"user","content":"a logged request"}}),
+            serde_json::json!({"type":"user","timestamp":"2026-11-11T10:00:02Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"a","content":"ok"}]}}),
+            serde_json::json!({"type":"user","timestamp":"2026-11-11T10:00:09Z","message":{"role":"user","content":"update the readme"}}),
+            serde_json::json!({"type":"user","timestamp":"2026-11-11T10:01:00Z","message":{"role":"user","content":"and the changelog"}}),
+        ] {
+            first_turns.push(reader.read_line(&line(l), read_at).first_user_turn);
+        }
+        assert_eq!(first_turns, vec![false, false, false, false, true, false]);
+        assert!(reader.user_turn_read());
+        // A queued command is a user turn too.
+        let mut queued = ShellCallReader::with_limits(8, 64);
+        let l = serde_json::json!({"type":"attachment","timestamp":"2026-11-11T10:00:09Z","attachment":{"type":"queued_command","prompt":"stop"}});
+        assert!(queued.read_line(&line(l), read_at).first_user_turn);
+        // Codex and OpenClaw messages.
+        for l in [
+            serde_json::json!({"timestamp":"2026-11-11T10:00:09Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"fix the build"}]}}),
+            serde_json::json!({"type":"message","timestamp":"2026-11-11T10:00:09Z","message":{"role":"user","content":[{"type":"text","text":"fix the build"}]}}),
+        ] {
+            let mut other = ShellCallReader::with_limits(8, 64);
+            assert!(other.read_line(&line(l), read_at).first_user_turn);
+        }
+        // Nothing yet: no turn read.
+        assert!(!ShellCallReader::with_limits(8, 64).user_turn_read());
+        // A collection's scan does not look for it.
+        let p = vocab();
+        let mut scan = FileScan::default();
+        scan.lines_seen += 1;
+        process_line(
+            &line(
+                serde_json::json!({"type":"user","timestamp":"2026-11-11T10:00:09Z","message":{"role":"user","content":"update the readme"}}),
+            ),
+            &mut scan,
+            &p.workspace_attribution,
+        );
+        assert!(!scan.user_turn_seen && !scan.first_user_turn_line);
+    }
+
+    /// The reader says what each line changed: the calls it carries, the
+    /// results that came back, the calls that stopped waiting (with the part
+    /// of the transcript the list then does not vouch for), and what its
+    /// caller did not hand over.
+    #[test]
+    fn the_reader_reports_what_each_line_changed() {
+        let at = |secs: i64| DateTime::<Utc>::from_timestamp(1_794_132_000 + secs, 0).unwrap();
+        let mut reader = ShellCallReader::with_limits(8, 3);
+        assert_eq!(reader.headless(), None);
+        let read = |reader: &mut ShellCallReader, value: serde_json::Value, secs: i64| {
+            reader.read_line(&line(value), at(secs))
+        };
+        let events = read(
+            &mut reader,
+            serde_json::json!({"type":"user","timestamp":"2026-11-08T10:00:00Z","cwd":"/Users/me/p","entrypoint":"cli","message":{"content":"hi"}}),
+            1,
+        );
+        assert_eq!(events, ShellCallLineEvents::default());
+        let events = read(
+            &mut reader,
+            serde_json::json!({"type":"assistant","timestamp":"2026-11-08T10:00:05Z","message":{"content":[{"type":"tool_use","id":"a","name":"Bash","input":{"command":"git status"}},{"type":"tool_use","id":"b","name":"Bash","input":{"command":"cargo build"}}]}}),
+            6,
+        );
+        assert_eq!(events.started, vec![0, 1]);
+        assert_eq!(reader.call(0).unwrap().read_at, at(6));
+        assert_eq!(reader.call(1).unwrap().programs, vec!["cargo".to_string()]);
+        let events = read(
+            &mut reader,
+            serde_json::json!({"type":"user","timestamp":"2026-11-08T10:00:07Z","message":{"content":[{"type":"tool_result","tool_use_id":"a","content":"ok"}]}}),
+            8,
+        );
+        assert_eq!(events.finished, vec![0]);
+        assert!(reader.call(0).unwrap().finished_at.is_some());
+        assert_eq!(reader.gaps(), &ShellCallGaps::default());
+        // The second call's result does not come within three lines.
+        let mut gave_up = Vec::new();
+        for n in 0..4 {
+            let events = read(
+                &mut reader,
+                serde_json::json!({"type":"progress","timestamp":"2026-11-08T10:00:09Z"}),
+                10 + n,
+            );
+            gave_up.extend(events.gave_up);
+        }
+        assert_eq!(gave_up, vec![1]);
+        assert_eq!(reader.call(1).unwrap().finished_at, None);
+        assert_eq!(
+            rfc3339(reader.gaps().unread_from),
+            Some("2026-11-08T10:00:05.000Z".to_string())
+        );
+        assert!(reader.gaps().unread_until.is_some());
+        assert_eq!(reader.calls().count(), 2);
+        // What the caller could not hand over is unread too.
+        let mut other = ShellCallReader::with_limits(8, 3);
+        other.note_unread(None, at(20));
+        assert_eq!(
+            (other.gaps().unread_from, other.gaps().unread_until),
+            (None, Some(at(20)))
+        );
+        let mut gaps = ShellCallGaps::default();
+        gaps.add_unread(Some(at(9)), at(9));
+        gaps.add_unread(Some(at(3)), at(9));
+        assert_eq!(
+            (gaps.unread_from, gaps.unread_until),
+            (Some(at(3)), Some(at(9)))
+        );
+    }
+
+    /// A line that repeats a message of the conversation without being a
+    /// turn of it (a logged request: no time of its own) yields no call in a
+    /// transcript whose lines carry a time. Read before the transcript showed
+    /// one, its call is taken back when it does.
+    #[test]
+    fn a_line_without_a_time_is_not_a_turn_record_where_lines_carry_one() {
+        let turn = serde_json::json!({"type":"assistant","timestamp":"2026-11-08T10:00:05Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_a","name":"Bash","input":{"command":"git status","description":"d"}}]}});
+        let logged = serde_json::json!({"type":"api-request-blob","sessionId":"s","hash":"h","message":{"role":"assistant","content":[{"type":"thinking","thinking":"","signature":"x"},{"type":"tool_use","id":"toolu_a","name":"Bash","input":{"command":"git status","description":"d"},"caller":{"type":"direct"}}]}});
+        let mut scan = FileScan::default();
+        feed(&mut scan, &[turn.clone(), logged.clone(), logged.clone()]);
+        let calls = shell_calls(&scan);
+        assert_eq!(calls.len(), 1, "{calls:?}");
+        assert!(calls[0].at.is_some());
+
+        let now = Utc::now();
+        let mut reader = ShellCallReader::with_limits(8, 64);
+        let first = reader.read_line(&line(logged.clone()), now);
+        assert_eq!(first.started, vec![0]);
+        let second = reader.read_line(&line(turn), now);
+        assert_eq!(second.withdrawn, vec![0]);
+        assert_eq!(second.started, vec![1]);
+        let third = reader.read_line(&line(logged), now);
+        assert_eq!(third, ShellCallLineEvents::default());
+        assert_eq!(
+            reader.calls().map(|(seq, _)| seq).collect::<Vec<_>>(),
+            vec![1]
+        );
+    }
+
+    /// A call without a time of its own takes no place from a dated one: it
+    /// is the first to leave a full list.
+    #[test]
+    fn a_call_without_a_time_leaves_a_full_list_first() {
+        let mut scan = FileScan {
+            max_shell_calls: 2,
+            ..Default::default()
+        };
+        feed(
+            &mut scan,
+            &[
+                serde_json::json!({"timestamp":"2026-11-08T10:00:00Z","type":"session_meta","payload":{"cwd":"/home/me/app","originator":"codex_exec","source":"exec"}}),
+                serde_json::json!({"timestamp":"2026-11-08T10:00:10.000Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","call_id":"c1","arguments":"{\"cmd\":\"cargo test\"}"}}),
+                // A command recorded once it had run, without a measured start.
+                serde_json::json!({"timestamp":"2026-11-08T10:00:20.000Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"CommandExecution","id":"exec-2","command":["/bin/bash","-lc","git status"],"cwd":"file:///home/me/app","status":"completed","exit_code":0}}}),
+            ],
+        );
+        let calls = shell_calls(&scan);
+        assert_eq!(calls.len(), 2);
+        assert!(calls[1].recorded_after_run && !calls[1].has_own_time());
+        assert!(!calls[0].recorded_after_run);
+        feed(
+            &mut scan,
+            &[
+                serde_json::json!({"timestamp":"2026-11-08T10:00:30.000Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","call_id":"c3","arguments":"{\"cmd\":\"npm test\"}"}}),
+            ],
+        );
+        let calls = shell_calls(&scan);
+        assert_eq!(
+            calls.iter().map(|c| names(c)[0]).collect::<Vec<_>>(),
+            vec!["cargo", "npm"]
+        );
+        assert!(scan.shell_gaps.calls_before.is_some());
     }
 }
