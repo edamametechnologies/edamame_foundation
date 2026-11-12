@@ -25,6 +25,7 @@ use std::path::{Path, PathBuf};
 
 /// The shell calls read when a transcript grows.
 pub mod capture;
+pub mod capture_wire;
 pub mod claude_code;
 pub mod claude_desktop;
 pub mod codex;
@@ -1138,6 +1139,46 @@ pub(crate) fn mtime_secs(path: &Path) -> u64 {
         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+/// Transcript files whose modification time was later than the moment they
+/// were read, with the time they are read as (a resource bound: past it the
+/// map is emptied and the next read of each starts again).
+const MAX_CLAMPED_MTIMES: usize = 4096;
+
+static CLAMPED_MTIMES: once_cell::sync::Lazy<
+    undeadlock::CustomDashMap<std::path::PathBuf, (u64, u64)>,
+> = once_cell::sync::Lazy::new(|| {
+    undeadlock::CustomDashMap::new("agent_transcripts_clamped_mtimes")
+});
+
+/// [`mtime_secs`], never later than `now`. A file whose modification time is
+/// later than `now` is read as the moment it was first read so, and keeps
+/// that value for as long as its modification time does not change: a
+/// clamped time does not move with each read, so it does not read as a
+/// change of the transcript.
+pub(crate) fn mtime_secs_not_after(path: &Path, now: u64) -> u64 {
+    clamp_mtime(path, mtime_secs(path), now)
+}
+
+fn clamp_mtime(path: &Path, mtime: u64, now: u64) -> u64 {
+    if mtime <= now {
+        if !CLAMPED_MTIMES.is_empty() {
+            CLAMPED_MTIMES.remove(path);
+        }
+        return mtime;
+    }
+    if let Some(entry) = CLAMPED_MTIMES.get(path) {
+        let (raw, clamped) = *entry;
+        if raw == mtime {
+            return clamped;
+        }
+    }
+    if CLAMPED_MTIMES.len() >= MAX_CLAMPED_MTIMES {
+        CLAMPED_MTIMES.clear();
+    }
+    CLAMPED_MTIMES.insert(path.to_path_buf(), (mtime, now));
+    now
 }
 
 /// File birthtime in seconds since unix epoch, falling back to mtime.

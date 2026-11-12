@@ -12,9 +12,9 @@ use super::parsing::{
     extract_paths, extract_ports, extract_tool_names, extract_traffic, ParsedTranscript,
 };
 use super::{
-    birthtime_secs, datetime_from_secs, hostname_string, mtime_secs, observer_agent_instance_id,
-    walk_files_with_suffix, CollectDiagnostics, CollectOptions, CollectResult, CollectedPayload,
-    CollectedRawSession,
+    birthtime_secs, datetime_from_secs, hostname_string, mtime_secs_not_after,
+    observer_agent_instance_id, walk_files_with_suffix, CollectDiagnostics, CollectOptions,
+    CollectResult, CollectedPayload, CollectedRawSession,
 };
 
 /// `scopeParentPaths` from `edamame_cursor/service/config.mjs`.
@@ -234,7 +234,9 @@ fn gather_cursor_transcripts(root: &Path, options: &CollectOptions) -> Vec<Trans
     let mut by_session: std::collections::HashMap<String, TranscriptGroup> =
         std::collections::HashMap::new();
     for path in files {
-        let mtime = mtime_secs(&path);
+        // A modification time later than the read time is read as the time
+        // it was first read so.
+        let mtime = mtime_secs_not_after(&path, now_secs);
         if mtime < active_cutoff {
             continue;
         }

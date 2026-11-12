@@ -287,6 +287,69 @@ fn claude_code_collects_jsonl() {
     assert_declares_model_traffic(session, "claude_code");
 }
 
+/// A collection reads no shell call: its result holds the sessions and the
+/// diagnostics, as before, whatever the transcripts' tool calls.
+#[test]
+fn a_collection_carries_no_shell_calls() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    let projects = home.join(".claude/projects/-Users-me-p");
+    let lines = [
+        r#"{"type":"user","timestamp":"2026-11-08T10:00:00.000Z","cwd":"/Users/me/p","entrypoint":"cli","message":{"role":"user","content":[{"type":"text","text":"push the branch"}]}}"#,
+        r#"{"type":"assistant","timestamp":"2026-11-08T10:00:30.500Z","cwd":"/Users/me/p","message":{"role":"assistant","content":[{"type":"text","text":"pushing"},{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"git push origin feature/login"}}]}}"#,
+        r#"{"type":"user","timestamp":"2026-11-08T10:00:33.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"done"}]}}"#,
+    ];
+    write(
+        &projects.join("session-1.jsonl"),
+        &(lines.join("\n") + "\n"),
+    );
+    let result = collect("claude_code", home, &options()).expect("claude_code collect");
+    assert_eq!(result.payload.sessions.len(), 1);
+    let value = serde_json::to_value(&result).expect("serialize");
+    let mut keys: Vec<&str> = value
+        .as_object()
+        .expect("an object")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(keys, vec!["diagnostics", "payload"]);
+    assert!(value["payload"]["sessions"][0].get("shell_calls").is_none());
+}
+
+/// A transcript whose modification time is later than the read time is
+/// collected with the read time: it sorts by it and its session carries it.
+#[test]
+fn a_transcript_modified_later_than_the_read_time_is_collected_with_the_read_time() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let home = temp.path();
+    let projects = home.join(".claude/projects/sample");
+    let line = r#"{"type":"user","timestamp":"2026-11-08T10:00:00.000Z","cwd":"/Users/me/p","entrypoint":"cli","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}"#;
+    let path = projects.join("session-1.jsonl");
+    write(&path, &format!("{line}\n"));
+    std::fs::File::options()
+        .write(true)
+        .open(&path)
+        .expect("open")
+        .set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(86_400))
+        .expect("set the modification time");
+    let before = chrono::Utc::now();
+    let result = collect("claude_code", home, &options()).expect("claude_code collect");
+    assert_eq!(result.payload.sessions.len(), 1);
+    let modified_at = result.payload.sessions[0].modified_at;
+    assert!(
+        modified_at <= chrono::Utc::now() && modified_at >= before - chrono::Duration::seconds(2),
+        "{modified_at}"
+    );
+    // Read again later, the clamped time does not move: the transcript does
+    // not read as changed on every collection.
+    let first = super::mtime_secs_not_after(&path, 1_000);
+    assert_eq!(super::mtime_secs_not_after(&path, 1_000 + 3_600), first);
+    // Its own time again once it is no longer in the future.
+    let actual = super::mtime_secs(&path);
+    assert_eq!(super::mtime_secs_not_after(&path, actual + 1), actual);
+}
+
 /// The agent's own model traffic is declared on every session, verbatim and
 /// in order, from the agent-visibility params (`agent_llm_traffic`): hosts,
 /// shared cloud suffixes and `asn:` owners alike.
