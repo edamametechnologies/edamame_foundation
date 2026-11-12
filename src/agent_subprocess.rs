@@ -388,14 +388,42 @@ fn max_subprocess_observations() -> usize {
         .max(1)
 }
 
+/// The command an observation keeps: the argv through the command-line
+/// redaction ([`crate::redaction::redact_command_line`]), joined and
+/// truncated. The observation is persisted, shown and served over MCP, so
+/// the credential a command line carries is masked before it is stored.
 fn join_command(cmd: &[String]) -> String {
-    let joined = cmd.join(" ");
+    truncate_command(crate::redaction::redact_command_line(cmd).join(" "))
+}
+
+fn truncate_command(joined: String) -> String {
     if joined.chars().count() > MAX_COMMAND_CHARS {
         let truncated: String = joined.chars().take(MAX_COMMAND_CHARS).collect();
         format!("{truncated}...")
     } else {
         joined
     }
+}
+
+/// Redact the joined command of observations an older build stored before
+/// the command-line redaction ran on them (a persisted history read back
+/// after an upgrade). The command is one string there, so it goes through
+/// [`crate::redaction::redact_command_text`]. Applying it to an already
+/// redacted command changes nothing. Returns how many observations changed.
+pub fn redact_observation_commands(observations: &mut [AgentSubprocessObservation]) -> usize {
+    let mut changed = 0;
+    for observation in observations.iter_mut() {
+        if observation.command.is_empty() {
+            continue;
+        }
+        let redacted =
+            truncate_command(crate::redaction::redact_command_text(&observation.command));
+        if redacted != observation.command {
+            observation.command = redacted;
+            changed += 1;
+        }
+    }
+    changed
 }
 
 // ---------------------------------------------------------------------------
@@ -949,6 +977,66 @@ mod tests {
         assert_eq!(usage.observations[0].source, "fim");
         assert_eq!(usage.observations[0].agent_type, "cursor");
         assert!(usage.observations[0].destination.is_none());
+    }
+
+    /// A token-shaped value built at run time, so no literal credential sits
+    /// in the source.
+    fn fake_token(prefix: &str, body_len: usize) -> String {
+        let alphabet = b"AbCdEfGhIjKlMnOpQrStUvWxYz0123456789";
+        let body: String = (0..body_len)
+            .map(|i| alphabet[i % alphabet.len()] as char)
+            .collect();
+        format!("{prefix}{body}")
+    }
+
+    #[test]
+    fn observation_command_is_redacted_in_argv_form() {
+        let token = fake_token("ghp_", 36);
+        let bearer = fake_token("", 40);
+        let mut curl = input("curl", "/home/me/.cursor/x", Some("api.example.com:443"));
+        curl.command = vec![
+            "curl".to_string(),
+            "-H".to_string(),
+            format!("Authorization: Bearer {bearer}"),
+            format!("https://api.example.com/repos?access_token={token}"),
+        ];
+        let mut git = input("git", "/home/me/.cursor/x", Some("github.com:443"));
+        git.command = vec![
+            "git".to_string(),
+            "push".to_string(),
+            format!("https://x-access-token:{token}@github.com/o/r.git"),
+        ];
+        let usage = build_agent_subprocess_usage(&[curl, git], 0);
+        assert_eq!(usage.total_observations, 2);
+        for observation in &usage.observations {
+            assert!(!observation.command.contains(&token), "token kept");
+            assert!(!observation.command.contains(&bearer), "bearer kept");
+            assert!(observation.command.contains(crate::redaction::REDACTED));
+        }
+        // The finding evidence carries the same, redacted, command.
+        for finding in &usage.findings {
+            let command = finding.evidence.get("command").expect("command evidence");
+            assert!(!command.contains(&token) && !command.contains(&bearer));
+        }
+    }
+
+    #[test]
+    fn stored_one_string_command_is_redacted_once_and_idempotently() {
+        let token = fake_token("ghp_", 36);
+        let mut observation =
+            build_agent_subprocess_usage(&[input("ssh", "/home/me/.cursor/x", Some("h:22"))], 0)
+                .observations
+                .remove(0);
+        // What an older build stored: the raw joined command.
+        observation.command =
+            format!("gh api -H 'Authorization: token {token}' /user GH_TOKEN={token}");
+        let mut history = vec![observation];
+        assert_eq!(redact_observation_commands(&mut history), 1);
+        assert!(!history[0].command.contains(&token));
+        // A second pass changes nothing.
+        let once = history[0].command.clone();
+        assert_eq!(redact_observation_commands(&mut history), 0);
+        assert_eq!(history[0].command, once);
     }
 
     #[test]

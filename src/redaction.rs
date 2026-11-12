@@ -763,6 +763,10 @@ struct ClientCredentialOptions {
     auth_type: &'static [&'static str],
     /// Kinds under which the `user_password` value is a token, masked whole.
     token_auth_types: &'static [&'static str],
+    /// When not empty, the options are read only in a command that names one
+    /// of these subcommands (`docker login`): elsewhere the same letter is
+    /// another option (`docker run -p 8080:80` publishes a port).
+    subcommands: &'static [&'static str],
 }
 
 const CLIENT_CREDENTIAL_OPTIONS: &[ClientCredentialOptions] = &[
@@ -773,6 +777,7 @@ const CLIENT_CREDENTIAL_OPTIONS: &[ClientCredentialOptions] = &[
         user_password: &["-u", "--user", "-U", "--proxy-user"],
         auth_type: &[],
         token_auth_types: &[],
+        subcommands: &[],
     },
     ClientCredentialOptions {
         programs: &["http", "https", "httpie"],
@@ -781,6 +786,7 @@ const CLIENT_CREDENTIAL_OPTIONS: &[ClientCredentialOptions] = &[
         user_password: &["-a", "--auth"],
         auth_type: &["-A", "--auth-type"],
         token_auth_types: &["bearer"],
+        subcommands: &[],
     },
     // The MySQL and MariaDB clients and tools: `-p` alone prompts.
     ClientCredentialOptions {
@@ -809,6 +815,7 @@ const CLIENT_CREDENTIAL_OPTIONS: &[ClientCredentialOptions] = &[
         user_password: &[],
         auth_type: &[],
         token_auth_types: &[],
+        subcommands: &[],
     },
     // mycli takes the password as the next argument too.
     ClientCredentialOptions {
@@ -818,6 +825,7 @@ const CLIENT_CREDENTIAL_OPTIONS: &[ClientCredentialOptions] = &[
         user_password: &[],
         auth_type: &[],
         token_auth_types: &[],
+        subcommands: &[],
     },
     ClientCredentialOptions {
         programs: &["redis-cli"],
@@ -826,6 +834,7 @@ const CLIENT_CREDENTIAL_OPTIONS: &[ClientCredentialOptions] = &[
         user_password: &[],
         auth_type: &[],
         token_auth_types: &[],
+        subcommands: &[],
     },
     // The MongoDB shells and database tools.
     ClientCredentialOptions {
@@ -845,6 +854,7 @@ const CLIENT_CREDENTIAL_OPTIONS: &[ClientCredentialOptions] = &[
         user_password: &[],
         auth_type: &[],
         token_auth_types: &[],
+        subcommands: &[],
     },
     ClientCredentialOptions {
         programs: &["zip", "unzip"],
@@ -853,6 +863,18 @@ const CLIENT_CREDENTIAL_OPTIONS: &[ClientCredentialOptions] = &[
         user_password: &[],
         auth_type: &[],
         token_auth_types: &[],
+        subcommands: &[],
+    },
+    // Container registry logins: `docker login -u USER -p PASSWORD`,
+    // `--password PASSWORD` (`--password-stdin` takes no value).
+    ClientCredentialOptions {
+        programs: &["docker", "podman", "nerdctl", "buildah", "skopeo"],
+        value: &["-p", "--password"],
+        attached_only: false,
+        user_password: &[],
+        auth_type: &[],
+        token_auth_types: &[],
+        subcommands: &["login"],
     },
 ];
 
@@ -1202,6 +1224,13 @@ fn simple_command_replacements(words: &[&str]) -> Vec<(usize, String)> {
     let Some(client) = client_for_program(words[program]) else {
         return out;
     };
+    if !client.subcommands.is_empty()
+        && !words[program + 1..]
+            .iter()
+            .any(|word| client.subcommands.contains(word))
+    {
+        return out;
+    }
     // The kind of credential, wherever it is given.
     let token = !client.token_auth_types.is_empty()
         && words[program + 1..]
@@ -1665,9 +1694,29 @@ pub fn redact_command_line<S: AsRef<str>>(args: &[S]) -> Vec<String> {
             Some((name, value)) if is_assignment_name(name) && !value.is_empty() => {
                 format!("{name}={REDACTED}")
             }
-            _ => redact_credential_header_options(&redact_text(&arg)),
+            _ => redact_java_properties(&redact_credential_header_options(&redact_text(&arg))),
         })
         .collect();
+    // A secret-named word and its value as two arguments (`aws configure set
+    // aws_secret_access_key VALUE`): read as the text form reads the pair.
+    for index in 1..out.len() {
+        let (name, value) = (&out[index - 1], &out[index]);
+        if name.starts_with('-')
+            || name.contains(char::is_whitespace)
+            || value.starts_with('-')
+            || value.contains(char::is_whitespace)
+            || !is_secret_field_name(name)
+        {
+            continue;
+        }
+        let pair = format!("{name} {value}");
+        let masked = redact_named_fields(&pair);
+        if let Some(rest) = masked.strip_prefix(&format!("{name} ")) {
+            if rest != value {
+                out[index] = rest.to_string();
+            }
+        }
+    }
     // A header that is the argument after `-H` / `--header`.
     for index in 1..out.len() {
         if !matches!(out[index - 1].as_str(), "-H" | "--header") {
@@ -1690,9 +1739,45 @@ pub fn redact_command_line<S: AsRef<str>>(args: &[S]) -> Vec<String> {
 /// [`COMMAND_LINE_ARG_MAX_CHARS`] cap. The same limit holds: what is not a
 /// known shape, a named field or a listed client's option stays.
 pub fn redact_command_text(text: &str) -> String {
-    cap_argument(redact_credential_header_options(&redact_text(
-        &redact_client_credentials_in_text(text, 0),
+    cap_argument(redact_java_properties(&redact_credential_header_options(
+        &redact_text(&redact_client_credentials_in_text(text, 0)),
     )))
+}
+
+lazy_static! {
+    /// A JVM system property on a command line (`-Dname=value`, also behind
+    /// `-J`): the value runs to the next space or quote.
+    static ref JAVA_PROPERTY: Regex =
+        Regex::new(r#"(?P<lead>(?:^|\s|["'])(?:-J)?-D(?P<name>[A-Za-z0-9_.\-]+)=)(?P<value>[^\s"']+)"#)
+            .expect("Failed to compile JVM property regex");
+}
+
+/// The value of a JVM system property whose name says it is a credential
+/// (`-Djavax.net.ssl.keyStorePassword=...`, `-Ddb.password=...`): the last
+/// dotted segment of the name, its camel case read as words, is a
+/// [`is_secret_field_name`] name.
+fn redact_java_properties(text: &str) -> String {
+    if !text.contains("-D") {
+        return text.to_string();
+    }
+    JAVA_PROPERTY
+        .replace_all(text, |caps: &regex::Captures| {
+            let name = &caps["name"];
+            let last = name.rsplit('.').next().unwrap_or(name);
+            let mut snake = String::with_capacity(last.len() + 4);
+            for (i, c) in last.chars().enumerate() {
+                if c.is_ascii_uppercase() && i > 0 {
+                    snake.push('_');
+                }
+                snake.push(c.to_ascii_lowercase());
+            }
+            if caps["value"] != *REDACTED && is_secret_field_name(&snake) {
+                format!("{}{}", &caps["lead"], REDACTED)
+            } else {
+                caps[0].to_string()
+            }
+        })
+        .into_owned()
 }
 
 /// `NAME` of a `NAME=value` assignment, as shells and `env` write them.
@@ -1857,7 +1942,7 @@ pub fn redact_command_lines_in_json_text(text: &str) -> String {
 
 fn cap_argument(arg: String) -> String {
     let total = arg.chars().count();
-    if total <= COMMAND_LINE_ARG_MAX_CHARS {
+    if total <= COMMAND_LINE_ARG_MAX_CHARS || is_capped_argument(&arg) {
         return arg;
     }
     let head: String = arg.chars().take(COMMAND_LINE_ARG_MAX_CHARS).collect();
@@ -1865,6 +1950,21 @@ fn cap_argument(arg: String) -> String {
         "{head}...[{} more chars]",
         total - COMMAND_LINE_ARG_MAX_CHARS
     )
+}
+
+/// An argument [`cap_argument`] already capped: its head and the
+/// `...[N more chars]` count. Capping it again would replace the count of the
+/// original's characters with the count of the marker's, so a stored value
+/// redacted a second time (a record read back, a document served twice)
+/// keeps the first count.
+fn is_capped_argument(arg: &str) -> bool {
+    let Some((head_end, _)) = arg.char_indices().nth(COMMAND_LINE_ARG_MAX_CHARS) else {
+        return false;
+    };
+    arg[head_end..]
+        .strip_prefix("...[")
+        .and_then(|rest| rest.strip_suffix(" more chars]"))
+        .is_some_and(|count| !count.is_empty() && count.bytes().all(|b| b.is_ascii_digit()))
 }
 
 // ---------------------------------------------------------------------------
@@ -2704,6 +2804,89 @@ mod tests {
         assert!(out
             .iter()
             .all(|a| !a.contains("MIIJQgIBADANBgkqhkiG9w0BAQEFAASCCSww")));
+        // A redacted command line redacted again is unchanged: the capped
+        // blob keeps the count of the original's characters.
+        assert_eq!(redact_command_line(&out), out);
+        assert_eq!(redact_command_text(&out[15]), out[15]);
+    }
+
+    #[test]
+    fn registry_logins_secret_pairs_and_jvm_properties_are_masked() {
+        let password = fake("Pq", 14);
+        let secret = fake("", 40);
+        let argv = |words: &[&str]| words.iter().map(|w| w.to_string()).collect::<Vec<_>>();
+        let cases: Vec<(Vec<String>, &String)> = vec![
+            (
+                argv(&["docker", "login", "-u", "me", "-p", &password]),
+                &password,
+            ),
+            (
+                argv(&[
+                    "docker",
+                    "login",
+                    "--password",
+                    &password,
+                    "registry.example.com",
+                ]),
+                &password,
+            ),
+            (
+                argv(&[
+                    "podman",
+                    "login",
+                    &format!("--password={password}"),
+                    "quay.io",
+                ]),
+                &password,
+            ),
+            (
+                argv(&["aws", "configure", "set", "aws_secret_access_key", &secret]),
+                &secret,
+            ),
+            (
+                argv(&[
+                    "java",
+                    &format!("-Djavax.net.ssl.keyStorePassword={password}"),
+                    "-jar",
+                    "app.jar",
+                ]),
+                &password,
+            ),
+            (
+                argv(&[
+                    "java",
+                    &format!("-Djavax.net.ssl.trustStorePassword={password}"),
+                    &format!("-Ddb.password={password}"),
+                    "-jar",
+                    "app.jar",
+                ]),
+                &password,
+            ),
+        ];
+        for (words, value) in &cases {
+            let out = redact_command_line(words);
+            assert!(!out.join(" ").contains(value.as_str()), "{:?}", out);
+            assert_eq!(redact_command_line(&out), out, "idempotent");
+            let text = redact_command_text(&words.join(" "));
+            assert!(!text.contains(value.as_str()), "{text}");
+            assert_eq!(redact_command_text(&text), text, "idempotent");
+        }
+        // The same letters elsewhere keep their meaning.
+        let run = argv(&["docker", "run", "-p", "8080:80", "nginx"]);
+        assert_eq!(redact_command_line(&run), run);
+        let stdin = argv(&["docker", "login", "--password-stdin", "-u", "me"]);
+        assert_eq!(redact_command_line(&stdin), stdin);
+        let props = argv(&[
+            "java",
+            "-Dfile.encoding=UTF-8",
+            "-Dserver.port=8080",
+            "-jar",
+            "x",
+        ]);
+        assert_eq!(redact_command_line(&props), props);
+        // The JVM rule holds in free text too (a log line).
+        let line = format!("started java -Dmail.smtp.password={password} -jar mail.jar");
+        assert!(!redact_command_text(&line).contains(&password));
     }
 
     #[test]
