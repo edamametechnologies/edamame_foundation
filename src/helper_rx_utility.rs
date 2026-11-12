@@ -1166,6 +1166,7 @@ pub async fn utility_start_file_monitor(paths_json: &str, start_args_json: &str)
             watcher.stop();
         }
     }
+    crate::fim_support::stop_transcript_capture();
 
     let raw_paths: Vec<String> = serde_json::from_str(paths_json).unwrap_or_default();
     let user_home_path = (!user_home.is_empty()).then(|| std::path::Path::new(&user_home));
@@ -1180,6 +1181,7 @@ pub async fn utility_start_file_monitor(paths_json: &str, start_args_json: &str)
             let mut guard = FIM_WATCHER.write().await;
             *guard = Some(watcher);
             info!("File monitor started via helper");
+            crate::fim_support::start_transcript_capture(user_home_path);
             Ok("".to_string())
         }
         Err(e) => {
@@ -1199,6 +1201,7 @@ pub async fn utility_stop_file_monitor() -> Result<String> {
         watcher.stop();
         info!("File monitor stopped via helper");
     }
+    crate::fim_support::stop_transcript_capture();
     Ok("".to_string())
 }
 

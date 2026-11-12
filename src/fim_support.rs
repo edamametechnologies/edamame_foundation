@@ -224,6 +224,48 @@ fn store_specs_under(
 
 /// [`default_watch_paths_for_home`] with who chose each root, as in
 /// [`resolve_fim_watch_roots`].
+/// The transcript reader (`agent_transcripts::capture`) beside the file
+/// monitor: started when a monitor that published the transcript stores
+/// starts, while `transcript_write_trust_enabled` is published true, and
+/// started again at each start of the monitor (the stores are published
+/// again, another record instance). Reads only the files of the account
+/// that owns `stores_home`. The helper and the standalone core both call it.
+/// Returns whether the reader runs.
+pub fn start_transcript_capture(stores_home: Option<&Path>) -> bool {
+    use crate::agent_transcripts::capture;
+    capture::stop();
+    if !flodbadd::store_writers::is_configured()
+        || !crate::vuln_detector_params::transcript_write_trust_enabled()
+    {
+        return false;
+    }
+    let max_calls =
+        usize::try_from(crate::vuln_detector_params::session_binding_max_calls_per_transcript())
+            .unwrap_or(usize::MAX);
+    capture::start(
+        capture::ShellCallExtractor,
+        capture::CaptureConfig::from_params(max_calls, stores_home.and_then(home_owner_uid)),
+    )
+}
+
+/// Stop the transcript reader with the file monitor.
+pub fn stop_transcript_capture() {
+    crate::agent_transcripts::capture::stop();
+}
+
+/// The account that owns the stores' home.
+#[cfg(unix)]
+fn home_owner_uid(home: &Path) -> Option<u32> {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata(home).ok().map(|meta| meta.uid())
+}
+
+/// Accounts have no uid here (Windows).
+#[cfg(not(unix))]
+fn home_owner_uid(_home: &Path) -> Option<u32> {
+    None
+}
+
 pub fn default_watch_roots_for_home(home: &Path) -> FimWatchRoots {
     fim::default_watch_roots_for_home(home)
 }
