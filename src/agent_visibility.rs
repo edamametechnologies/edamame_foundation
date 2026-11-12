@@ -4316,19 +4316,6 @@ pub struct McpRiskEndpoint {
     pub critical: bool,
 }
 
-/// Reduce a visibility bundle's findings to the alertable MCP exposures that
-/// drive the `mcp_risk` internal threat. The deterministic rule lives here
-/// rather than in `edamame_core` (invariant I3), so the score threat and the
-/// Agents-tab surface cannot disagree about what counts as an exposure.
-///
-/// Alertable means HIGH/CRITICAL, matching [`VisibilitySeverity::is_alertable`]
-/// and the attack-pattern detector's gate. Today that is
-/// `mcp_public_no_strong_auth`, `mcp_remote_cleartext_transport`, and
-/// `mcp_lan_privileged_no_auth`. The LOW/MEDIUM `mcp` rules
-/// (`mcp_remote_saas_endpoint`, `mcp_unclassified_transport`) stay visible in
-/// the Agents tab but never move the score: trusting a TLS SaaS vendor is an
-/// operator decision, and an unclassified transport is a visibility gap rather
-/// than an exposure.
 /// The agent an MCP finding belongs to, whatever form its subject takes: the
 /// hashed id of an inventory endpoint (the exposure findings), an
 /// `agent|server` endpoint key (a tool-definition change), or an
@@ -4357,6 +4344,19 @@ pub fn mcp_finding_agent_type(
         .map(str::to_string)
 }
 
+/// Reduce a visibility bundle's findings to the alertable MCP exposures that
+/// drive the `mcp_risk` internal threat. The deterministic rule lives here
+/// rather than in `edamame_core` (invariant I3), so the score threat and the
+/// Agents-tab surface cannot disagree about what counts as an exposure.
+///
+/// Alertable means HIGH/CRITICAL, matching [`VisibilitySeverity::is_alertable`]
+/// and the attack-pattern detector's gate. Today that is
+/// `mcp_public_no_strong_auth`, `mcp_remote_cleartext_transport`, and
+/// `mcp_lan_privileged_no_auth`. The LOW/MEDIUM `mcp` rules
+/// (`mcp_remote_saas_endpoint`, `mcp_unclassified_transport`) stay visible in
+/// the Agents tab but never move the score: trusting a TLS SaaS vendor is an
+/// operator decision, and an unclassified transport is a visibility gap rather
+/// than an exposure.
 pub fn alertable_mcp_risks(findings: &[VisibilityFinding]) -> Vec<McpRiskEndpoint> {
     let mut risks: Vec<McpRiskEndpoint> = findings
         .iter()
