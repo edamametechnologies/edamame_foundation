@@ -101,16 +101,6 @@ jobs:
           dump_vulnerability_findings: true
           exit_on_vulnerability_findings: true
 
-      - name: Slack alerts
-        if: failure()
-        uses: slackapi/slack-github-action@v1.26.0
-        with:
-          channel-id: 'C072J0U9TH7'
-          slack-message: "cargo-deny check ${{ matrix.checks }} in ${{ github.repository }} on branch ${{ github.ref }} failed: see https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-        env:
-          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-        continue-on-error: true
-
   drift-check:
     name: deny.toml drift check
     runs-on: ubuntu-latest
@@ -164,12 +154,12 @@ jobs:
           dump_vulnerability_findings: true
           exit_on_vulnerability_findings: true
 
-      - name: Slack alerts
-        if: failure()
-        uses: slackapi/slack-github-action@v1.26.0
-        with:
-          channel-id: 'C072J0U9TH7'
-          slack-message: "deny.toml drift check in ${{ github.repository }} on branch ${{ github.ref }} failed: see https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-        env:
-          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-        continue-on-error: true
+  notify:
+    name: Slack alert
+    needs: [cargo-deny, drift-check]
+    if: always() && github.event_name != 'pull_request'
+    uses: edamametechnologies/.github/.github/workflows/slack-notify.yml@main
+    with:
+      results: ${{ toJSON(needs) }}
+    secrets:
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
