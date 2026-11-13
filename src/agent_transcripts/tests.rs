@@ -350,6 +350,36 @@ fn a_transcript_modified_later_than_the_read_time_is_collected_with_the_read_tim
     assert_eq!(super::mtime_secs_not_after(&path, actual + 1), actual);
 }
 
+/// Past the memo's bound one entry gives way (the one clamped first), never
+/// the whole memo: with more future-dated files than it holds, every file
+/// still in it keeps its time on a later read.
+#[test]
+fn the_future_mtime_memo_keeps_its_entries_past_its_bound() {
+    let base = std::path::PathBuf::from("/nonexistent/edamame-test/future-mtime-memo");
+    let over = 50;
+    let paths: Vec<std::path::PathBuf> = (0..super::MAX_CLAMPED_MTIMES + over)
+        .map(|n| base.join(format!("{n}.jsonl")))
+        .collect();
+    let mtime = 10_000_000;
+    for (n, path) in paths.iter().enumerate() {
+        let now = 1_000 + n as u64;
+        assert_eq!(super::clamp_mtime(path, mtime, now), now);
+    }
+    assert!(super::CLAMPED_MTIMES.len() <= super::MAX_CLAMPED_MTIMES);
+    // Read again much later: the files past the first `over` (and those a
+    // test running beside this one left) keep the time they were read as.
+    for (n, path) in paths.iter().enumerate().skip(2 * over) {
+        assert_eq!(
+            super::clamp_mtime(path, mtime, 9_000_000),
+            1_000 + n as u64,
+            "{path:?}"
+        );
+    }
+    for path in &paths {
+        super::CLAMPED_MTIMES.remove(path);
+    }
+}
+
 /// The agent's own model traffic is declared on every session, verbatim and
 /// in order, from the agent-visibility params (`agent_llm_traffic`): hosts,
 /// shared cloud suffixes and `asn:` owners alike.

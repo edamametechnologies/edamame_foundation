@@ -1148,8 +1148,9 @@ pub(crate) fn mtime_secs(path: &Path) -> u64 {
 }
 
 /// Transcript files whose modification time was later than the moment they
-/// were read, with the time they are read as (a resource bound: past it the
-/// map is emptied and the next read of each starts again).
+/// were read, with the time they are read as (a resource bound: past it one
+/// entry gives way, the one clamped first, so the map is never emptied and
+/// only as many files as are past the bound are read as new again).
 const MAX_CLAMPED_MTIMES: usize = 4096;
 
 static CLAMPED_MTIMES: once_cell::sync::Lazy<
@@ -1181,7 +1182,14 @@ fn clamp_mtime(path: &Path, mtime: u64, now: u64) -> u64 {
         }
     }
     if CLAMPED_MTIMES.len() >= MAX_CLAMPED_MTIMES {
-        CLAMPED_MTIMES.clear();
+        // One entry gives way, never the whole map: the one clamped first.
+        let oldest = CLAMPED_MTIMES
+            .iter()
+            .min_by_key(|entry| entry.value().1)
+            .map(|entry| entry.key().clone());
+        if let Some(oldest) = oldest {
+            CLAMPED_MTIMES.remove(&oldest);
+        }
     }
     CLAMPED_MTIMES.insert(path.to_path_buf(), (mtime, now));
     now

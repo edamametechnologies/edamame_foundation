@@ -45,6 +45,7 @@ pub const UTILITY_ORDER_NAMES: &[&str] = &[
     "get_whitelist_name",
     "get_whitelists",
     "getappleid_email",
+    "harness_print_mode",
     "helper_check",
     "helper_flags",
     "helper_instance",

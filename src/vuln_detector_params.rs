@@ -1534,6 +1534,13 @@ pub struct CveDetectionParamsJSON {
     /// process tree whose binding is pending waits, in milliseconds (0: it
     /// does not wait).
     pub session_binding_settle_ms: u64,
+    /// How far apart, in milliseconds, the creation time a sensor reads for
+    /// a new process (when the process is no longer the event's subject by
+    /// the time it reads it) and the creation event's own timestamp may be
+    /// before the reading is dropped as another process's (a pid handed out
+    /// again in between). Read by the process sensors where they read the
+    /// start after the event (Windows).
+    pub process_start_event_tolerance_ms: u64,
     /// Lowercase `/` path suffixes (or `/dir/` fragments) of the credential
     /// caches a CLI writes when it logs in (`com.vercel.cli/auth.json`,
     /// `~/.azure/msal_token_cache.json`, ...). A write to one by an
@@ -1980,6 +1987,7 @@ pub struct CveDetectionParams {
     pub session_binding_typed_prompt_min_delay_ms: u64,
     pub session_binding_records_after_run_agents: Vec<String>,
     pub session_binding_settle_ms: u64,
+    pub process_start_event_tolerance_ms: u64,
     /// Lowercase `/` path suffixes (or `/dir/` fragments) of the credential
     /// caches a CLI writes when it logs in (`com.vercel.cli/auth.json`,
     /// `~/.azure/msal_token_cache.json`, ...). A write to one by an
@@ -3204,6 +3212,7 @@ impl CveDetectionParams {
                 .filter(|agent| !agent.is_empty())
                 .collect(),
             session_binding_settle_ms: json.session_binding_settle_ms,
+            process_start_event_tolerance_ms: json.process_start_event_tolerance_ms,
             cli_credential_cache_path_suffixes: lowercase_token_list(
                 &json.cli_credential_cache_path_suffixes,
             ),
@@ -3454,9 +3463,9 @@ pub fn params() -> Arc<CveDetectionParams> {
 /// at capture start, in the process that runs the capture, and after each
 /// params update.
 pub fn sync_capture_params() {
-    flodbadd::open_files::set_ownership_lock_file_names(
-        &PARAMS_SNAPSHOT.load().ownership_lock_file_names,
-    );
+    let params = PARAMS_SNAPSHOT.load();
+    flodbadd::open_files::set_ownership_lock_file_names(&params.ownership_lock_file_names);
+    flodbadd::process_events::set_start_event_tolerance_ms(params.process_start_event_tolerance_ms);
 }
 
 /// Installs `json` (the published `cve-detection-params-db.json` shape) as
@@ -5770,6 +5779,12 @@ pub fn session_binding_settle_ms() -> u64 {
     PARAMS_SNAPSHOT.load().session_binding_settle_ms
 }
 
+/// How far a new process's creation time, read after its creation event,
+/// may be from the event's own timestamp (see the field docs).
+pub fn process_start_event_tolerance_ms() -> u64 {
+    PARAMS_SNAPSHOT.load().process_start_event_tolerance_ms
+}
+
 /// Session binding: the shells a harness runs a command through, lower
 /// case (see the field docs).
 pub fn session_binding_shell_programs() -> Vec<String> {
@@ -6072,6 +6087,7 @@ mod tests {
             vec!["codex".to_string()]
         );
         assert_eq!(json.session_binding_settle_ms, 15_000);
+        assert_eq!(json.process_start_event_tolerance_ms, 1_000);
         // The shells of the three desktop platforms.
         for shell in ["sh", "bash", "zsh", "cmd", "powershell", "pwsh"] {
             assert!(
@@ -6109,6 +6125,7 @@ mod tests {
             "session_binding_typed_prompt_min_delay_ms",
             "session_binding_records_after_run_agents",
             "session_binding_settle_ms",
+            "process_start_event_tolerance_ms",
         ] {
             let mut value: serde_json::Value =
                 serde_json::from_str(&CVE_DETECTION_PARAMS_DB).expect("valid JSON");

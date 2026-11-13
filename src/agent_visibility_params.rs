@@ -759,6 +759,20 @@ pub struct AgentLlmTrafficJSON {
     pub provider_endpoints: Vec<String>,
 }
 
+/// What on an agent harness's command line says it was started in print
+/// (non-interactive) mode, its prompt given at its start: an option
+/// (`flags`: Claude Code's `-p`, `--print`) or a subcommand (`subcommands`:
+/// Codex's `exec`, its alias `e`, and `review`). Read by
+/// `harness_launch::argv_has_print_marker`, which keeps a yes or no and
+/// nothing of the command line. Compared as written (case matters for an
+/// option); a one-letter option also counts inside a cluster of one-letter
+/// options (`-cp`), a long one with an attached value (`--print=...`).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+pub struct PrintModeMarkersJSON {
+    pub flags: Vec<String>,
+    pub subcommands: Vec<String>,
+}
+
 /// What the transcript parser does not take as the agent's own actions when
 /// it derives the expected traffic, ports and acted-on paths of a session.
 ///
@@ -958,6 +972,9 @@ pub struct AgentVisibilityParamsJSON {
     pub transcript_stores: std::collections::BTreeMap<String, TranscriptStoreJSON>,
     /// The transcript reader's bounds (see [`TranscriptCaptureJSON`]).
     pub transcript_capture: TranscriptCaptureJSON,
+    /// Per agent type, what on its harness's command line says print mode
+    /// (see [`PrintModeMarkersJSON`]).
+    pub print_mode_markers: std::collections::BTreeMap<String, PrintModeMarkersJSON>,
 }
 
 /// Normalized runtime snapshot of the agent-visibility params.
@@ -1013,6 +1030,8 @@ pub struct AgentVisibilityParams {
     pub transcript_stores: std::collections::BTreeMap<String, TranscriptStoreJSON>,
     /// The transcript reader's bounds, as written.
     pub transcript_capture: TranscriptCaptureJSON,
+    /// Per agent type (lower case), its print-mode markers, as written.
+    pub print_mode_markers: std::collections::BTreeMap<String, PrintModeMarkersJSON>,
 }
 
 impl CloudSignature for AgentVisibilityParams {
@@ -1358,6 +1377,11 @@ impl AgentVisibilityParams {
                 })
                 .collect(),
             transcript_capture: json.transcript_capture,
+            print_mode_markers: json
+                .print_mode_markers
+                .iter()
+                .map(|(agent, markers)| (agent.trim().to_ascii_lowercase(), markers.clone()))
+                .collect(),
         }
     }
 }
@@ -1620,6 +1644,16 @@ pub fn agent_provider_endpoints(agent_type: &str) -> Vec<String> {
 /// Every agent type's transcript store, by agent type.
 pub fn transcript_stores() -> std::collections::BTreeMap<String, TranscriptStoreJSON> {
     PARAMS_SNAPSHOT.load().transcript_stores.clone()
+}
+
+/// `agent_type`'s print-mode markers. `None` for an agent type the params
+/// do not list: its command line says nothing measurable.
+pub fn print_mode_markers(agent_type: &str) -> Option<PrintModeMarkersJSON> {
+    PARAMS_SNAPSHOT
+        .load()
+        .print_mode_markers
+        .get(&agent_type.trim().to_ascii_lowercase())
+        .cloned()
 }
 
 /// `agent_type`'s transcript store. `None` for an agent type the params do
@@ -2068,6 +2102,29 @@ mod tests {
     /// are lowercase and start with a dot, and its three published booleans
     /// as shipped in 2.3.3 (all false).
     #[test]
+    fn test_print_mode_markers_are_published() {
+        // As the CLIs document them (`claude --help`: `-p, --print`;
+        // `codex --help`: `exec [aliases: e]`, `review` "non-interactively").
+        let params = build_fallback_params();
+        let claude = &params.print_mode_markers["claude_code"];
+        assert_eq!(claude.flags, vec!["-p".to_string(), "--print".to_string()]);
+        assert!(claude.subcommands.is_empty());
+        let codex = &params.print_mode_markers["codex"];
+        assert!(codex.flags.is_empty());
+        for subcommand in ["exec", "e", "review"] {
+            assert!(
+                codex.subcommands.iter().any(|s| s == subcommand),
+                "{subcommand}"
+            );
+        }
+        assert_eq!(
+            print_mode_markers(" Claude_Code ").map(|m| m.flags.len()),
+            Some(2)
+        );
+        assert!(print_mode_markers("hermes").is_none());
+    }
+
+    #[test]
     fn test_transcript_stores_ship_complete_and_switched_off() {
         let params = build_fallback_params();
         for agent in [
@@ -2166,7 +2223,11 @@ mod tests {
                 "a store without `{key}` parsed"
             );
         }
-        for key in ["transcript_stores", "transcript_capture"] {
+        for key in [
+            "transcript_stores",
+            "transcript_capture",
+            "print_mode_markers",
+        ] {
             let mut value = complete.clone();
             value.as_object_mut().expect("params object").remove(key);
             assert!(

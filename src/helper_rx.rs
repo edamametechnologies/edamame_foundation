@@ -889,6 +889,7 @@ pub async fn rpc_run(
             "scan_secret_content" => utility_scan_secret_content(arg1, arg2).await,
             "attest_dev_trees" => utility_attest_dev_trees(arg1, arg2).await,
             "process_credential_signals" => utility_process_credential_signals(arg1).await,
+            "harness_print_mode" => utility_harness_print_mode(arg1).await,
             "process_open_files" => utility_process_open_files(arg1, arg2).await,
             "collect_agent_transcripts" => utility_collect_agent_transcripts(arg1, arg2).await,
             #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]

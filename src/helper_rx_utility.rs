@@ -727,6 +727,23 @@ pub async fn utility_scan_secret_content(paths_json: &str, reply: &str) -> Resul
 /// helper runs the kernel open sensor and can read other processes'
 /// environments. Thin delegate; the standalone core calls the same function
 /// in-process.
+/// Whether each queried agent harness process was started in print mode
+/// (`harness_launch::measure_print_modes`): `arg1` is a JSON list of
+/// `harness_launch::PrintModeQuery`, the reply the answers, a yes, a no or
+/// unmeasured per query. No command line leaves this process. Thin
+/// delegate; the standalone core calls the same function in process.
+pub async fn utility_harness_print_mode(queries_json: &str) -> Result<String> {
+    let queries: Vec<crate::harness_launch::PrintModeQuery> = serde_json::from_str(queries_json)
+        .map_err(|e| anyhow::anyhow!("Failed to parse print-mode queries: {}", e))?;
+    // Process table reads: off the async workers.
+    let answers =
+        tokio::task::spawn_blocking(move || crate::harness_launch::measure_print_modes(&queries))
+            .await
+            .map_err(|e| anyhow::anyhow!("Print-mode task failed: {}", e))?;
+    serde_json::to_string(&answers)
+        .map_err(|e| anyhow::anyhow!("Failed to serialize print-mode answers: {}", e))
+}
+
 pub async fn utility_process_credential_signals(queries_json: &str) -> Result<String> {
     let queries: Vec<crate::process_credential_signals::ProcessQuery> =
         serde_json::from_str(queries_json)

@@ -39,6 +39,9 @@ pub mod file_reveal;
 pub mod fim_support;
 /// INC-18: MCP tool-definition integrity (tool poisoning / rug-pull detection).
 pub mod harness_efficacy;
+/// Whether an agent harness was started in print mode, from its command
+/// line against the published markers (standalone + helper order).
+pub mod harness_launch;
 pub mod health;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub mod helper_proto;
