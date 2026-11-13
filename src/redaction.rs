@@ -6,8 +6,9 @@
 //! - [`redact_text`]: known secret *shapes* anywhere in free text (EDAMAME
 //!   `edm_` / `edak_` keys, Anthropic `sk-ant-`, OpenAI `sk-`, GitHub `ghp_` /
 //!   `gho_` / `ghu_` / `ghs_` / `ghr_` / `github_pat_`, AWS `AKIA` / `ASIA`,
-//!   Slack `xox?-` / `xapp-`, Google `AIza`, `Bearer` values, JWTs, PEM private
-//!   key blocks, `user:password@` URL userinfo) plus the values of
+//!   Slack `xox?-` / `xapp-`, Google `AIza`, Telegram bot tokens (bare and as
+//!   the `/bot<token>/` segment of a Bot API URL), `Bearer` values, JWTs, PEM
+//!   private key blocks, `user:password@` URL userinfo) plus the values of
 //!   secret-named fields (`pin`, `password`, `api_key`, `*_token`, `secret`,
 //!   `authorization`, ... in JSON, `key=value`, `key: value`,
 //!   `--flag value` and `name value` shapes).
@@ -428,6 +429,13 @@ lazy_static! {
         r"|(?P<npm>\bnpm_[A-Za-z0-9]{30,})",
         r"|(?P<huggingface>\bhf_[A-Za-z0-9]{30,})",
         r"|(?P<stripe>\b(?:sk|rk)_live_[A-Za-z0-9]{16,})",
+        // Telegram bot tokens (`<bot id>:<secret>`). In a Bot API URL the
+        // token is a path segment (`/bot<token>/<method>`, `/file/bot<token>/`),
+        // which an HTTP client's error message repeats: the `/bot` stays and
+        // the whole token goes, whatever the secret part looks like. Bare, the
+        // secret part starts with `AA` and runs 30 characters or more.
+        r"|(?P<telegram_url>/bot)[0-9]{5,}:[A-Za-z0-9_\-]{30,}",
+        r"|(?P<telegram>\b[0-9]{5,}:AA[A-Za-z0-9_\-]{30,})",
         // user:password@ in a URL authority: keep the user, drop the password.
         r"|(?P<userinfo>://[^\s/:@]+:)[^\s/@]+@",
         // A token in the user position of a web URL's authority
@@ -493,6 +501,8 @@ pub fn redact_secret_tokens(text: &str) -> String {
                 format!("{}{}@", prefix.as_str(), REDACTED)
             } else if let Some(prefix) = caps.name("urltoken") {
                 format!("{}{}@", prefix.as_str(), REDACTED)
+            } else if let Some(prefix) = caps.name("telegram_url") {
+                format!("{}{}", prefix.as_str(), REDACTED)
             } else {
                 REDACTED.to_string()
             }
@@ -2233,10 +2243,18 @@ mod tests {
         format!("{prefix}{body}")
     }
 
+    /// A Telegram bot token as the Bot API issues them: a numeric bot id, a
+    /// colon, a 35-character secret starting with `AA`.
+    fn fake_telegram_token() -> String {
+        let bot_id: String = (1u8..=10).map(|i| char::from(b'0' + i % 10)).collect();
+        format!("{bot_id}:{}", fake("AA", 33))
+    }
+
     #[test]
     fn every_known_secret_shape_is_masked() {
         let jwt = format!("{}.{}.{}", fake("eyJ", 20), fake("eyJ", 30), fake("", 20));
         let cases = [
+            fake_telegram_token(),
             fake("edm_live_", 24),
             fake("edak_", 24),
             fake("sk-ant-api03-", 40),
@@ -2263,6 +2281,53 @@ mod tests {
                 out.starts_with("request failed (") && out.ends_with(") retrying"),
                 "{out}"
             );
+        }
+    }
+
+    #[test]
+    fn telegram_bot_tokens_are_masked_in_bot_api_urls_and_bare() {
+        let token = fake_telegram_token();
+        let secret = token.split_once(':').map(|(_, s)| s.to_string()).unwrap();
+        // What reqwest's Display appends to a failed request.
+        let line = format!(
+            "WARN core: Telegram polling failed: Telegram getUpdates request failed: \
+             error sending request for url (https://api.telegram.org/bot{token}/getUpdates)"
+        );
+        let out = redact_log_line(&line);
+        assert!(!out.contains(&secret), "{out}");
+        assert!(
+            out.ends_with("for url (https://api.telegram.org/bot[REDACTED]/getUpdates)"),
+            "{out}"
+        );
+        // The file download path carries it too.
+        let out = redact_text(&format!(
+            "GET https://api.telegram.org/file/bot{token}/photos/file_7.jpg failed"
+        ));
+        assert_eq!(
+            out,
+            "GET https://api.telegram.org/file/bot[REDACTED]/photos/file_7.jpg failed"
+        );
+        // Bare, in free text or a structured field.
+        for text in [
+            format!("token {token} accepted"),
+            format!("bot_config={{\"value\": \"{token}\"}}"),
+        ] {
+            let out = redact_log_line(&text);
+            assert!(!out.contains(&secret), "{out}");
+        }
+    }
+
+    #[test]
+    fn telegram_shapes_leave_lookalikes_alone() {
+        for text in [
+            "2026-11-12T10:30:45.123456Z  INFO edamame_core: tick at 10:30:45",
+            "GET /bot/status 200",
+            "routed through /bottleneck/12345:short",
+            "port 443:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA open",
+            "peer 2001:0db8:85a3:0000:0000:8a2e:0370:7334 joined",
+            "chat 123456789: AA batteries low",
+        ] {
+            assert_eq!(redact_text(text), text);
         }
     }
 

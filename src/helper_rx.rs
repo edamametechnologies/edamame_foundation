@@ -277,8 +277,8 @@ impl ServerControl {
         // under (the `is_sensitive` flag of every file event, the sessions'
         // sensitive open files), put in force before any order can start
         // either: the snapshots start as flodbadd's compile-time fallback, a
-        // small subset of the catalog, and the helper used to keep it for its
-        // whole life.
+        // small subset of the catalog, until a process puts the catalog in
+        // force.
         flodbadd::sensitive_paths::refresh_catalog_snapshots().await;
 
         // Store branch name
@@ -354,7 +354,7 @@ impl ServerControl {
         };
 
         // Kept current for as long as the server serves: ended with it.
-        let _catalog_upkeep = spawn_catalog_upkeep(branch.to_string());
+        let _model_upkeep = spawn_model_upkeep(branch.to_string());
         serve_until_stopped(server_future, &self.stop).await
     }
 
@@ -364,9 +364,69 @@ impl ServerControl {
     }
 }
 
-/// How often the helper updates the sensitive-path catalog, in seconds: the
-/// core's model update period.
-pub const HELPER_CATALOG_UPDATE_SECS: u64 = 600;
+/// How often the helper updates the models of [`HELPER_UPKEEP_MODELS`], in
+/// seconds: the core's model update period.
+pub const HELPER_MODEL_UPDATE_SECS: u64 = 600;
+
+/// A model the helper's process reads and nothing else in that process keeps
+/// current, so the helper's upkeep updates it. The models the helper reads
+/// that something else updates are left to it: the threat model (updated
+/// when an order names another signature than the helper's copy) and the
+/// white- and blacklists (the capture's own hourly update while it runs).
+/// The lanscan models (device profiles, vendor vulnerabilities) are read in
+/// the core's process only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HelperUpkeepModel {
+    /// The sensitive-path catalog: the file monitor's `is_sensitive` flag
+    /// and early drop, the capture's sensitive open files, the
+    /// credential-open sensor.
+    SensitivePaths,
+    /// The detector params: the file monitor's hash size threshold, the
+    /// capture's ownership lock-file names, the secret-content scan, the
+    /// dev-tree attestation, the process credential signals, the
+    /// transcript reader's launch facts.
+    CveDetectionParams,
+    /// The agent visibility params: the transcript reader, the visibility
+    /// collection and the workspace inventory, the secret-content scan.
+    AgentVisibilityParams,
+    /// The port table: the service names the capture gives sessions.
+    PortVulns,
+}
+
+/// What the helper's upkeep updates, in this order.
+pub const HELPER_UPKEEP_MODELS: [HelperUpkeepModel; 4] = [
+    HelperUpkeepModel::SensitivePaths,
+    HelperUpkeepModel::CveDetectionParams,
+    HelperUpkeepModel::AgentVisibilityParams,
+    HelperUpkeepModel::PortVulns,
+];
+
+impl HelperUpkeepModel {
+    /// The model's own update, the one the core runs: authenticated like
+    /// every model download; a failed download leaves the model in force.
+    async fn update(self, branch: &str) -> Result<threatmodels_rs::UpdateStatus> {
+        match self {
+            Self::SensitivePaths => flodbadd::sensitive_paths::update(branch, false).await,
+            Self::CveDetectionParams => crate::vuln_detector_params::update(branch, false).await,
+            Self::AgentVisibilityParams => {
+                crate::agent_visibility_params::update(branch, false).await
+            }
+            Self::PortVulns => flodbadd::port_vulns::update(branch, false).await,
+        }
+    }
+}
+
+/// One pass of the upkeep: every model of [`HELPER_UPKEEP_MODELS`] updated
+/// on `branch`, in order, each whatever the others' outcome.
+async fn update_helper_models(
+    branch: &str,
+) -> Vec<(HelperUpkeepModel, Result<threatmodels_rs::UpdateStatus>)> {
+    let mut outcomes = Vec::with_capacity(HELPER_UPKEEP_MODELS.len());
+    for model in HELPER_UPKEEP_MODELS {
+        outcomes.push((model, model.update(branch).await));
+    }
+    outcomes
+}
 
 /// A task aborted when this is dropped.
 struct AbortOnDrop(tokio::task::JoinHandle<()>);
@@ -394,24 +454,27 @@ where
     }))
 }
 
-/// Keep the helper's sensitive-path catalog current: nothing else updates it
-/// in the helper's process (the core's model updates run in the core's), so
-/// a catalog published after the helper's build would never reach its file
-/// monitor or capture. The update is the core's, on the helper's branch:
-/// verified like every model download, it refreshes the snapshots whatever
-/// its outcome, and a failed download leaves the catalog in force.
-fn spawn_catalog_upkeep(branch: String) -> AbortOnDrop {
+/// Keep the models of [`HELPER_UPKEEP_MODELS`] current in the helper's
+/// process: the core's model updates run in the core's, so a model
+/// published after the helper's build would otherwise never reach the
+/// helper's readers. On the helper's branch, at once and every
+/// [`HELPER_MODEL_UPDATE_SECS`]. A reader that takes its value when its
+/// service starts (the file monitor's hash size threshold and watch roots)
+/// sees an update at the service's next start; nothing is restarted here.
+fn spawn_model_upkeep(branch: String) -> AbortOnDrop {
     spawn_periodic(
-        std::time::Duration::from_secs(HELPER_CATALOG_UPDATE_SECS),
+        std::time::Duration::from_secs(HELPER_MODEL_UPDATE_SECS),
         move || {
             let branch = branch.clone();
             async move {
-                match flodbadd::sensitive_paths::update(&branch, false).await {
-                    Ok(status) => debug!("Sensitive-path catalog update: {:?}", status),
-                    Err(e) => info!(
-                        "Sensitive-path catalog update failed, the catalog in force stays: {}",
-                        e
-                    ),
+                for (model, outcome) in update_helper_models(&branch).await {
+                    match outcome {
+                        Ok(status) => debug!("Helper model update {:?}: {:?}", model, status),
+                        Err(e) => info!(
+                            "Helper model update {:?} failed, the model in force stays: {}",
+                            model, e
+                        ),
+                    }
                 }
             }
         },
@@ -871,10 +934,76 @@ mod tests {
     use tonic::transport::Channel;
     use tonic::transport::{Certificate, ClientTlsConfig, Identity};
 
-    /// The catalog upkeep's schedule: a run at once, then one a period, and
-    /// none once its guard is dropped (the server stopped).
+    /// The models the upkeep keeps current: every model the helper's
+    /// process reads that nothing else in that process updates (chapter 25
+    /// of the AI security reference has the table). Taking one off fails
+    /// here.
+    #[test]
+    fn the_upkeep_updates_every_model_nothing_else_in_the_helper_keeps_current() {
+        assert_eq!(
+            HELPER_UPKEEP_MODELS.to_vec(),
+            vec![
+                HelperUpkeepModel::SensitivePaths,
+                HelperUpkeepModel::CveDetectionParams,
+                HelperUpkeepModel::AgentVisibilityParams,
+                HelperUpkeepModel::PortVulns,
+            ]
+        );
+    }
+
+    /// Mark the model custom (its update then returns at once, from the
+    /// model itself, without a download), or back to its embedded data.
+    async fn set_upkeep_model_custom(model: HelperUpkeepModel, custom: bool) {
+        macro_rules! set {
+            ($cloud_model:expr) => {
+                if custom {
+                    let data = $cloud_model.data.read().await.clone();
+                    $cloud_model.overwrite_with_test_data(data).await;
+                } else {
+                    $cloud_model.reset_to_default().await;
+                }
+            };
+        }
+        match model {
+            HelperUpkeepModel::SensitivePaths => set!(flodbadd::sensitive_paths::SENSITIVE_PATHS),
+            HelperUpkeepModel::CveDetectionParams => {
+                set!(crate::vuln_detector_params::CVE_PARAMS)
+            }
+            HelperUpkeepModel::AgentVisibilityParams => {
+                set!(crate::agent_visibility_params::AGENT_VISIBILITY_PARAMS)
+            }
+            HelperUpkeepModel::PortVulns => set!(flodbadd::port_vulns::VULNS),
+        }
+    }
+
+    /// One pass of the upkeep runs each model's own update, in order, and
+    /// goes on past a model that did not update. Every model is marked
+    /// custom, so each update returns `SkippedCustom` from the model itself
+    /// and nothing is downloaded.
     #[tokio::test]
-    async fn the_catalog_upkeep_runs_at_once_then_every_period_until_dropped() {
+    #[serial_test::serial]
+    async fn one_upkeep_pass_runs_the_update_of_every_model() {
+        for model in HELPER_UPKEEP_MODELS {
+            set_upkeep_model_custom(model, true).await;
+        }
+        let outcomes = update_helper_models("main").await;
+        for model in HELPER_UPKEEP_MODELS {
+            set_upkeep_model_custom(model, false).await;
+        }
+        let asked: Vec<HelperUpkeepModel> = outcomes.iter().map(|(model, _)| *model).collect();
+        assert_eq!(asked, HELPER_UPKEEP_MODELS.to_vec());
+        for (model, outcome) in &outcomes {
+            assert!(
+                matches!(outcome, Ok(threatmodels_rs::UpdateStatus::SkippedCustom)),
+                "{model:?}: {outcome:?}"
+            );
+        }
+    }
+
+    /// The upkeep's schedule: a run at once, then one a period, and none
+    /// once its guard is dropped (the server stopped).
+    #[tokio::test]
+    async fn the_model_upkeep_runs_at_once_then_every_period_until_dropped() {
         let runs = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let counted = runs.clone();
         let upkeep = spawn_periodic(Duration::from_secs(1), move || {
@@ -903,12 +1032,12 @@ mod tests {
     }
 
     /// The helper's start puts the catalog in force before anything can
-    /// serve an order, and keeps the upkeep for as long as it serves (a guard
-    /// bound to `_` would be dropped, and the task aborted, at once). Read
-    /// from `start_server` in this file's source; what the first call does is
-    /// `tests/helper_catalog_at_start.rs`.
+    /// serve an order, and keeps the model upkeep for as long as it serves (a
+    /// guard bound to `_` would be dropped, and the task aborted, at once).
+    /// Read from `start_server` in this file's source; what the first call
+    /// does is `tests/helper_catalog_at_start.rs`.
     #[test]
-    fn the_server_puts_the_catalog_in_force_then_keeps_it_current() {
+    fn the_server_puts_the_catalog_in_force_then_keeps_its_models_current() {
         let source = include_str!("helper_rx.rs");
         let start = source
             .find("pub async fn start_server(")
@@ -923,7 +1052,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("`{needle}` not found in start_server"))
         };
         let seed = at("flodbadd::sensitive_paths::refresh_catalog_snapshots().await;");
-        let upkeep = at("let _catalog_upkeep = spawn_catalog_upkeep(branch.to_string());");
+        let upkeep = at("let _model_upkeep = spawn_model_upkeep(branch.to_string());");
         let serve = at("serve_until_stopped(server_future, &self.stop).await");
         assert!(
             seed < at("Server::builder()"),
