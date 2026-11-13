@@ -72,6 +72,22 @@ pub fn resolve_fim_watch_roots(
     user_home: Option<&Path>,
     mode: FimMode,
 ) -> FimWatchRoots {
+    resolve_fim_watch_roots_with(
+        paths,
+        user_home,
+        mode,
+        crate::vuln_detector_params::transcript_write_trust_enabled(),
+    )
+}
+
+/// [`resolve_fim_watch_roots`] with the transcript write trust switched on
+/// or off (`transcript_write_trust_enabled`): off, no store is attached.
+pub fn resolve_fim_watch_roots_with(
+    paths: &[String],
+    user_home: Option<&Path>,
+    mode: FimMode,
+    stores_switched_on: bool,
+) -> FimWatchRoots {
     let roots = if !paths.is_empty() {
         FimWatchRoots::operator(paths.iter().map(PathBuf::from).collect())
     } else {
@@ -80,7 +96,7 @@ pub fn resolve_fim_watch_roots(
             None => fim::default_watch_roots(mode),
         }
     };
-    attach_stores(roots, user_home.ok_or(NO_HOME))
+    attach_stores_with(roots, user_home.ok_or(NO_HOME), stores_switched_on)
 }
 
 /// Why no home was resolved for the stores: the caller gave none.
@@ -100,7 +116,23 @@ pub const NO_HOME: &str = "no_home";
 /// A caller whose roots need no home (explicit paths, the CI roots) passes
 /// the home it resolved for the stores here.
 pub fn attach_stores(roots: FimWatchRoots, stores_home: Result<&Path, &str>) -> FimWatchRoots {
-    if !crate::vuln_detector_params::transcript_write_trust_enabled() {
+    attach_stores_with(
+        roots,
+        stores_home,
+        crate::vuln_detector_params::transcript_write_trust_enabled(),
+    )
+}
+
+/// [`attach_stores`] with the transcript write trust switched on or off.
+/// Off: no store, resolved or not. The file monitor then publishes none, so
+/// nothing is recorded, no sensor subscribes to or marks anything for the
+/// stores, and the transcript reader does not start.
+pub fn attach_stores_with(
+    roots: FimWatchRoots,
+    stores_home: Result<&Path, &str>,
+    switched_on: bool,
+) -> FimWatchRoots {
+    if !switched_on {
         return roots.with_stores(Vec::new());
     }
     match stores_home {
@@ -234,9 +266,10 @@ fn store_specs_under(
 pub fn start_transcript_capture(stores_home: Option<&Path>) -> bool {
     use crate::agent_transcripts::capture;
     capture::stop();
-    if !flodbadd::store_writers::is_configured()
-        || !crate::vuln_detector_params::transcript_write_trust_enabled()
-    {
+    if !reader_runs(
+        flodbadd::store_writers::is_configured(),
+        crate::vuln_detector_params::transcript_write_trust_enabled(),
+    ) {
         return false;
     }
     let max_calls =
@@ -246,6 +279,12 @@ pub fn start_transcript_capture(stores_home: Option<&Path>) -> bool {
         capture::ShellCallExtractor,
         capture::CaptureConfig::from_params(max_calls, stores_home.and_then(home_owner_uid)),
     )
+}
+
+/// Whether the transcript reader runs beside a file monitor: only while the
+/// monitor published the stores and the trust is switched on.
+fn reader_runs(stores_published: bool, switched_on: bool) -> bool {
+    stores_published && switched_on
 }
 
 /// Stop the transcript reader with the file monitor.
@@ -298,6 +337,47 @@ pub fn default_watch_paths_for_home(home: &Path) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The roots with the transcript write trust switched on: what the
+    /// stores' tests read, whatever the published switch says.
+    fn resolve_fim_watch_roots_on(
+        paths: &[String],
+        user_home: Option<&Path>,
+        mode: FimMode,
+    ) -> FimWatchRoots {
+        resolve_fim_watch_roots_with(paths, user_home, mode, true)
+    }
+
+    /// Switched off (as published for 2.3.3), no store is attached to any
+    /// roots, with or without a home, and the transcript reader does not
+    /// start: the file monitor publishes no store, so nothing of the write
+    /// provenance runs in the sensors.
+    #[test]
+    fn switched_off_attaches_no_store_and_starts_no_reader() {
+        assert!(!crate::vuln_detector_params::transcript_write_trust_enabled());
+        let home = temp_home("switched-off");
+        for paths in [
+            Vec::new(),
+            vec![home.join("audit").to_string_lossy().to_string()],
+        ] {
+            for user_home in [Some(home.as_path()), None] {
+                let roots = resolve_fim_watch_roots(&paths, user_home, FimMode::Desktop);
+                assert!(roots.stores.is_empty());
+                assert!(roots.stores_unresolved.is_none());
+                assert!(roots.store_only_roots().is_empty());
+            }
+        }
+        let attached = attach_stores(FimWatchRoots::operator(Vec::new()), Ok(&home));
+        assert!(attached.stores.is_empty());
+        assert!(attached.stores_unresolved.is_none());
+        let attached = attach_stores(FimWatchRoots::operator(Vec::new()), Err("no_home"));
+        assert!(attached.stores_unresolved.is_none());
+        // The reader runs only beside published stores, switched on.
+        assert!(!reader_runs(true, false));
+        assert!(!reader_runs(false, true));
+        assert!(reader_runs(true, true));
+        let _ = std::fs::remove_dir_all(&home);
+    }
 
     fn temp_home(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -396,7 +476,7 @@ mod tests {
         let home = temp_home("roots");
         std::fs::create_dir_all(home.join(".ssh")).unwrap();
         let paths = resolve_fim_watch_paths(&[], Some(&home), FimMode::Desktop);
-        let roots = resolve_fim_watch_roots(&[], Some(&home), FimMode::Desktop);
+        let roots = resolve_fim_watch_roots_on(&[], Some(&home), FimMode::Desktop);
         let mut split = roots.all();
         let mut plain = paths.clone();
         split.sort();
@@ -405,7 +485,7 @@ mod tests {
         assert!(roots.operator.contains(&home.join(".ssh")));
 
         let explicit = vec![home.join("project").to_string_lossy().to_string()];
-        let roots = resolve_fim_watch_roots(&explicit, Some(&home), FimMode::Desktop);
+        let roots = resolve_fim_watch_roots_on(&explicit, Some(&home), FimMode::Desktop);
         assert_eq!(
             roots,
             FimWatchRoots::operator(vec![home.join("project")])
@@ -460,14 +540,14 @@ mod tests {
             Vec::new(),
             vec![home.join("audit").to_string_lossy().to_string()],
         ] {
-            let roots = resolve_fim_watch_roots(&explicit, Some(&home), FimMode::Desktop);
+            let roots = resolve_fim_watch_roots_on(&explicit, Some(&home), FimMode::Desktop);
             assert_eq!(roots.stores, specs, "explicit paths: {:?}", explicit);
             assert!(roots.stores_unresolved.is_none());
         }
         // A store root under a watched root is delivered with it; the others
         // are watched for the record only.
         std::fs::create_dir_all(home.join(".claude")).unwrap();
-        let roots = resolve_fim_watch_roots(&[], Some(&home), FimMode::Desktop);
+        let roots = resolve_fim_watch_roots_on(&[], Some(&home), FimMode::Desktop);
         let only = roots.store_only_roots();
         assert!(!only.contains(&home.join(".claude").join("projects")));
         assert!(only.contains(&home.join(".codex").join("sessions")));
@@ -480,7 +560,6 @@ mod tests {
     /// it resolved.
     #[test]
     fn test_the_stores_are_resolved_under_the_callers_home_only() {
-        assert!(crate::vuln_detector_params::transcript_write_trust_enabled());
         let home = temp_home("stores-home");
         let explicit = vec![home.join("audit").to_string_lossy().to_string()];
         for (paths, mode) in [
@@ -489,7 +568,7 @@ mod tests {
             (Vec::new(), FimMode::CI),
             (Vec::new(), FimMode::Desktop),
         ] {
-            let roots = resolve_fim_watch_roots(&paths, None, mode);
+            let roots = resolve_fim_watch_roots_on(&paths, None, mode);
             assert!(roots.stores.is_empty(), "{:?} {:?}", paths, mode);
             assert_eq!(
                 roots.stores_unresolved.as_deref(),
@@ -502,7 +581,7 @@ mod tests {
 
             // The same roots, with the stores under a home the caller
             // resolved: the watch roots are unchanged.
-            let attached = attach_stores(roots.clone(), Ok(&home));
+            let attached = attach_stores_with(roots.clone(), Ok(&home), true);
             assert_eq!(attached.stores, store_specs_for_home(&home));
             assert!(attached.stores_unresolved.is_none());
             assert_eq!(attached.operator, roots.operator);
@@ -510,9 +589,10 @@ mod tests {
         }
         // None of the stores lies under a home this process could resolve
         // for itself.
-        let attached = attach_stores(
+        let attached = attach_stores_with(
             FimWatchRoots::operator(Vec::new()),
             Err("privileged_account"),
+            true,
         );
         assert!(attached.stores.is_empty());
         assert_eq!(

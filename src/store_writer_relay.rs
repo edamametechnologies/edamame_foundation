@@ -83,11 +83,8 @@ pub fn store_writers_since(cursor: &StoreWritersCursor) -> StoreWriterBatch {
         .running
         .then(|| (capture.record_instance.as_str(), capture.record_seq));
     let rows = store_writers::rows_since(&cursor.record_instance, cursor.rows_seq, cut);
-    let mut capture = capture;
     let built_at_ms = store_writers::now_ms();
-    if capture.running {
-        capture.batch.stores = store_coverage(&capture, built_at_ms);
-    }
+    let capture = with_store_coverage(capture, built_at_ms);
     StoreWriterBatch {
         version: STORE_WRITER_BATCH_VERSION,
         rows,
@@ -95,6 +92,15 @@ pub fn store_writers_since(cursor: &StoreWritersCursor) -> StoreWriterBatch {
         sensor: store_writers::sensor(),
         built_at_ms,
     }
+}
+
+/// The reader's reply with what each published store vouches for, while the
+/// reader runs (the binding reads the two together).
+fn with_store_coverage(mut capture: CaptureReply, built_at_ms: u64) -> CaptureReply {
+    if capture.running {
+        capture.batch.stores = store_coverage(&capture, built_at_ms);
+    }
+    capture
 }
 
 /// What each published store vouches for: since the later of the reader's
@@ -215,6 +221,30 @@ mod tests {
         store_writers::clear();
         let cleared = store_writers_since(&StoreWritersCursor::default());
         assert!(!cleared.rows.as_ref().unwrap().configured);
+    }
+
+    /// While the reader runs, its reply carries what each published store
+    /// vouches for; while it does not, none.
+    #[test]
+    #[serial(store_writers)]
+    fn a_running_readers_reply_carries_the_stores_coverage() {
+        let root = std::env::temp_dir().join(format!("edamame-swr-cov-{}", std::process::id()));
+        store_writers::configure(&[spec(&root)]);
+        let mut running = CaptureReply::not_running();
+        running.running = true;
+        running.started_at_ms = 1;
+        let served = with_store_coverage(running, store_writers::now_ms());
+        let agents: Vec<&str> = served
+            .batch
+            .stores
+            .iter()
+            .map(|store| store.agent_type.as_str())
+            .collect();
+        assert_eq!(agents, vec!["claude_code"]);
+        assert!(served.batch.stores[0].watched_since_ms >= 1);
+        let idle = with_store_coverage(CaptureReply::not_running(), store_writers::now_ms());
+        assert!(idle.batch.stores.is_empty());
+        store_writers::clear();
     }
 
     /// The order goes through the helper's dispatcher to this function; an

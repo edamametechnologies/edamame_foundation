@@ -4589,11 +4589,10 @@ mod tests {
         assert_eq!(gap.replaced_by, None);
     }
 
-    /// The `mv` of a prepared directory holding a forged transcript into a
-    /// store: no operation on the file is reported, the forged file has the
-    /// size of the one it replaces, and the sweep finds another file under
-    /// the path by its identity. Nothing of the forged file is read and the
-    /// replacement names no process.
+    /// A directory renamed into a store over the one that held the
+    /// transcript, with a file of the same size under the same path: the
+    /// sweep finds another file by its identity. Nothing of the new file is
+    /// read and the replacement names no process.
     #[cfg(unix)]
     #[test]
     fn a_directory_moved_into_a_store_is_another_file_for_the_sweep() {
@@ -4604,7 +4603,7 @@ mod tests {
         let creation = bench.created_by_harness();
         bench.appended_by(HARNESS, creation, "C k1 curl\n");
         assert_eq!(bench.programs(), vec!["curl".to_string()]);
-        // Prepared elsewhere: the same size, a forged call.
+        // Another directory, with a file of the same size.
         let prepared = bench.base.join("x").join("p");
         std::fs::create_dir_all(&prepared).unwrap();
         std::fs::write(prepared.join("k.jsonl"), "C k1 sudo\n").unwrap();
