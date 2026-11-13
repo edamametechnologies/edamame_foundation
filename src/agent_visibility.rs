@@ -3521,13 +3521,17 @@ fn build_endpoint(
     } else {
         None
     };
+    // The launch command and its arguments are stored, shown and served over
+    // MCP: a token passed on the server's command line is masked here, after
+    // the classification above read the raw values.
+    let (command, args) = redact_endpoint_launch(server.command.as_deref(), &server.args);
     McpEndpoint {
         id,
         agent_type: agent_type.to_string(),
         server_name: server.name,
         transport,
-        command: server.command,
-        args: server.args,
+        command,
+        args,
         url: redacted_url,
         bind_host,
         exposure_scope,
@@ -3538,6 +3542,45 @@ fn build_endpoint(
         config_path: config_path.to_string(),
         env_keys: server.env_keys,
     }
+}
+
+/// An MCP server's launch command and arguments as they may be stored: the
+/// arguments through the command-line redaction as one argv with the command
+/// in front (so a client's own credential options are read as that client's),
+/// the command alone through the one-string form when it carries arguments.
+fn redact_endpoint_launch(command: Option<&str>, args: &[String]) -> (Option<String>, Vec<String>) {
+    let redacted_command = command.map(crate::redaction::redact_command_text);
+    if args.is_empty() {
+        return (redacted_command, Vec::new());
+    }
+    let mut argv: Vec<&str> = Vec::with_capacity(args.len() + 1);
+    if let Some(command) = command {
+        argv.push(command);
+    }
+    argv.extend(args.iter().map(String::as_str));
+    let mut redacted = crate::redaction::redact_command_line(&argv);
+    if command.is_some() && !redacted.is_empty() {
+        redacted.remove(0);
+    }
+    (redacted_command, redacted)
+}
+
+/// Redact the launch command and arguments of the endpoints of an MCP
+/// inventory an older build stored before [`redact_endpoint_launch`] ran on
+/// them (a persisted snapshot read back after an upgrade). The stored
+/// arguments are already the parsed argv. Applying it twice changes nothing.
+/// Returns how many endpoints changed.
+pub fn redact_inventory_endpoint_launch(inventory: &mut McpInventory) -> usize {
+    let mut changed = 0;
+    for endpoint in inventory.endpoints.iter_mut() {
+        let (command, args) = redact_endpoint_launch(endpoint.command.as_deref(), &endpoint.args);
+        if command != endpoint.command || args != endpoint.args {
+            endpoint.command = command;
+            endpoint.args = args;
+            changed += 1;
+        }
+    }
+    changed
 }
 
 /// Dispatch config parsing on file extension. JSON is authoritative; TOML and
@@ -4271,6 +4314,34 @@ pub struct McpRiskEndpoint {
     pub agent_type: String,
     /// True when the finding graded CRITICAL rather than HIGH.
     pub critical: bool,
+}
+
+/// The agent an MCP finding belongs to, whatever form its subject takes: the
+/// hashed id of an inventory endpoint (the exposure findings), an
+/// `agent|server` endpoint key (a tool-definition change), or an
+/// `agent|server:tool` key (instructions in a tool description). The
+/// `agent_type` evidence is read when present. `None` when none of these
+/// names an agent.
+pub fn mcp_finding_agent_type(
+    finding: &VisibilityFinding,
+    endpoints: &[McpEndpoint],
+) -> Option<String> {
+    if let Some(endpoint) = endpoints.iter().find(|e| e.id == finding.subject_id) {
+        return Some(endpoint.agent_type.clone());
+    }
+    if let Some(agent) = finding
+        .evidence
+        .get("agent_type")
+        .filter(|agent| !agent.trim().is_empty())
+    {
+        return Some(agent.clone());
+    }
+    finding
+        .subject_id
+        .split_once('|')
+        .map(|(agent, _)| agent.trim())
+        .filter(|agent| !agent.is_empty())
+        .map(str::to_string)
 }
 
 /// Reduce a visibility bundle's findings to the alertable MCP exposures that
@@ -6667,11 +6738,10 @@ fn is_high_privilege_label(label: &str) -> bool {
 /// One row of the operator agent inventory (INC-10). Pure data container;
 /// core fills it by joining observer status + MCP/component discovery.
 ///
-/// There is no operator classification axis. The observer is enabled by
-/// default for every agent, so the only operator-relevant state a row can be
-/// in is "discovered on disk but not observed" -- derived at render time from
-/// `discovered && !observer_enabled` and reported as the `unsecured_<agent>`
-/// internal threat.
+/// There is no operator classification axis. A row says whether the agent is
+/// protected (`protected` / `protection_gaps`, the rule of the
+/// `unsecured_<agent>` internal threat) and, as one of those gaps, whether
+/// its observer is off ([`AgentInventoryEntry::is_unobserved`]).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentInventoryEntry {
     pub agent_type: String,
@@ -6691,14 +6761,30 @@ pub struct AgentInventoryEntry {
     pub mcp_endpoint_count: u32,
     /// Count of discovered components attributed to this agent.
     pub component_count: u32,
-    /// Count of high-or-critical visibility findings touching this agent.
+    /// Count of high-or-critical MCP findings on this agent's servers (the
+    /// subject resolved by [`mcp_finding_agent_type`]).
     pub alertable_finding_count: u32,
+    /// Whether `discovered` was measured at the last observer pass. False
+    /// while the transcript collection fails (the helper did not answer):
+    /// `discovered` is then the last measured value, not a fresh negative.
+    pub discovery_measured: bool,
+    /// Every part of the agent's protection is in place: the attack-pattern
+    /// detector and the divergence engine on, a model adjudicating, and its
+    /// observer not paused ([`crate::ai_governance_detail::AgentProtectionState`]).
+    pub protected: bool,
+    /// The missing parts, as
+    /// [`crate::ai_governance_detail::AgentProtectionGap::token`] values, in
+    /// the order the `unsecured_<agent>` check names them. Empty when
+    /// `protected`.
+    pub protection_gaps: Vec<String>,
 }
 
 impl AgentInventoryEntry {
     /// The agent has an on-disk footprint but its transcript observer is off,
-    /// so EDAMAME is blind to what it does. This is the only operator-facing
-    /// state the inventory flags, and it mirrors `unsecured_<agent>`.
+    /// so EDAMAME does not read what it does. One cause of `unsecured_<agent>`
+    /// among others: that check is also active while the attack-pattern
+    /// detector or the divergence engine is off or no model adjudicates
+    /// (`protected` / `protection_gaps` carry the whole rule).
     pub fn is_unobserved(&self) -> bool {
         (self.discovered || self.installed_on_host) && !self.observer_enabled
     }
@@ -8853,6 +8939,123 @@ malformed
             .any(|f| f.rule_id == "mcp_remote_saas_endpoint"));
     }
 
+    /// A token-shaped value built at run time, so no literal credential sits
+    /// in the source.
+    fn fake_token(prefix: &str, body_len: usize) -> String {
+        let alphabet = b"AbCdEfGhIjKlMnOpQrStUvWxYz0123456789";
+        let body: String = (0..body_len)
+            .map(|i| alphabet[i % alphabet.len()] as char)
+            .collect();
+        format!("{prefix}{body}")
+    }
+
+    #[test]
+    fn endpoint_launch_arguments_are_redacted() {
+        let token = fake_token("ghp_", 36);
+        let bearer = fake_token("", 40);
+        let entry = serde_json::json!({
+            "command": "npx",
+            "args": [
+                "-y",
+                "mcp-remote",
+                "https://mcp.example.com/sse",
+                "--header",
+                format!("Authorization: Bearer {bearer}"),
+                format!("--token={token}"),
+                format!("GITHUB_TOKEN={token}"),
+            ],
+        });
+        let ep = endpoint_from_json("cursor", "remote", &entry.to_string());
+        assert_eq!(ep.command.as_deref(), Some("npx"));
+        assert_eq!(ep.args.len(), 7, "the argv keeps its shape");
+        assert_eq!(ep.args[0], "-y");
+        assert_eq!(ep.args[2], "https://mcp.example.com/sse");
+        let joined = ep.args.join(" ");
+        assert!(!joined.contains(&token), "token kept: {joined}");
+        assert!(!joined.contains(&bearer), "bearer kept: {joined}");
+
+        // A command that carries its arguments in one string.
+        let one_string = serde_json::json!({
+            "command": format!("docker run -e GITHUB_TOKEN={token} ghcr.io/github/github-mcp-server"),
+        });
+        let ep = endpoint_from_json("cursor", "gh", &one_string.to_string());
+        let command = ep.command.expect("command kept");
+        assert!(!command.contains(&token), "token kept: {command}");
+        assert!(command.starts_with("docker run"));
+
+        // An inventory stored before the redaction is redacted once, and a
+        // second pass changes nothing.
+        let mut stored = McpInventory {
+            generated_at: chrono::Utc::now(),
+            endpoints: vec![McpEndpoint {
+                command: Some(format!("node server.js --api-key {token}")),
+                args: vec!["--auth".to_string(), format!("Bearer {bearer}")],
+                ..endpoint_from_json("cursor", "fs", r#"{"command":"npx"}"#)
+            }],
+            findings: Vec::new(),
+        };
+        assert_eq!(redact_inventory_endpoint_launch(&mut stored), 1);
+        let ep = &stored.endpoints[0];
+        assert!(!ep.command.as_deref().unwrap_or("").contains(&token));
+        assert!(!ep.args.join(" ").contains(&bearer));
+        assert_eq!(redact_inventory_endpoint_launch(&mut stored), 0);
+    }
+
+    #[test]
+    fn mcp_findings_attribute_to_their_agent_whatever_the_subject_form() {
+        let endpoint = endpoint_from_json("cursor", "fs", r#"{"command":"npx"}"#);
+        let endpoints = vec![endpoint.clone()];
+        let by_id = VisibilityFinding::new(
+            "mcp",
+            "mcp_public_no_auth",
+            VisibilitySeverity::High,
+            &endpoint.id,
+            "t",
+            "d",
+        );
+        assert_eq!(
+            mcp_finding_agent_type(&by_id, &endpoints).as_deref(),
+            Some("cursor")
+        );
+        // A tool-definition change names the `agent|server` endpoint key.
+        let by_key = VisibilityFinding::new(
+            "mcp",
+            "mcp_tool_definition_changed",
+            VisibilitySeverity::High,
+            "claude_desktop|filesystem",
+            "t",
+            "d",
+        );
+        assert_eq!(
+            mcp_finding_agent_type(&by_key, &endpoints).as_deref(),
+            Some("claude_desktop")
+        );
+        // Instructions in a tool description name `agent|server:tool`.
+        let by_tool = VisibilityFinding::new(
+            "mcp",
+            "mcp_tool_description_instructions",
+            VisibilitySeverity::High,
+            "codex|srv:run_command",
+            "t",
+            "d",
+        );
+        assert_eq!(
+            mcp_finding_agent_type(&by_tool, &endpoints).as_deref(),
+            Some("codex")
+        );
+        // The agent_type evidence wins over a subject that names none.
+        let by_evidence =
+            VisibilityFinding::new("mcp", "r", VisibilitySeverity::High, "opaque", "t", "d")
+                .with_evidence("agent_type", "openclaw");
+        assert_eq!(
+            mcp_finding_agent_type(&by_evidence, &endpoints).as_deref(),
+            Some("openclaw")
+        );
+        let unattributed =
+            VisibilityFinding::new("mcp", "r", VisibilitySeverity::High, "opaque", "t", "d");
+        assert_eq!(mcp_finding_agent_type(&unattributed, &endpoints), None);
+    }
+
     #[test]
     fn inline_url_secret_is_shared_auth_and_redacted() {
         // Mirrors the real `framer` Cursor config: an https SSE endpoint with a
@@ -9848,6 +10051,9 @@ some normal line
             mcp_endpoint_count: 0,
             component_count: 0,
             alertable_finding_count: 0,
+            discovery_measured: true,
+            protected: true,
+            protection_gaps: Vec::new(),
         };
 
         // Observed footprint -- nothing to flag.

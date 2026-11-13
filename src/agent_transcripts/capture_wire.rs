@@ -78,6 +78,12 @@ pub struct CaptureCall {
     pub in_rewrite: bool,
     /// Another process than `writer` wrote the file in that interval.
     pub writers_differ: bool,
+    /// `writer` and `writers_differ` are final: the time a report may take
+    /// after the read has passed, and every report that arrived in it was
+    /// applied. A capture serves only final calls; `None` from a capture
+    /// that does not say, read as not final: a call that is not final is
+    /// neither bound nor remembered.
+    pub writer_final: Option<bool>,
 }
 
 /// When the capture read one line: the first write the sensor announced
@@ -118,6 +124,9 @@ pub struct CaptureGap {
     /// Why (`oversized_line`, `rewrite`, `lost_events`, `result_not_found`,
     /// `unmarked_directory`, ...): never read as anything but a gap.
     pub reason: String,
+    /// For a `rewrite` or a `replaced`: the one process whose recorded
+    /// operation explains the change; `None` when nothing recorded does.
+    pub replaced_by: Option<ProcessIdentity>,
 }
 
 /// One transcript file the capture follows.

@@ -6,8 +6,9 @@
 //! - [`redact_text`]: known secret *shapes* anywhere in free text (EDAMAME
 //!   `edm_` / `edak_` keys, Anthropic `sk-ant-`, OpenAI `sk-`, GitHub `ghp_` /
 //!   `gho_` / `ghu_` / `ghs_` / `ghr_` / `github_pat_`, AWS `AKIA` / `ASIA`,
-//!   Slack `xox?-` / `xapp-`, Google `AIza`, `Bearer` values, JWTs, PEM private
-//!   key blocks, `user:password@` URL userinfo) plus the values of
+//!   Slack `xox?-` / `xapp-`, Google `AIza`, Telegram bot tokens (bare and as
+//!   the `/bot<token>/` segment of a Bot API URL), `Bearer` values, JWTs, PEM
+//!   private key blocks, `user:password@` URL userinfo) plus the values of
 //!   secret-named fields (`pin`, `password`, `api_key`, `*_token`, `secret`,
 //!   `authorization`, ... in JSON, `key=value`, `key: value`,
 //!   `--flag value` and `name value` shapes).
@@ -422,8 +423,25 @@ lazy_static! {
         r"|(?P<google>\bAIza[0-9A-Za-z_\-]{30,})",
         // JWTs (OAuth access / id tokens).
         r"|(?P<jwt>\beyJ[A-Za-z0-9_\-]{8,}\.eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]*)",
+        // GitLab personal access tokens, npm tokens, Hugging Face tokens,
+        // Stripe live secret and restricted keys.
+        r"|(?P<gitlab>\bglpat-[A-Za-z0-9_\-]{20,})",
+        r"|(?P<npm>\bnpm_[A-Za-z0-9]{30,})",
+        r"|(?P<huggingface>\bhf_[A-Za-z0-9]{30,})",
+        r"|(?P<stripe>\b(?:sk|rk)_live_[A-Za-z0-9]{16,})",
+        // Telegram bot tokens (`<bot id>:<secret>`). In a Bot API URL the
+        // token is a path segment (`/bot<token>/<method>`, `/file/bot<token>/`),
+        // which an HTTP client's error message repeats: the `/bot` stays and
+        // the whole token goes, whatever the secret part looks like. Bare, the
+        // secret part starts with `AA` and runs 30 characters or more.
+        r"|(?P<telegram_url>/bot)[0-9]{5,}:[A-Za-z0-9_\-]{30,}",
+        r"|(?P<telegram>\b[0-9]{5,}:AA[A-Za-z0-9_\-]{30,})",
         // user:password@ in a URL authority: keep the user, drop the password.
         r"|(?P<userinfo>://[^\s/:@]+:)[^\s/@]+@",
+        // A token in the user position of a web URL's authority
+        // (`https://TOKEN@host`, `https://TOKEN:x-oauth-basic@host`), whatever
+        // follows its colon: a user name is short, a token is not.
+        r"|(?P<urltoken>https?://)[A-Za-z0-9_\-.~%]{20,}(?::[^\s/@]*)?@",
     ))
     .expect("Failed to compile secret shape regex");
 
@@ -481,6 +499,10 @@ pub fn redact_secret_tokens(text: &str) -> String {
                 format!("{}{}", prefix.as_str(), REDACTED)
             } else if let Some(prefix) = caps.name("userinfo") {
                 format!("{}{}@", prefix.as_str(), REDACTED)
+            } else if let Some(prefix) = caps.name("urltoken") {
+                format!("{}{}@", prefix.as_str(), REDACTED)
+            } else if let Some(prefix) = caps.name("telegram_url") {
+                format!("{}{}", prefix.as_str(), REDACTED)
             } else {
                 REDACTED.to_string()
             }
@@ -728,6 +750,905 @@ pub fn redact_cli_args<S: AsRef<str>>(args: &[S], extra_secret_flags: &[&str]) -
     out
 }
 
+/// Options of common command-line clients whose value is a credential
+/// although the option's name does not say so. They are read only for the
+/// words of a simple command whose program is the client (see
+/// [`client_credential_replacements`]): `-p` is a password for one program and
+/// a port for another, and a host, a path or another option's value that
+/// happens to name a client selects nothing.
+struct ClientCredentialOptions {
+    /// Program names, lower case, without a path or `.exe`.
+    programs: &'static [&'static str],
+    /// Options whose value is a credential, attached (`-pVALUE`,
+    /// `--pass=VALUE`) or in the next argument.
+    value: &'static [&'static str],
+    /// The value counts only when attached: the option alone asks for the
+    /// credential on the terminal.
+    attached_only: bool,
+    /// Options whose value is `user:password`: the user stays, unless the
+    /// password is empty (`-u KEY:`), where the user is the key.
+    user_password: &'static [&'static str],
+    /// Options that name the kind of credential given under
+    /// `user_password` (HTTPie `-A`).
+    auth_type: &'static [&'static str],
+    /// Kinds under which the `user_password` value is a token, masked whole.
+    token_auth_types: &'static [&'static str],
+    /// When not empty, the options are read only in a command that names one
+    /// of these subcommands (`docker login`): elsewhere the same letter is
+    /// another option (`docker run -p 8080:80` publishes a port).
+    subcommands: &'static [&'static str],
+}
+
+const CLIENT_CREDENTIAL_OPTIONS: &[ClientCredentialOptions] = &[
+    ClientCredentialOptions {
+        programs: &["curl"],
+        value: &[],
+        attached_only: false,
+        user_password: &["-u", "--user", "-U", "--proxy-user"],
+        auth_type: &[],
+        token_auth_types: &[],
+        subcommands: &[],
+    },
+    ClientCredentialOptions {
+        programs: &["http", "https", "httpie"],
+        value: &[],
+        attached_only: false,
+        user_password: &["-a", "--auth"],
+        auth_type: &["-A", "--auth-type"],
+        token_auth_types: &["bearer"],
+        subcommands: &[],
+    },
+    // The MySQL and MariaDB clients and tools: `-p` alone prompts.
+    ClientCredentialOptions {
+        programs: &[
+            "mysql",
+            "mysqldump",
+            "mysqladmin",
+            "mysqlimport",
+            "mysqlcheck",
+            "mysqlshow",
+            "mysqlslap",
+            "mysqlpump",
+            "mysqlbinlog",
+            "mysqlsh",
+            "mariadb",
+            "mariadb-dump",
+            "mariadb-admin",
+            "mariadb-import",
+            "mariadb-check",
+            "mariadb-show",
+            "mariadb-slap",
+            "mariadb-binlog",
+        ],
+        value: &["-p"],
+        attached_only: true,
+        user_password: &[],
+        auth_type: &[],
+        token_auth_types: &[],
+        subcommands: &[],
+    },
+    // mycli takes the password as the next argument too.
+    ClientCredentialOptions {
+        programs: &["mycli"],
+        value: &["-p"],
+        attached_only: false,
+        user_password: &[],
+        auth_type: &[],
+        token_auth_types: &[],
+        subcommands: &[],
+    },
+    ClientCredentialOptions {
+        programs: &["redis-cli"],
+        value: &["-a", "--pass"],
+        attached_only: false,
+        user_password: &[],
+        auth_type: &[],
+        token_auth_types: &[],
+        subcommands: &[],
+    },
+    // The MongoDB shells and database tools.
+    ClientCredentialOptions {
+        programs: &[
+            "mongosh",
+            "mongo",
+            "mongodump",
+            "mongorestore",
+            "mongoexport",
+            "mongoimport",
+            "mongostat",
+            "mongotop",
+            "mongofiles",
+        ],
+        value: &["-p"],
+        attached_only: false,
+        user_password: &[],
+        auth_type: &[],
+        token_auth_types: &[],
+        subcommands: &[],
+    },
+    ClientCredentialOptions {
+        programs: &["zip", "unzip"],
+        value: &["-P"],
+        attached_only: false,
+        user_password: &[],
+        auth_type: &[],
+        token_auth_types: &[],
+        subcommands: &[],
+    },
+    // Container registry logins: `docker login -u USER -p PASSWORD`,
+    // `--password PASSWORD` (`--password-stdin` takes no value).
+    ClientCredentialOptions {
+        programs: &["docker", "podman", "nerdctl", "buildah", "skopeo"],
+        value: &["-p", "--password"],
+        attached_only: false,
+        user_password: &[],
+        auth_type: &[],
+        token_auth_types: &[],
+        subcommands: &["login"],
+    },
+];
+
+/// Programs that run the command given after their own options, so that the
+/// word after those options is in command position: `sudo`, `doas`, `env`,
+/// `nohup`, `time`, `nice`, `ionice`, `timeout`, `xargs`, `exec`, `command`,
+/// `stdbuf`, `setsid`, `caffeinate`, and `sshpass`, whose own `-p` is a
+/// password. The list is short on purpose: a wrapper it does not name leaves
+/// the command it runs unread for client options, never misread.
+struct CommandWrapper {
+    names: &'static [&'static str],
+    /// Options that take the next word as their value.
+    options_with_value: &'static [&'static str],
+    /// Words after the options that belong to the wrapper (`timeout 10`).
+    positionals: usize,
+    /// `NAME=value` words belong to the wrapper (`env`).
+    assignments: bool,
+    /// Options whose value is a credential (`sshpass -p`).
+    credential: &'static [&'static str],
+}
+
+const COMMAND_WRAPPERS: &[CommandWrapper] = &[
+    CommandWrapper {
+        names: &["sudo"],
+        options_with_value: &[
+            "-u",
+            "-g",
+            "-h",
+            "-p",
+            "-C",
+            "-D",
+            "-R",
+            "-T",
+            "-U",
+            "-r",
+            "-t",
+            "--user",
+            "--group",
+            "--host",
+            "--prompt",
+            "--chdir",
+            "--chroot",
+            "--other-user",
+            "--role",
+            "--type",
+            "--close-from",
+            "--command-timeout",
+        ],
+        positionals: 0,
+        assignments: false,
+        credential: &[],
+    },
+    CommandWrapper {
+        names: &["doas"],
+        options_with_value: &["-u", "-C"],
+        positionals: 0,
+        assignments: false,
+        credential: &[],
+    },
+    CommandWrapper {
+        names: &["env"],
+        options_with_value: &["-u", "-C", "-S", "--unset", "--chdir", "--split-string"],
+        positionals: 0,
+        assignments: true,
+        credential: &[],
+    },
+    CommandWrapper {
+        names: &["nohup", "setsid", "command"],
+        options_with_value: &[],
+        positionals: 0,
+        assignments: false,
+        credential: &[],
+    },
+    CommandWrapper {
+        names: &["exec"],
+        options_with_value: &["-a"],
+        positionals: 0,
+        assignments: false,
+        credential: &[],
+    },
+    CommandWrapper {
+        names: &["time"],
+        options_with_value: &["-f", "-o", "--format", "--output"],
+        positionals: 0,
+        assignments: false,
+        credential: &[],
+    },
+    CommandWrapper {
+        names: &["nice"],
+        options_with_value: &["-n", "--adjustment"],
+        positionals: 0,
+        assignments: false,
+        credential: &[],
+    },
+    CommandWrapper {
+        names: &["ionice"],
+        options_with_value: &["-c", "-n", "--class", "--classdata"],
+        positionals: 0,
+        assignments: false,
+        credential: &[],
+    },
+    CommandWrapper {
+        names: &["timeout"],
+        options_with_value: &["-s", "-k", "--signal", "--kill-after"],
+        positionals: 1,
+        assignments: false,
+        credential: &[],
+    },
+    CommandWrapper {
+        names: &["xargs"],
+        options_with_value: &[
+            "-I",
+            "-L",
+            "-n",
+            "-P",
+            "-s",
+            "-d",
+            "-E",
+            "-a",
+            "--max-args",
+            "--max-procs",
+            "--delimiter",
+            "--arg-file",
+            "--replace",
+            "--max-lines",
+            "--eof",
+            "--max-chars",
+        ],
+        positionals: 0,
+        assignments: false,
+        credential: &[],
+    },
+    CommandWrapper {
+        names: &["stdbuf"],
+        options_with_value: &["-i", "-o", "-e", "--input", "--output", "--error"],
+        positionals: 0,
+        assignments: false,
+        credential: &[],
+    },
+    CommandWrapper {
+        names: &["caffeinate"],
+        options_with_value: &["-t", "-w"],
+        positionals: 0,
+        assignments: false,
+        credential: &[],
+    },
+    CommandWrapper {
+        names: &["sshpass"],
+        options_with_value: &["-f", "-d", "-P"],
+        positionals: 0,
+        assignments: false,
+        credential: &["-p"],
+    },
+];
+
+/// Shell words after which the next word is in command position.
+const COMMAND_PREFIX_WORDS: &[&str] = &[
+    "!", "{", "if", "then", "else", "elif", "do", "while", "until",
+];
+
+/// A command line's words that separate two simple commands, when they
+/// stand as words of their own (an argv).
+const COMMAND_SEPARATOR_WORDS: &[&str] = &[";", "&", "&&", "|", "||", "|&", "(", ")"];
+
+/// How many levels of commands are read for a client's credential, the
+/// command itself included: a command, and up to three levels of commands
+/// nested in it, each inside the other (a quoted command such as a `-c`
+/// string or the remote command of `ssh`, a command substitution `$(...)`,
+/// `<(...)` or between backticks). A command nested deeper is not read for
+/// client options; the other masks still apply to its text.
+pub const MAX_COMMAND_NESTING: usize = 4;
+
+/// A program's name as a command calls it: the file name of the word,
+/// without quotes, a leading `\` (which skips an alias), a path or `.exe`,
+/// lower case.
+fn program_name(word: &str) -> String {
+    let word = word.trim_matches(['"', '\'']).trim_start_matches('\\');
+    let name = word.rsplit(['/', '\\']).next().unwrap_or(word);
+    let name = name.to_ascii_lowercase();
+    name.strip_suffix(".exe").unwrap_or(&name).to_string()
+}
+
+/// The client a program word names ([`CLIENT_CREDENTIAL_OPTIONS`]).
+fn client_for_program(word: &str) -> Option<&'static ClientCredentialOptions> {
+    let name = program_name(word);
+    CLIENT_CREDENTIAL_OPTIONS
+        .iter()
+        .find(|client| client.programs.contains(&name.as_str()))
+}
+
+/// The wrapper a program word names ([`COMMAND_WRAPPERS`]).
+fn wrapper_for_program(word: &str) -> Option<&'static CommandWrapper> {
+    let name = program_name(word);
+    COMMAND_WRAPPERS
+        .iter()
+        .find(|wrapper| wrapper.names.contains(&name.as_str()))
+}
+
+/// `NAME=value`, as a shell assignment before a command.
+fn is_assignment_word(word: &str) -> bool {
+    word.split_once('=')
+        .is_some_and(|(name, _)| is_assignment_name(name))
+}
+
+/// `user:password` with the password masked. With an empty password the
+/// user is the credential (`-u KEY:`, an API key given as the user) and is
+/// masked. A value without `:` is a user alone and stays.
+fn mask_password_of(value: &str) -> String {
+    match value.split_once(':') {
+        Some((user, password)) if !password.is_empty() => format!("{user}:{REDACTED}"),
+        Some((user, _)) if !user.is_empty() => format!("{REDACTED}:"),
+        _ => value.to_string(),
+    }
+}
+
+/// What a client's option says about a word.
+enum ClientOptionMatch {
+    /// The credential is this word's tail, from this byte.
+    Attached { at: usize, user_password: bool },
+    /// The credential is the next word.
+    Next { user_password: bool },
+}
+
+fn match_client_option(client: &ClientCredentialOptions, word: &str) -> Option<ClientOptionMatch> {
+    let options = client
+        .user_password
+        .iter()
+        .map(|option| (*option, true))
+        .chain(client.value.iter().map(|option| (*option, false)));
+    for (option, user_password) in options {
+        if word == option {
+            if !user_password && client.attached_only {
+                return None;
+            }
+            return Some(ClientOptionMatch::Next { user_password });
+        }
+        // `--option=value`, or `-ovalue` for a one-letter option.
+        if let Some(value) = word.strip_prefix(option) {
+            let long = option.starts_with("--");
+            let attached = if long {
+                value.strip_prefix('=')
+            } else {
+                Some(value)
+            };
+            if let Some(value) = attached.filter(|value| !value.is_empty()) {
+                return Some(ClientOptionMatch::Attached {
+                    at: word.len() - value.len(),
+                    user_password,
+                });
+            }
+        }
+    }
+    // Short options written together (`-sSu user:password`,
+    // `-sSuuser:password`): letters that take no value, then a `user:password`
+    // option. Only for those: a value-taking letter before a password option
+    // would hide where the value starts.
+    let cluster = word
+        .strip_prefix('-')
+        .filter(|rest| !rest.starts_with('-'))?;
+    for (at, letter) in cluster.char_indices() {
+        if !letter.is_ascii_alphabetic() {
+            return None;
+        }
+        let option = format!("-{letter}");
+        if client.user_password.contains(&option.as_str()) {
+            let start = 1 + at + letter.len_utf8();
+            return Some(if start < word.len() {
+                ClientOptionMatch::Attached {
+                    at: start,
+                    user_password: true,
+                }
+            } else {
+                ClientOptionMatch::Next {
+                    user_password: true,
+                }
+            });
+        }
+    }
+    None
+}
+
+/// One word of a command line, or a mark between two simple commands.
+#[derive(Clone, Copy)]
+enum CommandPiece<'a> {
+    Word(&'a str),
+    Separator,
+}
+
+/// The replacement of each piece whose value is a client's credential;
+/// `None` for one that stays. Each simple command (the pieces between two
+/// separators) is read on its own: its program is its first word after
+/// leading `NAME=value` assignments, shell keywords and the wrappers of
+/// [`COMMAND_WRAPPERS`] with their own options, and a client's options are
+/// read only in a simple command whose program is that client.
+fn client_credential_replacements(pieces: &[CommandPiece]) -> Vec<Option<String>> {
+    let mut out: Vec<Option<String>> = vec![None; pieces.len()];
+    let mut start = 0usize;
+    while start < pieces.len() {
+        let end = pieces[start..]
+            .iter()
+            .position(|piece| matches!(piece, CommandPiece::Separator))
+            .map_or(pieces.len(), |at| start + at);
+        let words: Vec<&str> = pieces[start..end]
+            .iter()
+            .map(|piece| match piece {
+                CommandPiece::Word(word) => *word,
+                CommandPiece::Separator => "",
+            })
+            .collect();
+        for (offset, replacement) in simple_command_replacements(&words) {
+            out[start + offset] = Some(replacement);
+        }
+        start = end + 1;
+    }
+    out
+}
+
+/// The masked form of a credential option's value; `None` when it stays.
+fn masked_value(value: &str, user_password: bool, token: bool) -> Option<String> {
+    let masked = if user_password && !token {
+        mask_password_of(value)
+    } else {
+        REDACTED.to_string()
+    };
+    (masked != value).then_some(masked)
+}
+
+/// [`client_credential_replacements`] for one simple command: the index of
+/// each word to replace and its replacement.
+fn simple_command_replacements(words: &[&str]) -> Vec<(usize, String)> {
+    let mut out = Vec::new();
+    // The program: past assignments, keywords and wrappers.
+    let mut at = 0usize;
+    let program = loop {
+        let Some(word) = words.get(at) else {
+            return out;
+        };
+        if is_assignment_word(word) || COMMAND_PREFIX_WORDS.contains(word) {
+            at += 1;
+            continue;
+        }
+        let Some(wrapper) = wrapper_for_program(word) else {
+            break at;
+        };
+        at = skip_wrapper(wrapper, words, at + 1, &mut out);
+    };
+    let Some(client) = client_for_program(words[program]) else {
+        return out;
+    };
+    if !client.subcommands.is_empty()
+        && !words[program + 1..]
+            .iter()
+            .any(|word| client.subcommands.contains(word))
+    {
+        return out;
+    }
+    // The kind of credential, wherever it is given.
+    let token = !client.token_auth_types.is_empty()
+        && words[program + 1..]
+            .iter()
+            .enumerate()
+            .any(|(offset, word)| {
+                let kind = client.auth_type.iter().find_map(|option| {
+                    let option: &str = option;
+                    if *word == option {
+                        words.get(program + 2 + offset).copied()
+                    } else if option.starts_with("--") {
+                        word.strip_prefix(option)
+                            .and_then(|rest| rest.strip_prefix('='))
+                    } else {
+                        word.strip_prefix(option).filter(|rest| !rest.is_empty())
+                    }
+                });
+                kind.is_some_and(|kind| {
+                    client
+                        .token_auth_types
+                        .iter()
+                        .any(|token| kind.eq_ignore_ascii_case(token))
+                })
+            });
+    let mut index = program + 1;
+    while index < words.len() {
+        let word = words[index];
+        if word == "--" {
+            break;
+        }
+        match match_client_option(client, word) {
+            Some(ClientOptionMatch::Next { user_password }) => {
+                // A value never starts with `-`: that is the next option, and
+                // this one asks on the terminal.
+                if let Some(value) = words.get(index + 1).filter(|value| !value.starts_with('-')) {
+                    if let Some(masked) = masked_value(value, user_password, token) {
+                        out.push((index + 1, masked));
+                    }
+                    index += 2;
+                    continue;
+                }
+            }
+            Some(ClientOptionMatch::Attached { at, user_password }) => {
+                let (head, value) = word.split_at(at);
+                if let Some(masked) = masked_value(value, user_password, token) {
+                    out.push((index, format!("{head}{masked}")));
+                }
+            }
+            None => {}
+        }
+        index += 1;
+    }
+    out
+}
+
+/// Skip a wrapper's own words from `from` (its options, their values, its
+/// assignments and positional words), masking a credential option's value
+/// (`sshpass -p`); the index of the word after them.
+fn skip_wrapper(
+    wrapper: &CommandWrapper,
+    words: &[&str],
+    from: usize,
+    out: &mut Vec<(usize, String)>,
+) -> usize {
+    let mut index = from;
+    let mut positionals = wrapper.positionals;
+    while let Some(word) = words.get(index) {
+        if *word == "--" {
+            return index + 1;
+        }
+        if word.starts_with('-') && word.len() > 1 {
+            if let Some(option) = wrapper
+                .credential
+                .iter()
+                .find(|option| word.starts_with(**option))
+            {
+                let attached = &word[option.len()..];
+                if attached.is_empty() {
+                    if index + 1 < words.len() {
+                        out.push((index + 1, REDACTED.to_string()));
+                    }
+                    index += 2;
+                } else {
+                    out.push((index, format!("{option}{REDACTED}")));
+                    index += 1;
+                }
+                continue;
+            }
+            index += if wrapper.options_with_value.contains(word) {
+                2
+            } else {
+                1
+            };
+            continue;
+        }
+        if wrapper.assignments && is_assignment_word(word) {
+            index += 1;
+            continue;
+        }
+        if positionals > 0 {
+            positionals -= 1;
+            index += 1;
+            continue;
+        }
+        break;
+    }
+    index
+}
+
+/// One word of a command written as one string: where it is, where it is
+/// without the quotes around it, and, when the whole word is one quoted
+/// string, where that string's content is.
+struct TextWord {
+    core: (usize, usize),
+    quoted: Option<(usize, usize)>,
+}
+
+enum TextPiece {
+    Word(TextWord),
+    Separator,
+}
+
+/// The index after the `)` that closes the `(` before `from` (`$(`, `<(`),
+/// or the end of the text: quotes and escapes are skipped, parentheses
+/// nest.
+fn closing_paren(bytes: &[u8], from: usize) -> usize {
+    let mut depth = 1usize;
+    let mut index = from;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\\' => index += 1,
+            b'\'' => {
+                index = bytes[index + 1..]
+                    .iter()
+                    .position(|byte| *byte == b'\'')
+                    .map_or(bytes.len(), |at| index + 1 + at);
+            }
+            b'"' => {
+                let mut inner = index + 1;
+                while inner < bytes.len() && bytes[inner] != b'"' {
+                    inner += if bytes[inner] == b'\\' { 2 } else { 1 };
+                }
+                index = inner.min(bytes.len());
+            }
+            b'(' => depth += 1,
+            b')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return index;
+                }
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    bytes.len()
+}
+
+/// The index of the backtick that closes the one before `from`, or the end
+/// of the text.
+fn closing_backtick(bytes: &[u8], from: usize) -> usize {
+    let mut index = from;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\\' => index += 2,
+            b'`' => return index,
+            _ => index += 1,
+        }
+    }
+    bytes.len()
+}
+
+/// A command written as one string, as a shell splits it: words (quotes,
+/// escapes, command substitutions inside them), the separators between
+/// simple commands (`;`, `&`, `&&`, `|`, `||`, `(`, `)`, a new line, with or
+/// without spaces around them; `>&` and `&>` are redirections, not
+/// separators), and the spans of the commands nested in it (`$(...)`, `<(...)`,
+/// `>(...)`, backticks; inside double quotes too).
+fn split_command_text(text: &str) -> (Vec<TextPiece>, Vec<(usize, usize)>) {
+    let bytes = text.as_bytes();
+    let mut pieces = Vec::new();
+    let mut nested = Vec::new();
+    let mut word_start: Option<usize> = None;
+    let close_word = |pieces: &mut Vec<TextPiece>, start: &mut Option<usize>, end: usize| {
+        if let Some(from) = start.take() {
+            pieces.push(TextPiece::Word(text_word(text, from, end.min(bytes.len()))));
+        }
+    };
+    let mut index = 0usize;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        let next = bytes.get(index + 1).copied();
+        match byte {
+            b' ' | b'\t' | b'\r' | b'\n' => {
+                close_word(&mut pieces, &mut word_start, index);
+                if byte == b'\n' {
+                    pieces.push(TextPiece::Separator);
+                }
+                index += 1;
+            }
+            b'&' if (index > 0 && matches!(bytes[index - 1], b'>' | b'<'))
+                || next == Some(b'>') =>
+            {
+                word_start.get_or_insert(index);
+                index += 1;
+            }
+            b';' | b'|' | b'&' | b'(' | b')' => {
+                close_word(&mut pieces, &mut word_start, index);
+                pieces.push(TextPiece::Separator);
+                index += 1;
+            }
+            b'$' | b'<' | b'>' if next == Some(b'(') => {
+                word_start.get_or_insert(index);
+                let end = closing_paren(bytes, index + 2);
+                nested.push((index + 2, end));
+                index = end + 1;
+            }
+            b'`' => {
+                word_start.get_or_insert(index);
+                let end = closing_backtick(bytes, index + 1);
+                nested.push((index + 1, end));
+                index = end + 1;
+            }
+            b'\\' => {
+                word_start.get_or_insert(index);
+                index += 2;
+            }
+            b'\'' => {
+                word_start.get_or_insert(index);
+                index = bytes[index + 1..]
+                    .iter()
+                    .position(|byte| *byte == b'\'')
+                    .map_or(bytes.len(), |at| index + 2 + at);
+            }
+            b'"' => {
+                word_start.get_or_insert(index);
+                let mut inner = index + 1;
+                loop {
+                    match bytes.get(inner) {
+                        None => break,
+                        Some(b'"') => {
+                            inner += 1;
+                            break;
+                        }
+                        Some(b'\\') => inner += 2,
+                        Some(b'`') => {
+                            let end = closing_backtick(bytes, inner + 1);
+                            nested.push((inner + 1, end));
+                            inner = end + 1;
+                        }
+                        Some(b'$') if bytes.get(inner + 1) == Some(&b'(') => {
+                            let end = closing_paren(bytes, inner + 2);
+                            nested.push((inner + 2, end));
+                            inner = end + 1;
+                        }
+                        Some(_) => inner += 1,
+                    }
+                }
+                index = inner;
+            }
+            _ => {
+                word_start.get_or_insert(index);
+                index += 1;
+            }
+        }
+    }
+    close_word(&mut pieces, &mut word_start, bytes.len());
+    let nested = nested
+        .into_iter()
+        .map(|(from, to)| (from.min(bytes.len()), to.min(bytes.len())))
+        .filter(|(from, to)| from < to)
+        .collect();
+    (pieces, nested)
+}
+
+/// The word of `text` from `from` to `to`, with its core (the quotes around
+/// it left out) and the content of a word that is one quoted string.
+fn text_word(text: &str, from: usize, to: usize) -> TextWord {
+    let raw = &text[from..to];
+    let quotes: &[char] = &['"', '\''];
+    let lead = raw.len() - raw.trim_start_matches(quotes).len();
+    let trail = raw.len() - raw.trim_end_matches(quotes).len();
+    let core = if lead + trail >= raw.len() {
+        (from, to)
+    } else {
+        (from + lead, to - trail)
+    };
+    let quoted = raw
+        .chars()
+        .next()
+        .filter(|first| quotes.contains(first))
+        .filter(|first| raw.len() >= 2 && raw.ends_with(*first) && raw.matches(*first).count() == 2)
+        .map(|_| (from + 1, to - 1));
+    TextWord { core, quoted }
+}
+
+/// [`client_credential_replacements`] over a command written as one string,
+/// and over the commands nested in it, `depth` levels down already: the
+/// text with each credential replaced and everything else as it was.
+fn redact_client_credentials_in_text(text: &str, depth: usize) -> String {
+    let (pieces, nested) = split_command_text(text);
+    let words: Vec<CommandPiece> = pieces
+        .iter()
+        .map(|piece| match piece {
+            TextPiece::Word(word) => CommandPiece::Word(&text[word.core.0..word.core.1]),
+            TextPiece::Separator => CommandPiece::Separator,
+        })
+        .collect();
+    let replacements = client_credential_replacements(&words);
+    let mut edits: Vec<(usize, usize, String)> = Vec::new();
+    let nest = depth + 1 < MAX_COMMAND_NESTING;
+    for (piece, replacement) in pieces.iter().zip(replacements) {
+        let TextPiece::Word(word) = piece else {
+            continue;
+        };
+        if let Some(replacement) = replacement {
+            edits.push((word.core.0, word.core.1, replacement));
+            continue;
+        }
+        // A quoted command (a `-c` string, a remote command).
+        if let Some((from, to)) = word.quoted.filter(|_| nest) {
+            let inner = &text[from..to];
+            if inner.contains(char::is_whitespace) {
+                let redacted = redact_client_credentials_in_text(inner, depth + 1);
+                if redacted != inner {
+                    edits.push((from, to, redacted));
+                }
+            }
+        }
+    }
+    if nest {
+        for (from, to) in nested {
+            let inner = &text[from..to];
+            let redacted = redact_client_credentials_in_text(inner, depth + 1);
+            if redacted != inner {
+                edits.push((from, to, redacted));
+            }
+        }
+    }
+    if edits.is_empty() {
+        return text.to_string();
+    }
+    // A replaced word holds a nested command it replaced too: the first edit
+    // of a span wins, and an edit inside one already made is left out.
+    edits.sort_by_key(|(from, to, _)| (*from, std::cmp::Reverse(*to)));
+    let mut out = String::with_capacity(text.len());
+    let mut copied = 0usize;
+    for (from, to, replacement) in edits {
+        if from < copied {
+            continue;
+        }
+        out.push_str(&text[copied..from]);
+        out.push_str(&replacement);
+        copied = to;
+    }
+    out.push_str(&text[copied..]);
+    out
+}
+
+/// A header name that says it carries a credential: one of its `-` or `_`
+/// separated parts is a credential word (`Authorization`, `X-Api-Key`,
+/// `X-Auth-Token`, `Cookie`), compared whole and without case. A word inside
+/// a part does not count: `X-Author` is not a credential header.
+const CREDENTIAL_HEADER_NAME: &str = r"(?i:(?:[A-Za-z0-9]+[-_])*(?:authorization|auth|token|key|apikey|secret|cookie|password|passwd|credentials?)(?:[-_][A-Za-z0-9]+)*)";
+
+lazy_static! {
+    /// A quoted header given with `-H` / `--header` (`-H "Name: value"`)
+    /// whose name is a [`CREDENTIAL_HEADER_NAME`]: the value runs to the
+    /// closing quote.
+    static ref CREDENTIAL_HEADER_OPTION_QUOTED: Regex = Regex::new(&format!(
+        r#"(?P<lead>(?:^|\s)(?:-H|--header)(?:=|\s*)["']{CREDENTIAL_HEADER_NAME}\s*:\s*)(?P<value>[^"'\r\n]+)"#
+    ))
+    .expect("Failed to compile credential header regex");
+    /// The same without quotes (`-H Name:value`): the value is one word.
+    static ref CREDENTIAL_HEADER_OPTION_BARE: Regex = Regex::new(&format!(
+        r"(?P<lead>(?:^|\s)(?:-H|--header)(?:=|\s*){CREDENTIAL_HEADER_NAME}:)(?P<value>\S+)"
+    ))
+    .expect("Failed to compile credential header regex");
+    /// The same header as an argument of its own (`Name: value`).
+    static ref CREDENTIAL_HEADER: Regex = Regex::new(&format!(
+        r"^(?P<lead>{CREDENTIAL_HEADER_NAME}\s*:\s*)(?P<value>.+)$"
+    ))
+    .expect("Failed to compile credential header regex");
+}
+
+/// A header value the passes before this one already masked: it holds the
+/// marker, or stars alone.
+fn header_value_is_masked(value: &str) -> bool {
+    value.contains(REDACTED) || value.trim().chars().all(|c| c == '*')
+}
+
+/// The value of a credential-named header option masked, in a command
+/// written as one string or in one argument that holds the option and its
+/// value.
+fn redact_credential_header_options(text: &str) -> String {
+    let mask = |caps: &Captures| {
+        if header_value_is_masked(&caps["value"]) {
+            caps[0].to_string()
+        } else {
+            format!("{}{}", &caps["lead"], REDACTED)
+        }
+    };
+    let quoted = CREDENTIAL_HEADER_OPTION_QUOTED.replace_all(text, mask);
+    CREDENTIAL_HEADER_OPTION_BARE
+        .replace_all(&quoted, mask)
+        .into_owned()
+}
+
 /// Longest argument of a captured command line that leaves the host whole
 /// (see [`redact_command_line`]); a longer one keeps its head and a count.
 pub const COMMAND_LINE_ARG_MAX_CHARS: usize = 256;
@@ -738,27 +1659,135 @@ pub const COMMAND_LINE_ARG_MAX_CHARS: usize = 256;
 /// (assignments are how a command line carries configuration and credentials,
 /// and the name is the context), then [`redact_text`] per argument, and each
 /// argument capped at [`COMMAND_LINE_ARG_MAX_CHARS`] characters so a long blob
-/// (a certificate bundle, an encoded key) never travels whole.
+/// (a certificate bundle, an encoded key) never travels whole. Before that,
+/// the credential a common client takes under an option whose name does not
+/// say so is masked (`curl -u user:password`, `mysql -pPASSWORD`, `sshpass -p`,
+/// `redis-cli -a`: [`CLIENT_CREDENTIAL_OPTIONS`]), read only in a simple
+/// command whose program is that client (its first word after assignments
+/// and the wrappers of [`COMMAND_WRAPPERS`]); an argument that holds a
+/// command of its own (a `-c` string) is read the same way, nested up to
+/// [`MAX_COMMAND_NESTING`] levels. After that, the value of a `-H` /
+/// `--header` option whose header name has a credential word as one of its
+/// parts ([`CREDENTIAL_HEADER_NAME`]).
+///
+/// What this cannot know stays: a password given as a plain argument, a
+/// secret inside an inline script that is not a `name=value` assignment, a
+/// token of a shape or under an option not listed here, a client run by a
+/// wrapper not listed here.
 pub fn redact_command_line<S: AsRef<str>>(args: &[S]) -> Vec<String> {
-    redact_cli_args(args, &[])
-        .into_iter()
-        .map(|arg| {
-            let arg = match arg.split_once('=') {
-                Some((name, value)) if is_assignment_name(name) && !value.is_empty() => {
-                    format!("{name}={REDACTED}")
-                }
-                _ => redact_text(&arg),
-            };
-            cap_argument(arg)
+    let words: Vec<&str> = args.iter().map(|arg| arg.as_ref()).collect();
+    let pieces: Vec<CommandPiece> = words
+        .iter()
+        .map(|word| {
+            if COMMAND_SEPARATOR_WORDS.contains(word) {
+                CommandPiece::Separator
+            } else {
+                CommandPiece::Word(*word)
+            }
         })
-        .collect()
+        .collect();
+    let args: Vec<String> = words
+        .iter()
+        .zip(client_credential_replacements(&pieces))
+        .map(|(word, replacement)| match replacement {
+            Some(replacement) => replacement,
+            // An argument that is itself a command (`sh -c "..."`).
+            None if word.contains(char::is_whitespace) => {
+                redact_client_credentials_in_text(word, 1)
+            }
+            None => word.to_string(),
+        })
+        .collect();
+    let mut out: Vec<String> = redact_cli_args(&args, &[])
+        .into_iter()
+        .map(|arg| match arg.split_once('=') {
+            Some((name, value)) if is_assignment_name(name) && !value.is_empty() => {
+                format!("{name}={REDACTED}")
+            }
+            _ => redact_java_properties(&redact_credential_header_options(&redact_text(&arg))),
+        })
+        .collect();
+    // A secret-named word and its value as two arguments (`aws configure set
+    // aws_secret_access_key VALUE`): read as the text form reads the pair.
+    for index in 1..out.len() {
+        let (name, value) = (&out[index - 1], &out[index]);
+        if name.starts_with('-')
+            || name.contains(char::is_whitespace)
+            || value.starts_with('-')
+            || value.contains(char::is_whitespace)
+            || !is_secret_field_name(name)
+        {
+            continue;
+        }
+        let pair = format!("{name} {value}");
+        let masked = redact_named_fields(&pair);
+        if let Some(rest) = masked.strip_prefix(&format!("{name} ")) {
+            if rest != value {
+                out[index] = rest.to_string();
+            }
+        }
+    }
+    // A header that is the argument after `-H` / `--header`.
+    for index in 1..out.len() {
+        if !matches!(out[index - 1].as_str(), "-H" | "--header") {
+            continue;
+        }
+        let masked = CREDENTIAL_HEADER
+            .captures(&out[index])
+            .filter(|caps| !header_value_is_masked(&caps["value"]))
+            .map(|caps| format!("{}{}", &caps["lead"], REDACTED));
+        if let Some(masked) = masked {
+            out[index] = masked;
+        }
+    }
+    out.into_iter().map(cap_argument).collect()
 }
 
 /// A command, or a path taken from one (an interpreter's inline `-c` script),
-/// made safe to leave the host: [`redact_text`] and the
-/// [`COMMAND_LINE_ARG_MAX_CHARS`] cap.
+/// made safe to leave the host: the client credentials and header options of
+/// [`redact_command_line`], [`redact_text`], and the
+/// [`COMMAND_LINE_ARG_MAX_CHARS`] cap. The same limit holds: what is not a
+/// known shape, a named field or a listed client's option stays.
 pub fn redact_command_text(text: &str) -> String {
-    cap_argument(redact_text(text))
+    cap_argument(redact_java_properties(&redact_credential_header_options(
+        &redact_text(&redact_client_credentials_in_text(text, 0)),
+    )))
+}
+
+lazy_static! {
+    /// A JVM system property on a command line (`-Dname=value`, also behind
+    /// `-J`): the value runs to the next space or quote.
+    static ref JAVA_PROPERTY: Regex =
+        Regex::new(r#"(?P<lead>(?:^|\s|["'])(?:-J)?-D(?P<name>[A-Za-z0-9_.\-]+)=)(?P<value>[^\s"']+)"#)
+            .expect("Failed to compile JVM property regex");
+}
+
+/// The value of a JVM system property whose name says it is a credential
+/// (`-Djavax.net.ssl.keyStorePassword=...`, `-Ddb.password=...`): the last
+/// dotted segment of the name, its camel case read as words, is a
+/// [`is_secret_field_name`] name.
+fn redact_java_properties(text: &str) -> String {
+    if !text.contains("-D") {
+        return text.to_string();
+    }
+    JAVA_PROPERTY
+        .replace_all(text, |caps: &regex::Captures| {
+            let name = &caps["name"];
+            let last = name.rsplit('.').next().unwrap_or(name);
+            let mut snake = String::with_capacity(last.len() + 4);
+            for (i, c) in last.chars().enumerate() {
+                if c.is_ascii_uppercase() && i > 0 {
+                    snake.push('_');
+                }
+                snake.push(c.to_ascii_lowercase());
+            }
+            if caps["value"] != *REDACTED && is_secret_field_name(&snake) {
+                format!("{}{}", &caps["lead"], REDACTED)
+            } else {
+                caps[0].to_string()
+            }
+        })
+        .into_owned()
 }
 
 /// `NAME` of a `NAME=value` assignment, as shells and `env` write them.
@@ -773,26 +1802,93 @@ fn is_assignment_name(name: &str) -> bool {
 const COMMAND_LINE_ARRAY_KEYS: &[&str] = &["cmd", "parent_cmd", "grandparent_cmd", "process_cmd"];
 
 /// JSON keys whose string value is a command, or a path taken from one: an
-/// interpreter's script argument can be a whole inline `-c` command.
+/// interpreter's script argument can be a whole inline `-c` command. The last
+/// two are the commands of a denied-command event, as an agent's transcript
+/// holds them.
 const COMMAND_TEXT_KEYS: &[&str] = &[
     "command",
     "script_path",
     "parent_script_path",
     "grandparent_script_path",
+    "denied_command",
+    "bypass_command",
 ];
+
+/// JSON keys whose string value is made of a command's words and is only ever
+/// compared for equality (the key two spellings of one command share). The
+/// value is replaced by a digest of itself: equal values stay equal, and the
+/// words do not travel.
+const COMMAND_DIGEST_KEYS: &[&str] = &["semantic_key"];
+
+/// What a digested value starts with ([`digest_command_key`]).
+pub const COMMAND_DIGEST_PREFIX: &str = "sha256:";
+
+/// Hex characters of a digested value after its prefix (128 bits).
+const COMMAND_DIGEST_HEX_CHARS: usize = 32;
+
+fn is_command_digest(text: &str) -> bool {
+    text.strip_prefix(COMMAND_DIGEST_PREFIX).is_some_and(|hex| {
+        hex.len() == COMMAND_DIGEST_HEX_CHARS
+            && hex
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    })
+}
+
+/// A value that is only compared for equality, replaced by a digest of
+/// itself: [`COMMAND_DIGEST_PREFIX`] and the first 128 bits of its SHA-256.
+/// Two equal values give the same digest. An empty value stays empty and a
+/// value that is already a digest stays as it is, so applying this twice
+/// changes nothing.
+pub fn digest_command_key(text: &str) -> String {
+    use sha2::{Digest, Sha256};
+    if text.is_empty() || is_command_digest(text) {
+        return text.to_string();
+    }
+    let digest = Sha256::digest(text.as_bytes());
+    format!(
+        "{COMMAND_DIGEST_PREFIX}{}",
+        hex::encode(&digest[..COMMAND_DIGEST_HEX_CHARS / 2])
+    )
+}
+
+/// The JSON keys [`redact_command_lines_in_json`] acts on, for a caller that
+/// accounts for what the redaction changed.
+pub fn redacted_command_keys() -> Vec<&'static str> {
+    COMMAND_LINE_ARRAY_KEYS
+        .iter()
+        .chain(COMMAND_TEXT_KEYS)
+        .chain(COMMAND_DIGEST_KEYS)
+        .copied()
+        .collect()
+}
 
 /// Every captured command line in a JSON document EDAMAME is about to hand
 /// off the host (an MCP answer, an export), redacted in place: arrays under a
 /// `cmd`-named key through [`redact_command_line`], commands and script paths
-/// through [`redact_text`] and the same length cap. A JSON document carried in
-/// a string value (an export that nests one) is redacted the same way.
+/// through [`redact_command_text`], a command given as an array of strings
+/// under one of those keys as an argv (any other array there is walked as a
+/// document), and a value under a [`COMMAND_DIGEST_KEYS`] key through
+/// [`digest_command_key`]. A JSON document carried in a string value (an
+/// export that nests one) is redacted the same way.
+///
+/// This is a redaction of known shapes, not a guarantee that no secret
+/// travels: see [`redact_command_line`] for what stays.
 pub fn redact_command_lines_in_json(value: &mut Value) {
     match value {
         Value::Object(map) => {
             for (key, item) in map.iter_mut() {
                 let key = key.as_str();
                 match item {
-                    Value::Array(args) if COMMAND_LINE_ARRAY_KEYS.contains(&key) => {
+                    // An argv: the array under a `cmd`-named key, or an array
+                    // of strings under a command or script key. Any other
+                    // array under one of those is a document and is walked.
+                    Value::Array(args)
+                        if COMMAND_LINE_ARRAY_KEYS.contains(&key)
+                            || (COMMAND_TEXT_KEYS.contains(&key)
+                                && !args.is_empty()
+                                && args.iter().all(Value::is_string)) =>
+                    {
                         let text: Vec<String> = args
                             .iter()
                             .map(|a| {
@@ -811,6 +1907,9 @@ pub fn redact_command_lines_in_json(value: &mut Value) {
                             || COMMAND_TEXT_KEYS.contains(&key) =>
                     {
                         *text = redact_command_text(text);
+                    }
+                    Value::String(text) if COMMAND_DIGEST_KEYS.contains(&key) => {
+                        *text = digest_command_key(text);
                     }
                     _ => redact_command_lines_in_json(item),
                 }
@@ -853,7 +1952,7 @@ pub fn redact_command_lines_in_json_text(text: &str) -> String {
 
 fn cap_argument(arg: String) -> String {
     let total = arg.chars().count();
-    if total <= COMMAND_LINE_ARG_MAX_CHARS {
+    if total <= COMMAND_LINE_ARG_MAX_CHARS || is_capped_argument(&arg) {
         return arg;
     }
     let head: String = arg.chars().take(COMMAND_LINE_ARG_MAX_CHARS).collect();
@@ -861,6 +1960,21 @@ fn cap_argument(arg: String) -> String {
         "{head}...[{} more chars]",
         total - COMMAND_LINE_ARG_MAX_CHARS
     )
+}
+
+/// An argument [`cap_argument`] already capped: its head and the
+/// `...[N more chars]` count. Capping it again would replace the count of the
+/// original's characters with the count of the marker's, so a stored value
+/// redacted a second time (a record read back, a document served twice)
+/// keeps the first count.
+fn is_capped_argument(arg: &str) -> bool {
+    let Some((head_end, _)) = arg.char_indices().nth(COMMAND_LINE_ARG_MAX_CHARS) else {
+        return false;
+    };
+    arg[head_end..]
+        .strip_prefix("...[")
+        .and_then(|rest| rest.strip_suffix(" more chars]"))
+        .is_some_and(|count| !count.is_empty() && count.bytes().all(|b| b.is_ascii_digit()))
 }
 
 // ---------------------------------------------------------------------------
@@ -1129,10 +2243,18 @@ mod tests {
         format!("{prefix}{body}")
     }
 
+    /// A Telegram bot token as the Bot API issues them: a numeric bot id, a
+    /// colon, a 35-character secret starting with `AA`.
+    fn fake_telegram_token() -> String {
+        let bot_id: String = (1u8..=10).map(|i| char::from(b'0' + i % 10)).collect();
+        format!("{bot_id}:{}", fake("AA", 33))
+    }
+
     #[test]
     fn every_known_secret_shape_is_masked() {
         let jwt = format!("{}.{}.{}", fake("eyJ", 20), fake("eyJ", 30), fake("", 20));
         let cases = [
+            fake_telegram_token(),
             fake("edm_live_", 24),
             fake("edak_", 24),
             fake("sk-ant-api03-", 40),
@@ -1159,6 +2281,53 @@ mod tests {
                 out.starts_with("request failed (") && out.ends_with(") retrying"),
                 "{out}"
             );
+        }
+    }
+
+    #[test]
+    fn telegram_bot_tokens_are_masked_in_bot_api_urls_and_bare() {
+        let token = fake_telegram_token();
+        let secret = token.split_once(':').map(|(_, s)| s.to_string()).unwrap();
+        // What reqwest's Display appends to a failed request.
+        let line = format!(
+            "WARN core: Telegram polling failed: Telegram getUpdates request failed: \
+             error sending request for url (https://api.telegram.org/bot{token}/getUpdates)"
+        );
+        let out = redact_log_line(&line);
+        assert!(!out.contains(&secret), "{out}");
+        assert!(
+            out.ends_with("for url (https://api.telegram.org/bot[REDACTED]/getUpdates)"),
+            "{out}"
+        );
+        // The file download path carries it too.
+        let out = redact_text(&format!(
+            "GET https://api.telegram.org/file/bot{token}/photos/file_7.jpg failed"
+        ));
+        assert_eq!(
+            out,
+            "GET https://api.telegram.org/file/bot[REDACTED]/photos/file_7.jpg failed"
+        );
+        // Bare, in free text or a structured field.
+        for text in [
+            format!("token {token} accepted"),
+            format!("bot_config={{\"value\": \"{token}\"}}"),
+        ] {
+            let out = redact_log_line(&text);
+            assert!(!out.contains(&secret), "{out}");
+        }
+    }
+
+    #[test]
+    fn telegram_shapes_leave_lookalikes_alone() {
+        for text in [
+            "2026-11-12T10:30:45.123456Z  INFO edamame_core: tick at 10:30:45",
+            "GET /bot/status 200",
+            "routed through /bottleneck/12345:short",
+            "port 443:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA open",
+            "peer 2001:0db8:85a3:0000:0000:8a2e:0370:7334 joined",
+            "chat 123456789: AA batteries low",
+        ] {
+            assert_eq!(redact_text(text), text);
         }
     }
 
@@ -1700,6 +2869,89 @@ mod tests {
         assert!(out
             .iter()
             .all(|a| !a.contains("MIIJQgIBADANBgkqhkiG9w0BAQEFAASCCSww")));
+        // A redacted command line redacted again is unchanged: the capped
+        // blob keeps the count of the original's characters.
+        assert_eq!(redact_command_line(&out), out);
+        assert_eq!(redact_command_text(&out[15]), out[15]);
+    }
+
+    #[test]
+    fn registry_logins_secret_pairs_and_jvm_properties_are_masked() {
+        let password = fake("Pq", 14);
+        let secret = fake("", 40);
+        let argv = |words: &[&str]| words.iter().map(|w| w.to_string()).collect::<Vec<_>>();
+        let cases: Vec<(Vec<String>, &String)> = vec![
+            (
+                argv(&["docker", "login", "-u", "me", "-p", &password]),
+                &password,
+            ),
+            (
+                argv(&[
+                    "docker",
+                    "login",
+                    "--password",
+                    &password,
+                    "registry.example.com",
+                ]),
+                &password,
+            ),
+            (
+                argv(&[
+                    "podman",
+                    "login",
+                    &format!("--password={password}"),
+                    "quay.io",
+                ]),
+                &password,
+            ),
+            (
+                argv(&["aws", "configure", "set", "aws_secret_access_key", &secret]),
+                &secret,
+            ),
+            (
+                argv(&[
+                    "java",
+                    &format!("-Djavax.net.ssl.keyStorePassword={password}"),
+                    "-jar",
+                    "app.jar",
+                ]),
+                &password,
+            ),
+            (
+                argv(&[
+                    "java",
+                    &format!("-Djavax.net.ssl.trustStorePassword={password}"),
+                    &format!("-Ddb.password={password}"),
+                    "-jar",
+                    "app.jar",
+                ]),
+                &password,
+            ),
+        ];
+        for (words, value) in &cases {
+            let out = redact_command_line(words);
+            assert!(!out.join(" ").contains(value.as_str()), "{:?}", out);
+            assert_eq!(redact_command_line(&out), out, "idempotent");
+            let text = redact_command_text(&words.join(" "));
+            assert!(!text.contains(value.as_str()), "{text}");
+            assert_eq!(redact_command_text(&text), text, "idempotent");
+        }
+        // The same letters elsewhere keep their meaning.
+        let run = argv(&["docker", "run", "-p", "8080:80", "nginx"]);
+        assert_eq!(redact_command_line(&run), run);
+        let stdin = argv(&["docker", "login", "--password-stdin", "-u", "me"]);
+        assert_eq!(redact_command_line(&stdin), stdin);
+        let props = argv(&[
+            "java",
+            "-Dfile.encoding=UTF-8",
+            "-Dserver.port=8080",
+            "-jar",
+            "x",
+        ]);
+        assert_eq!(redact_command_line(&props), props);
+        // The JVM rule holds in free text too (a log line).
+        let line = format!("started java -Dmail.smtp.password={password} -jar mail.jar");
+        assert!(!redact_command_text(&line).contains(&password));
     }
 
     #[test]
@@ -1733,6 +2985,586 @@ mod tests {
         assert_eq!(doc["sessions"][0]["l7"]["cmd"][1], "server.js");
         assert_eq!(doc["sessions"][0]["l7"]["process_name"], "node");
         assert_eq!(doc["finding_key"], "vuln:abc");
+    }
+
+    /// The two commands of a denied-command event are redacted like any
+    /// other command, as a string or as an argv, and the key the two
+    /// spellings share is replaced by a digest: equal keys stay equal, and
+    /// the words they were made of are gone.
+    #[test]
+    fn the_commands_of_a_denied_command_event_are_redacted_and_its_key_digested() {
+        let key = "curl\u{1}-H\u{1}Authorization: Bearer abcdefghijklmnopqrstuvwxyz123456";
+        let event = |key: &str| {
+            serde_json::json!({
+                "agent_type": "claude_code",
+                "tool": "Bash",
+                "denied_command": "curl -H 'Authorization: Bearer abcdefghijklmnopqrstuvwxyz123456' https://x",
+                "bypass_command": ["/bin/sh", "-c", "API_TOKEN=nested-secret curl https://x"],
+                "semantic_key": key,
+            })
+        };
+        let mut doc =
+            serde_json::json!({"events": [event(key), event(key), event("git\u{1}push")]});
+        redact_command_lines_in_json(&mut doc);
+        let text = doc.to_string();
+        for leaked in ["abcdefghijklmnopqrstuvwxyz123456", "nested-secret"] {
+            assert!(!text.contains(leaked), "{leaked} survived: {text}");
+        }
+        let events = doc["events"].as_array().unwrap();
+        assert_eq!(events[0]["tool"], "Bash");
+        assert_eq!(events[0]["agent_type"], "claude_code");
+        assert!(events[0]["denied_command"]
+            .as_str()
+            .unwrap()
+            .starts_with("curl -H"));
+        assert_eq!(events[0]["bypass_command"][0], "/bin/sh");
+        let digest = events[0]["semantic_key"].as_str().unwrap().to_string();
+        assert!(digest.starts_with(COMMAND_DIGEST_PREFIX));
+        assert_eq!(digest.len(), COMMAND_DIGEST_PREFIX.len() + 32);
+        assert!(!digest.contains("curl") && !digest.contains("Bearer"));
+        assert_eq!(events[1]["semantic_key"], events[0]["semantic_key"]);
+        assert_ne!(events[2]["semantic_key"], events[0]["semantic_key"]);
+        // A second pass changes nothing: a digest is not digested again.
+        let once = doc.clone();
+        redact_command_lines_in_json(&mut doc);
+        assert_eq!(
+            doc["events"][0]["semantic_key"],
+            once["events"][0]["semantic_key"]
+        );
+        assert_eq!(digest_command_key(""), "");
+        assert_eq!(digest_command_key(&digest), digest);
+        // A value that only looks like a digest is digested.
+        assert_ne!(digest_command_key("sha256:XYZ"), "sha256:XYZ");
+        for key in [
+            "denied_command",
+            "bypass_command",
+            "semantic_key",
+            "cmd",
+            "parent_script_path",
+        ] {
+            assert!(redacted_command_keys().contains(&key), "{key}");
+        }
+    }
+
+    /// `argv` through [`redact_command_line`], joined with spaces, and the
+    /// same words written as one string through [`redact_command_text`]:
+    /// both give `expected`. For words without white space in them, where
+    /// the two forms are the same command.
+    fn same_in_both_forms(argv: &[&str], expected: &str) {
+        assert_eq!(
+            redact_command_line(argv).join(" "),
+            expected,
+            "as an argv: {argv:?}"
+        );
+        assert_eq!(
+            redact_command_text(&argv.join(" ")),
+            expected,
+            "as one string: {argv:?}"
+        );
+    }
+
+    /// The credential a common client takes under an option whose name does
+    /// not say so, as an argv and as one string.
+    #[test]
+    fn a_clients_credential_option_is_masked() {
+        // A user and a password: the user stays.
+        same_in_both_forms(
+            &["curl", "-u", "alice:hunter2pass", "https://example.test"],
+            "curl -u alice:[REDACTED] https://example.test",
+        );
+        same_in_both_forms(
+            &[
+                "/usr/bin/curl",
+                "--user=alice:hunter2pass",
+                "-s",
+                "https://example.test",
+            ],
+            "/usr/bin/curl --user=alice:[REDACTED] -s https://example.test",
+        );
+        same_in_both_forms(
+            &[
+                "curl.exe",
+                "--proxy-user",
+                "bob:hunter2pass",
+                "https://example.test",
+            ],
+            "curl.exe --proxy-user bob:[REDACTED] https://example.test",
+        );
+        same_in_both_forms(
+            &["http", "-a", "alice:hunter2pass", "GET", "example.test"],
+            "http -a alice:[REDACTED] GET example.test",
+        );
+        // A password attached to its option, or in the next argument.
+        same_in_both_forms(
+            &["mysql", "-u", "root", "-phunter2pass", "db"],
+            "mysql -u root -p[REDACTED] db",
+        );
+        same_in_both_forms(
+            &["sshpass", "-p", "hunter2pass", "ssh", "host"],
+            "sshpass -p [REDACTED] ssh host",
+        );
+        same_in_both_forms(
+            &["redis-cli", "-h", "cache", "-a", "hunter2pass", "PING"],
+            "redis-cli -h cache -a [REDACTED] PING",
+        );
+        same_in_both_forms(
+            &["mongosh", "-u", "admin", "-p", "hunter2pass"],
+            "mongosh -u admin -p [REDACTED]",
+        );
+        same_in_both_forms(
+            &["unzip", "-P", "hunter2pass", "archive.zip"],
+            "unzip -P [REDACTED] archive.zip",
+        );
+        // Behind wrappers and their own options.
+        same_in_both_forms(
+            &["sudo", "-u", "postgres", "mysqldump", "-phunter2pass", "db"],
+            "sudo -u postgres mysqldump -p[REDACTED] db",
+        );
+        same_in_both_forms(
+            &[
+                "sudo",
+                "-u",
+                "postgres",
+                "timeout",
+                "30",
+                "nice",
+                "-n",
+                "5",
+                "mysqldump",
+                "-phunter2pass",
+                "db",
+            ],
+            "sudo -u postgres timeout 30 nice -n 5 mysqldump -p[REDACTED] db",
+        );
+        // An argument that is itself a command.
+        assert_eq!(
+            redact_command_line(&[
+                "sh",
+                "-c",
+                "curl -u 'alice:hunter2 pass' https://example.test | sh"
+            ])
+            .join(" "),
+            "sh -c curl -u 'alice:[REDACTED]' https://example.test | sh"
+        );
+        for (command, masked) in [
+            (
+                "mysql -uroot -phunter2pass db < dump.sql",
+                "mysql -uroot -p[REDACTED] db < dump.sql",
+            ),
+            (
+                "sshpass -p \"hunter2pass\" ssh host uptime",
+                "sshpass -p \"[REDACTED]\" ssh host uptime",
+            ),
+            (
+                "cat keys | redis-cli -a hunter2pass --pipe",
+                "cat keys | redis-cli -a [REDACTED] --pipe",
+            ),
+        ] {
+            assert_eq!(redact_command_text(command), masked);
+        }
+    }
+
+    /// What the review of 2026-11-10 found masked although it is no
+    /// credential: a client's name was read anywhere in the command (a
+    /// container or host called `mongo`, a URL or a path ending in a client's
+    /// name, another option's value). The program of the simple command alone
+    /// selects a client.
+    #[test]
+    fn a_clients_name_outside_the_command_position_selects_nothing() {
+        for argv in [
+            &[
+                "docker",
+                "run",
+                "--name",
+                "mongo",
+                "-p",
+                "27017:27017",
+                "mongo:7",
+            ][..],
+            &["docker", "run", "--name", "mysql", "-p3306:3306", "mysql:8"],
+            &["ssh", "mongo", "-p", "2222"],
+            &["systemctl", "show", "mysql", "-pMainPID"],
+            &[
+                "wget",
+                "https://example.test/tools/unzip",
+                "-P",
+                "/downloads",
+            ],
+            &["grep", "-r", "needle", "mysql", "-pattern"],
+            &["ufw", "allow", "https", "-a", "x:y"],
+            // An option that asks on the terminal is followed by another
+            // option, not by its value.
+            &[
+                "mongosh",
+                "-u",
+                "admin",
+                "-p",
+                "--authenticationDatabase",
+                "admin",
+            ],
+            &["docker", "run", "-u", "1000:1000", "-p", "8080:80", "image"],
+            &["ps", "-p", "1234", "-o", "pid,comm"],
+            &["tar", "-czf", "backup.tgz", "-P", "/etc"],
+        ] {
+            same_in_both_forms(argv, &argv.join(" "));
+        }
+        // `sshpass` masks its own password and runs a command whose `-p` is
+        // a port.
+        same_in_both_forms(
+            &["sshpass", "-p", "hunter2pass", "ssh", "-p", "2222", "host"],
+            "sshpass -p [REDACTED] ssh -p 2222 host",
+        );
+        // A header whose name only holds a credential word inside one of its
+        // parts.
+        let argv = ["curl", "-H", "X-Author: Bob Smith", "https://example.test"];
+        assert_eq!(redact_command_line(&argv), argv);
+        let text = "curl -H 'X-Author: Bob Smith' https://example.test";
+        assert_eq!(redact_command_text(text), text);
+        let text = "curl -H X-Authored-By:BobSmith https://example.test";
+        assert_eq!(redact_command_text(text), text);
+    }
+
+    /// What the review of 2026-11-10 found left as it was although it is the
+    /// listed shape, each as an argv and as one string.
+    #[test]
+    fn a_clients_credential_is_masked_wherever_the_command_puts_it() {
+        // A URL or a path whose last part names another client.
+        same_in_both_forms(
+            &[
+                "curl",
+                "https://example.test/api/http",
+                "-u",
+                "alice:hunter2pass",
+            ],
+            "curl https://example.test/api/http -u alice:[REDACTED]",
+        );
+        same_in_both_forms(
+            &[
+                "curl",
+                "https://example.test/db/mysql",
+                "-u",
+                "alice:hunter2pass",
+            ],
+            "curl https://example.test/db/mysql -u alice:[REDACTED]",
+        );
+        // Short options written together, the value next or attached.
+        same_in_both_forms(
+            &["curl", "-sSu", "alice:hunter2pass", "https://example.test"],
+            "curl -sSu alice:[REDACTED] https://example.test",
+        );
+        same_in_both_forms(
+            &["curl", "-sSualice:hunter2pass", "https://example.test"],
+            "curl -sSualice:[REDACTED] https://example.test",
+        );
+        // A key given as the user with an empty password.
+        same_in_both_forms(
+            &["curl", "-u", "AbCdEf0123:", "https://example.test"],
+            "curl -u [REDACTED]: https://example.test",
+        );
+        // A user alone asks for the password, and stays.
+        same_in_both_forms(
+            &["curl", "-u", "alice", "https://example.test"],
+            "curl -u alice https://example.test",
+        );
+        // HTTPie with a bearer token, the kind given before or after.
+        same_in_both_forms(
+            &[
+                "http",
+                "-A",
+                "bearer",
+                "-a",
+                "TokenValue0123",
+                "https://example.test",
+            ],
+            "http -A bearer -a [REDACTED] https://example.test",
+        );
+        same_in_both_forms(
+            &[
+                "http",
+                "--auth=TokenValue0123",
+                "--auth-type=bearer",
+                "https://example.test",
+            ],
+            "http --auth=[REDACTED] --auth-type=bearer https://example.test",
+        );
+        same_in_both_forms(
+            &["http", "-a", "alice", "https://example.test"],
+            "http -a alice https://example.test",
+        );
+        // More clients of the MySQL and MariaDB families.
+        same_in_both_forms(
+            &["mysqlsh", "-uroot", "-phunter2pass", "--sql"],
+            "mysqlsh -uroot -p[REDACTED] --sql",
+        );
+        same_in_both_forms(
+            &["mycli", "-u", "root", "-p", "hunter2pass", "db"],
+            "mycli -u root -p [REDACTED] db",
+        );
+        same_in_both_forms(
+            &["mariadb-import", "-phunter2pass", "db", "rows.csv"],
+            "mariadb-import -p[REDACTED] db rows.csv",
+        );
+        same_in_both_forms(
+            &[
+                "mongoexport",
+                "-u",
+                "admin",
+                "-p",
+                "hunter2pass",
+                "--db",
+                "app",
+            ],
+            "mongoexport -u admin -p [REDACTED] --db app",
+        );
+        // A password with a space in it: escaped in one string, one argument
+        // in an argv.
+        assert_eq!(
+            redact_command_text("curl -u alice:hunter2\\ pass https://example.test"),
+            "curl -u alice:[REDACTED] https://example.test"
+        );
+        assert_eq!(
+            redact_command_line(&["curl", "-u", "alice:hunter2 pass", "https://example.test"])
+                .join(" "),
+            "curl -u alice:[REDACTED] https://example.test"
+        );
+        // After a separator, with or without spaces around it, and behind
+        // leading assignments and wrappers.
+        for separator in [";", " ; ", "&&", " && ", "||", "|", " | ", "&", "\n"] {
+            let text = format!("true{separator}curl -u alice:hunter2pass https://example.test");
+            let masked = redact_command_text(&text);
+            assert_eq!(
+                masked,
+                format!("true{separator}curl -u alice:[REDACTED] https://example.test"),
+                "{separator:?}"
+            );
+        }
+        assert_eq!(
+            redact_command_text("HOME=/tmp nohup curl -u alice:hunter2pass https://example.test"),
+            "HOME=/tmp nohup curl -u alice:[REDACTED] https://example.test"
+        );
+        assert_eq!(
+            redact_command_text("curl -s https://example.test 2>&1 | mysql -phunter2pass db"),
+            "curl -s https://example.test 2>&1 | mysql -p[REDACTED] db"
+        );
+    }
+
+    /// A command nested in another is read like the outer one: a `-c`
+    /// string, a quoted remote command, a subshell, a command substitution,
+    /// backticks. Each as one string, and as the argv of a shell given it.
+    #[test]
+    fn a_nested_command_is_read_for_client_options() {
+        let inner = "curl -u alice:hunter2pass https://example.test";
+        let masked = "curl -u alice:[REDACTED] https://example.test";
+        for (command, expected) in [
+            (
+                format!("bash -c \"{inner}\""),
+                format!("bash -c \"{masked}\""),
+            ),
+            (
+                format!("bash -lc '{inner}'"),
+                format!("bash -lc '{masked}'"),
+            ),
+            (format!("({inner})"), format!("({masked})")),
+            (format!("echo $({inner})"), format!("echo $({masked})")),
+            (
+                format!("echo \"$({inner})\""),
+                format!("echo \"$({masked})\""),
+            ),
+            (format!("echo `{inner}`"), format!("echo `{masked}`")),
+            (
+                format!("diff <({inner}) local.json"),
+                format!("diff <({masked}) local.json"),
+            ),
+            (
+                "ssh host \"mysql -uroot -phunter2pass db\"".to_string(),
+                "ssh host \"mysql -uroot -p[REDACTED] db\"".to_string(),
+            ),
+        ] {
+            assert_eq!(redact_command_text(&command), expected, "{command}");
+            // The shell's argv: the command as one argument.
+            assert_eq!(
+                redact_command_line(&["bash", "-c", &command]).join(" "),
+                format!("bash -c {expected}"),
+                "{command}"
+            );
+        }
+        // Up to MAX_COMMAND_NESTING levels, the outer command included.
+        let mut command = inner.to_string();
+        let mut expected = masked.to_string();
+        for _ in 1..MAX_COMMAND_NESTING {
+            command = format!("echo $({command})");
+            expected = format!("echo $({expected})");
+        }
+        assert_eq!(redact_command_text(&command), expected, "{command}");
+        // One level more is not read for client options (a bound, pinned).
+        let deeper = format!("echo $({command})");
+        assert_eq!(redact_command_text(&deeper), deeper);
+    }
+
+    /// Token shapes with a prefix of their own, a token in the user position
+    /// of a URL, and a header option whose name says it carries one. The
+    /// token-shaped values are built at run time: no literal of a provider's
+    /// token shape is in the source.
+    #[test]
+    fn tokens_by_prefix_in_a_url_and_in_a_header_option_are_masked() {
+        let secrets = [
+            fake("glpat-", 20),
+            fake("npm_", 36),
+            fake("hf_", 34),
+            fake("sk_live_", 24),
+            fake("rk_live_", 24),
+        ];
+        for secret in &secrets {
+            let text = redact_text(&format!("deploy with {secret} now"));
+            assert_eq!(text, "deploy with [REDACTED] now", "{}", &secret[..4]);
+        }
+        // Names that only start like a token prefix stay.
+        for plain in [
+            "npm_config_registry",
+            "hf_hub_download",
+            "sk_live_",
+            "glpat-",
+        ] {
+            assert_eq!(redact_secret_tokens(plain), plain);
+        }
+        let url_token = fake("", 24);
+        assert_eq!(
+            redact_text(&format!(
+                "git clone https://{url_token}@gitlab.example.test/o/r.git"
+            )),
+            "git clone https://[REDACTED]@gitlab.example.test/o/r.git"
+        );
+        // A token as the user, whatever follows its colon.
+        assert_eq!(
+            redact_text(&format!(
+                "git clone https://{url_token}:x-oauth-basic@github.example.test/o/r.git"
+            )),
+            "git clone https://[REDACTED]@github.example.test/o/r.git"
+        );
+        assert_eq!(
+            redact_text("https://deploy:AbCdEfGhIjKl@host/o/r.git"),
+            "https://deploy:[REDACTED]@host/o/r.git"
+        );
+        // A header option, quoted, bare, attached, and as the next argument.
+        assert_eq!(
+            redact_command_text("curl -H 'X-Auth-Value: abc def' https://example.test"),
+            "curl -H 'X-Auth-Value: [REDACTED]' https://example.test"
+        );
+        assert_eq!(
+            redact_command_text("curl -H X-Custom-Auth:abcdef https://example.test"),
+            "curl -H X-Custom-Auth:[REDACTED] https://example.test"
+        );
+        // (A name the named-field rule knows may already be masked by it.)
+        let api_key = redact_command_text("curl -H 'X-Api-Key: abcdef123' https://example.test");
+        assert!(!api_key.contains("abcdef123"), "{api_key}");
+        assert!(api_key.starts_with("curl -H 'X-Api-Key: "), "{api_key}");
+        let args = redact_command_line(&[
+            "curl",
+            "-H",
+            "X-Custom-Auth: abc def",
+            "--header=X-Signing-Secret:abcdef",
+            "-H",
+            "X_Session_Token: abcdef",
+            "https://example.test",
+        ]);
+        assert_eq!(args[2], "X-Custom-Auth: [REDACTED]");
+        assert!(!args[3].contains("abcdef"), "{}", args[3]);
+        assert!(!args[5].contains("abcdef"), "{}", args[5]);
+        // An Authorization header keeps its scheme, as before.
+        let bearer = redact_command_text(
+            "curl -H 'Authorization: Bearer abcdefghijklmnopqrstuvwxyz123456' https://example.test",
+        );
+        assert_eq!(
+            bearer,
+            "curl -H 'Authorization: Bearer [REDACTED]' https://example.test"
+        );
+    }
+
+    /// An option that is a credential for one program is something else for
+    /// another, and an ordinary argument is left alone.
+    #[test]
+    fn an_ordinary_argument_is_left_alone() {
+        for args in [
+            vec!["docker", "run", "-u", "1000:1000", "-p", "8080:80", "image"],
+            vec!["ssh", "-p", "2222", "host"],
+            vec!["ps", "-p", "1234", "-o", "pid,comm"],
+            vec!["grep", "-a", "pattern", "file"],
+            vec!["mysql", "-u", "root", "-p"],
+            vec!["mysql", "-P", "3306", "-h", "db"],
+            vec!["curl", "-u", "alice", "https://example.test"],
+            vec![
+                "curl",
+                "-H",
+                "Accept: application/json",
+                "https://example.test",
+            ],
+            vec![
+                "curl",
+                "-H",
+                "Content-Type: text/plain",
+                "-d",
+                "@body.txt",
+                "https://example.test",
+            ],
+            vec!["git", "clone", "https://git@github.com/owner/repo.git"],
+            vec!["tar", "-czf", "backup.tgz", "-P", "/etc"],
+            vec!["npm", "run", "build", "--", "--mode", "production"],
+            vec![
+                "/opt/homebrew/bin/node",
+                "/Users/u/app/server.js",
+                "--inspect",
+            ],
+        ] {
+            assert_eq!(redact_command_line(&args), args, "{args:?}");
+        }
+        for command in [
+            "docker run -u 1000:1000 image",
+            "ssh -p 2222 host uptime",
+            "curl -s https://example.test/v1/items?page=2",
+            "git clone https://git@github.com/owner/repo.git",
+            "curl -H 'Accept: application/json' https://example.test",
+            "python3 manage.py migrate --noinput",
+        ] {
+            assert_eq!(redact_command_text(command), command);
+        }
+    }
+
+    /// What the redaction does not know stays: it masks known shapes, named
+    /// fields and listed clients' options, and cannot tell a password given
+    /// as a plain argument, or a literal inside an inline script, from any
+    /// other word. This pins the limit; it is not a wish.
+    #[test]
+    fn a_secret_of_no_known_shape_stays() {
+        let args = redact_command_line(&[
+            "/usr/local/bin/backup-tool",
+            "positional-Passw0rd-of-no-shape",
+            "prod",
+        ]);
+        assert_eq!(args[1], "positional-Passw0rd-of-no-shape");
+        let script = "python3 -c \"import db; db.connect('literal-Passw0rd-in-a-script')\"";
+        assert!(redact_command_text(script).contains("literal-Passw0rd-in-a-script"));
+    }
+
+    /// An array of strings under a command or script key is an argv; any
+    /// other array there is a document and is walked, not rewritten.
+    #[test]
+    fn only_an_array_of_strings_under_a_command_key_is_an_argv() {
+        let mut doc = serde_json::json!({
+            "command": ["mysql", "-phunter2pass", "db"],
+            "bypass_command": [{"cmd": ["env", "API_TOKEN=nested-secret"], "n": 1}, 2],
+            "script_path": [],
+        });
+        redact_command_lines_in_json(&mut doc);
+        assert_eq!(
+            doc["command"],
+            serde_json::json!(["mysql", "-p[REDACTED]", "db"])
+        );
+        assert_eq!(
+            doc["bypass_command"],
+            serde_json::json!([{"cmd": ["env", "API_TOKEN=[REDACTED]"], "n": 1}, 2]),
+            "objects and numbers stay what they are"
+        );
+        assert_eq!(doc["script_path"], serde_json::json!([]));
     }
 
     #[test]

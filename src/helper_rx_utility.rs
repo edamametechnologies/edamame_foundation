@@ -952,18 +952,41 @@ pub async fn utility_collect_sensor_coverage(_arg1: &str, _arg2: &str) -> Result
 
 /// The kernel process events this helper's sensors delivered at or after
 /// `arg1` (epoch milliseconds; empty or 0 for the whole ring), for the app's
-/// lineage table (`process_event_relay::process_events_since`). Thin
+/// lineage table (`process_event_relay::process_events_since`), with the
+/// listing of the pids in `arg2` (a JSON array; empty for none). Thin
 /// delegate; the standalone core drains the ring in process.
-pub async fn utility_process_events_since(since_ms: &str) -> Result<String> {
+pub async fn utility_process_events_since(since_ms: &str, listed_pids: &str) -> Result<String> {
     let since_ms = match since_ms.trim() {
         "" => 0,
         text => text
             .parse::<u64>()
             .map_err(|e| anyhow::anyhow!("Invalid since timestamp: {}", e))?,
     };
-    let batch = crate::process_event_relay::process_events_since(since_ms);
+    let listed_pids: Vec<u32> = match listed_pids.trim() {
+        "" => Vec::new(),
+        text => {
+            serde_json::from_str(text).map_err(|e| anyhow::anyhow!("Invalid pid list: {}", e))?
+        }
+    };
+    let batch = crate::process_event_relay::process_events_since(since_ms, &listed_pids);
     serde_json::to_string(&batch)
         .map_err(|e| anyhow::anyhow!("Failed to serialize process events: {}", e))
+}
+
+/// The processes recorded per file of the agent transcript stores, and the
+/// shell calls read as transcripts grew, that changed since the cursor in
+/// `arg1` (a `store_writer_relay::StoreWritersCursor` as JSON; empty for
+/// everything). Thin delegate (`store_writer_relay::store_writers_since`);
+/// the standalone core calls the same function in process.
+pub async fn utility_store_writers_since(cursor_json: &str) -> Result<String> {
+    let cursor = match cursor_json.trim() {
+        "" => crate::store_writer_relay::StoreWritersCursor::default(),
+        text => serde_json::from_str(text)
+            .map_err(|e| anyhow::anyhow!("Invalid store-writers cursor: {}", e))?,
+    };
+    let batch = crate::store_writer_relay::store_writers_since(&cursor);
+    serde_json::to_string(&batch)
+        .map_err(|e| anyhow::anyhow!("Failed to serialize store writers: {}", e))
 }
 
 /// Platform signature verdicts for the binaries in `arg1` (a JSON array of
@@ -1150,6 +1173,7 @@ pub async fn utility_start_file_monitor(paths_json: &str, start_args_json: &str)
             watcher.stop();
         }
     }
+    crate::fim_support::stop_transcript_capture();
 
     let raw_paths: Vec<String> = serde_json::from_str(paths_json).unwrap_or_default();
     let user_home_path = (!user_home.is_empty()).then(|| std::path::Path::new(&user_home));
@@ -1164,6 +1188,7 @@ pub async fn utility_start_file_monitor(paths_json: &str, start_args_json: &str)
             let mut guard = FIM_WATCHER.write().await;
             *guard = Some(watcher);
             info!("File monitor started via helper");
+            crate::fim_support::start_transcript_capture(user_home_path);
             Ok("".to_string())
         }
         Err(e) => {
@@ -1183,6 +1208,7 @@ pub async fn utility_stop_file_monitor() -> Result<String> {
         watcher.stop();
         info!("File monitor stopped via helper");
     }
+    crate::fim_support::stop_transcript_capture();
     Ok("".to_string())
 }
 

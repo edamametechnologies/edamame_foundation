@@ -482,6 +482,17 @@ impl AgentProtectionGap {
         }
     }
 
+    /// The wire token a read surface names this gap with
+    /// (`detector_off`, `divergence_off`, `no_model`, `observer_paused`).
+    pub fn token(self) -> &'static str {
+        match self {
+            Self::DetectorOff => "detector_off",
+            Self::DivergenceOff => "divergence_off",
+            Self::NoModel => "no_model",
+            Self::ObserverPaused => "observer_paused",
+        }
+    }
+
     /// The words the threat's detail uses.
     pub fn label(self) -> &'static str {
         match self {

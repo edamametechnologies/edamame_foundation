@@ -858,6 +858,76 @@ pub struct WixBurnLayoutJSON {
     pub delete_on_reboot_suffix: String,
 }
 
+/// Parameters of the per-process destination history (core
+/// `agentic::destination_history`): the record of which destinations a
+/// program used, and when.
+///
+/// Durations and counts:
+/// - `new_destination_window_minutes`: minutes after a destination's first
+///   use.
+/// - `identity_maturity_minutes`: minutes since a program was first recorded.
+/// - `identity_retention_days`: days a program's record is kept after its
+///   last use.
+/// - `established_min_distinct_days`: a count of distinct UTC days.
+/// - `established_min_age_hours`: hours since the start of the current run of
+///   recorded days.
+/// - `established_max_idle_days`: days since the last recorded day; also the
+///   gap after which a run of recorded days starts again.
+/// - `established_window_days`: the number of most recent UTC days the day
+///   count is taken over.
+/// - `established_min_clean_share_percent`: a share of a day's recorded
+///   hours, in percent (50 to 100).
+/// - `max_destinations_per_identity`, `max_identities`: entry counts, the
+///   least recently used entry going first.
+/// - `max_standing_destinations_per_identity`, `max_standing_records`: counts
+///   of per-day records, for one program and for the whole table, the least
+///   recently used record going first.
+///
+/// Upper bounds: the window at most 60 days, the idle limit at most the
+/// window, the age at most the window in hours, at most 1,024 records a
+/// program and 16,384 in all.
+///
+/// `established_enabled` selects whether the detector reads the
+/// `established_*` values, or only records and counts what they would say.
+/// Published `false`: the values are recorded and counted, and read by
+/// nothing else.
+///
+/// Name lists (lowercase):
+/// - `rpc_provider_suffixes`: domains (a domain or its subdomains) of public
+///   blockchain RPC providers.
+/// - `browser_process_names`: process names of web browsers;
+///   `browser_process_name_prefixes`: name prefixes followed by a space (a
+///   browser's helper processes: `google chrome helper`).
+/// - `standing_inline_code_options`: command-line options through which a
+///   script runtime takes its program as text rather than as a file.
+/// - `standing_subcommand_words`: first arguments of a script runtime that
+///   are a command word rather than a program file.
+/// - `registrable_domain_second_level_labels`: second-level labels that,
+///   under a two-letter top-level label, make a registrable domain three
+///   labels long (`example.co.uk`).
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct DestinationHistoryJSON {
+    pub established_enabled: bool,
+    pub established_min_distinct_days: u64,
+    pub established_min_age_hours: u64,
+    pub established_max_idle_days: u64,
+    pub established_window_days: u64,
+    pub established_min_clean_share_percent: u64,
+    pub new_destination_window_minutes: u64,
+    pub identity_maturity_minutes: u64,
+    pub identity_retention_days: u64,
+    pub max_destinations_per_identity: usize,
+    pub max_identities: usize,
+    pub max_standing_destinations_per_identity: usize,
+    pub max_standing_records: usize,
+    pub rpc_provider_suffixes: Vec<String>,
+    pub browser_process_names: Vec<String>,
+    pub browser_process_name_prefixes: Vec<String>,
+    pub standing_inline_code_options: Vec<String>,
+    pub standing_subcommand_words: Vec<String>,
+    pub registrable_domain_second_level_labels: Vec<String>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 pub struct PlatformOwnedUserStoreJSON {
     pub library_root: String,
@@ -1543,6 +1613,12 @@ pub struct CveDetectionParamsJSON {
     /// stamped (observation time, after its coalescer) still belongs to that
     /// session.
     pub fim_observation_lag_secs: i64,
+    /// Whether the processes recorded per agent transcript file are read
+    /// (the store-writer record and the trust state built from it).
+    pub transcript_write_trust_enabled: bool,
+    /// How many days a transcript's record is kept after its last recorded
+    /// operation.
+    pub transcript_write_trust_retention_days: u64,
     /// A project's own package-manager and agent tool configuration files,
     /// relative to the working tree (`.npmrc`, `.mcp.json`, ...).
     pub project_tool_config_files: Vec<String>,
@@ -1586,6 +1662,8 @@ pub struct CveDetectionParamsJSON {
     pub windows_temp_powershell_stub: WindowsTempPowershellStubJSON,
     /// The WiX Burn bundle layout (see [`WixBurnLayoutJSON`]).
     pub wix_burn_layout: WixBurnLayoutJSON,
+    /// The per-process destination history (see [`DestinationHistoryJSON`]).
+    pub destination_history: DestinationHistoryJSON,
 }
 
 fn normalize_runtime_perfdata_entry(entry: &RuntimePerfdataEntryJSON) -> RuntimePerfdataEntryJSON {
@@ -1935,6 +2013,9 @@ pub struct CveDetectionParams {
     pub evaluator_materialisation_burst_secs: i64,
     pub evaluator_session_attribution_slack_secs: i64,
     pub fim_observation_lag_secs: i64,
+    pub transcript_write_trust_enabled: bool,
+    /// At least one day.
+    pub transcript_write_trust_retention_days: u64,
     /// `project_tool_config_files`, lowercase, `/`-separated, no leading
     /// `/`, empty entries dropped.
     pub project_tool_config_files: Vec<String>,
@@ -1964,6 +2045,10 @@ pub struct CveDetectionParams {
     /// `wix_burn_layout`, lowercase and trimmed; staging directory entries
     /// that are empty or not one path segment are dropped.
     pub wix_burn_layout: WixBurnLayoutJSON,
+    /// `destination_history`, lists lowercase and trimmed, numeric values
+    /// held at the validator's lower bounds
+    /// (`normalized_destination_history`).
+    pub destination_history: DestinationHistoryJSON,
 }
 
 impl CloudSignature for CveDetectionParams {
@@ -2155,6 +2240,61 @@ fn normalized_wix_burn_layout(layout: &WixBurnLayoutJSON) -> WixBurnLayoutJSON {
         package_log_index_digits: layout.package_log_index_digits,
         delete_on_reboot_prefix: token(&layout.delete_on_reboot_prefix),
         delete_on_reboot_suffix: token(&layout.delete_on_reboot_suffix),
+    }
+}
+
+/// The destination history loads with its lists lowercased and trimmed
+/// (empty entries dropped: an empty entry would match every name) and its
+/// numeric values held at the lower bounds the validator enforces, so a
+/// published value below a bound loads as the bound. The window holds at
+/// least the day count.
+fn normalized_destination_history(history: &DestinationHistoryJSON) -> DestinationHistoryJSON {
+    let established_min_distinct_days = history.established_min_distinct_days.clamp(2, 60);
+    let established_window_days = history
+        .established_window_days
+        .max(established_min_distinct_days)
+        .min(60);
+    let max_standing_destinations_per_identity = history
+        .max_standing_destinations_per_identity
+        .clamp(1, 1024);
+    DestinationHistoryJSON {
+        established_enabled: history.established_enabled,
+        established_min_distinct_days,
+        established_min_age_hours: history
+            .established_min_age_hours
+            .max(24)
+            .min(established_window_days * 24),
+        established_max_idle_days: history
+            .established_max_idle_days
+            .max(1)
+            .min(established_window_days),
+        established_window_days,
+        established_min_clean_share_percent: history
+            .established_min_clean_share_percent
+            .clamp(50, 100),
+        new_destination_window_minutes: history.new_destination_window_minutes.max(1),
+        identity_maturity_minutes: history.identity_maturity_minutes.max(1),
+        identity_retention_days: history.identity_retention_days.max(1),
+        max_destinations_per_identity: history.max_destinations_per_identity.max(1),
+        max_identities: history.max_identities.max(1),
+        max_standing_destinations_per_identity,
+        max_standing_records: history
+            .max_standing_records
+            .min(16_384)
+            .max(max_standing_destinations_per_identity),
+        rpc_provider_suffixes: history
+            .rpc_provider_suffixes
+            .iter()
+            .map(|suffix| suffix.trim().trim_matches('.').to_ascii_lowercase())
+            .filter(|suffix| !suffix.is_empty())
+            .collect(),
+        browser_process_names: lowercase_token_list(&history.browser_process_names),
+        browser_process_name_prefixes: lowercase_token_list(&history.browser_process_name_prefixes),
+        standing_inline_code_options: lowercase_token_list(&history.standing_inline_code_options),
+        standing_subcommand_words: lowercase_token_list(&history.standing_subcommand_words),
+        registrable_domain_second_level_labels: lowercase_token_list(
+            &history.registrable_domain_second_level_labels,
+        ),
     }
 }
 
@@ -3107,6 +3247,10 @@ impl CveDetectionParams {
             evaluator_materialisation_burst_secs: json.evaluator_materialisation_burst_secs,
             evaluator_session_attribution_slack_secs: json.evaluator_session_attribution_slack_secs,
             fim_observation_lag_secs: json.fim_observation_lag_secs.max(0),
+            transcript_write_trust_enabled: json.transcript_write_trust_enabled,
+            transcript_write_trust_retention_days: json
+                .transcript_write_trust_retention_days
+                .max(1),
             project_tool_config_files: json
                 .project_tool_config_files
                 .iter()
@@ -3220,6 +3364,7 @@ impl CveDetectionParams {
                     .to_ascii_lowercase(),
             },
             wix_burn_layout: normalized_wix_burn_layout(&json.wix_burn_layout),
+            destination_history: normalized_destination_history(&json.destination_history),
         }
     }
 
@@ -4935,6 +5080,12 @@ pub fn evidence_floor_min_anomaly_margin() -> f32 {
     PARAMS_SNAPSHOT.load().evidence_floor_min_anomaly_margin
 }
 
+/// The per-process destination history's parameters (see
+/// [`DestinationHistoryJSON`]), normalized.
+pub fn destination_history() -> DestinationHistoryJSON {
+    PARAMS_SNAPSHOT.load().destination_history.clone()
+}
+
 /// Ambient-baseline switch and tunables (see field docs).
 pub fn ambient_baseline_enabled() -> bool {
     PARAMS_SNAPSHOT.load().ambient_baseline_enabled
@@ -5510,6 +5661,21 @@ pub fn divergence_unexplained_ingest_grace_secs() -> u64 {
     PARAMS_SNAPSHOT
         .load()
         .divergence_unexplained_ingest_grace_secs
+}
+
+/// Whether the processes recorded per agent transcript file are read (see
+/// the field docs).
+pub fn transcript_write_trust_enabled() -> bool {
+    PARAMS_SNAPSHOT.load().transcript_write_trust_enabled
+}
+
+/// How long a transcript's record is kept after its last recorded operation,
+/// in milliseconds.
+pub fn transcript_write_trust_retention_ms() -> u64 {
+    PARAMS_SNAPSHOT
+        .load()
+        .transcript_write_trust_retention_days
+        .saturating_mul(24 * 60 * 60 * 1000)
 }
 
 /// Session binding by tool-call time switch (see the field docs).
@@ -7432,6 +7598,40 @@ mod tests {
         );
     }
 
+    /// The transcript-store keys ship as published for 2.3.3 (the record is
+    /// read, a record is kept 30 days), the new check is graded HIGH, and a
+    /// file without one of the keys does not parse.
+    #[test]
+    fn test_transcript_write_trust_params() {
+        let p = params_from_edited_snapshot(|_| {});
+        // Published off until the posture perf gate and the lab have
+        // measured it in shadow.
+        assert!(!p.transcript_write_trust_enabled);
+        assert_eq!(p.transcript_write_trust_retention_days, 30);
+        assert_eq!(
+            p.check_metadata("agent_transcript_tampering")
+                .map(|m| m.severity.as_str()),
+            Some("HIGH")
+        );
+        // A retention of zero would drop a record the moment it is written.
+        let p = params_from_edited_snapshot(|value| {
+            value["transcript_write_trust_retention_days"] = serde_json::json!(0);
+        });
+        assert_eq!(p.transcript_write_trust_retention_days, 1);
+        for key in [
+            "transcript_write_trust_enabled",
+            "transcript_write_trust_retention_days",
+        ] {
+            let mut value: serde_json::Value =
+                serde_json::from_str(&CVE_DETECTION_PARAMS_DB).expect("embedded snapshot");
+            value.as_object_mut().expect("params object").remove(key);
+            assert!(
+                serde_json::from_value::<CveDetectionParamsJSON>(value).is_err(),
+                "params without `{key}` parsed"
+            );
+        }
+    }
+
     /// Process-lineage names load lowercased; the agent lookup answers by
     /// tool name.
     #[test]
@@ -7923,6 +8123,105 @@ mod tests {
         assert!(shipped.log_timestamp_digits > 0 && shipped.package_log_index_digits > 0);
         assert!(!shipped.delete_on_reboot_prefix.is_empty());
         assert!(!shipped.delete_on_reboot_suffix.is_empty());
+    }
+
+    /// The destination history's shipped values, and its normalization:
+    /// lists lowercased and trimmed with empty entries dropped, numeric
+    /// values held at the validator's lower bounds whatever a publish says.
+    #[test]
+    fn test_destination_history_is_normalized() {
+        let shipped = destination_history();
+        assert!(
+            !shipped.established_enabled,
+            "published off: the values are recorded and counted only"
+        );
+        assert_eq!(shipped.established_min_distinct_days, 3);
+        assert_eq!(shipped.established_min_age_hours, 72);
+        assert_eq!(shipped.established_max_idle_days, 7);
+        assert_eq!(shipped.established_window_days, 14);
+        assert_eq!(shipped.new_destination_window_minutes, 15);
+        assert_eq!(shipped.identity_maturity_minutes, 60);
+        assert_eq!(shipped.identity_retention_days, 7);
+        assert_eq!(shipped.max_destinations_per_identity, 256);
+        assert_eq!(shipped.max_identities, 2048);
+        assert_eq!(shipped.established_min_clean_share_percent, 75);
+        assert_eq!(shipped.max_standing_destinations_per_identity, 64);
+        assert_eq!(shipped.max_standing_records, 4096);
+        assert_eq!(
+            shipped.registrable_domain_second_level_labels,
+            vec!["ac", "co", "com", "edu", "gov", "net", "org"]
+        );
+        assert!(shipped
+            .rpc_provider_suffixes
+            .contains(&"helius-rpc.com".to_string()));
+        assert!(shipped
+            .browser_process_names
+            .contains(&"safari".to_string()));
+        assert!(shipped
+            .browser_process_name_prefixes
+            .contains(&"google chrome".to_string()));
+        for option in ["-c", "-e", "--eval", "/c"] {
+            assert!(
+                shipped
+                    .standing_inline_code_options
+                    .contains(&option.to_string()),
+                "{option}"
+            );
+        }
+        for word in ["run", "."] {
+            assert!(
+                shipped
+                    .standing_subcommand_words
+                    .contains(&word.to_string()),
+                "{word}"
+            );
+        }
+
+        let p = params_from_edited_snapshot(|value| {
+            let history = &mut value["destination_history"];
+            history["established_min_distinct_days"] = serde_json::json!(1);
+            history["established_min_age_hours"] = serde_json::json!(1);
+            history["established_max_idle_days"] = serde_json::json!(0);
+            history["established_window_days"] = serde_json::json!(1);
+            history["max_identities"] = serde_json::json!(0);
+            history["established_min_clean_share_percent"] = serde_json::json!(10);
+            history["max_standing_destinations_per_identity"] = serde_json::json!(0);
+            history["max_standing_records"] = serde_json::json!(0);
+            history["rpc_provider_suffixes"] = serde_json::json!([" .Helius-RPC.com. ", ""]);
+            history["browser_process_names"] = serde_json::json!([" Safari ", " "]);
+            history["browser_process_name_prefixes"] = serde_json::json!(["Google Chrome", ""]);
+            history["standing_inline_code_options"] = serde_json::json!([" -C ", ""]);
+            history["standing_subcommand_words"] = serde_json::json!([" Run ", " "]);
+        });
+        let history = p.destination_history;
+        assert_eq!(history.established_min_distinct_days, 2);
+        assert_eq!(history.established_min_age_hours, 24);
+        assert_eq!(history.established_max_idle_days, 1);
+        assert_eq!(history.established_window_days, 2);
+        assert_eq!(history.max_identities, 1);
+        assert_eq!(history.established_min_clean_share_percent, 50);
+        assert_eq!(history.max_standing_destinations_per_identity, 1);
+        assert_eq!(history.max_standing_records, 1);
+        assert_eq!(history.rpc_provider_suffixes, vec!["helius-rpc.com"]);
+        assert_eq!(history.browser_process_names, vec!["safari"]);
+        assert_eq!(history.browser_process_name_prefixes, vec!["google chrome"]);
+        assert_eq!(history.standing_inline_code_options, vec!["-c"]);
+        assert_eq!(history.standing_subcommand_words, vec!["run"]);
+        // And the upper bounds.
+        let p = params_from_edited_snapshot(|value| {
+            let history = &mut value["destination_history"];
+            history["established_window_days"] = serde_json::json!(400);
+            history["established_max_idle_days"] = serde_json::json!(400);
+            history["established_min_age_hours"] = serde_json::json!(100_000);
+            history["max_standing_destinations_per_identity"] = serde_json::json!(1_000_000);
+            history["max_standing_records"] = serde_json::json!(1_000_000_000u64);
+        });
+        let history = p.destination_history;
+        assert_eq!(history.established_window_days, 60);
+        assert_eq!(history.established_max_idle_days, 60);
+        assert_eq!(history.established_min_age_hours, 60 * 24);
+        assert_eq!(history.max_standing_destinations_per_identity, 1024);
+        assert_eq!(history.max_standing_records, 16_384);
     }
 
     #[test]

@@ -61,6 +61,7 @@ pub mod model_authenticity;
 pub mod open_files_limit;
 pub mod order;
 pub mod order_type;
+pub mod owner_only_fs;
 pub mod peer_ids;
 /// Operator hard kill of a process by pid (standalone + helper order).
 pub mod process_control;
@@ -85,6 +86,9 @@ pub mod secret_store;
 /// record (standalone in process, on the app path through the helper).
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub mod sensor_coverage;
+/// The store-writer record and the transcript reader, for a consumer in
+/// another process (standalone + helper order).
+pub mod store_writer_relay;
 pub mod sudoers_grading;
 pub mod supported_agents;
 pub mod threat;
