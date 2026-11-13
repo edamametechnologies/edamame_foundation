@@ -109,13 +109,18 @@ fn read_print_modes(queries: &[PrintModeQuery]) -> Vec<Option<bool>> {
         .map(|query| crate::agent_visibility_params::print_mode_markers(&query.agent_type))
         .collect();
     let before: Vec<bool> = queries.iter().map(same_start).collect();
-    let pids: Vec<Pid> = queries
+    let mut pids: Vec<Pid> = queries
         .iter()
         .zip(&before)
         .zip(&markers)
         .filter(|((_, same), markers)| **same && markers.is_some())
         .map(|((query, _), _)| Pid::from_u32(query.pid))
         .collect();
+    // Each pid once: a refresh of a list that names a pid twice drops that
+    // process from the table it fills (the second visit reads it as not
+    // refreshed), which would leave every query of the pid unmeasured.
+    pids.sort_unstable();
+    pids.dedup();
     let mut found: Vec<Option<bool>> = vec![None; queries.len()];
     if pids.is_empty() {
         return found;
@@ -236,5 +241,22 @@ mod tests {
         ]);
         let found: Vec<Option<bool>> = answers.iter().map(|a| a.print_mode).collect();
         assert_eq!(found, vec![Some(false), None, None, None]);
+    }
+
+    /// Two queries of one process (two starts within the identity
+    /// tolerance, or one query repeated) are both measured.
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+    #[test]
+    fn a_process_queried_twice_is_measured_for_each_query() {
+        let own = std::process::id();
+        let start = flodbadd::process_events::process_start_ms(own).expect("this process's start");
+        let query = |start_ms: u64| PrintModeQuery {
+            pid: own,
+            start_ms,
+            agent_type: "codex".to_string(),
+        };
+        let answers = measure_print_modes(&[query(start), query(start + 1)]);
+        let found: Vec<Option<bool>> = answers.iter().map(|a| a.print_mode).collect();
+        assert_eq!(found, vec![Some(false), Some(false)]);
     }
 }
