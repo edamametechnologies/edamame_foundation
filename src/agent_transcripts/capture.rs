@@ -174,24 +174,35 @@ impl CallExtractor for ShellCallExtractor {
     }
 }
 
-/// The conversation a transcript file belongs to, as the collectors key it
-/// (the file's name without its ending), and, for a subagent's file (one in
-/// a `subagents` directory), the main conversation's key (the directory
-/// above it).
-pub fn transcript_session_keys(path: &str) -> (String, Option<String>) {
+/// The conversation a transcript file of `agent` belongs to, as the
+/// collectors key it (the file's name without the store's file ending), and,
+/// for a subagent's file (one in the store's `subagent_segment` directory),
+/// the main conversation's key (the directory above it). Both from the
+/// agent's published store (`transcript_stores`).
+pub fn transcript_session_keys(agent: &str, path: &str) -> (String, Option<String>) {
+    let store = crate::agent_visibility_params::transcript_store(agent);
     let parts: Vec<&str> = path
         .split(['/', '\\'])
         .filter(|part| !part.is_empty())
         .collect();
     let name = parts.last().copied().unwrap_or_default();
-    let key = name
-        .strip_suffix(".jsonl")
-        .or_else(|| name.strip_suffix(".txt"))
+    let lowered = name.to_ascii_lowercase();
+    let key = store
+        .iter()
+        .flat_map(|store| store.file_suffixes.iter())
+        .filter(|suffix| lowered.ends_with(suffix.as_str()))
+        .max_by_key(|suffix| suffix.len())
+        .and_then(|suffix| name.get(..name.len() - suffix.len()))
         .unwrap_or(name)
         .to_string();
-    let parent = parts
-        .iter()
-        .rposition(|part| *part == "subagents")
+    let parent = store
+        .map(|store| store.subagent_segment)
+        .filter(|segment| !segment.is_empty())
+        .and_then(|segment| {
+            parts
+                .iter()
+                .rposition(|part| part.eq_ignore_ascii_case(&segment))
+        })
         .and_then(|index| index.checked_sub(1))
         .map(|index| parts[index].to_string())
         .filter(|parent| !parent.is_empty() && *parent != key);
@@ -225,6 +236,10 @@ pub struct CaptureConfig {
     /// Bytes one wake-up reads across every file; the files left are read
     /// at the next one.
     pub wake_byte_budget: u64,
+    /// How long a report may take to reach the record when the sensor has
+    /// not said up to when it delivered (`session_binding_sensor_lag_ms`):
+    /// the watermark then ends that long before the take.
+    pub sensor_lag_ms: u64,
 }
 
 impl CaptureConfig {
@@ -246,6 +261,7 @@ impl CaptureConfig {
                 .max(1),
             owner_uid,
             wake_byte_budget: WAKE_BYTE_BUDGET,
+            sensor_lag_ms: crate::vuln_detector_params::session_binding_sensor_lag_ms(),
         }
     }
 }
@@ -441,6 +457,9 @@ pub struct CaptureCounters {
     pub foreign_owner: u64,
     pub wake_budget_cuts: u64,
     pub late_after_final: u64,
+    /// Calls made final at the late-report bound before the sensor had
+    /// delivered up to their read: they name no writer.
+    pub writers_unconfirmed: u64,
     /// From the first report of a change to the read that found the line:
     /// reads that took at most 1, 2, 5, 10, 20, 50, 100, 250, 500, 1,000 and
     /// 5,000 ms, then the longer ones; and the longest.
@@ -537,7 +556,7 @@ impl CaptureGap {
 
 impl CapturedCall {
     fn to_wire(&self) -> wire::CaptureCall {
-        let (session_key, _) = transcript_session_keys(&self.path);
+        let (session_key, _) = transcript_session_keys(&self.agent, &self.path);
         wire::CaptureCall {
             transcript_path: self.path.clone(),
             session_key,
@@ -557,7 +576,7 @@ impl CapturedCall {
 
 impl CapturedFile {
     fn to_wire(&self, gaps: Vec<wire::CaptureGap>) -> wire::CaptureTranscript {
-        let (session_key, parent_session_key) = transcript_session_keys(&self.path);
+        let (session_key, parent_session_key) = transcript_session_keys(&self.agent, &self.path);
         wire::CaptureTranscript {
             transcript_path: self.path.clone(),
             session_key,
@@ -976,6 +995,9 @@ pub struct Capture<E: CallExtractor> {
     /// was handled.
     record_seq: u64,
     record_taken_at_ms: u64,
+    /// Up to when the sensor had delivered every event at the latest take
+    /// ([`DirtyTake::delivered_through_ms`]).
+    delivered_through_ms: Option<u64>,
     /// When the last pass began: a pass that begins before it means the
     /// clock moved back.
     last_pass_start_ms: u64,
@@ -1015,6 +1037,7 @@ impl<E: CallExtractor> Capture<E> {
             watermark_ms: None,
             record_seq: 0,
             record_taken_at_ms: 0,
+            delivered_through_ms: None,
             last_pass_start_ms: now,
             wake_bytes_left,
             facts_out: Vec::new(),
@@ -1027,24 +1050,34 @@ impl<E: CallExtractor> Capture<E> {
         std::mem::take(&mut self.facts_out)
     }
 
-    /// Give a writer to no call that did not get it as final: each call
-    /// whose writer is still open is made final once the time a report may
-    /// take has passed since its read (the reports that arrived meanwhile
-    /// were applied when they arrived).
+    /// Make final the writer of each call the sensor has delivered past: a
+    /// take whose sensor had delivered every event up to the call's read
+    /// was handled, so every report of the line's writes was applied. A call
+    /// still open when the time a report may take (`late_report_ms`) has
+    /// passed since its read is made final naming no writer.
     pub fn finalize_writers(&mut self) {
         let now = (self.clock)();
         let late_window = self.config.late_report_ms;
+        let delivered = self.delivered_through_ms.unwrap_or(0);
         let mut changed: Vec<(String, usize)> = Vec::new();
+        let mut unconfirmed = 0;
         for state in self.files.values_mut() {
             for (index, held) in state.calls.iter_mut().enumerate() {
-                if !held.entry.writer_final
-                    && (held.lost || now.saturating_sub(held.entry.arrived_at_ms) >= late_window)
-                {
+                if held.entry.writer_final {
+                    continue;
+                }
+                if held.lost || delivered >= held.entry.arrived_at_ms {
                     held.entry.writer_final = true;
+                    changed.push((state.path.clone(), index));
+                } else if now.saturating_sub(held.entry.arrived_at_ms) >= late_window {
+                    held.entry.writer = None;
+                    held.entry.writer_final = true;
+                    unconfirmed += 1;
                     changed.push((state.path.clone(), index));
                 }
             }
         }
+        self.counters.writers_unconfirmed += unconfirmed;
         for (path, index) in changed {
             let seq = self.bump();
             if let Some(state) = self.files.get_mut(&path) {
@@ -1138,6 +1171,7 @@ impl<E: CallExtractor> Capture<E> {
         self.record_instance = Some(take.instance.clone());
         self.record_seq = take.seq;
         self.record_taken_at_ms = now;
+        self.delivered_through_ms = self.delivered_through_ms.max(take.delivered_through_ms);
         self.begin_wake();
         for dirty in &take.files {
             if dirty.kind != StoreFileKind::Transcript {
@@ -1228,6 +1262,12 @@ impl<E: CallExtractor> Capture<E> {
             self.read_file(&path, acked_seq);
         }
         self.release_beyond_bound(acked_seq);
+        // A file the record reported after the latest take is not held yet:
+        // the watermark ends where that take covered every report.
+        let taken_through = self.delivered_through_ms.unwrap_or_else(|| {
+            self.record_taken_at_ms
+                .saturating_sub(self.config.sensor_lag_ms)
+        });
         self.watermark_ms = Some(
             self.files
                 .values()
@@ -1235,7 +1275,8 @@ impl<E: CallExtractor> Capture<E> {
                 .map(|state| state.confirmed_through_ms.unwrap_or(0))
                 .min()
                 .unwrap_or(started)
-                .min(started),
+                .min(started)
+                .min(taken_through),
         );
     }
 
@@ -1798,6 +1839,18 @@ impl<E: CallExtractor> Capture<E> {
                 if let Some(gap) = state.gaps.last_mut() {
                     gap.replaced_by = replaced_by;
                 }
+                // Kept with the record too, where it outlives this reader.
+                self.facts_out.push((
+                    state.path.clone(),
+                    state.record_id,
+                    store_writers::ReaderFacts {
+                        replacement: Some(store_writers::ReaderReplacement {
+                            at_ms: t_before,
+                            replaced_by,
+                        }),
+                        ..Default::default()
+                    },
+                ));
                 state.parse_state = E::State::default();
                 state.pending_results.clear();
                 state.identity = identity;
@@ -2169,20 +2222,16 @@ impl<E: CallExtractor> Capture<E> {
         let max_read = self.config.max_calls_per_file;
         let mut dropped: Vec<u64> = Vec::new();
         if let Some(state) = self.files.get_mut(path) {
+            // A call is asked past once it was served, which is once its
+            // writer is final.
+            let asked_past =
+                |held: &HeldCall| held.entry.writer_final && held.entry.changed_seq <= acked_seq;
             loop {
-                let read = state
-                    .calls
-                    .iter()
-                    .filter(|held| held.entry.changed_seq <= acked_seq)
-                    .count();
+                let read = state.calls.iter().filter(|held| asked_past(held)).count();
                 if read <= max_read {
                     break;
                 }
-                let Some(position) = state
-                    .calls
-                    .iter()
-                    .position(|held| held.entry.changed_seq <= acked_seq)
-                else {
+                let Some(position) = state.calls.iter().position(asked_past) else {
                     break;
                 };
                 if let Some(held) = state.calls.remove(position) {
@@ -2591,6 +2640,14 @@ impl CaptureView {
             (Some(through), Some(from)) => Some(through.min(from.saturating_sub(1))),
             (through, _) => through,
         };
+        // The gaps held back with their file: the watermark ends before the
+        // earliest of them.
+        let gaps_held_back = self
+            .gaps
+            .iter()
+            .filter(|gap| gap.changed_seq > seq)
+            .map(|gap| gap.from_ms.unwrap_or(0))
+            .min();
         let transcripts = self
             .files
             .iter()
@@ -2626,7 +2683,8 @@ impl CaptureView {
             files_held: self.files_held,
             batch: wire::CaptureBatch {
                 capture_instance: self.instance.clone(),
-                served_at_ms: cut(self.watermark_ms, open_from(None)).unwrap_or(0),
+                served_at_ms: cut(cut(self.watermark_ms, open_from(None)), gaps_held_back)
+                    .unwrap_or(0),
                 stores: Vec::new(),
                 transcripts,
                 calls,
@@ -2848,6 +2906,7 @@ mod tests {
             max_files_held: 64,
             owner_uid: None,
             wake_byte_budget: 1 << 20,
+            sensor_lag_ms: 0,
         }
     }
 
@@ -2870,6 +2929,8 @@ mod tests {
         creation_read: Option<u64>,
         /// Everything the reader gave back, in order.
         given_back: Vec<store_writers::ReaderFacts>,
+        /// Up to when the sensor had delivered, as each take says.
+        delivered: Option<u64>,
     }
 
     impl Bench {
@@ -2893,6 +2954,7 @@ mod tests {
                 acked: 0,
                 creation_read: None,
                 given_back: Vec::new(),
+                delivered: None,
             }
         }
 
@@ -2958,14 +3020,26 @@ mod tests {
         }
 
         fn take(&mut self, file: DirtyFile) {
+            self.take_files(vec![file]);
+        }
+
+        fn take_files(&mut self, files: Vec<DirtyFile>) {
             let take = DirtyTake {
                 instance: self.record_instance.clone(),
                 seq: 0,
                 configured: true,
-                files: vec![file],
+                files,
+                delivered_through_ms: self.delivered,
             };
             self.capture.handle_take(&take, self.acked);
             self.give_back();
+        }
+
+        /// The sensor delivered every event up to now: a take with nothing
+        /// changed says so.
+        fn delivered_now(&mut self) {
+            self.delivered = Some(self.now());
+            self.take_files(Vec::new());
         }
 
         /// What the reader gave back, kept as the record keeps it.
@@ -3540,7 +3614,11 @@ mod tests {
         assert_eq!(bench.programs().len(), 6);
         assert_eq!(bench.file().calls_before_ms, None);
 
-        // A reader asked past everything: the four most recent stay.
+        // Their writers final, and a reader asked past everything: the four
+        // most recent stay.
+        bench.advance(1);
+        bench.delivered_now();
+        bench.capture.finalize_writers();
         bench.acked = bench.view().seq;
         let dropped_until = bench
             .view()
@@ -3572,7 +3650,8 @@ mod tests {
             "C KEYID77 curl AuthBearer:SECRET_TOKEN_VALUE /private/path\nSECRET_PLAIN_LINE\nR KEYID77 SECRET_RESULT\n",
         );
         // Served once its writer is final.
-        bench.advance(config().late_report_ms);
+        bench.advance(1);
+        bench.delivered_now();
         bench.capture.finalize_writers();
         let view = bench.view();
         assert_eq!(view.calls.len(), 1);
@@ -3857,12 +3936,9 @@ mod tests {
             creation_reorder_ms: 1_000,
         }]);
         assert!(!since("", 0).running);
-        // Writers final soon after their read: the reply serves final calls.
-        let quick = CaptureConfig {
-            late_report_ms: 50,
-            ..config()
-        };
-        assert!(start(WordExtractor, quick));
+        // Writers final once the sensor delivered past their read: the
+        // reply serves final calls.
+        assert!(start(WordExtractor, config()));
         assert!(!start(WordExtractor, config()), "one reader at a time");
         assert!(is_running());
 
@@ -3889,12 +3965,14 @@ mod tests {
             .unwrap();
         report(ops::WRITE);
 
+        // As a sensor does: it says up to when it delivered everything.
         let mut batch = since("", 0);
         for _ in 0..100 {
             if !batch.batch.calls.is_empty() {
                 break;
             }
             std::thread::sleep(Duration::from_millis(50));
+            store_writers::note_delivered_through(store_writers::now_ms());
             batch = since("", 0);
         }
         assert!(batch.running);
@@ -4049,6 +4127,7 @@ mod tests {
             seq: 0,
             configured: true,
             files,
+            delivered_through_ms: None,
         };
         bench.capture.handle_take(&take, 0);
         assert_eq!(bench.capture.files_held(), 0);
@@ -4190,6 +4269,7 @@ mod tests {
             seq: 0,
             configured: true,
             files: vec![dirty(at)],
+            delivered_through_ms: None,
         };
         clock.fetch_add(2, Ordering::AcqRel);
         capture.handle_take(&take(now), 0);
@@ -4372,6 +4452,7 @@ mod tests {
                 unlinked: false,
                 creation_read_at_ms: None,
             }],
+            delivered_through_ms: None,
         };
         capture.handle_take(&take(now), 0);
         let at = clock.fetch_add(10, Ordering::AcqRel) + 10;
@@ -4415,21 +4496,25 @@ mod tests {
         bench.appended_by(HARNESS, creation, "C k1 curl\n");
         assert_eq!(bench.view().watermark_ms, None);
         let first = bench.advance(10_000);
+        bench.delivered_now();
         bench.capture.sweep(0);
         assert_eq!(bench.view().watermark_ms, Some(first));
         // Nothing changed: it moves anyway.
         let second = bench.advance(10_000);
+        bench.delivered_now();
         bench.capture.sweep(0);
         assert_eq!(bench.view().watermark_ms, Some(second));
         // Growth nobody reported: read by the sweep, the watermark moves.
         bench.append("C k2 nc\n");
         let third = bench.advance(10_000);
+        bench.delivered_now();
         bench.capture.sweep(0);
         assert!(bench.programs().contains(&"nc".to_string()));
         assert_eq!(bench.view().watermark_ms, Some(third));
         // Removed: desynced, and the watermark is the sweep's start.
         std::fs::remove_file(&bench.path).unwrap();
         let fourth = bench.advance(10_000);
+        bench.delivered_now();
         bench.capture.sweep(0);
         assert_eq!(bench.file().status, CapturedFileStatus::Desynced);
         assert_eq!(bench.view().watermark_ms, Some(fourth));
@@ -4688,6 +4773,7 @@ mod tests {
             seq: 0,
             configured: true,
             files,
+            delivered_through_ms: None,
         };
         bench.capture.handle_take(&take, 0);
         bench.give_back();
@@ -4891,11 +4977,12 @@ mod tests {
         assert_eq!(watermark, through);
     }
 
-    /// A call's writer stays open until the time a report may take has
-    /// passed; then it is final. A report that arrives afterwards for the
-    /// line's interval and names another process leaves it with none.
+    /// A call's writer stays open until a take says the sensor delivered
+    /// every event up to the call's read; then it is final. A report that
+    /// arrives afterwards for the line's interval and names another process
+    /// leaves it with none.
     #[test]
-    fn a_writer_is_final_after_the_late_report_bound_and_no_writer_after_it() {
+    fn a_writer_is_final_once_the_sensor_delivered_past_its_read() {
         let mut bench = Bench::new(config());
         let creation = bench.created_by_harness();
         let wrote_at = bench.appended_by(HARNESS, creation, "C k1 ls\n");
@@ -4904,7 +4991,13 @@ mod tests {
         assert!(!call.writer_final);
         bench.capture.finalize_writers();
         assert!(!bench.view().calls.pop().unwrap().writer_final);
-        bench.advance(config().late_report_ms);
+        // Delivered up to just before the read: still open.
+        bench.delivered = Some(call.arrived_at_ms - 1);
+        bench.take_files(Vec::new());
+        bench.capture.finalize_writers();
+        assert!(!bench.view().calls.pop().unwrap().writer_final);
+        bench.advance(1);
+        bench.delivered_now();
         bench.capture.finalize_writers();
         let call = bench.view().calls.pop().unwrap();
         assert!(call.writer_final);
@@ -4919,6 +5012,158 @@ mod tests {
         assert!(call.writers_differ);
         assert!(call.writer_final);
         assert_eq!(bench.view().counters.late_after_final, 1);
+        assert_eq!(bench.view().counters.writers_unconfirmed, 0);
+    }
+
+    /// A call whose read the sensor never delivered past is made final at
+    /// the late-report bound with no writer, and counted: the wall-clock
+    /// bound alone never confirms a writer.
+    #[test]
+    fn a_writer_the_sensor_did_not_deliver_past_is_final_with_none() {
+        let mut bench = Bench::new(config());
+        let creation = bench.created_by_harness();
+        bench.appended_by(HARNESS, creation, "C k1 ls\n");
+        assert_eq!(bench.view().calls[0].writer, Some(HARNESS));
+        bench.advance(config().late_report_ms - 1);
+        bench.capture.finalize_writers();
+        assert!(!bench.view().calls[0].writer_final);
+        bench.advance(1);
+        bench.capture.finalize_writers();
+        let call = bench.view().calls.pop().unwrap();
+        assert!(call.writer_final);
+        assert_eq!(call.writer, None);
+        assert_eq!(bench.view().counters.writers_unconfirmed, 1);
+    }
+
+    /// The watermark ends where the latest take covered every report: a
+    /// transcript written after the take is not held yet, and the sweep
+    /// that comes after it does not vouch for its lines. Without the
+    /// sensor's word, it ends the published lag before the take.
+    #[test]
+    fn the_watermark_ends_where_the_latest_take_covered_every_report() {
+        let mut bench = Bench::new(config());
+        let creation = bench.created_by_harness();
+        bench.appended_by(HARNESS, creation, "C k1 ls\n");
+        bench.advance(1);
+        bench.delivered_now();
+        let taken_at = bench.now();
+        // A second transcript, written after the take: nobody took it.
+        let written_at = bench.advance(100);
+        std::fs::write(bench.base.join("second.jsonl"), "C k2 curl\n").unwrap();
+        bench.advance(100);
+        bench.capture.sweep(0);
+        let watermark = bench.view().watermark_ms.expect("a sweep ran");
+        assert!(watermark <= taken_at);
+        assert!(watermark < written_at);
+        // No word from the sensor: the take's time less the published lag.
+        let mut lagged = config();
+        lagged.sensor_lag_ms = 2_000;
+        let mut bench = Bench::new(lagged);
+        let creation = bench.created_by_harness();
+        bench.appended_by(HARNESS, creation, "C k1 ls\n");
+        let taken_at = bench.now();
+        bench.advance(SWEEP_INTERVAL_MS);
+        bench.capture.sweep(0);
+        assert_eq!(bench.view().watermark_ms, Some(taken_at - 2_000));
+    }
+
+    /// With calls held back by the reply's bound, a gap of a file held back
+    /// with them ends the watermark before it.
+    #[test]
+    fn a_gap_held_back_by_the_reply_bound_ends_the_watermark() {
+        let call = |id: u64, seq: u64| CapturedCall {
+            id,
+            path: "/t/s.jsonl".to_string(),
+            agent: "claude_code".to_string(),
+            arrival_from_ms: 4_000,
+            announced: true,
+            arrived_at_ms: 4_001,
+            result_arrived_at_ms: None,
+            writer: Some(HARNESS),
+            writers_differ: false,
+            writer_final: true,
+            in_rewrite: false,
+            call: ShellCall::default(),
+            changed_seq: seq,
+        };
+        let mut calls: Vec<CapturedCall> = (1..=MAX_CALLS_PER_REPLY as u64)
+            .map(|id| call(id, 1))
+            .collect();
+        calls.push(call(MAX_CALLS_PER_REPLY as u64 + 1, 3));
+        let view = CaptureView {
+            instance: "capture-1".to_string(),
+            running: true,
+            started_at_ms: 1,
+            seq: 3,
+            files: Vec::new(),
+            calls,
+            gaps: vec![CaptureGap {
+                path: "/t/other.jsonl".to_string(),
+                agent: "claude_code".to_string(),
+                from_ms: Some(2_000),
+                until_ms: 2_500,
+                reason: CaptureGapReason::Rewrite,
+                replaced_by: None,
+                changed_seq: 2,
+            }],
+            counters: CaptureCounters::default(),
+            files_held: 2,
+            watermark_ms: Some(5_000),
+            record_instance: String::new(),
+            record_seq: 0,
+            record_taken_at_ms: 0,
+        };
+        let first = view.batch_since("capture-1", 0);
+        assert!(first.more);
+        assert_eq!(first.seq, 1);
+        assert_eq!(first.batch.served_at_ms, 1_999);
+        let second = view.batch_since("capture-1", first.seq);
+        assert!(!second.more);
+        assert_eq!(second.batch.served_at_ms, 5_000);
+    }
+
+    /// A call is dropped by the per-file bound only once it was served
+    /// (its writer final and asked past): one not final yet is kept.
+    #[test]
+    fn a_call_is_trimmed_only_once_it_was_served() {
+        let mut one = config();
+        one.max_calls_per_file = 1;
+        let mut bench = Bench::new(one);
+        let creation = bench.created_by_harness();
+        bench.acked = u64::MAX;
+        bench.appended_by(HARNESS, creation, "C k1 ls\nC k2 curl\nC k3 nc\n");
+        assert_eq!(bench.view().calls.len(), 3);
+        bench.appended_by(HARNESS, creation, "C k4 git\n");
+        assert_eq!(bench.view().calls.len(), 4);
+        // Final, served, asked past: the bound applies.
+        bench.advance(1);
+        bench.delivered_now();
+        bench.capture.finalize_writers();
+        bench.appended_by(HARNESS, creation, "C k5 id\n");
+        assert_eq!(bench.view().calls.len(), 2);
+    }
+
+    /// A rewrite or a replacement the reader finds is given back to the
+    /// record with the one process that explains it, if any.
+    #[test]
+    fn a_replacement_is_given_back_to_the_record() {
+        let mut bench = Bench::new(config());
+        let creation = bench.created_by_harness();
+        bench.appended_by(HARNESS, creation, "C k1 ls\n");
+        let truncated_at = bench.advance(10);
+        std::fs::write(&bench.path, "").unwrap();
+        bench.advance(2);
+        bench.take(bench.dirty(
+            Some(creation),
+            vec![bench.span(OTHER, ops::TRUNCATE, truncated_at)],
+        ));
+        let replacements: Vec<store_writers::ReaderReplacement> = bench
+            .given_back
+            .iter()
+            .filter_map(|facts| facts.replacement)
+            .collect();
+        assert_eq!(replacements.len(), 1);
+        assert_eq!(replacements[0].replaced_by, Some(OTHER));
     }
 
     /// A line read before the report of its write: its writer is the
@@ -5058,6 +5303,7 @@ mod tests {
             seq: 0,
             configured: true,
             files: vec![first, other],
+            delivered_through_ms: None,
         };
         bench.capture.handle_take(&take, 0);
         assert!(bench.view().counters.wake_budget_cuts >= 1);
@@ -5130,16 +5376,32 @@ mod tests {
     #[test]
     fn a_transcript_names_its_conversation_and_a_subagents_its_parent() {
         assert_eq!(
-            transcript_session_keys("/h/.claude/projects/p/1234-abcd.jsonl"),
+            transcript_session_keys("claude_code", "/h/.claude/projects/p/1234-abcd.jsonl"),
             ("1234-abcd".to_string(), None)
         );
         assert_eq!(
-            transcript_session_keys("/h/.claude/projects/p/1234-abcd/subagents/agent-9.jsonl"),
+            transcript_session_keys(
+                "claude_code",
+                "/h/.claude/projects/p/1234-abcd/subagents/agent-9.jsonl"
+            ),
             ("agent-9".to_string(), Some("1234-abcd".to_string()))
         );
         assert_eq!(
-            transcript_session_keys(r"C:\Users\u\.cursor\projects\x\agent-transcripts\s1.txt"),
+            transcript_session_keys(
+                "cursor",
+                r"C:\Users\u\.cursor\projects\x\agent-transcripts\s1.txt"
+            ),
             ("s1".to_string(), None)
+        );
+        // The ending and the subagent directory are the agent's own: a store
+        // that names none keeps the file's whole name and no parent.
+        assert_eq!(
+            transcript_session_keys("codex", "/h/.codex/sessions/subagents/r.jsonl"),
+            ("r".to_string(), None)
+        );
+        assert_eq!(
+            transcript_session_keys("unlisted", "/h/x/subagents/r.jsonl"),
+            ("r.jsonl".to_string(), None)
         );
     }
 
@@ -5153,7 +5415,8 @@ mod tests {
         let reply = bench.view().batch_since("", 0);
         // Not final yet: not served, and the watermark stays before it.
         assert!(reply.batch.calls.is_empty());
-        bench.advance(config().late_report_ms);
+        bench.advance(1);
+        bench.delivered_now();
         bench.capture.finalize_writers();
         bench.capture.sweep(0);
         let reply = bench.view().batch_since("", 0);

@@ -30,7 +30,7 @@ pub struct StoreWritersCursor {
 
 /// The version of [`StoreWriterBatch`]: a consumer reads a reply of another
 /// version as a failed relay, never as a partial one.
-pub const STORE_WRITER_BATCH_VERSION: u32 = 2;
+pub const STORE_WRITER_BATCH_VERSION: u32 = 3;
 
 /// Reply of [`store_writers_since`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -83,13 +83,15 @@ pub fn store_writers_since(cursor: &StoreWritersCursor) -> StoreWriterBatch {
         .running
         .then(|| (capture.record_instance.as_str(), capture.record_seq));
     let rows = store_writers::rows_since(&cursor.record_instance, cursor.rows_seq, cut);
+    // The sensor is polled first: the coverage reads its state.
+    let sensor = store_writers::sensor();
     let built_at_ms = store_writers::now_ms();
     let capture = with_store_coverage(capture, built_at_ms);
     StoreWriterBatch {
         version: STORE_WRITER_BATCH_VERSION,
         rows,
         capture,
-        sensor: store_writers::sensor(),
+        sensor,
         built_at_ms,
     }
 }
@@ -106,7 +108,8 @@ fn with_store_coverage(mut capture: CaptureReply, built_at_ms: u64) -> CaptureRe
 /// What each published store vouches for: since the later of the reader's
 /// start and the record's, with the record's gaps (dropped events, a
 /// directory moved in, the window before a new directory's watch, a
-/// directory left without one).
+/// directory left without one, a sensor that does not deliver every
+/// operation, up to now).
 fn store_coverage(capture: &CaptureReply, now_ms: u64) -> Vec<capture_wire::CaptureStore> {
     store_writers::store_coverage(now_ms)
         .unwrap_or_default()
@@ -242,6 +245,15 @@ mod tests {
             .collect();
         assert_eq!(agents, vec!["claude_code"]);
         assert!(served.batch.stores[0].watched_since_ms >= 1);
+        // The sensor of a test build delivers nothing: the store vouches for
+        // nothing up to the reply.
+        assert!(!store_writers::sensor().delivers_everything());
+        let open = served.batch.stores[0]
+            .gaps
+            .iter()
+            .find(|gap| gap.reason == "sensor_partial")
+            .expect("an open gap");
+        assert_eq!(open.from_ms, None);
         let idle = with_store_coverage(CaptureReply::not_running(), store_writers::now_ms());
         assert!(idle.batch.stores.is_empty());
         store_writers::clear();

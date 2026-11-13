@@ -839,6 +839,9 @@ impl TranscriptStoreRootsJSON {
 ///   [`AgentVisibilityParams::new_from_json`].
 /// - `excluded_segments`: directory names below the root whose files are not
 ///   transcripts, lowercased.
+/// - `subagent_segment`: the directory name whose files are a subagent's
+///   transcripts, the main conversation's being the directory above it, or
+///   empty; lowercased.
 /// - `file_suffixes`: the endings of a transcript file, lowercased.
 /// - `pid_file_roots` / `pid_file_suffixes`: the directories (relative to a
 ///   home) and endings of the files that name a harness process; the file's
@@ -859,6 +862,7 @@ pub struct TranscriptStoreJSON {
     pub roots: TranscriptStoreRootsJSON,
     pub path_segment: String,
     pub excluded_segments: Vec<String>,
+    pub subagent_segment: String,
     pub file_suffixes: Vec<String>,
     pub pid_file_roots: Vec<String>,
     pub pid_file_suffixes: Vec<String>,
@@ -1363,6 +1367,7 @@ impl AgentVisibilityParams {
                         agent.clone(),
                         TranscriptStoreJSON {
                             path_segment: store.path_segment.to_ascii_lowercase(),
+                            subagent_segment: store.subagent_segment.to_ascii_lowercase(),
                             excluded_segments: store
                                 .excluded_segments
                                 .iter()
@@ -2184,6 +2189,10 @@ mod tests {
         // beside them are no transcripts.
         assert_eq!(claude.file_suffixes, vec![".jsonl".to_string()]);
         assert_eq!(claude.excluded_segments, vec!["tool-results".to_string()]);
+        // Its subagents' transcripts lie in a directory of their own, below
+        // the main conversation's.
+        assert_eq!(claude.subagent_segment, "subagents");
+        assert_eq!(params.transcript_stores["codex"].subagent_segment, "");
         assert_eq!(
             params.transcript_stores["cursor"].file_suffixes,
             vec![".jsonl".to_string(), ".txt".to_string()]
@@ -2205,6 +2214,7 @@ mod tests {
             "roots",
             "path_segment",
             "excluded_segments",
+            "subagent_segment",
             "file_suffixes",
             "pid_file_roots",
             "pid_file_suffixes",
