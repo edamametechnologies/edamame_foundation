@@ -161,4 +161,5 @@ jobs:
     uses: edamametechnologies/.github/.github/workflows/slack-notify.yml@main
     with:
       results: ${{ toJSON(needs) }}
-    secrets: inherit
+    secrets:
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
