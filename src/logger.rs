@@ -150,9 +150,29 @@ pub struct LogBatch {
     pub entries: Vec<LogEntry>,
     /// Entries at or after the cursor passed in that the ring no longer
     /// holds: overwritten (more than `MAX_LOG_LINES` were logged since that
-    /// cursor) or flushed by a second `init_logger`.
+    /// cursor), flushed by a second `init_logger`, or given up on (a writer
+    /// that claimed its index and had not stored it [`STALL_MARGIN`] entries
+    /// later).
     pub dropped: u64,
+    /// The ring this answer comes from: a random id drawn when the process's
+    /// logger starts (nothing about the host or the user). A caller that sees
+    /// it change is talking to another process (the daemon restarted): its
+    /// cursor means nothing there, and it reads again from 0.
+    pub instance: String,
 }
+
+/// How far behind the end of the ring a claimed slot may stay unstored
+/// before a cursor read gives up on it (counts it in `dropped`) and goes on.
+///
+/// A writer stores its entry right after claiming the index (no allocation
+/// in between), so a slot stays unstored only while its thread is
+/// preempted, typically a scheduler slice: at the logging rates seen
+/// (INFO: tens of lines a second; `EDAMAME_LOG_LEVEL=debug`: thousands),
+/// far fewer than 1,024 later entries are written meanwhile, and a line
+/// still in flight is not given up on. A writer stalled longer (a debugger,
+/// a suspended thread) stops every reader at its index only until 1,024
+/// more entries arrive, a twentieth of the ring, instead of forever.
+pub const STALL_MARGIN: usize = 1024;
 
 /// A ring slot: the entry and the index it was logged at.
 struct RingSlot {
@@ -171,6 +191,8 @@ struct RingSlot {
 /// next read instead of being skipped.
 pub struct MemoryWriterData {
     slots: Box<[ArcSwapOption<RingSlot>]>,
+    /// See [`LogBatch::instance`].
+    instance: String,
     /// Entries ever logged: the index the next entry takes.
     next: AtomicUsize,
     /// Entries below this index were flushed.
@@ -184,6 +206,7 @@ impl MemoryWriterData {
     pub fn new() -> Self {
         Self {
             slots: (0..MAX_LOG_LINES).map(|_| ArcSwapOption::empty()).collect(),
+            instance: uuid::Uuid::new_v4().simple().to_string(),
             next: AtomicUsize::new(0),
             floor: AtomicUsize::new(0),
             taken: AtomicUsize::new(0),
@@ -198,7 +221,18 @@ impl MemoryWriterData {
         if let Some(slot) = Arc::get_mut(&mut slot) {
             slot.index = index;
         }
-        self.slots[index % MAX_LOG_LINES].store(Some(slot));
+        self.store(slot);
+    }
+
+    /// Publishes a claimed entry in its slot, unless the ring lapped while
+    /// its writer was preempted and the slot already holds a newer entry: a
+    /// late store would put an older line where readers expect the newer one.
+    fn store(&self, slot: Arc<RingSlot>) {
+        let index = slot.index;
+        self.slots[index % MAX_LOG_LINES].rcu(|current| match current {
+            Some(held) if held.index > index => Some(Arc::clone(held)),
+            _ => Some(Arc::clone(&slot)),
+        });
     }
 
     /// The oldest index the ring may still hold when `end` entries were
@@ -225,6 +259,9 @@ impl MemoryWriterData {
                 Some(slot) if slot.index == index => entries.push(slot.entry.clone()),
                 // Overwritten since `end` was read: lost to this reader.
                 Some(slot) if slot.index > index => dropped += 1,
+                // Claimed and not stored yet, far behind the end: its writer
+                // is stalled, not in flight. Given up on.
+                _ if end - index > STALL_MARGIN => dropped += 1,
                 // Claimed and not stored yet: the next read serves it.
                 _ => break,
             }
@@ -509,6 +546,7 @@ impl Logger {
             cursor: next_cursor as u64,
             entries,
             dropped: dropped as u64,
+            instance: self.data.instance.clone(),
         }
     }
 
@@ -1321,6 +1359,10 @@ fn init_logger_once(
     forget(file_guard);
 }
 
+/// The entries logged since the previous call by any caller, as text,
+/// newest first. Deprecated: the cursor is one for the whole process, so two
+/// readers take lines from each other. Use [`get_logs_since`]. Kept through
+/// 2.x, removed in the next major.
 pub fn get_new_logs() -> String {
     LOGGER
         .get()
@@ -1328,6 +1370,8 @@ pub fn get_new_logs() -> String {
         .unwrap_or_default()
 }
 
+/// Every entry the ring holds, as text, newest first, each line after a
+/// newline. Moves no cursor (posture's `background-logs`, feedback reports).
 pub fn get_all_logs() -> String {
     LOGGER
         .get()
@@ -1339,7 +1383,8 @@ pub fn get_all_logs() -> String {
 /// next time (see [`LogBatch`]). The cursor is the caller's: two callers
 /// never take lines from each other, and asking again with the same cursor
 /// returns the same lines (plus any logged since). Pass 0 for everything the
-/// ring holds. Without a logger: nothing, the cursor unchanged.
+/// ring holds; read from 0 again when `instance` changes. Without a logger:
+/// nothing, the cursor unchanged, an empty instance.
 pub fn get_logs_since(cursor: u64) -> LogBatch {
     LOGGER
         .get()
@@ -1348,6 +1393,7 @@ pub fn get_logs_since(cursor: u64) -> LogBatch {
             cursor,
             entries: Vec::new(),
             dropped: 0,
+            instance: String::new(),
         })
 }
 
@@ -1643,6 +1689,61 @@ mod tests {
         let (cursor, entries, _) = ring.since(MAX_LOG_LINES - 1);
         assert_eq!((cursor, messages(&entries)), (MAX_LOG_LINES, vec!["19999"]));
         assert!(!ring.all().iter().any(|e| e.message == "0"));
+    }
+
+    #[test]
+    fn a_stalled_writer_stops_readers_only_up_to_the_margin() {
+        let ring = MemoryWriterData::new();
+        ring.push(entry("before"));
+        // A writer claimed index 1 and never stores it.
+        ring.next.fetch_add(1, Ordering::AcqRel);
+        for i in 0..STALL_MARGIN - 1 {
+            ring.push(entry(&format!("after {i}")));
+        }
+        // Exactly the margin behind the end: still waited for.
+        let (cursor, entries, dropped) = ring.since(0);
+        assert_eq!((cursor, entries.len(), dropped), (1, 1, 0));
+        // One more entry and it is given up on: counted, and the read goes on.
+        ring.push(entry("last"));
+        let (cursor, entries, dropped) = ring.since(0);
+        assert_eq!(cursor, STALL_MARGIN + 2);
+        assert_eq!(dropped, 1);
+        assert_eq!(entries.len(), STALL_MARGIN + 1);
+        assert_eq!(entries.last().unwrap().message, "last");
+        // The legacy cursor goes on too.
+        assert_eq!(ring.take_new().len(), STALL_MARGIN + 1);
+    }
+
+    #[test]
+    fn a_late_store_never_replaces_a_newer_lap() {
+        let ring = MemoryWriterData::new();
+        // A writer claims index 0 and is preempted for a whole lap.
+        let claimed = ring.next.fetch_add(1, Ordering::AcqRel);
+        for i in 1..=MAX_LOG_LINES {
+            ring.push(entry(&i.to_string()));
+        }
+        // Its store lands at last, on the slot that now holds the next lap.
+        ring.store(Arc::new(RingSlot {
+            index: claimed,
+            entry: entry("late"),
+        }));
+        let newest = MAX_LOG_LINES;
+        let (cursor, entries, _) = ring.since(newest);
+        assert_eq!(cursor, newest + 1);
+        assert_eq!(messages(&entries), vec![newest.to_string().as_str()]);
+        assert!(!ring.all().iter().any(|e| e.message == "late"));
+    }
+
+    #[test]
+    fn every_answer_names_the_ring_it_comes_from() {
+        let first = Logger::new();
+        let second = Logger::new();
+        let a = first.get_logs_since(0).instance;
+        assert_eq!(a.len(), 32, "{a}");
+        assert!(a.bytes().all(|b| b.is_ascii_hexdigit()), "{a}");
+        assert_eq!(first.get_logs_since(5).instance, a);
+        // Another process (another logger): another instance.
+        assert_ne!(second.get_logs_since(0).instance, a);
     }
 
     #[test]
