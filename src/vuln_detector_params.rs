@@ -7604,7 +7604,9 @@ mod tests {
     #[test]
     fn test_transcript_write_trust_params() {
         let p = params_from_edited_snapshot(|_| {});
-        assert!(p.transcript_write_trust_enabled);
+        // Published off until the posture perf gate and the lab have
+        // measured it in shadow.
+        assert!(!p.transcript_write_trust_enabled);
         assert_eq!(p.transcript_write_trust_retention_days, 30);
         assert_eq!(
             p.check_metadata("agent_transcript_tampering")
