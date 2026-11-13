@@ -86,6 +86,9 @@ pub mod secret_store;
 /// record (standalone in process, on the app path through the helper).
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub mod sensor_coverage;
+/// The store-writer record and the transcript reader, for a consumer in
+/// another process (standalone + helper order).
+pub mod store_writer_relay;
 pub mod sudoers_grading;
 pub mod supported_agents;
 pub mod threat;

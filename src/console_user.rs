@@ -242,9 +242,198 @@ pub fn console_user_home() -> Option<PathBuf> {
     None
 }
 
+/// The home of the user at this machine's console, for core's
+/// `resolve_user_home` when the process runs as a privileged account whose
+/// own home stands in for the user's (macOS: root, `/var/root`; Windows:
+/// SYSTEM, its profile under the Windows directory). The helper never calls
+/// it: it is handed the home in its order. `None` when the process is not
+/// privileged, when it was given a home of its own (an explicit `$HOME`
+/// that is not the privileged account's), or when no user is at the
+/// console: callers keep the home they had.
+///
+/// The rule, without the system calls: the invoking user of `sudo` first,
+/// then the user at the console.
+pub fn console_home_choice(
+    process_privileged: bool,
+    own_home_is_privileged: bool,
+    sudo_user_home: impl FnOnce() -> Option<PathBuf>,
+    console_user_home: impl FnOnce() -> Option<PathBuf>,
+) -> Option<PathBuf> {
+    if !process_privileged || !own_home_is_privileged {
+        return None;
+    }
+    sudo_user_home().or_else(console_user_home)
+}
+
+/// macOS: root's console user, by `SUDO_USER` and else by the owner of
+/// `/dev/console` (the user logged in at the screen; root while nobody is).
+#[cfg(target_os = "macos")]
+pub fn privileged_console_user_home(own_home: Option<&std::path::Path>) -> Option<PathBuf> {
+    use std::os::unix::fs::MetadataExt;
+    use uzers::os::unix::UserExt;
+    // SAFETY: geteuid has no preconditions and cannot fail.
+    let root = unsafe { libc::geteuid() } == 0;
+    let own_home_is_roots = own_home.map_or(true, |home| {
+        std::fs::metadata(home).map_or(true, |meta| meta.uid() == 0)
+    });
+    console_home_choice(
+        root,
+        own_home_is_roots,
+        || {
+            let name = std::env::var("SUDO_USER").ok()?;
+            let name = name.trim();
+            if name.is_empty() || name == "root" {
+                return None;
+            }
+            uzers::get_user_by_name(name).map(|user| user.home_dir().to_path_buf())
+        },
+        || {
+            let uid = std::fs::metadata("/dev/console").ok()?.uid();
+            if uid == 0 {
+                return None;
+            }
+            uzers::get_user_by_uid(uid).map(|user| user.home_dir().to_path_buf())
+        },
+    )
+}
+
+/// Windows: SYSTEM's console user, the profile of the user logged on to the
+/// console session (`WTSGetActiveConsoleSessionId`, `WTSQueryUserToken`,
+/// the profile in that user's environment block). `SUDO_USER` has no
+/// meaning here.
+#[cfg(target_os = "windows")]
+pub fn privileged_console_user_home(own_home: Option<&std::path::Path>) -> Option<PathBuf> {
+    let windows_dir = std::env::var_os("SystemRoot")
+        .or_else(|| std::env::var_os("windir"))
+        .map(|dir| dir.to_string_lossy().to_lowercase())
+        .unwrap_or_else(|| "c:\\windows".to_string());
+    let own_home_is_system = own_home.map_or(true, |home| {
+        home.to_string_lossy()
+            .to_lowercase()
+            .starts_with(windows_dir.trim_end_matches('\\'))
+    });
+    console_home_choice(
+        own_home_is_system,
+        own_home_is_system,
+        || None,
+        windows_console_profile,
+    )
+}
+
+#[cfg(target_os = "windows")]
+fn windows_console_profile() -> Option<PathBuf> {
+    use windows::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows::Win32::System::Environment::{CreateEnvironmentBlock, DestroyEnvironmentBlock};
+    use windows::Win32::System::RemoteDesktop::{WTSGetActiveConsoleSessionId, WTSQueryUserToken};
+    // SAFETY: no preconditions; 0xFFFFFFFF means no session is attached.
+    let session = unsafe { WTSGetActiveConsoleSessionId() };
+    if session == u32::MAX {
+        return None;
+    }
+    let mut token = HANDLE::default();
+    // SAFETY: `token` outlives the call; only SYSTEM holds the privilege
+    // this needs, any other caller gets an error.
+    unsafe { WTSQueryUserToken(session, &mut token) }.ok()?;
+    let mut block: *mut core::ffi::c_void = std::ptr::null_mut();
+    // SAFETY: `block` and `token` outlive the call; the block is destroyed
+    // below and the token closed.
+    let created = unsafe { CreateEnvironmentBlock(&mut block, Some(token), false) };
+    let profile = if created.is_ok() && !block.is_null() {
+        // SAFETY: the block is a sequence of NUL-terminated UTF-16 strings
+        // ended by an empty one, as CreateEnvironmentBlock returns it.
+        let units = unsafe { environment_block_units(block as *const u16) };
+        let profile = profile_from_environment_block(&units);
+        // SAFETY: the block was created above and is not used afterwards.
+        let _ = unsafe { DestroyEnvironmentBlock(block) };
+        profile
+    } else {
+        None
+    };
+    // SAFETY: the token was opened above and is not used afterwards.
+    let _ = unsafe { CloseHandle(token) };
+    profile
+}
+
+/// The UTF-16 units of an environment block, up to its terminating empty
+/// string.
+///
+/// # Safety
+/// `block` points to NUL-terminated UTF-16 strings ended by an empty one.
+#[cfg(target_os = "windows")]
+unsafe fn environment_block_units(block: *const u16) -> Vec<u16> {
+    let mut units = Vec::new();
+    let mut index = 0usize;
+    loop {
+        // SAFETY: within the block, per the caller's contract.
+        let unit = unsafe { *block.add(index) };
+        let previous = units.last().copied();
+        units.push(unit);
+        index += 1;
+        if unit == 0 && (previous == Some(0) || units.len() == 1) {
+            break;
+        }
+    }
+    units
+}
+
+/// `USERPROFILE` from an environment block (NUL-separated UTF-16
+/// `NAME=value` strings), the name in any letter case.
+pub fn profile_from_environment_block(units: &[u16]) -> Option<PathBuf> {
+    units
+        .split(|unit| *unit == 0)
+        .map(String::from_utf16_lossy)
+        .find_map(|entry| {
+            let (name, value) = entry.split_once('=')?;
+            (name.eq_ignore_ascii_case("USERPROFILE") && !value.trim().is_empty())
+                .then(|| PathBuf::from(value))
+        })
+}
+
+/// Other platforms: no privileged console resolution here (Linux resolves
+/// its console user inside `real_home_dir`, [`console_user_home`]).
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+pub fn privileged_console_user_home(_own_home: Option<&std::path::Path>) -> Option<PathBuf> {
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The console user is looked up only for a privileged process whose
+    /// own home is the privileged account's; the invoking user of `sudo`
+    /// comes first.
+    #[test]
+    fn the_console_user_is_the_answer_only_for_a_privileged_process() {
+        let user = || Some(PathBuf::from("/Users/u"));
+        let console = || Some(PathBuf::from("/Users/c"));
+        assert_eq!(
+            console_home_choice(true, true, user, console),
+            Some(PathBuf::from("/Users/u"))
+        );
+        assert_eq!(
+            console_home_choice(true, true, || None, console),
+            Some(PathBuf::from("/Users/c"))
+        );
+        assert_eq!(console_home_choice(true, true, || None, || None), None);
+        // Not privileged, or given a home of its own: none.
+        assert_eq!(console_home_choice(false, true, user, console), None);
+        assert_eq!(console_home_choice(true, false, user, console), None);
+    }
+
+    /// The profile is read from an environment block, the name in any case.
+    #[test]
+    fn the_profile_is_read_from_an_environment_block() {
+        let block: Vec<u16> = "PATH=C:\\x\0UserProfile=C:\\Users\\u\0TEMP=C:\\t\0\0"
+            .encode_utf16()
+            .collect();
+        assert_eq!(
+            profile_from_environment_block(&block),
+            Some(PathBuf::from("C:\\Users\\u"))
+        );
+        let none: Vec<u16> = "PATH=C:\\x\0\0".encode_utf16().collect();
+        assert_eq!(profile_from_environment_block(&none), None);
+    }
 
     /// Verbatim `loginctl list-sessions --no-legend` from the Linux dogfood
     /// host (test-mint) on 2026-09-12. Three sessions for one user, two of

@@ -973,6 +973,22 @@ pub async fn utility_process_events_since(since_ms: &str, listed_pids: &str) -> 
         .map_err(|e| anyhow::anyhow!("Failed to serialize process events: {}", e))
 }
 
+/// The processes recorded per file of the agent transcript stores, and the
+/// shell calls read as transcripts grew, that changed since the cursor in
+/// `arg1` (a `store_writer_relay::StoreWritersCursor` as JSON; empty for
+/// everything). Thin delegate (`store_writer_relay::store_writers_since`);
+/// the standalone core calls the same function in process.
+pub async fn utility_store_writers_since(cursor_json: &str) -> Result<String> {
+    let cursor = match cursor_json.trim() {
+        "" => crate::store_writer_relay::StoreWritersCursor::default(),
+        text => serde_json::from_str(text)
+            .map_err(|e| anyhow::anyhow!("Invalid store-writers cursor: {}", e))?,
+    };
+    let batch = crate::store_writer_relay::store_writers_since(&cursor);
+    serde_json::to_string(&batch)
+        .map_err(|e| anyhow::anyhow!("Failed to serialize store writers: {}", e))
+}
+
 /// Platform signature verdicts for the binaries in `arg1` (a JSON array of
 /// paths): the helper runs the verification outside the app's sandbox
 /// (`publisher_attestation::attest_binaries`). Thin delegate; the standalone
@@ -1157,6 +1173,7 @@ pub async fn utility_start_file_monitor(paths_json: &str, start_args_json: &str)
             watcher.stop();
         }
     }
+    crate::fim_support::stop_transcript_capture();
 
     let raw_paths: Vec<String> = serde_json::from_str(paths_json).unwrap_or_default();
     let user_home_path = (!user_home.is_empty()).then(|| std::path::Path::new(&user_home));
@@ -1171,6 +1188,7 @@ pub async fn utility_start_file_monitor(paths_json: &str, start_args_json: &str)
             let mut guard = FIM_WATCHER.write().await;
             *guard = Some(watcher);
             info!("File monitor started via helper");
+            crate::fim_support::start_transcript_capture(user_home_path);
             Ok("".to_string())
         }
         Err(e) => {
@@ -1190,6 +1208,7 @@ pub async fn utility_stop_file_monitor() -> Result<String> {
         watcher.stop();
         info!("File monitor stopped via helper");
     }
+    crate::fim_support::stop_transcript_capture();
     Ok("".to_string())
 }
 

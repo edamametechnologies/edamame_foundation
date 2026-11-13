@@ -23,6 +23,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+/// The shell calls read when a transcript grows.
+pub mod capture;
 pub mod capture_wire;
 pub mod claude_code;
 pub mod claude_desktop;
@@ -123,6 +125,12 @@ pub struct HarnessProcess {
     pub proc_started_at_ms: Option<u64>,
     /// Where the binding came from (`claude_sessions_pid_file`).
     pub source: String,
+    /// The pid file the binding was read from: the write provenance of the
+    /// stores says which process wrote it. `#[serde(default)]`: the session
+    /// cache and the persisted behavioral model carry sessions written
+    /// before the field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid_file: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

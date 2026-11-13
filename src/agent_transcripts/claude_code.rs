@@ -321,9 +321,13 @@ pub(crate) fn harness_processes(
     live_harness_processes(found)
 }
 
-/// `(pid, session id, recorded start)` from each `<pid>.json` file, unchecked.
-fn harness_pid_files(home: &Path) -> Vec<(u32, String, Option<u64>)> {
-    let mut found: Vec<(u32, String, Option<u64>)> = Vec::new();
+/// One `<pid>.json` file, unchecked: the pid, the session id, the recorded
+/// start and the file.
+type PidFileEntry = (u32, String, Option<u64>, String);
+
+/// Each `<pid>.json` file, unchecked.
+fn harness_pid_files(home: &Path) -> Vec<PidFileEntry> {
+    let mut found: Vec<PidFileEntry> = Vec::new();
     let dir = home.join(".claude").join("sessions");
     let Ok(entries) = std::fs::read_dir(&dir) else {
         return Default::default();
@@ -351,7 +355,12 @@ fn harness_pid_files(home: &Path) -> Vec<(u32, String, Option<u64>)> {
             .map(str::to_string);
         let started_at_ms = value.get("startedAt").and_then(|v| v.as_u64());
         if let (Some(pid), Some(session_id)) = (pid, session_id) {
-            found.push((pid, session_id, started_at_ms));
+            found.push((
+                pid,
+                session_id,
+                started_at_ms,
+                path.to_string_lossy().to_string(),
+            ));
         }
     }
     found
@@ -362,14 +371,14 @@ fn harness_pid_files(home: &Path) -> Vec<(u32, String, Option<u64>)> {
 /// agent harness, so the other targets bind nothing.
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 fn live_harness_processes(
-    found: Vec<(u32, String, Option<u64>)>,
+    found: Vec<PidFileEntry>,
 ) -> std::collections::BTreeMap<String, super::HarnessProcess> {
     use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
     // One refresh per distinct pid: two pid files can name one process (a
     // session that was cleared and restarted in the same harness).
     let pids: Vec<Pid> = found
         .iter()
-        .map(|(pid, _, _)| *pid)
+        .map(|(pid, _, _, _)| *pid)
         .collect::<std::collections::BTreeSet<u32>>()
         .into_iter()
         .map(Pid::from_u32)
@@ -381,7 +390,7 @@ fn live_harness_processes(
         ProcessRefreshKind::nothing(),
     );
     let mut map = std::collections::BTreeMap::new();
-    for (pid, session_id, started_at_ms) in found {
+    for (pid, session_id, started_at_ms, pid_file) in found {
         let Some(process) = system.process(Pid::from_u32(pid)) else {
             continue;
         };
@@ -399,6 +408,7 @@ fn live_harness_processes(
                 pid,
                 proc_started_at_ms: started_at_ms,
                 source: "claude_sessions_pid_file".to_string(),
+                pid_file: Some(pid_file),
             },
         );
     }
@@ -407,7 +417,7 @@ fn live_harness_processes(
 
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 fn live_harness_processes(
-    _found: Vec<(u32, String, Option<u64>)>,
+    _found: Vec<PidFileEntry>,
 ) -> std::collections::BTreeMap<String, super::HarnessProcess> {
     Default::default()
 }
@@ -484,6 +494,12 @@ mod harness_process_tests {
         });
         assert_eq!(live.pid, me);
         assert_eq!(live.source, "claude_sessions_pid_file");
+        assert!(
+            live.pid_file
+                .as_deref()
+                .is_some_and(|file| file.ends_with(&format!("{me}.json"))),
+            "the binding names its pid file"
+        );
         if started > 0 {
             assert!(!map.contains_key("s-reused"), "a reused pid does not bind");
         }
