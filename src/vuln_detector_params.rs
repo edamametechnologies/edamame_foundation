@@ -898,10 +898,6 @@ pub struct WixBurnLayoutJSON {
 /// - `browser_process_names`: process names of web browsers;
 ///   `browser_process_name_prefixes`: name prefixes followed by a space (a
 ///   browser's helper processes: `google chrome helper`).
-/// - `standing_inline_code_options`: command-line options through which a
-///   script runtime takes its program as text rather than as a file.
-/// - `standing_subcommand_words`: first arguments of a script runtime that
-///   are a command word rather than a program file.
 /// - `registrable_domain_second_level_labels`: second-level labels that,
 ///   under a two-letter top-level label, make a registrable domain three
 ///   labels long (`example.co.uk`).
@@ -923,8 +919,6 @@ pub struct DestinationHistoryJSON {
     pub rpc_provider_suffixes: Vec<String>,
     pub browser_process_names: Vec<String>,
     pub browser_process_name_prefixes: Vec<String>,
-    pub standing_inline_code_options: Vec<String>,
-    pub standing_subcommand_words: Vec<String>,
     pub registrable_domain_second_level_labels: Vec<String>,
 }
 
@@ -2308,8 +2302,6 @@ fn normalized_destination_history(history: &DestinationHistoryJSON) -> Destinati
             .collect(),
         browser_process_names: lowercase_token_list(&history.browser_process_names),
         browser_process_name_prefixes: lowercase_token_list(&history.browser_process_name_prefixes),
-        standing_inline_code_options: lowercase_token_list(&history.standing_inline_code_options),
-        standing_subcommand_words: lowercase_token_list(&history.standing_subcommand_words),
         registrable_domain_second_level_labels: lowercase_token_list(
             &history.registrable_domain_second_level_labels,
         ),
@@ -8226,22 +8218,6 @@ mod tests {
         assert!(shipped
             .browser_process_name_prefixes
             .contains(&"google chrome".to_string()));
-        for option in ["-c", "-e", "--eval", "/c"] {
-            assert!(
-                shipped
-                    .standing_inline_code_options
-                    .contains(&option.to_string()),
-                "{option}"
-            );
-        }
-        for word in ["run", "."] {
-            assert!(
-                shipped
-                    .standing_subcommand_words
-                    .contains(&word.to_string()),
-                "{word}"
-            );
-        }
 
         let p = params_from_edited_snapshot(|value| {
             let history = &mut value["destination_history"];
@@ -8256,8 +8232,6 @@ mod tests {
             history["rpc_provider_suffixes"] = serde_json::json!([" .Helius-RPC.com. ", ""]);
             history["browser_process_names"] = serde_json::json!([" Safari ", " "]);
             history["browser_process_name_prefixes"] = serde_json::json!(["Google Chrome", ""]);
-            history["standing_inline_code_options"] = serde_json::json!([" -C ", ""]);
-            history["standing_subcommand_words"] = serde_json::json!([" Run ", " "]);
         });
         let history = p.destination_history;
         assert_eq!(history.established_min_distinct_days, 2);
@@ -8271,8 +8245,6 @@ mod tests {
         assert_eq!(history.rpc_provider_suffixes, vec!["helius-rpc.com"]);
         assert_eq!(history.browser_process_names, vec!["safari"]);
         assert_eq!(history.browser_process_name_prefixes, vec!["google chrome"]);
-        assert_eq!(history.standing_inline_code_options, vec!["-c"]);
-        assert_eq!(history.standing_subcommand_words, vec!["run"]);
         // And the upper bounds.
         let p = params_from_edited_snapshot(|value| {
             let history = &mut value["destination_history"];
