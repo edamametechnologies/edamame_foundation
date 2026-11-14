@@ -848,6 +848,10 @@ impl TranscriptStoreRootsJSON {
 ///   stem is the process id.
 /// - `writer_images`: tool names of the images that write the store, besides
 ///   the agent's own process names; lowercased.
+/// - `launcher_images`: images that start the store's harness and are not the
+///   agent, each a tool name or a `/`-separated path pattern (`*` stands for
+///   any characters), matched against the image path lowercased with `/`
+///   separators; lowercased.
 /// - `append_only`: the harness only ever appends to a transcript.
 /// - `call_logged_before_spawn`: the harness writes a shell call's line
 ///   before it starts the command.
@@ -867,6 +871,7 @@ pub struct TranscriptStoreJSON {
     pub pid_file_roots: Vec<String>,
     pub pid_file_suffixes: Vec<String>,
     pub writer_images: Vec<String>,
+    pub launcher_images: Vec<String>,
     pub append_only: bool,
     pub call_logged_before_spawn: bool,
     pub finding_mode: TranscriptFindingMode,
@@ -894,8 +899,9 @@ pub enum TranscriptFindingMode {
 /// the process that wrote it, and how long after the first report for a file
 /// the report of its creation is still taken as its creation, which the
 /// store-writer record applies (`flodbadd::store_writers::StoreSpec`;
-/// milliseconds, 0: never), and how many transcripts the reader holds at
-/// once.
+/// milliseconds, 0: never), how many transcripts the reader holds at once,
+/// and how long the trust store looks up again a file whose creator the
+/// process lineage did not hold yet (milliseconds).
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TranscriptCaptureJSON {
     pub max_line_bytes: u64,
@@ -906,6 +912,7 @@ pub struct TranscriptCaptureJSON {
     pub late_report_ms: u64,
     pub creation_reorder_ms: u64,
     pub max_files_held: u64,
+    pub creator_retry_ms: u64,
 }
 
 /// Raw JSON shape of `agent-visibility-params-db.json`. No serde defaults:
@@ -1376,6 +1383,7 @@ impl AgentVisibilityParams {
                             file_suffixes: lower(&store.file_suffixes),
                             pid_file_suffixes: lower(&store.pid_file_suffixes),
                             writer_images: lower(&store.writer_images),
+                            launcher_images: lower(&store.launcher_images),
                             ..store.clone()
                         },
                     )
@@ -2193,6 +2201,14 @@ mod tests {
         // the main conversation's.
         assert_eq!(claude.subagent_segment, "subagents");
         assert_eq!(params.transcript_stores["codex"].subagent_segment, "");
+        // The desktop application that starts the command-line harness is
+        // a launcher of its store, not the agent.
+        assert!(claude
+            .launcher_images
+            .contains(&"*/claude.app/contents/macos/claude".to_string()));
+        assert!(params.transcript_stores["cursor"]
+            .launcher_images
+            .is_empty());
         assert_eq!(
             params.transcript_stores["cursor"].file_suffixes,
             vec![".jsonl".to_string(), ".txt".to_string()]
@@ -2219,6 +2235,7 @@ mod tests {
             "pid_file_roots",
             "pid_file_suffixes",
             "writer_images",
+            "launcher_images",
             "append_only",
             "call_logged_before_spawn",
             "finding_mode",
@@ -2245,7 +2262,12 @@ mod tests {
                 "params without `{key}` parsed"
             );
         }
-        for key in ["max_line_bytes", "creation_reorder_ms", "max_files_held"] {
+        for key in [
+            "max_line_bytes",
+            "creation_reorder_ms",
+            "max_files_held",
+            "creator_retry_ms",
+        ] {
             let mut value = complete.clone();
             value["transcript_capture"]
                 .as_object_mut()
@@ -2344,6 +2366,7 @@ mod tests {
         assert_eq!(capture.late_report_ms, 15_000);
         assert_eq!(capture.creation_reorder_ms, 1_000);
         assert_eq!(capture.max_files_held, 2_048);
+        assert_eq!(capture.creator_retry_ms, 60_000);
     }
 
     #[tokio::test]

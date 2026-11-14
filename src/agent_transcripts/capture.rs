@@ -180,7 +180,18 @@ impl CallExtractor for ShellCallExtractor {
 /// the main conversation's key (the directory above it). Both from the
 /// agent's published store (`transcript_stores`).
 pub fn transcript_session_keys(agent: &str, path: &str) -> (String, Option<String>) {
-    let store = crate::agent_visibility_params::transcript_store(agent);
+    session_keys_in(
+        crate::agent_visibility_params::transcript_store(agent).as_ref(),
+        path,
+    )
+}
+
+/// [`transcript_session_keys`] for the store `store` (`None`: a store the
+/// params do not list).
+fn session_keys_in(
+    store: Option<&crate::agent_visibility_params::TranscriptStoreJSON>,
+    path: &str,
+) -> (String, Option<String>) {
     let parts: Vec<&str> = path
         .split(['/', '\\'])
         .filter(|part| !part.is_empty())
@@ -196,7 +207,7 @@ pub fn transcript_session_keys(agent: &str, path: &str) -> (String, Option<Strin
         .unwrap_or(name)
         .to_string();
     let parent = store
-        .map(|store| store.subagent_segment)
+        .map(|store| store.subagent_segment.clone())
         .filter(|segment| !segment.is_empty())
         .and_then(|segment| {
             parts
@@ -1171,7 +1182,10 @@ impl<E: CallExtractor> Capture<E> {
         self.record_instance = Some(take.instance.clone());
         self.record_seq = take.seq;
         self.record_taken_at_ms = now;
-        self.delivered_through_ms = self.delivered_through_ms.max(take.delivered_through_ms);
+        // The take's own word, never one ahead of this reader's clock (a
+        // clock that stepped back): the reader holds what the latest take
+        // said, not the most any take said.
+        self.delivered_through_ms = take.delivered_through_ms.filter(|through| *through <= now);
         self.begin_wake();
         for dirty in &take.files {
             if dirty.kind != StoreFileKind::Transcript {
@@ -1285,6 +1299,8 @@ impl<E: CallExtractor> Capture<E> {
     /// names no process for what it reads, and the interval since its last
     /// read is a gap up to that pass. The calls read so far stay.
     fn record_restarted(&mut self, now: u64) {
+        // Up to when the sensor delivered is the next take's to say.
+        self.delivered_through_ms = None;
         let paths: Vec<String> = self.files.keys().cloned().collect();
         for path in paths {
             let seq = self.bump();
@@ -5403,6 +5419,79 @@ mod tests {
             transcript_session_keys("unlisted", "/h/x/subagents/r.jsonl"),
             ("r.jsonl".to_string(), None)
         );
+        // The directory's name in any letter case; another store's own
+        // directory name, not a fixed one.
+        assert_eq!(
+            transcript_session_keys("claude_code", "/h/.claude/projects/p/s1/SubAgents/a.jsonl"),
+            ("a".to_string(), Some("s1".to_string()))
+        );
+        let mut other = crate::agent_visibility_params::transcript_store("claude_code")
+            .expect("the published store");
+        other.subagent_segment = "children".to_string();
+        assert_eq!(
+            session_keys_in(Some(&other), "/h/p/s1/children/a.jsonl"),
+            ("a".to_string(), Some("s1".to_string()))
+        );
+        assert_eq!(
+            session_keys_in(Some(&other), "/h/p/s1/subagents/a.jsonl"),
+            ("a".to_string(), None)
+        );
+    }
+
+    /// A clock that steps back: the delivery a take said before the step is
+    /// ahead of every later read, and is not taken as delivered past them; a
+    /// call read after the step stays open until a take says the sensor
+    /// delivered past it, and a report that arrives meanwhile names its
+    /// writer.
+    #[test]
+    fn a_clock_step_back_never_makes_a_read_final_before_the_sensor_delivered() {
+        let mut bench = Bench::new(config());
+        let creation = bench.created_by_harness();
+        bench.appended_by(HARNESS, creation, "C k1 ls\n");
+        bench.advance(1);
+        bench.delivered_now();
+        bench.capture.finalize_writers();
+        bench.clock.fetch_sub(60_000, Ordering::AcqRel);
+        bench.appended_by(HARNESS, creation, "C k2 git\n");
+        let at = bench.appended_by(HARNESS, creation, "C k3 curl\n");
+        bench.capture.finalize_writers();
+        let curl = |bench: &Bench| {
+            bench
+                .view()
+                .calls
+                .into_iter()
+                .find(|call| call.call.programs[0] == "curl")
+                .unwrap()
+        };
+        assert!(!curl(&bench).writer_final);
+        bench.take(bench.dirty(Some(creation), vec![bench.span(OTHER, ops::WRITE, at)]));
+        assert_eq!(curl(&bench).writer, None);
+        assert_eq!(bench.view().counters.late_after_final, 0);
+        // The sensor says it delivered past the read: final.
+        bench.advance(1);
+        bench.delivered_now();
+        bench.capture.finalize_writers();
+        assert!(curl(&bench).writer_final);
+    }
+
+    /// A clock that steps back: the watermark does not cover a file written
+    /// after the latest take.
+    #[test]
+    fn a_clock_step_back_never_lets_the_watermark_cover_an_untaken_file() {
+        let mut bench = Bench::new(config());
+        let creation = bench.created_by_harness();
+        bench.appended_by(HARNESS, creation, "C k1 ls\n");
+        bench.advance(1);
+        bench.delivered_now();
+        bench.clock.fetch_sub(60_000, Ordering::AcqRel);
+        bench.appended_by(HARNESS, creation, "C k2 git\n");
+        bench.advance(1);
+        let written_at = bench.advance(100);
+        std::fs::write(bench.base.join("second.jsonl"), "C k9 nc\n").unwrap();
+        bench.advance(100);
+        bench.capture.sweep(0);
+        let watermark = bench.view().watermark_ms.expect("a sweep ran");
+        assert!(watermark < written_at);
     }
 
     /// The reply's wire batch: transcripts with their keys, coverage and
