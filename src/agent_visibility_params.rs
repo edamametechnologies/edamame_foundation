@@ -2102,33 +2102,57 @@ mod tests {
         assert_eq!(norm.entries[1].match_substring, "gpt-5");
     }
 
-    /// The embedded snapshot lists a transcript store for every agent type
-    /// the collectors read, each with a root on this platform, endings that
-    /// are lowercase and start with a dot, and its three published booleans
-    /// as shipped in 2.3.3 (all false).
+    /// The print-mode markers are published per agent type as the installed
+    /// CLIs take them (Claude Code 2.1.251, Codex 0.137.0), each agent with
+    /// at least one marker.
     #[test]
     fn test_print_mode_markers_are_published() {
-        // As the CLIs document them (`claude --help`: `-p, --print`;
-        // `codex --help`: `exec [aliases: e]`, `review` "non-interactively").
+        // `claude --help`: `-p, --print`, `--bg, --background`; the binary's
+        // own non-interactive test: `--init-only`, `--sdk-url`. `codex
+        // --help`: `exec [aliases: e]`, `review` "non-interactively",
+        // `mcp-server` (stdio), `app-server`, `exec-server`.
         let params = build_fallback_params();
         let claude = &params.print_mode_markers["claude_code"];
-        assert_eq!(claude.flags, vec!["-p".to_string(), "--print".to_string()]);
+        for flag in [
+            "-p",
+            "--print",
+            "--sdk-url",
+            "--init-only",
+            "--bg",
+            "--background",
+        ] {
+            assert!(claude.flags.iter().any(|f| f == flag), "{flag}");
+        }
         assert!(claude.subcommands.is_empty());
         let codex = &params.print_mode_markers["codex"];
         assert!(codex.flags.is_empty());
-        for subcommand in ["exec", "e", "review"] {
+        for subcommand in [
+            "exec",
+            "e",
+            "review",
+            "mcp-server",
+            "app-server",
+            "exec-server",
+        ] {
             assert!(
                 codex.subcommands.iter().any(|s| s == subcommand),
                 "{subcommand}"
             );
         }
+        for markers in params.print_mode_markers.values() {
+            assert!(!markers.flags.is_empty() || !markers.subcommands.is_empty());
+        }
         assert_eq!(
             print_mode_markers(" Claude_Code ").map(|m| m.flags.len()),
-            Some(2)
+            Some(6)
         );
         assert!(print_mode_markers("hermes").is_none());
     }
 
+    /// The embedded snapshot lists a transcript store for every agent type
+    /// the collectors read, each with a root on this platform, endings that
+    /// are lowercase and start with a dot, and its three published booleans
+    /// as shipped in 2.3.3 (all false).
     #[test]
     fn test_transcript_stores_ship_complete_and_switched_off() {
         let params = build_fallback_params();

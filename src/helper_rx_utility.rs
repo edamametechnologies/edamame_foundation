@@ -722,15 +722,12 @@ pub async fn utility_scan_secret_content(paths_json: &str, reply: &str) -> Resul
     .map_err(|e| anyhow::anyhow!("Failed to serialize secret-content matches: {}", e))
 }
 
-/// BS-10 credential signals for the queried processes
-/// (`process_credential_signals::collect_process_credential_signals`): the
-/// helper runs the kernel open sensor and can read other processes'
-/// environments. Thin delegate; the standalone core calls the same function
-/// in-process.
-/// Whether each queried agent harness process was started in print mode
+/// How each queried agent harness process was launched
 /// (`harness_launch::measure_print_modes`): `arg1` is a JSON list of
-/// `harness_launch::PrintModeQuery`, the reply the answers, a yes, a no or
-/// unmeasured per query. No command line leaves this process. Thin
+/// `harness_launch::PrintModeQuery`, the reply the answers, per query
+/// whether a print-mode marker is on its command line and whether its
+/// standard input and output are its terminal, each a yes, a no or
+/// unmeasured. No command line, path or device leaves this process. Thin
 /// delegate; the standalone core calls the same function in process.
 pub async fn utility_harness_print_mode(queries_json: &str) -> Result<String> {
     let queries: Vec<crate::harness_launch::PrintModeQuery> = serde_json::from_str(queries_json)
@@ -744,6 +741,11 @@ pub async fn utility_harness_print_mode(queries_json: &str) -> Result<String> {
         .map_err(|e| anyhow::anyhow!("Failed to serialize print-mode answers: {}", e))
 }
 
+/// BS-10 credential signals for the queried processes
+/// (`process_credential_signals::collect_process_credential_signals`): the
+/// helper runs the kernel open sensor and can read other processes'
+/// environments. Thin delegate; the standalone core calls the same function
+/// in-process.
 pub async fn utility_process_credential_signals(queries_json: &str) -> Result<String> {
     let queries: Vec<crate::process_credential_signals::ProcessQuery> =
         serde_json::from_str(queries_json)

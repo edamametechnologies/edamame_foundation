@@ -1475,6 +1475,15 @@ pub struct CveDetectionParamsJSON {
     /// was not started by one of its conversations' tool calls, and the host
     /// is no conversation of the chain.
     pub session_binding_host_agents: Vec<String>,
+    /// Session binding: per platform, the image names (tool names: lower
+    /// case, without `.exe`) of editors' extension hosts. A harness whose
+    /// standard input and output are not both its terminal reads as started
+    /// in print mode (its conversation never narrows), unless the process
+    /// that created it, its creation verified, is one of these: an editor's
+    /// extension runs the harness for a person typing in the editor. It may
+    /// then narrow, on its print-mode markers and its first user turn as any
+    /// other. An empty list: no such exception.
+    pub session_binding_ide_extension_hosts: PlatformStringLists,
     /// Session binding: tool names (lower case, without `.exe`) of the
     /// shells a harness runs a command through. A process tree whose first
     /// process is one of them is compared with a tool call by the programs
@@ -1972,6 +1981,7 @@ pub struct CveDetectionParams {
     pub session_binding_tool_call_enabled: bool,
     pub session_binding_tool_call_agents: Vec<String>,
     pub session_binding_host_agents: Vec<String>,
+    pub session_binding_ide_extension_hosts: PlatformStringLists,
     pub session_binding_shell_programs: Vec<String>,
     pub session_binding_clock_slack_ms: u64,
     pub session_binding_spawn_window_ms: u64,
@@ -3185,6 +3195,20 @@ impl CveDetectionParams {
                 .map(|agent| agent.trim().to_ascii_lowercase())
                 .filter(|agent| !agent.is_empty())
                 .collect(),
+            session_binding_ide_extension_hosts: {
+                let names = |list: &[String]| -> Vec<String> {
+                    list.iter()
+                        .map(|name| name.trim().to_ascii_lowercase())
+                        .filter(|name| !name.is_empty())
+                        .collect()
+                };
+                let lists = &json.session_binding_ide_extension_hosts;
+                PlatformStringLists {
+                    macos: names(&lists.macos),
+                    linux: names(&lists.linux),
+                    windows: names(&lists.windows),
+                }
+            },
             session_binding_shell_programs: json
                 .session_binding_shell_programs
                 .iter()
@@ -5744,6 +5768,22 @@ pub fn session_binding_host_agents() -> Vec<String> {
     PARAMS_SNAPSHOT.load().session_binding_host_agents.clone()
 }
 
+/// Session binding: this platform's editors' extension hosts, lower case
+/// (see the field docs); empty on a platform without a list.
+pub fn session_binding_ide_extension_hosts() -> Vec<String> {
+    let params = PARAMS_SNAPSHOT.load();
+    let lists = &params.session_binding_ide_extension_hosts;
+    if cfg!(target_os = "macos") {
+        lists.macos.clone()
+    } else if cfg!(target_os = "linux") {
+        lists.linux.clone()
+    } else if cfg!(target_os = "windows") {
+        lists.windows.clone()
+    } else {
+        Vec::new()
+    }
+}
+
 /// Session binding: process trees that keep the conversation they were tied
 /// to.
 pub fn session_binding_max_remembered_roots() -> u64 {
@@ -6079,6 +6119,14 @@ mod tests {
         assert!(!json.session_binding_tool_call_enabled);
         assert!(json.session_binding_tool_call_agents.is_empty());
         assert_eq!(json.session_binding_host_agents, vec!["cursor".to_string()]);
+        // The editors' extension hosts seen starting Claude Code on macOS;
+        // none verified yet on Linux and Windows.
+        assert_eq!(
+            json.session_binding_ide_extension_hosts.macos,
+            vec!["Cursor Helper (Plugin)".to_string()]
+        );
+        assert!(json.session_binding_ide_extension_hosts.linux.is_empty());
+        assert!(json.session_binding_ide_extension_hosts.windows.is_empty());
         assert_eq!(json.session_binding_max_remembered_roots, 4_096);
         assert_eq!(json.session_binding_process_start_tolerance_ms, 2_000);
         assert_eq!(json.session_binding_typed_prompt_min_delay_ms, 5_000);
@@ -6110,6 +6158,7 @@ mod tests {
             "session_binding_tool_call_enabled",
             "session_binding_tool_call_agents",
             "session_binding_host_agents",
+            "session_binding_ide_extension_hosts",
             "session_binding_shell_programs",
             "session_binding_clock_slack_ms",
             "session_binding_spawn_window_ms",
