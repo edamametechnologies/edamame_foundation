@@ -1,13 +1,17 @@
-//! Whether an agent harness process was started in print (non-interactive)
-//! mode, read from its command line against the published markers
-//! (`agent_visibility_params::print_mode_markers`): Claude Code's `-p` /
-//! `--print`, Codex's `exec` subcommand and the like.
+//! How an agent harness process was launched, as two measures the observed
+//! agent does not set: whether its command line carries a print-mode
+//! (non-interactive) marker of the published list
+//! (`agent_visibility_params::print_mode_markers`: Claude Code's `-p` /
+//! `--print`, Codex's `exec` subcommand and the like), and whether its
+//! standard input and output are both its own terminal.
 //!
-//! Only the answer leaves this module: the command line is read, compared
-//! with the markers and dropped. It is never stored, returned, logged or
-//! traced, here or by a caller. A command line that cannot be read (the
-//! process is gone, another process holds its pid now, the platform or the
-//! caller's rights do not allow it) is unmeasured, never "no marker".
+//! Only the answers leave this module: the command line is read, compared
+//! with the markers and dropped, and of the standard input and output only
+//! whether each is the process's controlling terminal is kept (no path, no
+//! name, no device number). Nothing is stored, returned, logged or traced,
+//! here or by a caller. What cannot be read (the process is gone, another
+//! process holds its pid now, the platform or the caller's rights do not
+//! allow it) is unmeasured, never "no marker" or "no terminal".
 //!
 //! One function serves both paths: the standalone core calls
 //! [`measure_print_modes`] in process, and the helper calls it for the app
@@ -26,13 +30,19 @@ pub struct PrintModeQuery {
     pub agent_type: String,
 }
 
-/// The answer for one query: `Some(true)` a print-mode marker is on the
-/// process's command line, `Some(false)` none is, `None` not measured.
+/// The answer for one query, each part `None` when not measured.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PrintModeAnswer {
     pub pid: u32,
     pub start_ms: u64,
+    /// `Some(true)` a print-mode marker is on the process's command line,
+    /// `Some(false)` none is.
     pub print_mode: Option<bool>,
+    /// `Some(true)` its standard input and its standard output are both its
+    /// controlling terminal (a terminal or a pseudo-terminal it runs in),
+    /// `Some(false)` at least one is not (a pipe, a socket, a file,
+    /// `/dev/null`, another device, a closed descriptor).
+    pub terminal_stdio: Option<bool>,
 }
 
 /// Whether the arguments of a command line (the program first) carry one of
@@ -77,26 +87,44 @@ pub fn argv_has_print_marker<S: AsRef<str>>(args: &[S], markers: &PrintModeMarke
 }
 
 /// Measure each query's process: its start is read before and after its
-/// command line, and both readings must be the query's start (within the
-/// published `session_binding_process_start_tolerance_ms`), so the command
-/// line is the queried process's own. Unmeasured for a process that is gone,
-/// one whose pid another process holds now, an agent type with no published
-/// markers, and on a platform without the reading.
+/// command line and its standard input and output, and both readings must be
+/// the query's start (within the published
+/// `session_binding_process_start_tolerance_ms`), so what was read is the
+/// queried process's own. Unmeasured for a process that is gone, one whose
+/// pid another process holds now, and on a platform without the reading; the
+/// print mode also for an agent type with no published markers, or whose
+/// published lists are both empty (no marker could ever be found, so "none
+/// found" would say nothing).
 pub fn measure_print_modes(queries: &[PrintModeQuery]) -> Vec<PrintModeAnswer> {
-    let answers = read_print_modes(queries);
+    let answers = read_launches(queries);
     queries
         .iter()
         .zip(answers)
-        .map(|(query, print_mode)| PrintModeAnswer {
+        .map(|(query, (print_mode, terminal_stdio))| PrintModeAnswer {
             pid: query.pid,
             start_ms: query.start_ms,
             print_mode,
+            terminal_stdio,
         })
         .collect()
 }
 
+/// The published markers of `agent_type`, when there is one to find.
+#[cfg(any(test, target_os = "macos", target_os = "linux", target_os = "windows"))]
+fn markers_for(agent_type: &str) -> Option<PrintModeMarkersJSON> {
+    usable_markers(crate::agent_visibility_params::print_mode_markers(
+        agent_type,
+    ))
+}
+
+/// Markers that can be found: an entry with both lists empty says nothing.
+#[cfg(any(test, target_os = "macos", target_os = "linux", target_os = "windows"))]
+fn usable_markers(markers: Option<PrintModeMarkersJSON>) -> Option<PrintModeMarkersJSON> {
+    markers.filter(|markers| !markers.flags.is_empty() || !markers.subcommands.is_empty())
+}
+
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
-fn read_print_modes(queries: &[PrintModeQuery]) -> Vec<Option<bool>> {
+fn read_launches(queries: &[PrintModeQuery]) -> Vec<(Option<bool>, Option<bool>)> {
     use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 
     let tolerance = crate::vuln_detector_params::session_binding_process_start_tolerance_ms();
@@ -106,9 +134,15 @@ fn read_print_modes(queries: &[PrintModeQuery]) -> Vec<Option<bool>> {
     };
     let markers: Vec<Option<PrintModeMarkersJSON>> = queries
         .iter()
-        .map(|query| crate::agent_visibility_params::print_mode_markers(&query.agent_type))
+        .map(|query| markers_for(&query.agent_type))
         .collect();
     let before: Vec<bool> = queries.iter().map(same_start).collect();
+    let mut found: Vec<(Option<bool>, Option<bool>)> = vec![(None, None); queries.len()];
+    for (index, query) in queries.iter().enumerate() {
+        if before[index] {
+            found[index].1 = stdio_is_terminal(query.pid);
+        }
+    }
     let mut pids: Vec<Pid> = queries
         .iter()
         .zip(&before)
@@ -121,47 +155,198 @@ fn read_print_modes(queries: &[PrintModeQuery]) -> Vec<Option<bool>> {
     // refreshed), which would leave every query of the pid unmeasured.
     pids.sort_unstable();
     pids.dedup();
-    let mut found: Vec<Option<bool>> = vec![None; queries.len()];
-    if pids.is_empty() {
-        return found;
-    }
-    let mut system = System::new();
-    system.refresh_processes_specifics(
-        ProcessesToUpdate::Some(&pids),
-        true,
-        ProcessRefreshKind::nothing().with_cmd(UpdateKind::Always),
-    );
-    for (index, query) in queries.iter().enumerate() {
-        let (true, Some(markers)) = (before[index], markers[index].as_ref()) else {
-            continue;
-        };
-        let Some(process) = system.process(Pid::from_u32(query.pid)) else {
-            continue;
-        };
-        let args = process.cmd();
-        if args.is_empty() {
-            // Not readable (rights, a process that is exiting): unmeasured.
-            continue;
+    if !pids.is_empty() {
+        let mut system = System::new();
+        system.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&pids),
+            true,
+            ProcessRefreshKind::nothing().with_cmd(UpdateKind::Always),
+        );
+        for (index, query) in queries.iter().enumerate() {
+            let (true, Some(markers)) = (before[index], markers[index].as_ref()) else {
+                continue;
+            };
+            let Some(process) = system.process(Pid::from_u32(query.pid)) else {
+                continue;
+            };
+            let args = process.cmd();
+            if args.is_empty() {
+                // Not readable (rights, a process that is exiting): unmeasured.
+                continue;
+            }
+            let args: Vec<std::borrow::Cow<'_, str>> =
+                args.iter().map(|arg| arg.to_string_lossy()).collect();
+            found[index].0 = Some(argv_has_print_marker(&args, markers));
         }
-        let args: Vec<std::borrow::Cow<'_, str>> =
-            args.iter().map(|arg| arg.to_string_lossy()).collect();
-        found[index] = Some(argv_has_print_marker(&args, markers));
     }
-    drop(system);
     // The pid must still be the queried process: a process that exited and
-    // whose pid was handed out again while its command line was read is
-    // unmeasured.
+    // whose pid was handed out again while it was read is unmeasured.
     for (index, query) in queries.iter().enumerate() {
-        if found[index].is_some() && !same_start(query) {
-            found[index] = None;
+        if (found[index].0.is_some() || found[index].1.is_some()) && !same_start(query) {
+            found[index] = (None, None);
         }
     }
     found
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-fn read_print_modes(queries: &[PrintModeQuery]) -> Vec<Option<bool>> {
-    vec![None; queries.len()]
+fn read_launches(queries: &[PrintModeQuery]) -> Vec<(Option<bool>, Option<bool>)> {
+    vec![(None, None); queries.len()]
+}
+
+/// Whether `pid`'s standard input and standard output are both its
+/// controlling terminal: each a character device whose device is the one
+/// the kernel records as the process's controlling terminal. Comparing with
+/// the controlling terminal needs no list of terminal devices: a pipe, a
+/// socket, a file, `/dev/null` or a terminal that is not the process's own
+/// reads `false`; a process without one reads `false`. `None` when the
+/// descriptors or the process record cannot be read. Nothing is opened: the
+/// descriptors' targets are only looked at.
+#[cfg(target_os = "linux")]
+fn stdio_is_terminal(pid: u32) -> Option<bool> {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+    // `/proc/<pid>/stat`: the fields after the command name in parentheses
+    // (which may itself hold a parenthesis) are state, ppid, pgrp, session
+    // and tty_nr, the controlling terminal (0 for none).
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let fields = &stat[stat.rfind(')')? + 1..];
+    let tty_nr: u64 = fields.split_whitespace().nth(4)?.parse().ok()?;
+    // The kernel's device encoding: the major in bits 8 to 19, the minor in
+    // bits 0 to 7 and 20 to 31.
+    let terminal = (tty_nr != 0).then(|| {
+        (
+            (tty_nr >> 8) & 0xfff,
+            (tty_nr & 0xff) | ((tty_nr >> 12) & 0xfff00),
+        )
+    });
+    let mut both = true;
+    for fd in [0, 1] {
+        // Follows the descriptor to what it names; unreadable: unmeasured.
+        let target = std::fs::metadata(format!("/proc/{pid}/fd/{fd}")).ok()?;
+        let rdev = target.rdev();
+        let device = (u64::from(libc::major(rdev)), u64::from(libc::minor(rdev)));
+        both &= target.file_type().is_char_device() && terminal == Some(device);
+    }
+    Some(both)
+}
+
+/// See the Linux version. macOS: the controlling terminal is `e_tdev` of the
+/// process's BSD info, and each descriptor's type and device come from
+/// `proc_pidfdinfo` (a pipe or a socket is no vnode, so not a terminal).
+#[cfg(target_os = "macos")]
+fn stdio_is_terminal(pid: u32) -> Option<bool> {
+    use std::ffi::c_void;
+    use std::mem::{size_of, zeroed};
+
+    // `PROC_PIDFDVNODEINFO` and its `struct vnode_fdinfo`
+    // (`sys/proc_info.h`), which the libc crate does not carry.
+    const PROC_PIDFDVNODEINFO: libc::c_int = 1;
+    #[repr(C)]
+    struct ProcFileInfo {
+        fi_openflags: u32,
+        fi_status: u32,
+        fi_offset: libc::off_t,
+        fi_type: i32,
+        fi_guardflags: u32,
+    }
+    #[repr(C)]
+    struct VnodeFdInfo {
+        pfi: ProcFileInfo,
+        pvi: libc::vnode_info,
+    }
+    // No controlling terminal (`NODEV`).
+    const NO_DEVICE: u32 = u32::MAX;
+
+    let pid = libc::c_int::try_from(pid).ok()?;
+    // SAFETY: plain data, written by the kernel up to `size` bytes.
+    let mut bsd: libc::proc_bsdinfo = unsafe { zeroed() };
+    let size = libc::c_int::try_from(size_of::<libc::proc_bsdinfo>()).ok()?;
+    let read = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            &mut bsd as *mut libc::proc_bsdinfo as *mut c_void,
+            size,
+        )
+    };
+    if read != size {
+        return None;
+    }
+    let terminal = (bsd.e_tdev != NO_DEVICE).then_some(bsd.e_tdev);
+    let mut both = true;
+    for fd in [0, 1] {
+        // SAFETY: as above.
+        let mut info: VnodeFdInfo = unsafe { zeroed() };
+        let size = libc::c_int::try_from(size_of::<VnodeFdInfo>()).ok()?;
+        let read = unsafe {
+            libc::proc_pidfdinfo(
+                pid,
+                fd,
+                PROC_PIDFDVNODEINFO,
+                &mut info as *mut VnodeFdInfo as *mut c_void,
+                size,
+            )
+        };
+        if read == size {
+            let stat = &info.pvi.vi_stat;
+            let char_device =
+                u32::from(stat.vst_mode) & u32::from(libc::S_IFMT) == u32::from(libc::S_IFCHR);
+            both &= char_device && terminal == Some(stat.vst_rdev);
+        } else {
+            // Not a vnode (a pipe, a socket) or not readable: the descriptor
+            // list tells them apart.
+            match descriptor_type(pid, fd)? {
+                Some(kind) if kind == libc::PROX_FDTYPE_VNODE as u32 => return None,
+                _ => both = false,
+            }
+        }
+    }
+    Some(both)
+}
+
+/// The type of `pid`'s descriptor `fd` (`PROX_FDTYPE_*`), `Some(None)` when
+/// it is not open, `None` when the list cannot be read.
+#[cfg(target_os = "macos")]
+fn descriptor_type(pid: libc::c_int, fd: libc::c_int) -> Option<Option<u32>> {
+    use std::ffi::c_void;
+    use std::mem::size_of;
+    let entry = size_of::<libc::proc_fdinfo>();
+    // SAFETY: a size query (no buffer).
+    let bytes =
+        unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDLISTFDS, 0, std::ptr::null_mut(), 0) };
+    let bytes = usize::try_from(bytes).ok().filter(|bytes| *bytes > 0)?;
+    // Room for descriptors opened since the size query.
+    let mut list: Vec<libc::proc_fdinfo> = Vec::with_capacity(bytes / entry + 16);
+    let capacity = libc::c_int::try_from(list.capacity() * entry).ok()?;
+    // SAFETY: the kernel writes at most `capacity` bytes of entries.
+    let written = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDLISTFDS,
+            0,
+            list.as_mut_ptr() as *mut c_void,
+            capacity,
+        )
+    };
+    let written = usize::try_from(written)
+        .ok()
+        .filter(|written| *written > 0)?;
+    // SAFETY: `written` bytes of whole entries were written.
+    unsafe { list.set_len((written / entry).min(list.capacity())) };
+    Some(
+        list.iter()
+            .find(|info| info.proc_fd == fd)
+            .map(|info| info.proc_fdtype),
+    )
+}
+
+/// Windows: no way to read another process's standard handles without
+/// duplicating them into this process, which a behaviour engine reads as
+/// handle theft (the project's rule): unmeasured.
+#[cfg(target_os = "windows")]
+fn stdio_is_terminal(_pid: u32) -> Option<bool> {
+    None
 }
 
 #[cfg(test)]
@@ -258,5 +443,139 @@ mod tests {
         let answers = measure_print_modes(&[query(start), query(start + 1)]);
         let found: Vec<Option<bool>> = answers.iter().map(|a| a.print_mode).collect();
         assert_eq!(found, vec![Some(false), Some(false)]);
+    }
+
+    /// An entry whose two lists are empty can find no marker: unmeasured,
+    /// never "no marker" (the answer that may narrow).
+    #[test]
+    fn an_agent_with_no_marker_to_find_is_unmeasured() {
+        let empty = PrintModeMarkersJSON {
+            flags: Vec::new(),
+            subcommands: Vec::new(),
+        };
+        assert_eq!(usable_markers(Some(empty)), None);
+        assert_eq!(usable_markers(None), None);
+        assert_eq!(usable_markers(Some(claude())), Some(claude()));
+        assert_eq!(usable_markers(Some(codex())), Some(codex()));
+    }
+
+    /// A child of this test on a new pseudo-terminal that is its controlling
+    /// terminal, standard input and output both on it; the pty's controlling
+    /// side is returned too (it stays open while the child is measured).
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    fn child_on_its_own_terminal() -> (std::process::Child, libc::c_int) {
+        use std::os::fd::FromRawFd;
+        use std::os::unix::process::CommandExt;
+        use std::process::{Command, Stdio};
+        let (mut controller, mut terminal) = (0, 0);
+        // SAFETY: openpty writes the two descriptors.
+        let opened = unsafe {
+            libc::openpty(
+                &mut controller,
+                &mut terminal,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(opened, 0, "a pseudo-terminal");
+        // SAFETY: fresh descriptors, each owned by its Stdio.
+        let (input, output) = unsafe {
+            (
+                Stdio::from_raw_fd(libc::dup(terminal)),
+                Stdio::from_raw_fd(libc::dup(terminal)),
+            )
+        };
+        let mut command = Command::new("sleep");
+        command
+            .arg("30")
+            .stdin(input)
+            .stdout(output)
+            .stderr(Stdio::null());
+        // SAFETY: async-signal-safe calls only, after the standard
+        // descriptors were set up: a new session whose controlling terminal
+        // is the pty on standard input.
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() < 0 || libc::ioctl(0, libc::TIOCSCTTY as _, 0) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let child = command.spawn().expect("a child on the terminal");
+        // SAFETY: this process's copy only.
+        unsafe { libc::close(terminal) };
+        (child, controller)
+    }
+
+    /// Standard input and output are measured as the process's controlling
+    /// terminal, or not: a child running on its own pseudo-terminal is a
+    /// terminal; one whose input is `/dev/null` and whose output is a pipe is
+    /// not, nor one on `/dev/null` for both (character devices, not its
+    /// terminal); a process whose start differs is not measured at all.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn standard_input_and_output_are_measured_as_a_terminal_or_not() {
+        use std::process::{Command, Stdio};
+        let measure = |pid: u32| {
+            let start = flodbadd::process_events::process_start_ms(pid).expect("the child's start");
+            let query = |start_ms: u64| PrintModeQuery {
+                pid,
+                start_ms,
+                agent_type: "codex".to_string(),
+            };
+            let answers = measure_print_modes(&[query(start), query(start - 3_600_000)]);
+            (
+                (answers[0].print_mode, answers[0].terminal_stdio),
+                (answers[1].print_mode, answers[1].terminal_stdio),
+            )
+        };
+        let (mut on_terminal, controller) = child_on_its_own_terminal();
+        let (own, other) = measure(on_terminal.id());
+        let _ = on_terminal.kill();
+        let _ = on_terminal.wait();
+        // SAFETY: the descriptor openpty gave this test.
+        unsafe { libc::close(controller) };
+        assert_eq!(own, (Some(false), Some(true)));
+        assert_eq!(other, (None, None));
+        let mut piped = Command::new("sleep")
+            .arg("30")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("a child on a pipe");
+        let (own, _) = measure(piped.id());
+        let _ = piped.kill();
+        let _ = piped.wait();
+        assert_eq!(own, (Some(false), Some(false)));
+        // Character devices that are not its terminal: `/dev/null` on both.
+        let mut nulled = Command::new("sleep")
+            .arg("30")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("a child on /dev/null");
+        let (own, _) = measure(nulled.id());
+        let _ = nulled.kill();
+        let _ = nulled.wait();
+        assert_eq!(own, (Some(false), Some(false)));
+    }
+
+    /// Windows reads no other process's standard handles (that needs a
+    /// duplicate of them): unmeasured.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn standard_handles_are_not_measured_on_windows() {
+        let own = std::process::id();
+        let start = flodbadd::process_events::process_start_ms(own).expect("this process's start");
+        let answers = measure_print_modes(&[PrintModeQuery {
+            pid: own,
+            start_ms: start,
+            agent_type: "codex".to_string(),
+        }]);
+        assert_eq!(answers[0].terminal_stdio, None);
     }
 }
