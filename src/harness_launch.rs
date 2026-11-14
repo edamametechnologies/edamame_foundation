@@ -110,6 +110,7 @@ pub fn measure_print_modes(queries: &[PrintModeQuery]) -> Vec<PrintModeAnswer> {
 }
 
 /// The published markers of `agent_type`, when there is one to find.
+#[cfg(any(test, target_os = "macos", target_os = "linux", target_os = "windows"))]
 fn markers_for(agent_type: &str) -> Option<PrintModeMarkersJSON> {
     usable_markers(crate::agent_visibility_params::print_mode_markers(
         agent_type,
@@ -117,6 +118,7 @@ fn markers_for(agent_type: &str) -> Option<PrintModeMarkersJSON> {
 }
 
 /// Markers that can be found: an entry with both lists empty says nothing.
+#[cfg(any(test, target_os = "macos", target_os = "linux", target_os = "windows"))]
 fn usable_markers(markers: Option<PrintModeMarkersJSON>) -> Option<PrintModeMarkersJSON> {
     markers.filter(|markers| !markers.flags.is_empty() || !markers.subcommands.is_empty())
 }
