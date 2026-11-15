@@ -901,6 +901,12 @@ pub struct WixBurnLayoutJSON {
 /// - `registrable_domain_second_level_labels`: second-level labels that,
 ///   under a two-letter top-level label, make a registrable domain three
 ///   labels long (`example.co.uk`).
+/// - `standing_refused_program_prefixes`: path prefixes under which an
+///   executable or a script runtime's argument names no single program: the
+///   POSIX device and process trees (`/dev/`, `/proc/`: standard input, a
+///   pipe or a process's open descriptor) and the Windows device, verbatim
+///   and UNC namespaces (`\\.\`, `\\?\`, `\\`). Each starts and ends with a
+///   path separator.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 pub struct DestinationHistoryJSON {
     pub established_enabled: bool,
@@ -920,6 +926,7 @@ pub struct DestinationHistoryJSON {
     pub browser_process_names: Vec<String>,
     pub browser_process_name_prefixes: Vec<String>,
     pub registrable_domain_second_level_labels: Vec<String>,
+    pub standing_refused_program_prefixes: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
@@ -2304,6 +2311,9 @@ fn normalized_destination_history(history: &DestinationHistoryJSON) -> Destinati
         browser_process_name_prefixes: lowercase_token_list(&history.browser_process_name_prefixes),
         registrable_domain_second_level_labels: lowercase_token_list(
             &history.registrable_domain_second_level_labels,
+        ),
+        standing_refused_program_prefixes: lowercase_token_list(
+            &history.standing_refused_program_prefixes,
         ),
     }
 }
@@ -8218,6 +8228,14 @@ mod tests {
         assert!(shipped
             .browser_process_name_prefixes
             .contains(&"google chrome".to_string()));
+        for prefix in ["/dev/", "/proc/", "\\\\.\\", "\\\\?\\", "\\\\"] {
+            assert!(
+                shipped
+                    .standing_refused_program_prefixes
+                    .contains(&prefix.to_string()),
+                "{prefix}"
+            );
+        }
 
         let p = params_from_edited_snapshot(|value| {
             let history = &mut value["destination_history"];
@@ -8232,6 +8250,7 @@ mod tests {
             history["rpc_provider_suffixes"] = serde_json::json!([" .Helius-RPC.com. ", ""]);
             history["browser_process_names"] = serde_json::json!([" Safari ", " "]);
             history["browser_process_name_prefixes"] = serde_json::json!(["Google Chrome", ""]);
+            history["standing_refused_program_prefixes"] = serde_json::json!([" /DEV/ ", ""]);
         });
         let history = p.destination_history;
         assert_eq!(history.established_min_distinct_days, 2);
@@ -8245,6 +8264,7 @@ mod tests {
         assert_eq!(history.rpc_provider_suffixes, vec!["helius-rpc.com"]);
         assert_eq!(history.browser_process_names, vec!["safari"]);
         assert_eq!(history.browser_process_name_prefixes, vec!["google chrome"]);
+        assert_eq!(history.standing_refused_program_prefixes, vec!["/dev/"]);
         // And the upper bounds.
         let p = params_from_edited_snapshot(|value| {
             let history = &mut value["destination_history"];
