@@ -854,8 +854,17 @@ fn match_signatures_in_text(
 /// order given, so a caller puts first the paths it can least afford to leave
 /// unmeasured.
 pub fn scan_secret_like_files(paths: &[String]) -> SecretContentScan {
+    scan_secret_like_files_within(paths, SECRET_CONTENT_SCAN_BUDGET)
+}
+
+/// [`scan_secret_like_files`] bounded by the shorter of `budget` and
+/// [`SECRET_CONTENT_SCAN_BUDGET`], for a caller with less time than the
+/// scan's own budget. A zero budget inspects nothing: every path is left
+/// unmeasured and the scan is `truncated`.
+pub fn scan_secret_like_files_within(paths: &[String], budget: Duration) -> SecretContentScan {
     let started = Instant::now();
-    scan_secret_like_files_until(paths, || started.elapsed() >= SECRET_CONTENT_SCAN_BUDGET)
+    let budget = budget.min(SECRET_CONTENT_SCAN_BUDGET);
+    scan_secret_like_files_until(paths, || started.elapsed() >= budget)
 }
 
 /// [`scan_secret_like_files`] with the budget as a predicate, asked before
@@ -1667,6 +1676,20 @@ mod tests {
         assert_eq!(scan.matches[0].path, first);
         cleanup(&first);
         cleanup(&second);
+    }
+
+    /// A caller's budget shorter than the scan's own bounds it: none left,
+    /// nothing is inspected and the scan says so.
+    #[test]
+    fn a_zero_caller_budget_inspects_nothing() {
+        let path = flagged_script("budget_zero");
+        let scan = scan_secret_like_files_within(std::slice::from_ref(&path), Duration::ZERO);
+        assert!(scan.truncated, "{scan:?}");
+        assert!(scan.matches.is_empty(), "{scan:?}");
+        let full = scan_secret_like_files_within(std::slice::from_ref(&path), Duration::MAX);
+        assert!(!full.truncated, "{full:?}");
+        assert_eq!(full.matches.len(), 1, "{full:?}");
+        cleanup(&path);
     }
 
     #[test]

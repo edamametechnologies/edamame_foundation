@@ -142,8 +142,17 @@ pub struct DevTreeAttestationBatch {
 /// one entry per path that sits inside at least one recognised tree; paths
 /// inside none are omitted.
 pub fn attest_dev_trees(paths: &[String]) -> DevTreeAttestationBatch {
+    attest_dev_trees_within(paths, DEV_TREE_ATTESTATION_BUDGET)
+}
+
+/// [`attest_dev_trees`] bounded by the shorter of `budget` and
+/// [`DEV_TREE_ATTESTATION_BUDGET`], for a caller with less time than the
+/// batch's own budget. A zero budget attests nothing and the batch is
+/// `truncated`.
+pub fn attest_dev_trees_within(paths: &[String], budget: Duration) -> DevTreeAttestationBatch {
     let started = Instant::now();
-    attest_dev_trees_until(paths, || started.elapsed() >= DEV_TREE_ATTESTATION_BUDGET)
+    let budget = budget.min(DEV_TREE_ATTESTATION_BUDGET);
+    attest_dev_trees_until(paths, || started.elapsed() >= budget)
 }
 
 /// [`attest_dev_trees`] with the budget as a predicate, asked before each
@@ -1065,6 +1074,23 @@ mod tests {
         let mut truncated = b"DIRC\0\0\0\x02\0\0\0\x05".to_vec();
         truncated.extend_from_slice(&[0u8; 30]);
         assert!(GitIndex::parse(&truncated).is_none());
+    }
+
+    /// A caller's budget shorter than the batch's own bounds it: none left,
+    /// nothing is attested and the batch says so.
+    #[test]
+    fn a_zero_caller_budget_attests_nothing() {
+        let root = scratch("budget_zero");
+        let target = root.join("target");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("CACHEDIR.TAG"), CACHEDIR_TAG_SIGNATURE).unwrap();
+        let file = target.join("a.o");
+        std::fs::write(&file, "").unwrap();
+        let paths = vec![file.to_string_lossy().to_string()];
+        let none = attest_dev_trees_within(&paths, Duration::ZERO);
+        assert!(none.truncated && none.attestations.is_empty(), "{none:?}");
+        let full = attest_dev_trees_within(&paths, Duration::MAX);
+        assert!(!full.truncated && full.attestations.len() == 1, "{full:?}");
     }
 
     /// The budget stops the batch between paths: what was attested comes
