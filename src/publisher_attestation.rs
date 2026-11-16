@@ -56,12 +56,15 @@ pub struct BinaryAttestation {
 
 const CACHE_MAX_ENTRIES: usize = 4096;
 
-/// Wall-clock budget of one [`attest_binaries`] batch. A cold cache costs a
-/// platform-tool spawn per binary; the rest of the batch stays unmeasured and
-/// the next tick asks again (the cache keeps what this one verified).
+/// Wall-clock budget of the verifications of one [`attest_binaries`] batch.
+/// A cold cache costs a platform-tool spawn per binary; the binaries left
+/// unverified stay unmeasured and the next call asks again (the cache keeps
+/// what this one verified). A cached verdict is served whatever is left.
 pub const BINARY_ATTESTATION_BUDGET: Duration = Duration::from_secs(20);
 
-/// Most distinct paths one [`attest_binaries`] batch verifies.
+/// Most verifications one [`attest_binaries`] batch runs. A cached verdict,
+/// or a path with no readable file, costs no verification and does not
+/// count.
 pub const MAX_ATTESTED_BINARIES: usize = 512;
 
 /// One path's verdict in an [`AttestationBatch`].
@@ -75,11 +78,12 @@ pub struct PathAttestation {
 /// `attest_binaries` helper order.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct AttestationBatch {
-    /// One entry per path verified in this batch.
+    /// One entry per path with a verdict in this batch (verified now, or
+    /// from the cache).
     pub attestations: Vec<PathAttestation>,
-    /// Paths were left unverified because the batch reached
+    /// Paths were left unverified because the batch's verifications reached
     /// [`BINARY_ATTESTATION_BUDGET`] or [`MAX_ATTESTED_BINARIES`]: they are
-    /// unmeasured, not unsigned.
+    /// unmeasured, not unsigned, and have no entry.
     pub truncated: bool,
 }
 
@@ -109,9 +113,11 @@ pub fn is_canonical_os_path(path: &str) -> bool {
         || normalized.starts_with("c:/programdata/microsoft/windows defender/")
 }
 
-/// Verify every path (deduplicated, in the order given, bounded by
-/// [`BINARY_ATTESTATION_BUDGET`] and [`MAX_ATTESTED_BINARIES`]). The
-/// standalone core calls this in process; the helper serves it to the app.
+/// Verify every path (deduplicated, in the order given; the verifications
+/// bounded by [`BINARY_ATTESTATION_BUDGET`] and [`MAX_ATTESTED_BINARIES`],
+/// the cached verdicts served past them). A caller puts first the paths it
+/// can least afford to leave unverified. The standalone core calls this in
+/// process; the helper serves it to the app.
 pub fn attest_binaries(paths: &[String]) -> AttestationBatch {
     attest_binaries_within(paths, BINARY_ATTESTATION_BUDGET)
 }
@@ -123,48 +129,70 @@ pub fn attest_binaries(paths: &[String]) -> AttestationBatch {
 pub fn attest_binaries_within(paths: &[String], budget: Duration) -> AttestationBatch {
     let started = Instant::now();
     let budget = budget.min(BINARY_ATTESTATION_BUDGET);
-    attest_binaries_until(paths, attest_binary, || started.elapsed() >= budget)
+    attest_binaries_until(paths, known_attestation, verify_and_cache, || {
+        started.elapsed() >= budget
+    })
 }
 
-fn attest_binaries_until(
+/// The batch: `known` answers a path with no verification (a cached verdict,
+/// no readable file) or says what a verification needs; `verify` runs one.
+/// Only the verifications count against the cap and ask `out_of_time`; past
+/// either, the paths that need one are left out (`truncated`) and the known
+/// ones are still served.
+fn attest_binaries_until<Pending>(
     paths: &[String],
-    mut attest: impl FnMut(&str) -> BinaryAttestation,
+    mut known: impl FnMut(&str) -> Result<BinaryAttestation, Pending>,
+    mut verify: impl FnMut(&str, Pending) -> BinaryAttestation,
     mut out_of_time: impl FnMut() -> bool,
 ) -> AttestationBatch {
     let mut seen = std::collections::HashSet::new();
     let mut batch = AttestationBatch::default();
+    let mut verifications = 0usize;
     for raw in paths {
         let trimmed = raw.trim();
         if trimmed.is_empty() || !seen.insert(trimmed.to_string()) {
             continue;
         }
-        if seen.len() > MAX_ATTESTED_BINARIES || out_of_time() {
-            batch.truncated = true;
-            break;
-        }
+        let attestation = match known(trimmed) {
+            Ok(attestation) => attestation,
+            Err(pending) => {
+                if verifications >= MAX_ATTESTED_BINARIES || out_of_time() {
+                    batch.truncated = true;
+                    continue;
+                }
+                verifications += 1;
+                verify(trimmed, pending)
+            }
+        };
         batch.attestations.push(PathAttestation {
             path: trimmed.to_string(),
-            attestation: attest(trimmed),
+            attestation,
         });
     }
     batch
 }
 
-/// Verify the code-signing provenance of `path`, with caching.
-///
-/// Never panics; a missing/unreadable binary returns an unmeasured
-/// (`platform_signed: None`) verdict.
-pub fn attest_binary(path: &str) -> BinaryAttestation {
+/// What verifying a path needs once its cache entry is missing or stale.
+struct PendingVerification {
+    canonical_path: bool,
+    mtime_secs: u64,
+    size: u64,
+}
+
+/// The verdict of `path` without a verification: its cached verdict when the
+/// file is unchanged, an unmeasured one when there is no readable file;
+/// otherwise what verifying it needs.
+fn known_attestation(path: &str) -> Result<BinaryAttestation, PendingVerification> {
     let canonical_path = is_canonical_os_path(path);
     let metadata = match std::fs::metadata(path) {
         Ok(meta) => meta,
         Err(_) => {
             // Binary not readable/present: signature state unmeasured.
-            return BinaryAttestation {
+            return Ok(BinaryAttestation {
                 canonical_path,
                 platform_signed: None,
                 publisher: None,
-            };
+            });
         }
     };
     let mtime_secs = metadata
@@ -179,21 +207,43 @@ pub fn attest_binary(path: &str) -> BinaryAttestation {
         .get(path)
         .filter(|entry| entry.value().0 == mtime_secs && entry.value().1 == size)
         .map(|entry| entry.value().2.clone());
-    if let Some(attestation) = cached {
-        return attestation;
+    match cached {
+        Some(attestation) => Ok(attestation),
+        None => Err(PendingVerification {
+            canonical_path,
+            mtime_secs,
+            size,
+        }),
     }
+}
 
+/// Verify `path` and cache the verdict under its file's mtime and size.
+fn verify_and_cache(path: &str, pending: PendingVerification) -> BinaryAttestation {
     let (platform_signed, publisher) = verify_platform_signature(path);
     let attestation = BinaryAttestation {
-        canonical_path,
+        canonical_path: pending.canonical_path,
         platform_signed,
         publisher,
     };
     if ATTESTATION_CACHE.len() >= CACHE_MAX_ENTRIES {
         ATTESTATION_CACHE.clear();
     }
-    ATTESTATION_CACHE.insert(path.to_string(), (mtime_secs, size, attestation.clone()));
+    ATTESTATION_CACHE.insert(
+        path.to_string(),
+        (pending.mtime_secs, pending.size, attestation.clone()),
+    );
     attestation
+}
+
+/// Verify the code-signing provenance of `path`, with caching.
+///
+/// Never panics; a missing/unreadable binary returns an unmeasured
+/// (`platform_signed: None`) verdict.
+pub fn attest_binary(path: &str) -> BinaryAttestation {
+    match known_attestation(path) {
+        Ok(attestation) => attestation,
+        Err(pending) => verify_and_cache(path, pending),
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -699,7 +749,8 @@ mod batch_tests {
         let mut asked = Vec::new();
         let batch = attest_binaries_until(
             &paths,
-            |path| {
+            |_| Err::<BinaryAttestation, ()>(()),
+            |path, ()| {
                 asked.push(path.to_string());
                 signed(path)
             },
@@ -714,12 +765,79 @@ mod batch_tests {
     fn a_batch_out_of_time_leaves_the_rest_unmeasured() {
         let paths: Vec<String> = (0..5).map(|i| format!("/usr/bin/t{i}")).collect();
         let mut calls = 0;
-        let batch = attest_binaries_until(&paths, signed, || {
-            calls += 1;
-            calls > 2
-        });
+        let batch = attest_binaries_until(
+            &paths,
+            |_| Err::<BinaryAttestation, ()>(()),
+            |path, ()| signed(path),
+            || {
+                calls += 1;
+                calls > 2
+            },
+        );
         assert_eq!(batch.attestations.len(), 2);
         assert!(batch.truncated);
+    }
+
+    /// A verdict served without a verification (cached, or no readable
+    /// file) costs the batch nothing: more of them than the cap, beside a
+    /// few paths to verify, leave the batch complete.
+    #[test]
+    fn known_verdicts_do_not_count_against_the_cap() {
+        let mut paths: Vec<String> = (0..MAX_ATTESTED_BINARIES + 88)
+            .map(|i| format!("/opt/known/b{i}"))
+            .collect();
+        paths.extend((0..5).map(|i| format!("/opt/new/b{i}")));
+        let mut verified = 0;
+        let batch = attest_binaries_until(
+            &paths,
+            |path| {
+                if path.starts_with("/opt/known/") {
+                    Ok(signed(path))
+                } else {
+                    Err(())
+                }
+            },
+            |path, ()| {
+                verified += 1;
+                signed(path)
+            },
+            || false,
+        );
+        assert!(!batch.truncated);
+        assert_eq!(verified, 5);
+        assert_eq!(batch.attestations.len(), paths.len());
+    }
+
+    /// Past the cap the paths that need a verification are left out, and
+    /// the known verdicts after them are still served.
+    #[test]
+    fn past_the_cap_the_known_verdicts_are_still_served() {
+        let mut paths: Vec<String> = (0..MAX_ATTESTED_BINARIES + 1)
+            .map(|i| format!("/opt/new/b{i}"))
+            .collect();
+        paths.extend((0..3).map(|i| format!("/opt/known/b{i}")));
+        let mut verified = 0;
+        let batch = attest_binaries_until(
+            &paths,
+            |path| {
+                if path.starts_with("/opt/known/") {
+                    Ok(signed(path))
+                } else {
+                    Err(())
+                }
+            },
+            |path, ()| {
+                verified += 1;
+                signed(path)
+            },
+            || false,
+        );
+        assert!(batch.truncated);
+        assert_eq!(verified, MAX_ATTESTED_BINARIES);
+        assert_eq!(batch.attestations.len(), MAX_ATTESTED_BINARIES + 3);
+        let last = format!("/opt/new/b{}", MAX_ATTESTED_BINARIES);
+        assert!(batch.attestations.iter().all(|a| a.path != last));
+        assert!(batch.attestations.iter().any(|a| a.path == "/opt/known/b2"));
     }
 
     #[test]
@@ -796,13 +914,33 @@ mod tests {
     /// nothing is verified and the batch says so.
     #[test]
     fn a_zero_caller_budget_verifies_nothing() {
-        let paths = vec!["/nonexistent/definitely/not/here".to_string()];
+        // A file this test creates: no cached verdict, so it needs a
+        // verification.
+        let file = std::env::temp_dir().join(format!(
+            "publisher-attestation-budget-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or_default()
+        ));
+        std::fs::write(&file, b"not a binary").unwrap();
+        let paths = vec![file.to_string_lossy().to_string()];
         let none = attest_binaries_within(&paths, Duration::ZERO);
+        let full = attest_binaries_within(&paths, Duration::MAX);
+        // A path with no file costs no verification: served even with none.
+        let missing = attest_binaries_within(
+            &["/nonexistent/definitely/not/here".to_string()],
+            Duration::ZERO,
+        );
+        let _ = std::fs::remove_file(&file);
         assert!(none.truncated, "{none:?}");
         assert!(none.attestations.is_empty(), "{none:?}");
-        let full = attest_binaries_within(&paths, Duration::MAX);
         assert!(!full.truncated, "{full:?}");
         assert_eq!(full.attestations.len(), 1, "{full:?}");
+        assert!(!missing.truncated, "{missing:?}");
+        assert_eq!(missing.attestations.len(), 1, "{missing:?}");
+        assert_eq!(missing.attestations[0].attestation.platform_signed, None);
     }
 
     #[test]
