@@ -8337,6 +8337,13 @@ mod tests {
             .any(|owners| owners.contains(&"google-chrome-stable".to_string())));
         assert_eq!(claimed_app_data_root_owners(nested).as_ref(), lists.first());
         assert!(claimed_app_data_root_owner_lists("/home/u/.config/app/Cookies").is_empty());
+        // Safari's sandbox container is claimed as a whole, by the platform.
+        assert_eq!(
+            claimed_app_data_root_owner_lists(
+                "/Users/u/Library/Containers/com.apple.Safari/Data/Library/Cookies/Cookies.binarycookies"
+            ),
+            vec![vec!["platform".to_string()]]
+        );
     }
 
     /// The Burn layout loads lowercased and trimmed; a staging directory that
