@@ -943,6 +943,44 @@ mod tests {
         assert_eq!(missing.attestations[0].attestation.platform_signed, None);
     }
 
+    /// The cache answers an unchanged file with no verification, and a
+    /// changed one needs one again: a zero budget serves the first and
+    /// leaves the second out. The change here is one appended byte with the
+    /// mtime set back, so the size alone tells it.
+    #[test]
+    fn an_unchanged_file_is_served_from_the_cache_and_a_changed_one_is_not() {
+        let file = std::env::temp_dir().join(format!(
+            "publisher-attestation-cache-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or_default()
+        ));
+        std::fs::write(&file, b"not a binary").unwrap();
+        let paths = vec![file.to_string_lossy().to_string()];
+        let first = attest_binaries_within(&paths, Duration::MAX);
+        let cached = attest_binaries_within(&paths, Duration::ZERO);
+        {
+            use std::io::Write;
+            let modified = std::fs::metadata(&file).unwrap().modified().unwrap();
+            let mut handle = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&file)
+                .unwrap();
+            handle.write_all(b"!").unwrap();
+            handle.set_modified(modified).unwrap();
+        }
+        let changed = attest_binaries_within(&paths, Duration::ZERO);
+        let _ = std::fs::remove_file(&file);
+        assert!(!first.truncated, "{first:?}");
+        assert_eq!(first.attestations.len(), 1, "{first:?}");
+        assert!(!cached.truncated, "{cached:?}");
+        assert_eq!(cached.attestations, first.attestations);
+        assert!(changed.truncated, "{changed:?}");
+        assert!(changed.attestations.is_empty(), "{changed:?}");
+    }
+
     #[test]
     fn missing_binary_is_unmeasured() {
         let attestation = attest_binary("/nonexistent/definitely/not/here");
