@@ -196,6 +196,46 @@ pub struct ClaimedAppDataRootJSON {
     pub owners: Vec<String>,
 }
 
+/// The directories a store owned by lock may never be (2.3.3). The
+/// OWNS-by-lock relation takes as store the material's directory or that
+/// directory's parent. The bound keeps that store inside the material's own
+/// application directory: a home, a volume or a shared application-data
+/// root holds many applications' state, and a lock held elsewhere in one says
+/// nothing about who owns a file beside it. Every entry is a lower-cased,
+/// `/`-separated fragment with a leading and a trailing `/`, matched as whole
+/// path components only at the start of a root: the filesystem root (after a
+/// Windows drive, device or share prefix), a volume's root, a user's root.
+/// A directory that merely shares a listed name deeper in a path
+/// (`~/work/media/`, `~/src/home/`, a sandbox container's own `Library`) is
+/// not one of them.
+/// - `root_parent_directories`: directories whose every child is one user's
+///   root (`/users/`, `/home/`, `/run/user/`). That child and its top-level
+///   directories are never a store; below it only `shared_data_roots` apply.
+/// - `root_directories`: directories that are such a root themselves
+///   (`/root/`, `/var/root/`, the Windows SYSTEM profile, `/dev/shm/`). They
+///   and their top-level directories are never a store; below them only
+///   `shared_data_roots` apply.
+/// - `volume_parent_directories`: directories whose every child is a
+///   volume's root (`/volumes/`, `/mnt/`, `/media/*/`). That child and its
+///   top-level directories are never a store, and below it every list
+///   applies again as at the filesystem root. `*` stands for any one
+///   directory (the user level of `/media/<user>/<volume>`).
+/// - `shared_data_roots`: directories every application keeps its own
+///   directory in (`/library/application support/`, `/appdata/roaming/`,
+///   `/.config/`, `/programdata/`, `/var/lib/`), at the filesystem root, a
+///   volume's root or a user's root. The store lies at or below the first
+///   directory below the deepest one on the material's path: the
+///   application's own directory. A root nested in another
+///   (`/appdata/local/packages/` in `/appdata/local/`, a vendor's directory
+///   that holds several of its applications) is listed too.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct OwnershipLockStoreBoundsJSON {
+    pub root_parent_directories: Vec<String>,
+    pub root_directories: Vec<String>,
+    pub volume_parent_directories: Vec<String>,
+    pub shared_data_roots: Vec<String>,
+}
+
 /// A web flow's transport and port (`standard_web_flows`): HTTPS over QUIC
 /// (HTTP/3) is UDP 443 beside TCP 80 / 443.
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -1206,6 +1246,9 @@ pub struct CveDetectionParamsJSON {
     pub ownership_lock_file_names: Vec<String>,
     /// Data roots installed applications claim (see the struct docs).
     pub claimed_app_data_roots: Vec<ClaimedAppDataRootJSON>,
+    /// The directories a store owned by lock may never be (see the struct
+    /// docs, 2.3.3).
+    pub ownership_lock_store_bounds: OwnershipLockStoreBoundsJSON,
     /// Gate: when true, the anomaly arm of the
     /// The anomaly corroboration of the EvidenceFloor (its rule 2) and of the
     /// corroborated-lineage pin reads the session's exported anomaly score:
@@ -1863,6 +1906,9 @@ pub struct CveDetectionParams {
     pub ownership_lock_file_names: Vec<String>,
     /// Data roots installed applications claim (see the struct docs).
     pub claimed_app_data_roots: Vec<ClaimedAppDataRootJSON>,
+    /// The directories a store owned by lock may never be (see the struct
+    /// docs, 2.3.3).
+    pub ownership_lock_store_bounds: OwnershipLockStoreBoundsJSON,
     /// Gate: when true, the anomaly arm of the
     /// The anomaly corroboration of the EvidenceFloor (its rule 2) and of the
     /// corroborated-lineage pin reads the session's exported anomaly score:
@@ -2236,6 +2282,25 @@ fn normalized_os_temp_roots(roots: &OsTempRootsJSON) -> OsTempRootsJSON {
         macos_per_user_temp_trees: normalized_path_fragments(&roots.macos_per_user_temp_trees),
         macos_per_user_temp_parent: fragment(&roots.macos_per_user_temp_parent),
         macos_per_user_temp_leaf: fragment(&roots.macos_per_user_temp_leaf),
+    }
+}
+
+/// The lock-store bounds load lowercased with `/` separators; an entry that
+/// names no path component (empty, or only separators) is dropped.
+fn normalized_ownership_lock_store_bounds(
+    bounds: &OwnershipLockStoreBoundsJSON,
+) -> OwnershipLockStoreBoundsJSON {
+    let fragments = |list: &[String]| -> Vec<String> {
+        normalized_path_fragments(list)
+            .into_iter()
+            .filter(|fragment| fragment.split('/').any(|part| !part.trim().is_empty()))
+            .collect()
+    };
+    OwnershipLockStoreBoundsJSON {
+        root_parent_directories: fragments(&bounds.root_parent_directories),
+        root_directories: fragments(&bounds.root_directories),
+        volume_parent_directories: fragments(&bounds.volume_parent_directories),
+        shared_data_roots: fragments(&bounds.shared_data_roots),
     }
 }
 
@@ -3044,6 +3109,9 @@ impl CveDetectionParams {
                 })
                 .filter(|root| !root.pattern.is_empty())
                 .collect(),
+            ownership_lock_store_bounds: normalized_ownership_lock_store_bounds(
+                &json.ownership_lock_store_bounds,
+            ),
             evidence_floor_min_anomaly_margin: json.evidence_floor_min_anomaly_margin,
             evidence_floor_requires_graded_anomaly: json.evidence_floor_requires_graded_anomaly,
             ambient_baseline_enabled: json.ambient_baseline_enabled,
@@ -5078,6 +5146,26 @@ pub fn claimed_app_data_root_owners(path: &str) -> Option<Vec<String>> {
         .iter()
         .find(|root| normalized.contains(&root.pattern))
         .map(|root| root.owners.clone())
+}
+
+/// The owners of every claimed data root `path` lies in, in list order
+/// (`claimed_app_data_roots`); empty for an unclaimed path. A path inside two
+/// claimed roots, one nested in the other, belongs to both.
+pub fn claimed_app_data_root_owner_lists(path: &str) -> Vec<Vec<String>> {
+    let normalized = format!("{}/", normalized_match_path(path).trim_end_matches('/'));
+    PARAMS_SNAPSHOT
+        .load()
+        .claimed_app_data_roots
+        .iter()
+        .filter(|root| normalized.contains(&root.pattern))
+        .map(|root| root.owners.clone())
+        .collect()
+}
+
+/// The directories a store owned by lock may never be
+/// (`ownership_lock_store_bounds`, normalized).
+pub fn ownership_lock_store_bounds() -> OwnershipLockStoreBoundsJSON {
+    PARAMS_SNAPSHOT.load().ownership_lock_store_bounds.clone()
 }
 
 /// The flow's autonomous system serves only its owner's platform (see the
@@ -8160,6 +8248,97 @@ mod tests {
             .posix_temp_roots
             .contains(&"/private/var/tmp/".to_string()));
         assert!(temp_scratch_name().min_token_len > 0);
+    }
+
+    /// The lock-store bounds load lowercased with `/` separators; an entry
+    /// that names no path component is dropped. The shipped snapshot bounds
+    /// the homes, the volumes and the shared application-data roots of every
+    /// desktop platform.
+    #[test]
+    fn test_ownership_lock_store_bounds_are_normalized() {
+        let p = params_from_edited_snapshot(|value| {
+            value["ownership_lock_store_bounds"]["root_parent_directories"] =
+                serde_json::json!(["/Users/", " ", "/"]);
+            value["ownership_lock_store_bounds"]["volume_parent_directories"] =
+                serde_json::json!(["/Media/*/", "", "\\Volumes\\"]);
+            value["ownership_lock_store_bounds"]["shared_data_roots"] =
+                serde_json::json!(["\\AppData\\Roaming\\", "//"]);
+        });
+        assert_eq!(
+            p.ownership_lock_store_bounds.root_parent_directories,
+            vec!["/users/"]
+        );
+        assert_eq!(
+            p.ownership_lock_store_bounds.volume_parent_directories,
+            vec!["/media/*/", "/volumes/"]
+        );
+        assert_eq!(
+            p.ownership_lock_store_bounds.shared_data_roots,
+            vec!["/appdata/roaming/"]
+        );
+        let shipped = ownership_lock_store_bounds();
+        for parent in ["/users/", "/home/", "/run/user/"] {
+            assert!(
+                shipped
+                    .root_parent_directories
+                    .contains(&parent.to_string()),
+                "{parent}"
+            );
+        }
+        for parent in ["/volumes/", "/mnt/", "/media/*/"] {
+            assert!(
+                shipped
+                    .volume_parent_directories
+                    .contains(&parent.to_string()),
+                "{parent}"
+            );
+        }
+        for root in ["/root/", "/dev/shm/"] {
+            assert!(
+                shipped.root_directories.contains(&root.to_string()),
+                "{root}"
+            );
+        }
+        for root in [
+            "/library/application support/",
+            "/library/application support/google/",
+            "/programdata/microsoft/",
+            "/library/containers/",
+            "/library/group containers/",
+            "/library/caches/",
+            "/library/preferences/",
+            "/appdata/roaming/",
+            "/appdata/local/",
+            "/appdata/locallow/",
+            "/programdata/",
+            "/.config/",
+            "/.local/share/",
+            "/.cache/",
+            "/.var/app/",
+        ] {
+            assert!(
+                shipped.shared_data_roots.contains(&root.to_string()),
+                "{root}"
+            );
+        }
+    }
+
+    /// Every claimed root a path lies in is returned, in list order: a path
+    /// inside two claimed roots belongs to both. The first-match accessor
+    /// returns only the earlier one.
+    #[test]
+    fn test_claimed_app_data_root_owner_lists_returns_every_claim() {
+        let nested = "/home/u/.mozilla/firefox/x/.config/google-chrome/Default/Cookies";
+        let lists = claimed_app_data_root_owner_lists(nested);
+        assert_eq!(lists.len(), 2, "{lists:?}");
+        assert!(lists
+            .iter()
+            .any(|owners| owners.contains(&"firefox".to_string())));
+        assert!(lists
+            .iter()
+            .any(|owners| owners.contains(&"google-chrome-stable".to_string())));
+        assert_eq!(claimed_app_data_root_owners(nested).as_ref(), lists.first());
+        assert!(claimed_app_data_root_owner_lists("/home/u/.config/app/Cookies").is_empty());
     }
 
     /// The Burn layout loads lowercased and trimmed; a staging directory that
