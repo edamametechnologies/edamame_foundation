@@ -113,10 +113,17 @@ pub fn is_canonical_os_path(path: &str) -> bool {
 /// [`BINARY_ATTESTATION_BUDGET`] and [`MAX_ATTESTED_BINARIES`]). The
 /// standalone core calls this in process; the helper serves it to the app.
 pub fn attest_binaries(paths: &[String]) -> AttestationBatch {
+    attest_binaries_within(paths, BINARY_ATTESTATION_BUDGET)
+}
+
+/// [`attest_binaries`] bounded by the shorter of `budget` and
+/// [`BINARY_ATTESTATION_BUDGET`], for a caller with less time than the
+/// batch's own budget. A zero budget verifies nothing and the batch is
+/// `truncated`.
+pub fn attest_binaries_within(paths: &[String], budget: Duration) -> AttestationBatch {
     let started = Instant::now();
-    attest_binaries_until(paths, attest_binary, || {
-        started.elapsed() >= BINARY_ATTESTATION_BUDGET
-    })
+    let budget = budget.min(BINARY_ATTESTATION_BUDGET);
+    attest_binaries_until(paths, attest_binary, || started.elapsed() >= budget)
 }
 
 fn attest_binaries_until(
@@ -783,6 +790,19 @@ mod tests {
         ));
         assert!(!is_canonical_os_path("/opt/homebrew/bin/bash"));
         assert!(!is_canonical_os_path("/tmp/usr/bin/ls"));
+    }
+
+    /// A caller's budget shorter than the batch's own bounds it: none left,
+    /// nothing is verified and the batch says so.
+    #[test]
+    fn a_zero_caller_budget_verifies_nothing() {
+        let paths = vec!["/nonexistent/definitely/not/here".to_string()];
+        let none = attest_binaries_within(&paths, Duration::ZERO);
+        assert!(none.truncated, "{none:?}");
+        assert!(none.attestations.is_empty(), "{none:?}");
+        let full = attest_binaries_within(&paths, Duration::MAX);
+        assert!(!full.truncated, "{full:?}");
+        assert_eq!(full.attestations.len(), 1, "{full:?}");
     }
 
     #[test]
