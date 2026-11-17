@@ -704,10 +704,26 @@ fn sentry_event_to_send(
     // error body or a credential-bearing argument, and the sentry_tracing
     // layer sees the raw event, not the sanitized writer output. Always on,
     // debug builds included.
-    let event = scrub_sentry_event(event);
+    let mut event = scrub_sentry_event(event);
     let fp = sentry_event_fingerprint(&event);
     if sentry_event_is_repeat(fp, Instant::now()) {
         return None;
+    }
+    // Which build sent it (2.3.3): the sentry crate is built without its
+    // `contexts` feature, so core and helper events carried no OS, and a
+    // production stall could not be told apart between the macOS app, the
+    // Windows app and posture on a runner. Three build facts, no host name,
+    // no user; after the dedup, so the fingerprint is unchanged.
+    event
+        .tags
+        .entry("os".into())
+        .or_insert_with(|| std::env::consts::OS.into());
+    event
+        .tags
+        .entry("arch".into())
+        .or_insert_with(|| std::env::consts::ARCH.into());
+    if let Some(exe) = EXECUTABLE_TYPE.get() {
+        event.tags.entry("exe".into()).or_insert_with(|| exe.clone());
     }
     Some(event)
 }
