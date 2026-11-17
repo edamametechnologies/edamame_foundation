@@ -7,7 +7,7 @@
 // binary. See `src/cloud_model_fallback.rs` for the why and the runtime
 // decoder.
 //
-// Encoded size: 18184 bytes (plain: 78488, ratio: 4.32x).
+// Encoded size: 18210 bytes (plain: 78612, ratio: 4.32x).
 //
 // DO NOT EDIT BY HAND. Re-run the encoder if the upstream JSON changes.
 

@@ -5697,6 +5697,17 @@ pub fn dev_tree_markers() -> DevTreeMarkersJSON {
     PARAMS_SNAPSHOT.load().dev_tree_markers.clone()
 }
 
+/// The name of cargo's build directory inside a target profile
+/// (`dev_tree_markers.cargo_build_directory`), without cloning the other
+/// markers: read once per path by the memory-scrape census (FP-WIN-23).
+pub fn cargo_build_directory() -> String {
+    PARAMS_SNAPSHOT
+        .load()
+        .dev_tree_markers
+        .cargo_build_directory
+        .clone()
+}
+
 /// Code / persistence definition suffixes (lowercase).
 pub fn code_module_suffixes() -> Vec<String> {
     PARAMS_SNAPSHOT.load().code_module_suffixes.clone()
@@ -7947,6 +7958,10 @@ mod tests {
         assert!(is_package_index_host("pypi.org"));
         assert!(is_package_index_host("files.pythonhosted.org"));
         assert!(is_package_index_host("PyPI.org."));
+        // FP-CI-31: cargo's sparse index and its crate downloads.
+        assert!(is_package_index_host("index.crates.io"));
+        assert!(is_package_index_host("static.crates.io"));
+        assert!(!is_package_index_host("crates.io.evil.example"));
         assert!(!is_package_index_host("upload.pypi.org"));
         assert!(!is_package_index_host("pythonhosted.org"));
         assert!(!is_package_index_host("pypi.org.evil.example"));
@@ -8132,10 +8147,17 @@ mod tests {
         assert_eq!(p.code_module_suffixes, vec![".psm1"]);
         let shipped = dev_tree_markers();
         assert_eq!(shipped.cmake_cache_file, "CMakeCache.txt");
-        // FP-CI-22: cargo's build-script layout, inside cargo install's target.
+        // FP-CI-22: cargo's build-script layout, inside cargo install's target;
+        // FP-CI-31: the script's name in cargo's new build-dir layout (stable
+        // 1.100, `build/<pkg>/<hash>/out/build_script_build`).
         assert_eq!(shipped.cargo_build_directory, "build");
         assert_eq!(shipped.cargo_install_directory_prefix, "cargo-install");
-        for name in ["build-script-build", "build-script-build.exe"] {
+        for name in [
+            "build-script-build",
+            "build-script-build.exe",
+            "build_script_build",
+            "build_script_build.exe",
+        ] {
             assert!(
                 shipped
                     .cargo_build_script_basenames
