@@ -723,7 +723,10 @@ fn sentry_event_to_send(
         .entry("arch".into())
         .or_insert_with(|| std::env::consts::ARCH.into());
     if let Some(exe) = EXECUTABLE_TYPE.get() {
-        event.tags.entry("exe".into()).or_insert_with(|| exe.clone());
+        event
+            .tags
+            .entry("exe".into())
+            .or_insert_with(|| exe.clone());
     }
     Some(event)
 }
