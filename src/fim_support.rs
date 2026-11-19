@@ -547,7 +547,13 @@ mod tests {
         // A store root under a watched root is delivered with it; the others
         // are watched for the record only.
         std::fs::create_dir_all(home.join(".claude")).unwrap();
-        let roots = resolve_fim_watch_roots_on(&[], Some(&home), FimMode::Desktop);
+        let mut roots = resolve_fim_watch_roots_on(&[], Some(&home), FimMode::Desktop);
+        // The test home lies in the temp directory, itself a default root on
+        // Linux (/tmp) and Windows (%TEMP%): set the temp roots aside, or
+        // every store reads as covered by them.
+        let temp_roots = fim::default_temp_watch_paths();
+        roots.operator.retain(|root| !temp_roots.contains(root));
+        roots.defaults.retain(|root| !temp_roots.contains(root));
         let only = roots.store_only_roots();
         assert!(!only.contains(&home.join(".claude").join("projects")));
         assert!(only.contains(&home.join(".codex").join("sessions")));

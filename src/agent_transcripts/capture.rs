@@ -2949,6 +2949,31 @@ mod tests {
         delivered: Option<u64>,
     }
 
+    /// How far before the bench's start the reader is taken to have
+    /// started. Windows and Linux stamp a file's birth from the coarse
+    /// clock (one timer tick, up to about 16 ms), the bench's clock is the
+    /// precise one: a file created just after the bench started can carry
+    /// a birth time before it, and would read as born before the reader.
+    /// No file of a bench exists before it starts (its directory is new).
+    const BIRTH_CLOCK_SLACK_MS: u64 = 1_000;
+
+    /// Whether the files of the temporary directory carry a birth time:
+    /// std reads none on musl, and some filesystems keep none. The tests of
+    /// what the reader does with a file's birth time do not run without
+    /// one (the reader then takes no birth into account, by design).
+    fn birth_times_measured() -> bool {
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let probe = dir.path().join("probe");
+        std::fs::write(&probe, b"").expect("probe file");
+        let measured = std::fs::metadata(&probe)
+            .and_then(|meta| meta.created())
+            .is_ok();
+        if !measured {
+            eprintln!("skipped: the files here carry no birth time");
+        }
+        measured
+    }
+
     impl Bench {
         fn new(config: CaptureConfig) -> Self {
             let clock = Arc::new(AtomicU64::new(store_writers::now_ms()));
@@ -2956,12 +2981,14 @@ mod tests {
             let dir = tempfile::tempdir().expect("temporary directory");
             let base = std::fs::canonicalize(dir.path()).expect("canonical temporary directory");
             let path = base.join("session.jsonl");
+            let mut capture = Capture::with_clock(
+                WordExtractor,
+                config,
+                Box::new(move || reader.load(Ordering::Acquire)),
+            );
+            capture.started_at_ms = capture.started_at_ms.saturating_sub(BIRTH_CLOCK_SLACK_MS);
             Self {
-                capture: Capture::with_clock(
-                    WordExtractor,
-                    config,
-                    Box::new(move || reader.load(Ordering::Acquire)),
-                ),
+                capture,
                 clock,
                 _dir: dir,
                 base,
@@ -3496,6 +3523,9 @@ mod tests {
 
     #[test]
     fn a_new_file_waits_for_the_report_of_its_creation() {
+        if !birth_times_measured() {
+            return;
+        }
         // The change is noted before the sensor reports the creation.
         let mut bench = Bench::new(config());
         bench.append("C k1 curl\n");
@@ -3717,6 +3747,9 @@ mod tests {
 
     #[test]
     fn a_recorded_creation_the_files_own_time_contradicts_is_not_taken() {
+        if !birth_times_measured() {
+            return;
+        }
         let mut bench = Bench::new(config());
         bench.started_after_the_files();
         bench.append("C k0 planted\n");
@@ -4491,6 +4524,9 @@ mod tests {
     /// watched, nothing read through.
     #[test]
     fn a_file_waiting_for_its_first_read_is_pending() {
+        if !birth_times_measured() {
+            return;
+        }
         let mut bench = Bench::new(config());
         bench.append("C k1 curl\n");
         let span = bench.span(HARNESS, ops::WRITE, bench.now());
@@ -4574,6 +4610,9 @@ mod tests {
     /// end.
     #[test]
     fn a_file_born_after_the_reader_started_is_read_from_its_start() {
+        if !birth_times_measured() {
+            return;
+        }
         let mut bench = Bench::new(config());
         bench.append("C k1 curl\nC k2 ls\n");
         let born = std::fs::metadata(&bench.path)
@@ -4634,6 +4673,9 @@ mod tests {
     /// not read is a gap.
     #[test]
     fn a_file_created_again_without_its_creation_is_read_and_a_gap() {
+        if !birth_times_measured() {
+            return;
+        }
         let mut bench = Bench::new(config());
         let creation = bench.created_by_harness();
         bench.appended_by(HARNESS, creation, "C k1 curl\n");
@@ -4818,6 +4860,9 @@ mod tests {
     /// birth, and a gap over that interval.
     #[test]
     fn a_released_file_taken_again_names_no_process_for_its_old_lines() {
+        if !birth_times_measured() {
+            return;
+        }
         let mut small = config();
         small.max_files_held = 1;
         let mut bench = Bench::new(small);
