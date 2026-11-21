@@ -531,8 +531,24 @@ mod tests {
                 (answers[1].print_mode, answers[1].terminal_stdio),
             )
         };
+        // `spawn` can return while the child is still inside `execve`, before
+        // the kernel has laid out its arguments: `/proc/<pid>/cmdline` reads
+        // empty then and the launch is unmeasured (the Android leg's runner,
+        // 2026-11-21). Measure again while the launch is unmeasured; the
+        // assertions still read what was measured.
+        let measure_settled = |pid: u32| {
+            let mut answer = measure(pid);
+            for _ in 0..50 {
+                if answer.0 .0.is_some() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                answer = measure(pid);
+            }
+            answer
+        };
         let (mut on_terminal, controller) = child_on_its_own_terminal();
-        let (own, other) = measure(on_terminal.id());
+        let (own, other) = measure_settled(on_terminal.id());
         let _ = on_terminal.kill();
         let _ = on_terminal.wait();
         // SAFETY: the descriptor openpty gave this test.
@@ -546,7 +562,7 @@ mod tests {
             .stderr(Stdio::null())
             .spawn()
             .expect("a child on a pipe");
-        let (own, _) = measure(piped.id());
+        let (own, _) = measure_settled(piped.id());
         let _ = piped.kill();
         let _ = piped.wait();
         assert_eq!(own, (Some(false), Some(false)));
@@ -558,7 +574,7 @@ mod tests {
             .stderr(Stdio::null())
             .spawn()
             .expect("a child on /dev/null");
-        let (own, _) = measure(nulled.id());
+        let (own, _) = measure_settled(nulled.id());
         let _ = nulled.kill();
         let _ = nulled.wait();
         assert_eq!(own, (Some(false), Some(false)));
