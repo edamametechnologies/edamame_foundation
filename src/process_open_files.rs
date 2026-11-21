@@ -58,19 +58,45 @@ pub struct ProcessOpenFilesBatch {
 /// L7 resolver uses (one shared handle snapshot per batch on Windows), and
 /// the holders of the lock files around `lock_material` (paths the
 /// processes hold open) where the enumeration leaves those out.
+///
+/// The process taking the measurement (this one: a standalone daemon, or
+/// the helper) is never reported, as a holder of a lock file neither: what
+/// it holds open is what the observation opened, the file monitor's watches
+/// and the files it hashes or scans, not material of its own
+/// (`flodbadd::open_files::is_measuring_process`).
 pub fn collect_process_open_files(pids: &[u32], lock_material: &[String]) -> ProcessOpenFilesBatch {
+    let measured: Vec<u32> = pids
+        .iter()
+        .copied()
+        .filter(|pid| !flodbadd::open_files::is_measuring_process(*pid))
+        .collect();
     let mut batch = collect_with(
-        pids,
+        &measured,
         MEASUREMENT_BUDGET,
         flodbadd::open_files::get_open_file_paths_fresh,
         read_occupant,
     );
     if !lock_material.is_empty() {
-        batch.lock_holders = flodbadd::open_files::lock_file_holders(
+        batch.lock_holders = without_measuring_process(flodbadd::open_files::lock_file_holders(
             &flodbadd::open_files::lock_file_candidates(lock_material),
-        );
+        ));
     }
     batch
+}
+
+/// The lock holders with the process taking the measurement left out; a
+/// lock file no other process holds is dropped.
+fn without_measuring_process(holders: HashMap<String, Vec<u32>>) -> HashMap<String, Vec<u32>> {
+    holders
+        .into_iter()
+        .filter_map(|(path, pids)| {
+            let pids: Vec<u32> = pids
+                .into_iter()
+                .filter(|pid| !flodbadd::open_files::is_measuring_process(*pid))
+                .collect();
+            (!pids.is_empty()).then_some((path, pids))
+        })
+        .collect()
 }
 
 /// The process holding a pid, as one reading sees it.
@@ -308,7 +334,14 @@ mod tests {
         std::fs::write(&path, "held").unwrap();
         let held = std::fs::File::open(&path).unwrap();
         let own = std::process::id();
-        let batch = collect_process_open_files(&[own], &[]);
+        // The readers the public batch uses, on this process: the batch
+        // itself leaves the measuring process out (the test below).
+        let batch = collect_with(
+            &[own],
+            MEASUREMENT_BUDGET,
+            flodbadd::open_files::get_open_file_paths_fresh,
+            read_occupant,
+        );
         drop(held);
         let _ = std::fs::remove_file(&path);
 
@@ -333,6 +366,48 @@ mod tests {
         assert_eq!(
             canonical(std::path::Path::new(image)),
             canonical(&std::env::current_exe().unwrap())
+        );
+    }
+
+    /// The process taking the measurement holds a file open and is not
+    /// reported: its open files are the observation's (FP-WIN-51, the
+    /// Windows helper credited with the stores its file monitor watches).
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+    #[test]
+    fn the_measuring_process_is_not_reported() {
+        let path = std::env::temp_dir().join(format!(
+            "edamame_open_files_measuring_{}.txt",
+            std::process::id()
+        ));
+        std::fs::write(&path, "held").unwrap();
+        let held = std::fs::File::open(&path).unwrap();
+        let own = std::process::id();
+        let batch = collect_process_open_files(&[own], &[]);
+        drop(held);
+        let _ = std::fs::remove_file(&path);
+
+        assert!(
+            batch.processes.iter().all(|process| process.pid != own),
+            "{:?}",
+            batch.processes
+        );
+        assert!(!batch.truncated);
+    }
+
+    /// A lock file the measuring process holds is not credited to it, and a
+    /// lock file only it holds is dropped; another holder stays.
+    #[test]
+    fn the_measuring_process_holds_no_lock_file() {
+        let own = std::process::id();
+        let other = own.wrapping_add(1).max(1);
+        let holders = HashMap::from([
+            ("/profile/lockfile".to_string(), vec![own, other]),
+            ("/profile/parent.lock".to_string(), vec![own]),
+        ]);
+        let kept = without_measuring_process(holders);
+        assert_eq!(
+            kept,
+            HashMap::from([("/profile/lockfile".to_string(), vec![other])])
         );
     }
 }
