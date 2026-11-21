@@ -540,8 +540,8 @@ jobs:
         if: ${{ contains(matrix.container_image, 'alpine') }}
         shell: sh
         run: |
-          apk update
-          apk add --no-cache build-base git curl bash sudo pkgconf
+          apk --wait 300 update
+          apk --wait 300 add --no-cache build-base git curl bash sudo pkgconf
           git config --global --add safe.directory '*'
 
       - name: Setup permissions for git and install missing packages (apt)
@@ -619,7 +619,7 @@ jobs:
         if: ${{ contains(matrix.container_image, 'alpine') }}
         shell: sh
         run: |
-          apk add --no-cache protobuf-dev libpcap-dev
+          apk --wait 300 add --no-cache protobuf-dev libpcap-dev
 
       - name: Install additional packages (apt)
         if: ${{ !contains(matrix.container_image, 'alpine') }}
