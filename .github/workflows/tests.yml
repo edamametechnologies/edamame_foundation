@@ -338,10 +338,13 @@ jobs:
           # /tmp activity lands in the ring. The resume step brings them back
           # before the gate. Mirrors edamame_core/tests.yml (FP-CI-13 v2.1).
           set +e
-          POSTURE_CMD="${EDAMAME_POSTURE_CMD:-edamame_posture}"
-          if command -v "$POSTURE_CMD" >/dev/null 2>&1 || [ -x "$POSTURE_CMD" ]; then
-            "$POSTURE_CMD" background-vulnerability-stop >/dev/null 2>&1 || true
-            "$POSTURE_CMD" background-stop-file-monitor >/dev/null 2>&1 || true
+          # EDAMAME_POSTURE_CMD can carry its elevation (`sudo -E <path>`):
+          # test the binary, run the whole command.
+          read -r -a POSTURE <<< "${EDAMAME_POSTURE_CMD:-edamame_posture}"
+          POSTURE_BIN="${POSTURE[${#POSTURE[@]}-1]}"
+          if command -v "$POSTURE_BIN" >/dev/null 2>&1 || [ -x "$POSTURE_BIN" ]; then
+            "${POSTURE[@]}" background-vulnerability-stop >/dev/null 2>&1 || true
+            "${POSTURE[@]}" background-stop-file-monitor >/dev/null 2>&1 || true
             echo "Daemon FIM + vulnerability detector paused for cargo test."
           fi
           set -e
@@ -390,10 +393,13 @@ jobs:
           # detection pipeline; the next tick after restart fires from a clean
           # state once the cleanup step has drained any pre-pause findings.
           set +e
-          POSTURE_CMD="${EDAMAME_POSTURE_CMD:-edamame_posture}"
-          if command -v "$POSTURE_CMD" >/dev/null 2>&1 || [ -x "$POSTURE_CMD" ]; then
-            "$POSTURE_CMD" background-start-file-monitor >/dev/null 2>&1 || true
-            "$POSTURE_CMD" background-vulnerability-start 60 >/dev/null 2>&1 || true
+          # EDAMAME_POSTURE_CMD can carry its elevation (`sudo -E <path>`):
+          # test the binary, run the whole command.
+          read -r -a POSTURE <<< "${EDAMAME_POSTURE_CMD:-edamame_posture}"
+          POSTURE_BIN="${POSTURE[${#POSTURE[@]}-1]}"
+          if command -v "$POSTURE_BIN" >/dev/null 2>&1 || [ -x "$POSTURE_BIN" ]; then
+            "${POSTURE[@]}" background-start-file-monitor >/dev/null 2>&1 || true
+            "${POSTURE[@]}" background-vulnerability-start 60 >/dev/null 2>&1 || true
             echo "Daemon FIM + vulnerability detector resumed."
           fi
           set -e
@@ -441,12 +447,15 @@ jobs:
           fi
 
           # ---- Path B: edamame_posture background-* subcommands ----
-          POSTURE_CMD="${EDAMAME_POSTURE_CMD:-edamame_posture}"
-          if command -v "$POSTURE_CMD" >/dev/null 2>&1 || [ -x "$POSTURE_CMD" ]; then
-            echo "-- using $POSTURE_CMD background-* for FIM/suppression cleanup"
-            "$POSTURE_CMD" background-clear-file-events || true
-            "$POSTURE_CMD" background-vulnerability-reset-suppressions || true
-            "$POSTURE_CMD" background-clear-vulnerability-history || true
+          # EDAMAME_POSTURE_CMD can carry its elevation (`sudo -E <path>`):
+          # test the binary, run the whole command.
+          read -r -a POSTURE <<< "${EDAMAME_POSTURE_CMD:-edamame_posture}"
+          POSTURE_BIN="${POSTURE[${#POSTURE[@]}-1]}"
+          if command -v "$POSTURE_BIN" >/dev/null 2>&1 || [ -x "$POSTURE_BIN" ]; then
+            echo "-- using ${POSTURE[*]} background-* for FIM/suppression cleanup"
+            "${POSTURE[@]}" background-clear-file-events || true
+            "${POSTURE[@]}" background-vulnerability-reset-suppressions || true
+            "${POSTURE[@]}" background-clear-vulnerability-history || true
           fi
 
           # ---- Path C: on-disk vulnerability history truncation ----
@@ -699,10 +708,13 @@ jobs:
           # observed; the resume step restores them before the gate. Mirrors
           # edamame_core/tests.yml (FP-CI-13 v2.1).
           set +e
-          POSTURE_CMD="${EDAMAME_POSTURE_CMD:-edamame_posture}"
-          if command -v "$POSTURE_CMD" >/dev/null 2>&1 || [ -x "$POSTURE_CMD" ]; then
-            "$POSTURE_CMD" background-vulnerability-stop >/dev/null 2>&1 || true
-            "$POSTURE_CMD" background-stop-file-monitor >/dev/null 2>&1 || true
+          # EDAMAME_POSTURE_CMD can carry its elevation (`sudo -E <path>`):
+          # test the binary, run the whole command.
+          read -r -a POSTURE <<< "${EDAMAME_POSTURE_CMD:-edamame_posture}"
+          POSTURE_BIN="${POSTURE[${#POSTURE[@]}-1]}"
+          if command -v "$POSTURE_BIN" >/dev/null 2>&1 || [ -x "$POSTURE_BIN" ]; then
+            "${POSTURE[@]}" background-vulnerability-stop >/dev/null 2>&1 || true
+            "${POSTURE[@]}" background-stop-file-monitor >/dev/null 2>&1 || true
             echo "Daemon FIM + vulnerability detector paused for cargo test."
           fi
           set -e
@@ -748,10 +760,13 @@ jobs:
           # detection pipeline; the next tick after restart fires from a clean
           # state once the cleanup step has drained any pre-pause findings.
           set +e
-          POSTURE_CMD="${EDAMAME_POSTURE_CMD:-edamame_posture}"
-          if command -v "$POSTURE_CMD" >/dev/null 2>&1 || [ -x "$POSTURE_CMD" ]; then
-            "$POSTURE_CMD" background-start-file-monitor >/dev/null 2>&1 || true
-            "$POSTURE_CMD" background-vulnerability-start 60 >/dev/null 2>&1 || true
+          # EDAMAME_POSTURE_CMD can carry its elevation (`sudo -E <path>`):
+          # test the binary, run the whole command.
+          read -r -a POSTURE <<< "${EDAMAME_POSTURE_CMD:-edamame_posture}"
+          POSTURE_BIN="${POSTURE[${#POSTURE[@]}-1]}"
+          if command -v "$POSTURE_BIN" >/dev/null 2>&1 || [ -x "$POSTURE_BIN" ]; then
+            "${POSTURE[@]}" background-start-file-monitor >/dev/null 2>&1 || true
+            "${POSTURE[@]}" background-vulnerability-start 60 >/dev/null 2>&1 || true
             echo "Daemon FIM + vulnerability detector resumed."
           fi
           set -e
@@ -794,12 +809,15 @@ jobs:
           fi
 
           # ---- Path B: edamame_posture background-* subcommands ----
-          POSTURE_CMD="${EDAMAME_POSTURE_CMD:-edamame_posture}"
-          if command -v "$POSTURE_CMD" >/dev/null 2>&1 || [ -x "$POSTURE_CMD" ]; then
-            echo "-- using $POSTURE_CMD background-* for FIM/suppression cleanup"
-            "$POSTURE_CMD" background-clear-file-events || true
-            "$POSTURE_CMD" background-vulnerability-reset-suppressions || true
-            "$POSTURE_CMD" background-clear-vulnerability-history || true
+          # EDAMAME_POSTURE_CMD can carry its elevation (`sudo -E <path>`):
+          # test the binary, run the whole command.
+          read -r -a POSTURE <<< "${EDAMAME_POSTURE_CMD:-edamame_posture}"
+          POSTURE_BIN="${POSTURE[${#POSTURE[@]}-1]}"
+          if command -v "$POSTURE_BIN" >/dev/null 2>&1 || [ -x "$POSTURE_BIN" ]; then
+            echo "-- using ${POSTURE[*]} background-* for FIM/suppression cleanup"
+            "${POSTURE[@]}" background-clear-file-events || true
+            "${POSTURE[@]}" background-vulnerability-reset-suppressions || true
+            "${POSTURE[@]}" background-clear-vulnerability-history || true
           fi
 
           # ---- Path C: on-disk vulnerability history truncation ----
